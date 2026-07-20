@@ -8,25 +8,32 @@
   axis direction, then stops and holds position.
 
   SERIAL COMMANDS
-    1 = Y-   (Motor 1 CW  / Motor 2 CW )
-    2 = X-   (Motor 1 CW  / Motor 2 CCW)
-    3 = X+   (Motor 1 CCW / Motor 2 CW )
-    4 = Y+   (Motor 1 CCW / Motor 2 CCW)
+    1 = Y-   (Motor 1 CW  / Motor 2 CCW)   <-- limit switch end
+    2 = Y+   (Motor 1 CCW / Motor 2 CW )
+    3 = X-   (Motor 1 CW  / Motor 2 CW )
+    4 = X+   (Motor 1 CCW / Motor 2 CCW)   <-- limit switch end
     5 = Show step counters (totals since power-on / reset)
     6 = Reset step counters to zero
     7 = Disable both motors (release holding torque)
 
-  LIMIT SWITCHES
-    Pin 30 = X axis limit switch  (mounted at the X- end of travel)
-    Pin 31 = Y axis limit switch  (mounted at the Y- end of travel)
+  VERIFIED MOTOR / AXIS MAPPING
+    These pairings were confirmed by physical testing on the machine:
+      M1 CW  + M2 CW   ->  X-
+      M1 CW  + M2 CCW  ->  Y-
+      M1 CCW + M2 CW   ->  Y+
+      M1 CCW + M2 CCW  ->  X+
 
-    A tripped switch blocks ONLY the direction that drives into it.
-    Example: X switch hit -> command 2 (X-) is refused, but command 3
-    (X+) still works so you can back off the switch.
+  LIMIT SWITCHES
+    Pin 30 = X AXIS limit switch, mounted at the X+ end of travel
+    Pin 31 = Y AXIS limit switch, mounted at the Y- end of travel
+
+    A tripped switch blocks ONLY the direction that drives into it:
+      X switch hit -> command 4 (X+) refused, command 3 (X-) still works
+      Y switch hit -> command 1 (Y-) refused, command 2 (Y+) still works
 
     The switch is checked before the move AND before every step pulse,
-    so a mid-move trip aborts immediately and only the steps that were
-    actually executed get counted.
+    so a mid-move trip aborts immediately and only the steps actually
+    executed get counted.
 
   ============================================================
 */
@@ -68,8 +75,8 @@ const unsigned int DIR_SETTLE_MS = 5;
 // SECTION 3 - MOTOR DIRECTION POLARITY
 // ============================================================
 //
-// Motor 1 and Motor 2 may have different direction polarity because
-// of motor mounting or because one coil pair was reversed.
+// Motor 1 and Motor 2 have different direction polarity because of
+// motor mounting / reversed coil pair.
 //
 // If ONE motor spins the wrong way, swap only that motor's two
 // values below. Do NOT rewire the motor coils again.
@@ -83,8 +90,6 @@ const bool MOTOR2_CCW = HIGH;
 // ============================================================
 // SECTION 4 - AXIS DEFINITIONS
 // ============================================================
-//
-// Axis identifiers, used to pair a movement with its limit switch.
 
 const uint8_t AXIS_X = 0;
 const uint8_t AXIS_Y = 1;
@@ -94,7 +99,7 @@ const int8_t DIR_NEG = -1;
 const int8_t DIR_POS = +1;
 
 // ============================================================
-// SECTION 5 - MOVEMENT TABLE  (the direction / label mapping)
+// SECTION 5 - MOVEMENT TABLE  (command -> direction mapping)
 // ============================================================
 //
 // This is the single place where "command number" -> "what the
@@ -106,6 +111,9 @@ const int8_t DIR_POS = +1;
 //   dir2  : DIR level sent to Motor 2
 //   axis  : which limit switch guards this move
 //   sign  : which end of that axis this move travels toward
+//
+// Row order sets the command numbers: row 0 = '1', row 1 = '2', etc.
+// To renumber commands, just reorder these rows.
 
 struct MoveDef
 {
@@ -119,14 +127,17 @@ struct MoveDef
 const uint8_t MOVE_COUNT = 4;
 
 const MoveDef MOVES[MOVE_COUNT] = {
-    // Command '1'
-    {"Y-", MOTOR1_CW, MOTOR2_CW, AXIS_Y, DIR_NEG},
-    // Command '2'
-    {"X-", MOTOR1_CW, MOTOR2_CCW, AXIS_X, DIR_NEG},
-    // Command '3'
-    {"X+", MOTOR1_CCW, MOTOR2_CW, AXIS_X, DIR_POS},
-    // Command '4'
-    {"Y+", MOTOR1_CCW, MOTOR2_CCW, AXIS_Y, DIR_POS}};
+    // Command '1'  -  toward the Y limit switch (pin 31)
+    {"Y-", MOTOR1_CW, MOTOR2_CCW, AXIS_Y, DIR_NEG},
+
+    // Command '2'  -  away from the Y limit switch
+    {"Y+", MOTOR1_CCW, MOTOR2_CW, AXIS_Y, DIR_POS},
+
+    // Command '3'  -  away from the X limit switch
+    {"X-", MOTOR1_CW, MOTOR2_CW, AXIS_X, DIR_NEG},
+
+    // Command '4'  -  toward the X limit switch (pin 30)
+    {"X+", MOTOR1_CCW, MOTOR2_CCW, AXIS_X, DIR_POS}};
 
 // ============================================================
 // SECTION 6 - LIMIT SWITCH CONFIGURATION
@@ -149,7 +160,7 @@ const bool LIMIT_Y_USE_NC = true;
 // This decides WHICH direction the switch blocks.
 // DIR_NEG = switch sits at the negative end of travel (X- / Y-)
 // DIR_POS = switch sits at the positive end of travel (X+ / Y+)
-const int8_t LIMIT_X_AT_END = DIR_NEG; // X switch is at the X- end
+const int8_t LIMIT_X_AT_END = DIR_POS; // X switch is at the X+ end
 const int8_t LIMIT_Y_AT_END = DIR_NEG; // Y switch is at the Y- end
 
 // --- Master enable ---
@@ -167,16 +178,13 @@ const unsigned int LIMIT_CONFIRM_US = 200;
 // pulse (safest). Raise it only if you need faster step rates.
 const uint8_t LIMIT_CHECK_EVERY_N_STEPS = 1;
 
-// Debounce used for the slower startup / status reads.
-const unsigned int LIMIT_DEBOUNCE_MS = 100;
-
 // ============================================================
 // SECTION 7 - STEP COUNTER CONFIGURATION
 // ============================================================
 //
 // Counters increment once per step pulse ACTUALLY sent, so an
 // aborted move only counts the steps the machine really made.
-// Index matches the MOVES table above: 0=Y-, 1=X-, 2=X+, 3=Y+
+// Index matches the MOVES table above: 0=Y-, 1=Y+, 2=X-, 3=X+
 
 unsigned long stepCounts[MOVE_COUNT] = {0, 0, 0, 0};
 
@@ -211,8 +219,8 @@ void setup()
     pinMode(EN_PIN2, OUTPUT);
 
     // Limit switches: internal pull-ups, works for both NC and NO wiring
-    pinMode(LIMIT_PIN_X, INPUT_PULLUP);
-    pinMode(LIMIT_PIN_Y, INPUT_PULLUP);
+    pinMode(LIMIT_PIN_X, INPUT_PULLUP); // X axis switch, X+ end
+    pinMode(LIMIT_PIN_Y, INPUT_PULLUP); // Y axis switch, Y- end
 
     digitalWrite(STEP_PIN1, LOW);
     digitalWrite(STEP_PIN2, LOW);
@@ -416,13 +424,13 @@ bool isLimitHit(uint8_t axis)
 
     if (axis == AXIS_X)
     {
-        pin = LIMIT_PIN_X;
+        pin = LIMIT_PIN_X; // pin 30
         useNC = LIMIT_X_USE_NC;
         enabled = LIMIT_X_ENABLED;
     }
     else
     {
-        pin = LIMIT_PIN_Y;
+        pin = LIMIT_PIN_Y; // pin 31
         useNC = LIMIT_Y_USE_NC;
         enabled = LIMIT_Y_ENABLED;
     }
@@ -444,6 +452,8 @@ bool isLimitHit(uint8_t axis)
 
 // A switch only blocks the direction that drives INTO it.
 // Moving away from a tripped switch is always allowed.
+//   X switch at X+ end  ->  blocks X+ (command 4), allows X- (command 3)
+//   Y switch at Y- end  ->  blocks Y- (command 1), allows Y+ (command 2)
 bool isMoveBlocked(uint8_t axis, int8_t sign)
 {
     int8_t blockedSign = (axis == AXIS_X) ? LIMIT_X_AT_END : LIMIT_Y_AT_END;
@@ -580,10 +590,10 @@ void printInstructions()
     Serial.print("Step size per command: ");
     Serial.println(stepsPerMove);
     Serial.println("--------------------------------------");
-    Serial.println("1 = Y-   (M1 CW  / M2 CW )");
-    Serial.println("2 = X-   (M1 CW  / M2 CCW)");
-    Serial.println("3 = X+   (M1 CCW / M2 CW )");
-    Serial.println("4 = Y+   (M1 CCW / M2 CCW)");
+    Serial.println("1 = Y-   (M1 CW  / M2 CCW)  [limit: pin 31]");
+    Serial.println("2 = Y+   (M1 CCW / M2 CW )");
+    Serial.println("3 = X-   (M1 CW  / M2 CW )");
+    Serial.println("4 = X+   (M1 CCW / M2 CCW)  [limit: pin 30]");
     Serial.println("5 = Show step counters");
     Serial.println("6 = Reset step counters");
     Serial.println("7 = Disable both motors");
