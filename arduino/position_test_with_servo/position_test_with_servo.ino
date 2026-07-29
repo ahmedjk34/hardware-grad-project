@@ -5,8 +5,9 @@
   live position tracking, step counters, and GRID ADDRESSING
 
   Plus a THIRD, independent motor driving a Z axis (single motor,
-  not coupled to the X/Y pair), and a GRIPPER SERVO on pin 6 with
-  just two positions: OPEN and CLOSE.
+  not coupled to the X/Y pair), a GRIPPER SERVO on pin 6 with just
+  two positions (OPEN and CLOSE), and a FOURTH, independent
+  28BYJ-48 + ULN2003 stepper that only jogs +/-90 degrees on command.
   ============================================================
 
   SERIAL COMMANDS
@@ -27,13 +28,17 @@
     O = Servo OPEN   (pin 6)
     C = Servo CLOSE  (pin 6)
 
+    R  = Aux stepper rotate ~90 deg CW   (28BYJ-48, pins 36-39)
+    RR = Aux stepper rotate ~90 deg CCW  (28BYJ-48, pins 36-39)
+
     G <col> <row>   = go to grid cell (1-based). e.g.  G 3 5   or  G3,5
     S <cols> <rows> = change the grid division live. e.g.  S 20 39
     ?               = reprint the help text
 
   Multi-character commands need a newline. Single digit commands
-  work with or without one. D, U, O and C are letters, so like
-  G/S/? they need a newline too.
+  work with or without one. D, U, O, C and R are letters, so like
+  G/S/? they need a newline too. RR is two letters and ALSO needs
+  a newline - there is no single-character fast path for it.
 
   Z is NOT part of homing (0) or the grid (G) yet - it is jogged
   independently with D/U. It still respects its own physical and
@@ -75,6 +80,7 @@
 */
 
 #include <Servo.h>
+#include <Stepper.h>
 
 // ============================================================
 // SECTION 1 - MOTOR PIN CONFIGURATION
@@ -114,6 +120,46 @@ Servo gripperServo;
 // True = last commanded position was OPEN. Set to a known state in
 // setup() so this always reflects reality, not just "assumed".
 bool servoIsOpen = false;
+
+// ============================================================
+// SECTION 1C - AUXILIARY STEPPER CONFIGURATION (28BYJ-48 + ULN2003)
+// ============================================================
+//
+// A fourth, independent motor - not part of the X/Y/Z rig. It only
+// jogs +/-90 degrees on command (R / RR), no homing, no limits.
+//
+// ULN2003 connections:
+//   IN1 -> pin 36   BLACK
+//   IN2 -> pin 37   GREEN
+//   IN3 -> pin 38   BLUE
+//   IN4 -> pin 39   RED
+// Power the ULN2003 from a 5V external supply with a shared GND.
+
+const int AUX_STEPPER_IN1 = 36;
+const int AUX_STEPPER_IN2 = 37;
+const int AUX_STEPPER_IN3 = 38;
+const int AUX_STEPPER_IN4 = 39;
+
+// Approximate number of steps for one output-shaft revolution.
+const int AUX_STEPPER_STEPS_PER_REV = 2048;
+
+// A quarter turn - what R / RR actually move.
+const int AUX_STEPPER_QUARTER_TURN = AUX_STEPPER_STEPS_PER_REV / 4;
+
+const int AUX_STEPPER_SPEED_RPM = 10;
+
+// IMPORTANT: the correct Stepper library pin order for most
+// 28BYJ-48 + ULN2003 boards is IN1, IN3, IN2, IN4 (not IN1..IN4).
+Stepper auxStepper(
+    AUX_STEPPER_STEPS_PER_REV,
+    AUX_STEPPER_IN1,
+    AUX_STEPPER_IN3,
+    AUX_STEPPER_IN2,
+    AUX_STEPPER_IN4);
+
+// Net position in steps, relative to power-on. Purely informational -
+// this motor has no limits or homing to keep it honest.
+long auxStepperPos = 0;
 
 // ============================================================
 // SECTION 2 - MOTION TUNINGD
@@ -327,6 +373,8 @@ const char CMD_MOVE_Z_POS = 'U'; // Z+  (physical limit switch end)
 const char CMD_SERVO_OPEN = 'O';
 const char CMD_SERVO_CLOSE = 'C';
 
+const char CMD_AUX_STEPPER_CW = 'R'; // "R"  (RR is handled in handleLine)
+
 // ============================================================
 // BLOCK REASONS
 // ============================================================
@@ -374,6 +422,8 @@ void setup()
     gripperServo.write(SERVO_CLOSE_ANGLE);
     servoIsOpen = false;
 
+    auxStepper.setSpeed(AUX_STEPPER_SPEED_RPM);
+
     Serial.begin(9600);
     delay(1000);
 
@@ -382,6 +432,7 @@ void setup()
     printSoftLimitStatus();
     printGridConfig();
     printServoStatus();
+    printAuxStepperStatus();
 
     Serial.println();
     Serial.println(">> Position is UNKNOWN until you home. Send 0 to home.");
@@ -493,6 +544,18 @@ void handleLine(char *line)
         }
         break;
 
+    case 'R':
+        if ((line[1] == 'R' || line[1] == 'r') && line[2] == '\0')
+        {
+            rotateAuxStepperCCW();
+        }
+        else
+        {
+            Serial.println();
+            Serial.println("  ERROR - use:  R (CW ~90 deg) or RR (CCW ~90 deg)");
+        }
+        break;
+
     default:
         Serial.println();
         Serial.print("  Unknown command: ");
@@ -564,6 +627,10 @@ void handleSingleChar(char command)
 
     case CMD_SERVO_CLOSE:
         closeServo();
+        break;
+
+    case CMD_AUX_STEPPER_CW:
+        rotateAuxStepperCW();
         break;
 
     default:
@@ -830,6 +897,28 @@ void closeServo()
     Serial.print("SERVO: CLOSE (");
     Serial.print(SERVO_CLOSE_ANGLE);
     Serial.println(" deg)");
+}
+
+// ============================================================
+// AUXILIARY STEPPER (28BYJ-48)                 <<< NEW
+// ============================================================
+
+void rotateAuxStepperCW()
+{
+    Serial.println();
+    Serial.println("AUX STEPPER: rotating ~90 deg CW...");
+    auxStepper.step(AUX_STEPPER_QUARTER_TURN);
+    auxStepperPos += AUX_STEPPER_QUARTER_TURN;
+    Serial.println("AUX STEPPER: done.");
+}
+
+void rotateAuxStepperCCW()
+{
+    Serial.println();
+    Serial.println("AUX STEPPER: rotating ~90 deg CCW...");
+    auxStepper.step(-AUX_STEPPER_QUARTER_TURN);
+    auxStepperPos -= AUX_STEPPER_QUARTER_TURN;
+    Serial.println("AUX STEPPER: done.");
 }
 
 // ============================================================
@@ -1482,6 +1571,25 @@ void printServoStatus()
     Serial.println(servoIsOpen ? "OPEN" : "CLOSED");
 }
 
+void printAuxStepperStatus()
+{
+    Serial.println();
+    Serial.println("--- AUX STEPPER (28BYJ-48) ---");
+    Serial.print("Pins IN1-IN4: ");
+    Serial.print(AUX_STEPPER_IN1);
+    Serial.print(", ");
+    Serial.print(AUX_STEPPER_IN2);
+    Serial.print(", ");
+    Serial.print(AUX_STEPPER_IN3);
+    Serial.print(", ");
+    Serial.println(AUX_STEPPER_IN4);
+    Serial.print("Net position: ");
+    if (auxStepperPos > 0)
+        Serial.print("+");
+    Serial.print(auxStepperPos);
+    Serial.println(" steps (since power-on)");
+}
+
 void printGridConfig()
 {
     Serial.println();
@@ -1690,6 +1798,7 @@ void printStepCounts()
     printSoftLimitStatus();
     printGridConfig();
     printServoStatus();
+    printAuxStepperStatus();
 }
 
 void printNetLine(const char *axisLabel, long net)
@@ -1742,9 +1851,12 @@ void printInstructions()
     Serial.println("O = Servo OPEN              [pin 6]");
     Serial.println("C = Servo CLOSE             [pin 6]");
     Serial.println("--------------------------------------");
+    Serial.println("R  = Aux stepper ~90 deg CW   [28BYJ-48, pins 36-39]");
+    Serial.println("RR = Aux stepper ~90 deg CCW  [28BYJ-48, pins 36-39]");
+    Serial.println("--------------------------------------");
     Serial.println("G <col> <row>   goto cell, e.g.  G 3 5");
     Serial.println("S <cols> <rows> resize grid, e.g. S 20 39");
     Serial.println("?               reprint this help");
-    Serial.println("(D, U, O, C, G and S need a newline / Enter)");
+    Serial.println("(D, U, O, C, R, RR, G and S need a newline / Enter)");
     Serial.println("======================================");
 }
