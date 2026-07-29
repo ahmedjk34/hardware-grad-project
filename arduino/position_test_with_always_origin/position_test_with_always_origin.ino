@@ -8,8 +8,8 @@
   SERIAL COMMANDS
     1 = Y-   (Motor 1 CW  / Motor 2 CCW)   <-- physical limit switch end
     2 = Y+   (Motor 1 CCW / Motor 2 CW )   <-- SOFTWARE limit end
-    3 = X-   (Motor 1 CW  / Motor 2 CW )   <-- SOFTWARE limit end
-    4 = X+   (Motor 1 CCW / Motor 2 CCW)   <-- physical limit switch end
+    3 = X-   (Motor 1 CW  / Motor 2 CW )   <-- physical limit switch end
+    4 = X+   (Motor 1 CCW / Motor 2 CCW)   <-- SOFTWARE limit end
     5 = Show step counters + position + limit status
     6 = Reset step counters to zero
     7 = Disable both motors (release holding torque)
@@ -31,16 +31,16 @@
   own axis the moment it trips. The corner where BOTH switches are
   pressed is therefore machine position (0, 0) = the ORIGIN.
 
-  From that corner the machine travels in OPPOSITE signs per axis:
+  From that corner the machine travels in the SAME sign on both axes:
 
-      X switch at the X+ end  ->  X runs   0  ...  -1295   (soft limit)
+      X switch at the X- end  ->  X runs   0  ...  +1295   (soft limit)
       Y switch at the Y- end  ->  Y runs   0  ...  +2550   (soft limit)
 
   So the work envelope is 1295 x 2550 steps, living in the rectangle
-  X in [-1295, 0], Y in [0, +2550]. Grid indices hide this sign mess:
+  X in [0, +1295], Y in [0, +2550]. Grid indices hide this sign mess:
 
       col 1  = nearest the X switch (X = 0 side)
-      col N  = far end of X travel  (X = -1295 side)
+      col N  = far end of X travel  (X = +1295 side)
       row 1  = nearest the Y switch (Y = 0 side)
       row M  = far end of Y travel  (Y = +2550 side)
 
@@ -140,7 +140,7 @@ const int LIMIT_PIN_Y = 31; // Y AXIS limit switch
 const bool LIMIT_X_USE_NC = true;
 const bool LIMIT_Y_USE_NC = true;
 
-const int8_t LIMIT_X_AT_END = DIR_POS; // X switch is at the X+ end
+const int8_t LIMIT_X_AT_END = DIR_NEG; // X switch is at the X- end
 const int8_t LIMIT_Y_AT_END = DIR_NEG; // Y switch is at the Y- end
 
 const bool LIMIT_X_ENABLED = true;
@@ -157,10 +157,10 @@ const uint8_t LIMIT_CHECK_EVERY_N_STEPS = 1;
 
 const long SOFT_LIMIT_INFINITE = 0; // sentinel: no cap at all
 
-long SOFT_LIMIT_X_TRAVEL = 1295; // X- travel cap, in steps
+long SOFT_LIMIT_X_TRAVEL = 1295; // X+ travel cap, in steps
 long SOFT_LIMIT_Y_TRAVEL = 2550; // Y+ travel cap, in steps
 
-const int8_t SOFT_LIMIT_X_AT_END = DIR_NEG; // guards the X- end
+const int8_t SOFT_LIMIT_X_AT_END = DIR_POS; // guards the X+ end
 const int8_t SOFT_LIMIT_Y_AT_END = DIR_POS; // guards the Y+ end
 
 const bool SOFT_LIMIT_X_ENABLED = true;
@@ -1499,8 +1499,8 @@ void printInstructions()
     Serial.println("--------------------------------------");
     Serial.println("1 = Y-   (M1 CW  / M2 CCW)  [limit: pin 31]");
     Serial.println("2 = Y+   (M1 CCW / M2 CW )  [soft limit]");
-    Serial.println("3 = X-   (M1 CW  / M2 CW )  [soft limit]");
-    Serial.println("4 = X+   (M1 CCW / M2 CCW)  [limit: pin 30]");
+    Serial.println("3 = X-   (M1 CW  / M2 CW )  [limit: pin 30]");
+    Serial.println("4 = X+   (M1 CCW / M2 CCW)  [soft limit]");
     Serial.println("5 = Show counters / position / limits");
     Serial.println("6 = Reset step counters");
     Serial.println("7 = Disable both motors");
