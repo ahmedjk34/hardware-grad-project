@@ -93,11 +93,11 @@ const bool EN_ACTIVE_LEVEL = LOW;
 const bool EN_INACTIVE_LEVEL = HIGH;
 
 // ============================================================
-// SECTION 2 - MOTION TUNING
+// SECTION 2 - MOTION TUNINGD
 // ============================================================
 
 // Half-period of the step pulse, in microseconds.
-unsigned int STEP_DELAY = 500;
+unsigned int STEP_DELAY = 1000;
 
 // How many steps a single MANUAL jog command (1-4) moves.
 int stepsPerMove = 125;
@@ -117,8 +117,8 @@ const bool MOTOR2_CCW = HIGH;
 
 // CW = -Z, CCW = +Z (per spec). Flip these two if the physical
 // direction ends up reversed once wired up.
-const bool MOTOR3_CW = HIGH;
-const bool MOTOR3_CCW = LOW;
+const bool MOTOR3_CW = LOW;
+const bool MOTOR3_CCW = HIGH;
 
 // ============================================================
 // SECTION 4 - AXIS DEFINITIONS
@@ -172,7 +172,7 @@ const bool LIMIT_Z_USE_NC = true;
 
 const int8_t LIMIT_X_AT_END = DIR_POS; // X switch is at the X+ end
 const int8_t LIMIT_Y_AT_END = DIR_NEG; // Y switch is at the Y- end
-const int8_t LIMIT_Z_AT_END = DIR_NEG; // Z switch is at the Z- end
+const int8_t LIMIT_Z_AT_END = DIR_NEG; // Z switch is at the Z- end (down)
 
 const bool LIMIT_X_ENABLED = true;
 const bool LIMIT_Y_ENABLED = true;
@@ -189,13 +189,13 @@ const uint8_t LIMIT_CHECK_EVERY_N_STEPS = 1;
 
 const long SOFT_LIMIT_INFINITE = 0; // sentinel: no cap at all
 
-long SOFT_LIMIT_X_TRAVEL = 1295;               // X- travel cap, in steps
-long SOFT_LIMIT_Y_TRAVEL = 2550;               // Y+ travel cap, in steps
-long SOFT_LIMIT_Z_TRAVEL = SOFT_LIMIT_INFINITE; // Z+ travel cap - INFINITE for now
+long SOFT_LIMIT_X_TRAVEL = 1295;                // X- travel cap, in steps
+long SOFT_LIMIT_Y_TRAVEL = 2200;                // Y+ travel cap, in steps
+long SOFT_LIMIT_Z_TRAVEL = 1400; // Z+ travel cap - in steps
 
 const int8_t SOFT_LIMIT_X_AT_END = DIR_NEG; // guards the X- end
 const int8_t SOFT_LIMIT_Y_AT_END = DIR_POS; // guards the Y+ end
-const int8_t SOFT_LIMIT_Z_AT_END = DIR_POS; // guards the Z+ end
+const int8_t SOFT_LIMIT_Z_AT_END = DIR_POS; // guards the Z+ end (up)
 
 const bool SOFT_LIMIT_X_ENABLED = true;
 const bool SOFT_LIMIT_Y_ENABLED = true;
@@ -298,8 +298,8 @@ const char CMD_ZERO_POSITION = '8';
 const char CMD_SHOW_GRID = '9';
 const char CMD_GO_ORIGIN = '0';
 
-const char CMD_MOVE_Z_NEG = 'D'; // Z-  (physical limit switch end)
-const char CMD_MOVE_Z_POS = 'U'; // Z+  (software limit end)
+const char CMD_MOVE_Z_NEG = 'D'; // Z-  (software limit end)
+const char CMD_MOVE_Z_POS = 'U'; // Z+  (physical limit switch end)
 
 // ============================================================
 // BLOCK REASONS
