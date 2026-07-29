@@ -106,8 +106,8 @@ const bool EN_INACTIVE_LEVEL = HIGH;
 
 const int SERVO_PIN = 6;
 
-const int SERVO_OPEN_ANGLE = 90;
-const int SERVO_CLOSE_ANGLE = 0;
+const int SERVO_OPEN_ANGLE = 0;
+const int SERVO_CLOSE_ANGLE = 90;
 
 Servo gripperServo;
 
