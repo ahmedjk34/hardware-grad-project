@@ -63,6 +63,10 @@
 // SECTION 1 - MOTOR PIN CONFIGURATION
 // ============================================================
 
+// IMPORTANT: The driver wired to pins 2/3 (DIR_PIN1/STEP_PIN1) actually
+// drives CW on ACTIVE HIGH, not active low like the others. Its coil
+// wiring was physically reversed to compensate - do not "fix" this pin
+// polarity in software without re-checking the physical wiring first.
 const int DIR_PIN1 = 2;
 const int STEP_PIN1 = 3;
 const int EN_PIN1 = 4;
