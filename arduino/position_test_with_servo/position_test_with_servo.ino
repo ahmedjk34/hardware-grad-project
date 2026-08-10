@@ -170,10 +170,10 @@ long auxStepperPos = 0;
 // ============================================================
 
 // Half-period of the step pulse, in microseconds.
-unsigned int STEP_DELAY = 1000;
+unsigned int STEP_DELAY = 750;
 
 // How many steps a single MANUAL jog command (1-4) moves.
-int stepsPerMove = 125;
+int stepsPerMove = 300;
 
 // Settle time after changing a DIR pin before the first step pulse.
 const unsigned int DIR_SETTLE_MS = 5;
@@ -211,12 +211,12 @@ const int8_t DIR_POS = +1;
 
 struct MoveDef
 {
-    const char *label;
-    bool dir1; // DIR_PIN1 level (X/Y moves only)
-    bool dir2; // DIR_PIN2 level (X/Y moves only)
-    bool dir3; // DIR_PIN3 level (Z moves only)
-    uint8_t axis;
-    int8_t sign;
+  const char *label;
+  bool dir1; // DIR_PIN1 level (X/Y moves only)
+  bool dir2; // DIR_PIN2 level (X/Y moves only)
+  bool dir3; // DIR_PIN3 level (Z moves only)
+  uint8_t axis;
+  int8_t sign;
 };
 
 const uint8_t MOVE_COUNT = 6;
@@ -262,8 +262,8 @@ const uint8_t LIMIT_CHECK_EVERY_N_STEPS = 1;
 
 const long SOFT_LIMIT_INFINITE = 0; // sentinel: no cap at all
 
-long SOFT_LIMIT_X_TRAVEL = 1295;                // X+ travel cap, in steps
-long SOFT_LIMIT_Y_TRAVEL = 2200;                // Y+ travel cap, in steps
+long SOFT_LIMIT_X_TRAVEL = 1295; // X+ travel cap, in steps
+long SOFT_LIMIT_Y_TRAVEL = 2200; // Y+ travel cap, in steps
 long SOFT_LIMIT_Z_TRAVEL = 1400; // Z+ travel cap - in steps
 
 const int8_t SOFT_LIMIT_X_AT_END = DIR_POS; // guards the X+ end
@@ -401,45 +401,45 @@ uint8_t lineLen = 0;
 
 void setup()
 {
-    pinMode(DIR_PIN1, OUTPUT);
-    pinMode(STEP_PIN1, OUTPUT);
-    pinMode(EN_PIN1, OUTPUT);
+  pinMode(DIR_PIN1, OUTPUT);
+  pinMode(STEP_PIN1, OUTPUT);
+  pinMode(EN_PIN1, OUTPUT);
 
-    pinMode(DIR_PIN2, OUTPUT);
-    pinMode(STEP_PIN2, OUTPUT);
-    pinMode(EN_PIN2, OUTPUT);
+  pinMode(DIR_PIN2, OUTPUT);
+  pinMode(STEP_PIN2, OUTPUT);
+  pinMode(EN_PIN2, OUTPUT);
 
-    pinMode(DIR_PIN3, OUTPUT);
-    pinMode(STEP_PIN3, OUTPUT);
+  pinMode(DIR_PIN3, OUTPUT);
+  pinMode(STEP_PIN3, OUTPUT);
 
-    pinMode(LIMIT_PIN_X, INPUT_PULLUP);
-    pinMode(LIMIT_PIN_Y, INPUT_PULLUP);
-    pinMode(LIMIT_PIN_Z, INPUT_PULLUP);
+  pinMode(LIMIT_PIN_X, INPUT_PULLUP);
+  pinMode(LIMIT_PIN_Y, INPUT_PULLUP);
+  pinMode(LIMIT_PIN_Z, INPUT_PULLUP);
 
-    digitalWrite(STEP_PIN1, LOW);
-    digitalWrite(STEP_PIN2, LOW);
-    digitalWrite(STEP_PIN3, LOW);
+  digitalWrite(STEP_PIN1, LOW);
+  digitalWrite(STEP_PIN2, LOW);
+  digitalWrite(STEP_PIN3, LOW);
 
-    disableMotors();
+  disableMotors();
 
-    gripperServo.attach(SERVO_PIN);
-    gripperServo.write(SERVO_CLOSE_ANGLE);
-    servoIsOpen = false;
+  gripperServo.attach(SERVO_PIN);
+  gripperServo.write(SERVO_CLOSE_ANGLE);
+  servoIsOpen = false;
 
-    auxStepper.setSpeed(AUX_STEPPER_SPEED_RPM);
+  auxStepper.setSpeed(AUX_STEPPER_SPEED_RPM);
 
-    Serial.begin(9600);
-    delay(1000);
+  Serial.begin(9600);
+  delay(1000);
 
-    printInstructions();
-    printLimitStatus();
-    printSoftLimitStatus();
-    printGridConfig();
-    printServoStatus();
-    printAuxStepperStatus();
+  printInstructions();
+  printLimitStatus();
+  printSoftLimitStatus();
+  printGridConfig();
+  printServoStatus();
+  printAuxStepperStatus();
 
-    Serial.println();
-    Serial.println(">> Position is UNKNOWN until you home. Send 0 to home.");
+  Serial.println();
+  Serial.println(">> Position is UNKNOWN until you home. Send 0 to home.");
 }
 
 // ============================================================
@@ -448,7 +448,7 @@ void setup()
 
 void loop()
 {
-    checkSerial();
+  checkSerial();
 }
 
 // ============================================================
@@ -460,222 +460,222 @@ void loop()
 
 void checkSerial()
 {
-    while (Serial.available() > 0)
+  while (Serial.available() > 0)
+  {
+    char c = Serial.read();
+
+    if (c == '\n' || c == '\r')
     {
-        char c = Serial.read();
-
-        if (c == '\n' || c == '\r')
-        {
-            if (lineLen > 0)
-            {
-                lineBuf[lineLen] = '\0';
-                handleLine(lineBuf);
-                lineLen = 0;
-            }
-            continue;
-        }
-
-        // Fast path: a lone digit with nothing buffered is a command.
-        if (lineLen == 0 && c >= '0' && c <= '9')
-        {
-            handleSingleChar(c);
-            continue;
-        }
-
-        if (c == ' ' && lineLen == 0)
-        {
-            continue; // ignore leading spaces
-        }
-
-        if (lineLen < LINE_BUF_SIZE - 1)
-        {
-            lineBuf[lineLen++] = c;
-        }
-        else
-        {
-            lineLen = 0; // overflow: drop the garbage line
-            Serial.println("  ERROR - command too long, ignored.");
-        }
+      if (lineLen > 0)
+      {
+        lineBuf[lineLen] = '\0';
+        handleLine(lineBuf);
+        lineLen = 0;
+      }
+      continue;
     }
+
+    // Fast path: a lone digit with nothing buffered is a command.
+    if (lineLen == 0 && c >= '0' && c <= '9')
+    {
+      handleSingleChar(c);
+      continue;
+    }
+
+    if (c == ' ' && lineLen == 0)
+    {
+      continue; // ignore leading spaces
+    }
+
+    if (lineLen < LINE_BUF_SIZE - 1)
+    {
+      lineBuf[lineLen++] = c;
+    }
+    else
+    {
+      lineLen = 0; // overflow: drop the garbage line
+      Serial.println("  ERROR - command too long, ignored.");
+    }
+  }
 }
 
 void handleLine(char *line)
 {
-    char head = line[0];
+  char head = line[0];
 
-    if (head >= 'a' && head <= 'z')
+  if (head >= 'a' && head <= 'z')
+  {
+    head = head - 'a' + 'A';
+  }
+
+  // A single character on its own line behaves like the fast path.
+  if (line[1] == '\0')
+  {
+    if (head == '?')
     {
-        head = head - 'a' + 'A';
+      printInstructions();
+      return;
     }
+    handleSingleChar(head);
+    return;
+  }
 
-    // A single character on its own line behaves like the fast path.
-    if (line[1] == '\0')
+  long a = 0, b = 0;
+
+  switch (head)
+  {
+  case 'G':
+    if (parseTwoNumbers(line + 1, &a, &b))
     {
-        if (head == '?')
-        {
-            printInstructions();
-            return;
-        }
-        handleSingleChar(head);
-        return;
+      gotoCell(a, b);
     }
-
-    long a = 0, b = 0;
-
-    switch (head)
+    else
     {
-    case 'G':
-        if (parseTwoNumbers(line + 1, &a, &b))
-        {
-            gotoCell(a, b);
-        }
-        else
-        {
-            Serial.println();
-            Serial.println("  ERROR - use:  G <col> <row>   e.g.  G 3 5");
-        }
-        break;
-
-    case 'S':
-        if (parseTwoNumbers(line + 1, &a, &b))
-        {
-            setGridSize(a, b);
-        }
-        else
-        {
-            Serial.println();
-            Serial.println("  ERROR - use:  S <cols> <rows>   e.g.  S 20 39");
-        }
-        break;
-
-    case 'R':
-        if ((line[1] == 'R' || line[1] == 'r') && line[2] == '\0')
-        {
-            rotateAuxStepperCCW();
-        }
-        else
-        {
-            Serial.println();
-            Serial.println("  ERROR - use:  R (CW ~90 deg) or RR (CCW ~90 deg)");
-        }
-        break;
-
-    default:
-        Serial.println();
-        Serial.print("  Unknown command: ");
-        Serial.println(line);
-        break;
+      Serial.println();
+      Serial.println("  ERROR - use:  G <col> <row>   e.g.  G 3 5");
     }
+    break;
+
+  case 'S':
+    if (parseTwoNumbers(line + 1, &a, &b))
+    {
+      setGridSize(a, b);
+    }
+    else
+    {
+      Serial.println();
+      Serial.println("  ERROR - use:  S <cols> <rows>   e.g.  S 20 39");
+    }
+    break;
+
+  case 'R':
+    if ((line[1] == 'R' || line[1] == 'r') && line[2] == '\0')
+    {
+      rotateAuxStepperCCW();
+    }
+    else
+    {
+      Serial.println();
+      Serial.println("  ERROR - use:  R (CW ~90 deg) or RR (CCW ~90 deg)");
+    }
+    break;
+
+  default:
+    Serial.println();
+    Serial.print("  Unknown command: ");
+    Serial.println(line);
+    break;
+  }
 }
 
 void handleSingleChar(char command)
 {
-    if (command >= CMD_MOVE_FIRST && command <= CMD_MOVE_LAST)
+  if (command >= CMD_MOVE_FIRST && command <= CMD_MOVE_LAST)
+  {
+    uint8_t index = command - CMD_MOVE_FIRST;
+    executeMove(index);
+    return;
+  }
+
+  switch (command)
+  {
+  case CMD_SHOW_COUNTS:
+    printStepCounts();
+    break;
+
+  case CMD_RESET_COUNTS:
+    resetStepCounts();
+    break;
+
+  case CMD_MOTORS_OFF:
+    disableMotors();
+    Serial.println();
+    Serial.println("MOTORS OFF (holding torque released)");
+    break;
+
+  case CMD_ZERO_POSITION:
+    zeroPosition();
+    break;
+
+  case CMD_SHOW_GRID:
+    printGrid();
+    break;
+
+  case CMD_GO_ORIGIN:
+    goToOrigin();
+    break;
+
+  case CMD_MOVE_Z_NEG:
+  {
+    int8_t idx = findMoveIndex(AXIS_Z, DIR_NEG);
+    if (idx >= 0)
     {
-        uint8_t index = command - CMD_MOVE_FIRST;
-        executeMove(index);
-        return;
+      executeMove((uint8_t)idx);
     }
+    break;
+  }
 
-    switch (command)
+  case CMD_MOVE_Z_POS:
+  {
+    int8_t idx = findMoveIndex(AXIS_Z, DIR_POS);
+    if (idx >= 0)
     {
-    case CMD_SHOW_COUNTS:
-        printStepCounts();
-        break;
-
-    case CMD_RESET_COUNTS:
-        resetStepCounts();
-        break;
-
-    case CMD_MOTORS_OFF:
-        disableMotors();
-        Serial.println();
-        Serial.println("MOTORS OFF (holding torque released)");
-        break;
-
-    case CMD_ZERO_POSITION:
-        zeroPosition();
-        break;
-
-    case CMD_SHOW_GRID:
-        printGrid();
-        break;
-
-    case CMD_GO_ORIGIN:
-        goToOrigin();
-        break;
-
-    case CMD_MOVE_Z_NEG:
-    {
-        int8_t idx = findMoveIndex(AXIS_Z, DIR_NEG);
-        if (idx >= 0)
-        {
-            executeMove((uint8_t)idx);
-        }
-        break;
+      executeMove((uint8_t)idx);
     }
+    break;
+  }
 
-    case CMD_MOVE_Z_POS:
-    {
-        int8_t idx = findMoveIndex(AXIS_Z, DIR_POS);
-        if (idx >= 0)
-        {
-            executeMove((uint8_t)idx);
-        }
-        break;
-    }
+  case CMD_SERVO_OPEN:
+    openServo();
+    break;
 
-    case CMD_SERVO_OPEN:
-        openServo();
-        break;
+  case CMD_SERVO_CLOSE:
+    closeServo();
+    break;
 
-    case CMD_SERVO_CLOSE:
-        closeServo();
-        break;
+  case CMD_AUX_STEPPER_CW:
+    rotateAuxStepperCW();
+    break;
 
-    case CMD_AUX_STEPPER_CW:
-        rotateAuxStepperCW();
-        break;
-
-    default:
-        break;
-    }
+  default:
+    break;
+  }
 }
 
 // Pulls two integers out of a string, ignoring any separators
 // (space, comma, colon, etc). Returns false if two were not found.
 bool parseTwoNumbers(const char *s, long *outA, long *outB)
 {
-    long values[2] = {0, 0};
-    uint8_t found = 0;
-    uint8_t i = 0;
+  long values[2] = {0, 0};
+  uint8_t found = 0;
+  uint8_t i = 0;
 
-    while (s[i] != '\0' && found < 2)
+  while (s[i] != '\0' && found < 2)
+  {
+    if (s[i] >= '0' && s[i] <= '9')
     {
-        if (s[i] >= '0' && s[i] <= '9')
-        {
-            long v = 0;
-            while (s[i] >= '0' && s[i] <= '9')
-            {
-                v = v * 10 + (s[i] - '0');
-                i++;
-            }
-            values[found++] = v;
-        }
-        else
-        {
-            i++;
-        }
+      long v = 0;
+      while (s[i] >= '0' && s[i] <= '9')
+      {
+        v = v * 10 + (s[i] - '0');
+        i++;
+      }
+      values[found++] = v;
     }
-
-    if (found < 2)
+    else
     {
-        return false;
+      i++;
     }
+  }
 
-    *outA = values[0];
-    *outB = values[1];
-    return true;
+  if (found < 2)
+  {
+    return false;
+  }
+
+  *outA = values[0];
+  *outB = values[1];
+  return true;
 }
 
 // ============================================================
@@ -684,57 +684,57 @@ bool parseTwoNumbers(const char *s, long *outA, long *outB)
 
 void executeMove(uint8_t index)
 {
-    const MoveDef &m = MOVES[index];
+  const MoveDef &m = MOVES[index];
 
-    Serial.println();
-    Serial.print("COMMAND: ");
-    Serial.println(m.label);
+  Serial.println();
+  Serial.print("COMMAND: ");
+  Serial.println(m.label);
 
-    uint8_t blocked = blockReason(m.axis, m.sign);
-    if (blocked != BLOCK_NONE)
-    {
-        printBlockMessage(blocked, m.axis, m.sign);
-        return;
-    }
+  uint8_t blocked = blockReason(m.axis, m.sign);
+  if (blocked != BLOCK_NONE)
+  {
+    printBlockMessage(blocked, m.axis, m.sign);
+    return;
+  }
 
-    setDirection(m.dir1, m.dir2, m.dir3);
+  setDirection(m.dir1, m.dir2, m.dir3);
 
-    unsigned long moved = moveSteps(stepsPerMove, m.axis, m.sign);
-    stepCounts[index] += moved;
+  unsigned long moved = moveSteps(stepsPerMove, m.axis, m.sign);
+  stepCounts[index] += moved;
 
-    // A manual jog invalidates the "we are sitting on cell N" idea.
-    // Z is not part of the X/Y grid, so a Z jog leaves the cell alone.
-    if (m.axis != AXIS_Z)
-    {
-        curCol = 0;
-        curRow = 0;
-    }
+  // A manual jog invalidates the "we are sitting on cell N" idea.
+  // Z is not part of the X/Y grid, so a Z jog leaves the cell alone.
+  if (m.axis != AXIS_Z)
+  {
+    curCol = 0;
+    curRow = 0;
+  }
 
-    Serial.print("  Moved ");
-    Serial.print(moved);
-    Serial.print(" of ");
-    Serial.print(stepsPerMove);
-    Serial.print(" steps  [");
-    Serial.print(m.label);
-    Serial.print("]  pos ");
+  Serial.print("  Moved ");
+  Serial.print(moved);
+  Serial.print(" of ");
+  Serial.print(stepsPerMove);
+  Serial.print(" steps  [");
+  Serial.print(m.label);
+  Serial.print("]  pos ");
+  Serial.print(axisName(m.axis));
+  Serial.print(" = ");
+  Serial.println(axisPos[m.axis]);
+
+  if (moved < (unsigned long)stepsPerMove)
+  {
+    uint8_t why = blockReason(m.axis, m.sign);
+    Serial.print("  STOPPED EARLY - ");
     Serial.print(axisName(m.axis));
-    Serial.print(" = ");
-    Serial.println(axisPos[m.axis]);
-
-    if (moved < (unsigned long)stepsPerMove)
+    if (why == BLOCK_SOFTWARE)
     {
-        uint8_t why = blockReason(m.axis, m.sign);
-        Serial.print("  STOPPED EARLY - ");
-        Serial.print(axisName(m.axis));
-        if (why == BLOCK_SOFTWARE)
-        {
-            Serial.println(" SOFTWARE limit reached during the move.");
-        }
-        else
-        {
-            Serial.println(" limit switch tripped during the move.");
-        }
+      Serial.println(" SOFTWARE limit reached during the move.");
     }
+    else
+    {
+      Serial.println(" limit switch tripped during the move.");
+    }
+  }
 }
 
 // Sends step pulses, checking limits as it goes.
@@ -743,68 +743,68 @@ void executeMove(uint8_t index)
 // Returns the number of pulses actually sent.
 unsigned long moveSteps(long steps, uint8_t axis, int8_t sign)
 {
-    enableMotors();
+  enableMotors();
 
-    unsigned long done = 0;
-    uint8_t counter = 0;
-    bool isZ = (axis == AXIS_Z);
+  unsigned long done = 0;
+  uint8_t counter = 0;
+  bool isZ = (axis == AXIS_Z);
 
-    for (long i = 0; i < steps; i++)
+  for (long i = 0; i < steps; i++)
+  {
+    if (counter == 0)
     {
-        if (counter == 0)
-        {
-            if (blockReason(axis, sign) != BLOCK_NONE)
-            {
-                break;
-            }
-        }
-        counter++;
-        if (counter >= LIMIT_CHECK_EVERY_N_STEPS)
-        {
-            counter = 0;
-        }
-
-        if (isZ)
-        {
-            digitalWrite(STEP_PIN3, HIGH);
-        }
-        else
-        {
-            digitalWrite(STEP_PIN1, HIGH);
-            digitalWrite(STEP_PIN2, HIGH);
-        }
-        delayMicroseconds(STEP_DELAY);
-
-        if (isZ)
-        {
-            digitalWrite(STEP_PIN3, LOW);
-        }
-        else
-        {
-            digitalWrite(STEP_PIN1, LOW);
-            digitalWrite(STEP_PIN2, LOW);
-        }
-        delayMicroseconds(STEP_DELAY);
-
-        axisPos[axis] += sign;
-        done++;
+      if (blockReason(axis, sign) != BLOCK_NONE)
+      {
+        break;
+      }
+    }
+    counter++;
+    if (counter >= LIMIT_CHECK_EVERY_N_STEPS)
+    {
+      counter = 0;
     }
 
-    return done;
+    if (isZ)
+    {
+      digitalWrite(STEP_PIN3, HIGH);
+    }
+    else
+    {
+      digitalWrite(STEP_PIN1, HIGH);
+      digitalWrite(STEP_PIN2, HIGH);
+    }
+    delayMicroseconds(STEP_DELAY);
+
+    if (isZ)
+    {
+      digitalWrite(STEP_PIN3, LOW);
+    }
+    else
+    {
+      digitalWrite(STEP_PIN1, LOW);
+      digitalWrite(STEP_PIN2, LOW);
+    }
+    delayMicroseconds(STEP_DELAY);
+
+    axisPos[axis] += sign;
+    done++;
+  }
+
+  return done;
 }
 
 // Finds the MOVES row that drives the given axis in the given
 // direction, so direction pins and counters stay in one place.
 int8_t findMoveIndex(uint8_t axis, int8_t sign)
 {
-    for (uint8_t i = 0; i < MOVE_COUNT; i++)
+  for (uint8_t i = 0; i < MOVE_COUNT; i++)
+  {
+    if (MOVES[i].axis == axis && MOVES[i].sign == sign)
     {
-        if (MOVES[i].axis == axis && MOVES[i].sign == sign)
-        {
-            return (int8_t)i;
-        }
+      return (int8_t)i;
     }
-    return -1;
+  }
+  return -1;
 }
 
 // Moves one axis by a signed number of steps, using the right
@@ -812,69 +812,69 @@ int8_t findMoveIndex(uint8_t axis, int8_t sign)
 // Returns steps actually sent.
 unsigned long moveAxisSteps(uint8_t axis, long deltaSteps)
 {
-    if (deltaSteps == 0)
-    {
-        return 0;
-    }
+  if (deltaSteps == 0)
+  {
+    return 0;
+  }
 
-    int8_t sign = (deltaSteps > 0) ? DIR_POS : DIR_NEG;
-    long count = (deltaSteps > 0) ? deltaSteps : -deltaSteps;
+  int8_t sign = (deltaSteps > 0) ? DIR_POS : DIR_NEG;
+  long count = (deltaSteps > 0) ? deltaSteps : -deltaSteps;
 
-    int8_t idx = findMoveIndex(axis, sign);
-    if (idx < 0)
-    {
-        return 0;
-    }
+  int8_t idx = findMoveIndex(axis, sign);
+  if (idx < 0)
+  {
+    return 0;
+  }
 
-    setDirection(MOVES[idx].dir1, MOVES[idx].dir2, MOVES[idx].dir3);
-    unsigned long moved = moveSteps(count, axis, sign);
-    stepCounts[idx] += moved;
-    return moved;
+  setDirection(MOVES[idx].dir1, MOVES[idx].dir2, MOVES[idx].dir3);
+  unsigned long moved = moveSteps(count, axis, sign);
+  stepCounts[idx] += moved;
+  return moved;
 }
 
 // Drives an axis to an absolute machine position.
 bool moveAxisTo(uint8_t axis, long target)
 {
-    long delta = target - axisPos[axis];
-    long want = (delta > 0) ? delta : -delta;
+  long delta = target - axisPos[axis];
+  long want = (delta > 0) ? delta : -delta;
 
-    unsigned long moved = moveAxisSteps(axis, delta);
+  unsigned long moved = moveAxisSteps(axis, delta);
 
-    if (moved < (unsigned long)want)
-    {
-        Serial.print("  !! ");
-        Serial.print(axisName(axis));
-        Serial.print(" stopped early at ");
-        Serial.print(axisPos[axis]);
-        Serial.print(" (wanted ");
-        Serial.print(target);
-        Serial.println(")");
-        return false;
-    }
-    return true;
+  if (moved < (unsigned long)want)
+  {
+    Serial.print("  !! ");
+    Serial.print(axisName(axis));
+    Serial.print(" stopped early at ");
+    Serial.print(axisPos[axis]);
+    Serial.print(" (wanted ");
+    Serial.print(target);
+    Serial.println(")");
+    return false;
+  }
+  return true;
 }
 
 void setDirection(bool dir1, bool dir2, bool dir3)
 {
-    digitalWrite(DIR_PIN1, dir1);
-    digitalWrite(DIR_PIN2, dir2);
-    digitalWrite(DIR_PIN3, dir3);
-    delay(DIR_SETTLE_MS);
+  digitalWrite(DIR_PIN1, dir1);
+  digitalWrite(DIR_PIN2, dir2);
+  digitalWrite(DIR_PIN3, dir3);
+  delay(DIR_SETTLE_MS);
 }
 
 void enableMotors()
 {
-    digitalWrite(EN_PIN1, EN_ACTIVE_LEVEL);
-    digitalWrite(EN_PIN2, EN_ACTIVE_LEVEL);
+  digitalWrite(EN_PIN1, EN_ACTIVE_LEVEL);
+  digitalWrite(EN_PIN2, EN_ACTIVE_LEVEL);
 }
 
 void disableMotors()
 {
-    digitalWrite(STEP_PIN1, LOW);
-    digitalWrite(STEP_PIN2, LOW);
+  digitalWrite(STEP_PIN1, LOW);
+  digitalWrite(STEP_PIN2, LOW);
 
-    digitalWrite(EN_PIN1, EN_INACTIVE_LEVEL);
-    digitalWrite(EN_PIN2, EN_INACTIVE_LEVEL);
+  digitalWrite(EN_PIN1, EN_INACTIVE_LEVEL);
+  digitalWrite(EN_PIN2, EN_INACTIVE_LEVEL);
 }
 
 // ============================================================
@@ -883,24 +883,24 @@ void disableMotors()
 
 void openServo()
 {
-    gripperServo.write(SERVO_OPEN_ANGLE);
-    servoIsOpen = true;
+  gripperServo.write(SERVO_OPEN_ANGLE);
+  servoIsOpen = true;
 
-    Serial.println();
-    Serial.print("SERVO: OPEN (");
-    Serial.print(SERVO_OPEN_ANGLE);
-    Serial.println(" deg)");
+  Serial.println();
+  Serial.print("SERVO: OPEN (");
+  Serial.print(SERVO_OPEN_ANGLE);
+  Serial.println(" deg)");
 }
 
 void closeServo()
 {
-    gripperServo.write(SERVO_CLOSE_ANGLE);
-    servoIsOpen = false;
+  gripperServo.write(SERVO_CLOSE_ANGLE);
+  servoIsOpen = false;
 
-    Serial.println();
-    Serial.print("SERVO: CLOSE (");
-    Serial.print(SERVO_CLOSE_ANGLE);
-    Serial.println(" deg)");
+  Serial.println();
+  Serial.print("SERVO: CLOSE (");
+  Serial.print(SERVO_CLOSE_ANGLE);
+  Serial.println(" deg)");
 }
 
 // ============================================================
@@ -909,20 +909,20 @@ void closeServo()
 
 void rotateAuxStepperCW()
 {
-    Serial.println();
-    Serial.println("AUX STEPPER: rotating ~90 deg CW...");
-    auxStepper.step(AUX_STEPPER_QUARTER_TURN);
-    auxStepperPos += AUX_STEPPER_QUARTER_TURN;
-    Serial.println("AUX STEPPER: done.");
+  Serial.println();
+  Serial.println("AUX STEPPER: rotating ~90 deg CW...");
+  auxStepper.step(AUX_STEPPER_QUARTER_TURN);
+  auxStepperPos += AUX_STEPPER_QUARTER_TURN;
+  Serial.println("AUX STEPPER: done.");
 }
 
 void rotateAuxStepperCCW()
 {
-    Serial.println();
-    Serial.println("AUX STEPPER: rotating ~90 deg CCW...");
-    auxStepper.step(-AUX_STEPPER_QUARTER_TURN);
-    auxStepperPos -= AUX_STEPPER_QUARTER_TURN;
-    Serial.println("AUX STEPPER: done.");
+  Serial.println();
+  Serial.println("AUX STEPPER: rotating ~90 deg CCW...");
+  auxStepper.step(-AUX_STEPPER_QUARTER_TURN);
+  auxStepperPos -= AUX_STEPPER_QUARTER_TURN;
+  Serial.println("AUX STEPPER: done.");
 }
 
 // ============================================================
@@ -931,105 +931,105 @@ void rotateAuxStepperCCW()
 
 long homeMaxStepsOf(uint8_t axis)
 {
-    return (axis == AXIS_X) ? HOME_MAX_STEPS_X : HOME_MAX_STEPS_Y;
+  return (axis == AXIS_X) ? HOME_MAX_STEPS_X : HOME_MAX_STEPS_Y;
 }
 
 bool limitEnabledOn(uint8_t axis)
 {
-    return (axis == AXIS_X) ? LIMIT_X_ENABLED : LIMIT_Y_ENABLED;
+  return (axis == AXIS_X) ? LIMIT_X_ENABLED : LIMIT_Y_ENABLED;
 }
 
 // Drives toward the axis' physical switch until it trips.
 // The switch itself sets axisPos to 0 via isPhysicalBlocked().
 bool homeAxis(uint8_t axis)
 {
-    if (!limitEnabledOn(axis))
-    {
-        Serial.print("  CANNOT HOME ");
-        Serial.print(axisName(axis));
-        Serial.println(" - its limit switch is DISABLED in config.");
-        axisHomed[axis] = false;
-        return false;
-    }
-
-    int8_t sign = limitEndOf(axis);
-    long travelled = 0;
-    long maxSteps = homeMaxStepsOf(axis);
-
-    if (HOME_VERBOSE)
-    {
-        Serial.print("  Homing ");
-        Serial.print(axisName(axis));
-        Serial.print(signName(sign));
-        Serial.print(" ...");
-    }
-
-    while (travelled < maxSteps)
-    {
-        if (isPhysicalBlocked(axis, sign))
-        {
-            axisPos[axis] = 0; // belt and braces; the check already did it
-            axisHomed[axis] = true;
-            if (HOME_VERBOSE)
-            {
-                Serial.print(" switch found after ");
-                Serial.print(travelled);
-                Serial.println(" steps. Axis zeroed.");
-            }
-            return true;
-        }
-
-        unsigned long moved = moveAxisSteps(axis, (long)sign * HOME_CHUNK_STEPS);
-        travelled += (long)moved;
-
-        if (moved == 0)
-        {
-            break; // something is blocking and it is not the switch
-        }
-    }
-
-    // Fell out without finding the switch.
-    if (isPhysicalBlocked(axis, sign))
-    {
-        axisPos[axis] = 0;
-        axisHomed[axis] = true;
-        if (HOME_VERBOSE)
-        {
-            Serial.println(" switch found. Axis zeroed.");
-        }
-        return true;
-    }
-
-    Serial.println();
-    Serial.print("  HOMING FAILED on ");
+  if (!limitEnabledOn(axis))
+  {
+    Serial.print("  CANNOT HOME ");
     Serial.print(axisName(axis));
-    Serial.print(" after ");
-    Serial.print(travelled);
-    Serial.println(" steps - switch never tripped.");
-    Serial.println("  Check wiring, pin number, and NC/NO setting.");
+    Serial.println(" - its limit switch is DISABLED in config.");
     axisHomed[axis] = false;
     return false;
+  }
+
+  int8_t sign = limitEndOf(axis);
+  long travelled = 0;
+  long maxSteps = homeMaxStepsOf(axis);
+
+  if (HOME_VERBOSE)
+  {
+    Serial.print("  Homing ");
+    Serial.print(axisName(axis));
+    Serial.print(signName(sign));
+    Serial.print(" ...");
+  }
+
+  while (travelled < maxSteps)
+  {
+    if (isPhysicalBlocked(axis, sign))
+    {
+      axisPos[axis] = 0; // belt and braces; the check already did it
+      axisHomed[axis] = true;
+      if (HOME_VERBOSE)
+      {
+        Serial.print(" switch found after ");
+        Serial.print(travelled);
+        Serial.println(" steps. Axis zeroed.");
+      }
+      return true;
+    }
+
+    unsigned long moved = moveAxisSteps(axis, (long)sign * HOME_CHUNK_STEPS);
+    travelled += (long)moved;
+
+    if (moved == 0)
+    {
+      break; // something is blocking and it is not the switch
+    }
+  }
+
+  // Fell out without finding the switch.
+  if (isPhysicalBlocked(axis, sign))
+  {
+    axisPos[axis] = 0;
+    axisHomed[axis] = true;
+    if (HOME_VERBOSE)
+    {
+      Serial.println(" switch found. Axis zeroed.");
+    }
+    return true;
+  }
+
+  Serial.println();
+  Serial.print("  HOMING FAILED on ");
+  Serial.print(axisName(axis));
+  Serial.print(" after ");
+  Serial.print(travelled);
+  Serial.println(" steps - switch never tripped.");
+  Serial.println("  Check wiring, pin number, and NC/NO setting.");
+  axisHomed[axis] = false;
+  return false;
 }
 
 // Y first, then X - same order as the go-to sequence.
 bool goToOrigin()
 {
-    Serial.println();
-    Serial.println("=== GO TO ORIGIN (homing both axes) ===");
+  Serial.println();
+  Serial.println("=== GO TO ORIGIN (homing both axes) ===");
 
-    bool okY = homeAxis(AXIS_Y);
-    bool okX = homeAxis(AXIS_X);
+  bool okY = homeAxis(AXIS_Y);
+  bool okX = homeAxis(AXIS_X);
 
-    if (okX && okY)
-    {
-        curCol = 0;
-        curRow = 0;
-        Serial.println("  AT ORIGIN. Position = X 0 / Y 0");
-        return true;
-    }
+  if (okX && okY)
+  {
+    curCol = 0;
+    curRow = 0;
+    Serial.println("  AT ORIGIN. Position = X 0 / Y 0");
+    return true;
+  }
 
-    Serial.println("  ORIGIN NOT REACHED - position is NOT trustworthy.");
-    return false;
+  Serial.println("  ORIGIN NOT REACHED - position is NOT trustworthy.");
+  return false;
 }
 
 // ============================================================
@@ -1040,17 +1040,17 @@ bool goToOrigin()
 // from the software limits so the two can never drift apart.
 long gridTravelOf(uint8_t axis)
 {
-    return softTravelOf(axis);
+  return softTravelOf(axis);
 }
 
 int8_t gridDirOf(uint8_t axis)
 {
-    return softEndOf(axis);
+  return softEndOf(axis);
 }
 
 long gridCountOf(uint8_t axis)
 {
-    return (axis == AXIS_X) ? GRID_COLS : GRID_ROWS;
+  return (axis == AXIS_X) ? GRID_COLS : GRID_ROWS;
 }
 
 // Centre of cell `index` (1-based) as a MAGNITUDE from the origin,
@@ -1058,91 +1058,91 @@ long gridCountOf(uint8_t axis)
 //     magnitude = (index - 0.5) * travel / count
 long cellCentreMagnitude(uint8_t axis, long index)
 {
-    long travel = gridTravelOf(axis);
-    long count = gridCountOf(axis);
+  long travel = gridTravelOf(axis);
+  long count = gridCountOf(axis);
 
-    long numerator = (2L * index - 1L) * travel;
-    long denominator = 2L * count;
+  long numerator = (2L * index - 1L) * travel;
+  long denominator = 2L * count;
 
-    long mag = (numerator + denominator / 2) / denominator;
+  long mag = (numerator + denominator / 2) / denominator;
 
-    if (mag > travel)
-    {
-        mag = travel;
-    }
-    if (mag < 0)
-    {
-        mag = 0;
-    }
-    return mag;
+  if (mag > travel)
+  {
+    mag = travel;
+  }
+  if (mag < 0)
+  {
+    mag = 0;
+  }
+  return mag;
 }
 
 // Same thing as a signed machine position.
 long cellTargetPosition(uint8_t axis, long index)
 {
-    return cellCentreMagnitude(axis, index) * (long)gridDirOf(axis);
+  return cellCentreMagnitude(axis, index) * (long)gridDirOf(axis);
 }
 
 // Cell size in steps, printed as a rounded value.
 long cellSizeOf(uint8_t axis)
 {
-    return gridTravelOf(axis) / gridCountOf(axis);
+  return gridTravelOf(axis) / gridCountOf(axis);
 }
 
 // Which cell index a raw position falls in. 0 = outside the grid.
 long positionToIndex(uint8_t axis, long pos)
 {
-    long travel = gridTravelOf(axis);
-    long count = gridCountOf(axis);
-    long mag = pos * (long)gridDirOf(axis); // distance from origin
+  long travel = gridTravelOf(axis);
+  long count = gridCountOf(axis);
+  long mag = pos * (long)gridDirOf(axis); // distance from origin
 
-    if (mag < 0 || mag > travel || travel <= 0)
-    {
-        return 0;
-    }
+  if (mag < 0 || mag > travel || travel <= 0)
+  {
+    return 0;
+  }
 
-    long idx = (mag * count) / travel + 1;
-    if (idx > count)
-    {
-        idx = count;
-    }
-    return idx;
+  long idx = (mag * count) / travel + 1;
+  if (idx > count)
+  {
+    idx = count;
+  }
+  return idx;
 }
 
 bool gridReady()
 {
-    if (!softEnabledOn(AXIS_X) || !softEnabledOn(AXIS_Y))
-    {
-        Serial.println("  ERROR - grid needs BOTH software limits enabled");
-        Serial.println("  and non-zero. Check SECTION 6B.");
-        return false;
-    }
-    return true;
+  if (!softEnabledOn(AXIS_X) || !softEnabledOn(AXIS_Y))
+  {
+    Serial.println("  ERROR - grid needs BOTH software limits enabled");
+    Serial.println("  and non-zero. Check SECTION 6B.");
+    return false;
+  }
+  return true;
 }
 
 void setGridSize(long cols, long rows)
 {
-    Serial.println();
+  Serial.println();
 
-    if (cols < 1 || rows < 1 || cols > GRID_COLS_MAX || rows > GRID_ROWS_MAX)
-    {
-        Serial.print("  ERROR - grid must be 1..");
-        Serial.print(GRID_COLS_MAX);
-        Serial.print(" cols and 1..");
-        Serial.print(GRID_ROWS_MAX);
-        Serial.println(" rows.");
-        return;
-    }
+  if (cols < 1 || rows < 1 || cols > GRID_COLS_MAX || rows > GRID_ROWS_MAX)
+  {
+    Serial.print("  ERROR - grid must be 1..");
+    Serial.print(GRID_COLS_MAX);
+    Serial.print(" cols and 1..");
+    Serial.print(GRID_ROWS_MAX);
+    Serial.println(" rows.");
+    return;
+  }
 
-    GRID_COLS = cols;
-    GRID_ROWS = rows;
+  GRID_COLS = cols;
+  GRID_ROWS = rows;
 
-    // Old cell numbers no longer mean the same thing.
-    curCol = positionToIndex(AXIS_X, axisPos[AXIS_X]);
-    curRow = positionToIndex(AXIS_Y, axisPos[AXIS_Y]);
+  // Old cell numbers no longer mean the same thing.
+  curCol = positionToIndex(AXIS_X, axisPos[AXIS_X]);
+  curRow = positionToIndex(AXIS_Y, axisPos[AXIS_Y]);
 
-    Serial.println("GRID RESIZED");
-    printGridConfig();
+  Serial.println("GRID RESIZED");
+  printGridConfig();
 }
 
 // ============================================================
@@ -1151,73 +1151,73 @@ void setGridSize(long cols, long rows)
 
 void gotoCell(long col, long row)
 {
-    Serial.println();
-    Serial.print("=== GOTO CELL [");
+  Serial.println();
+  Serial.print("=== GOTO CELL [");
+  Serial.print(col);
+  Serial.print(",");
+  Serial.print(row);
+  Serial.println("] ===");
+
+  if (!gridReady())
+  {
+    return;
+  }
+
+  if (col < 1 || col > GRID_COLS || row < 1 || row > GRID_ROWS)
+  {
+    Serial.print("  ERROR - out of range. Valid: col 1..");
+    Serial.print(GRID_COLS);
+    Serial.print(", row 1..");
+    Serial.println(GRID_ROWS);
+    return;
+  }
+
+  long targetX = cellTargetPosition(AXIS_X, col);
+  long targetY = cellTargetPosition(AXIS_Y, row);
+
+  Serial.print("  Target position: X ");
+  Serial.print(targetX);
+  Serial.print(" / Y ");
+  Serial.println(targetY);
+
+  // STEP 1 - back to a known origin.
+  if (!goToOrigin())
+  {
+    Serial.println("  ABORTED - cannot trust position without origin.");
+    return;
+  }
+
+  // STEP 2 - Y axis.
+  Serial.print("  Moving Y to ");
+  Serial.print(targetY);
+  Serial.println(" ...");
+  bool okY = moveAxisTo(AXIS_Y, targetY);
+
+  // STEP 3 - X axis.
+  Serial.print("  Moving X to ");
+  Serial.print(targetX);
+  Serial.println(" ...");
+  bool okX = moveAxisTo(AXIS_X, targetX);
+
+  if (okX && okY)
+  {
+    curCol = col;
+    curRow = row;
+    Serial.print("  ARRIVED at cell [");
     Serial.print(col);
     Serial.print(",");
     Serial.print(row);
-    Serial.println("] ===");
-
-    if (!gridReady())
-    {
-        return;
-    }
-
-    if (col < 1 || col > GRID_COLS || row < 1 || row > GRID_ROWS)
-    {
-        Serial.print("  ERROR - out of range. Valid: col 1..");
-        Serial.print(GRID_COLS);
-        Serial.print(", row 1..");
-        Serial.println(GRID_ROWS);
-        return;
-    }
-
-    long targetX = cellTargetPosition(AXIS_X, col);
-    long targetY = cellTargetPosition(AXIS_Y, row);
-
-    Serial.print("  Target position: X ");
-    Serial.print(targetX);
+    Serial.print("]  pos X ");
+    Serial.print(axisPos[AXIS_X]);
     Serial.print(" / Y ");
-    Serial.println(targetY);
-
-    // STEP 1 - back to a known origin.
-    if (!goToOrigin())
-    {
-        Serial.println("  ABORTED - cannot trust position without origin.");
-        return;
-    }
-
-    // STEP 2 - Y axis.
-    Serial.print("  Moving Y to ");
-    Serial.print(targetY);
-    Serial.println(" ...");
-    bool okY = moveAxisTo(AXIS_Y, targetY);
-
-    // STEP 3 - X axis.
-    Serial.print("  Moving X to ");
-    Serial.print(targetX);
-    Serial.println(" ...");
-    bool okX = moveAxisTo(AXIS_X, targetX);
-
-    if (okX && okY)
-    {
-        curCol = col;
-        curRow = row;
-        Serial.print("  ARRIVED at cell [");
-        Serial.print(col);
-        Serial.print(",");
-        Serial.print(row);
-        Serial.print("]  pos X ");
-        Serial.print(axisPos[AXIS_X]);
-        Serial.print(" / Y ");
-        Serial.println(axisPos[AXIS_Y]);
-    }
-    else
-    {
-        curCol = positionToIndex(AXIS_X, axisPos[AXIS_X]);
-        curRow = positionToIndex(AXIS_Y, axisPos[AXIS_Y]);
-        Serial.println("  MOVE INCOMPLETE - a limit stopped it short.");
-    }
+    Serial.println(axisPos[AXIS_Y]);
+  }
+  else
+  {
+    curCol = positionToIndex(AXIS_X, axisPos[AXIS_X]);
+    curRow = positionToIndex(AXIS_Y, axisPos[AXIS_Y]);
+    Serial.println("  MOVE INCOMPLETE - a limit stopped it short.");
+  }
 }
 
 // ============================================================
@@ -1226,87 +1226,87 @@ void gotoCell(long col, long row)
 
 bool interpretLimit(int pinState, bool useNC)
 {
-    if (useNC)
-    {
-        return pinState == HIGH;
-    }
-    else
-    {
-        return pinState == LOW;
-    }
+  if (useNC)
+  {
+    return pinState == HIGH;
+  }
+  else
+  {
+    return pinState == LOW;
+  }
 }
 
 bool isLimitHit(uint8_t axis)
 {
-    int pin;
-    bool useNC;
-    bool enabled;
+  int pin;
+  bool useNC;
+  bool enabled;
 
-    if (axis == AXIS_X)
-    {
-        pin = LIMIT_PIN_X;
-        useNC = LIMIT_X_USE_NC;
-        enabled = LIMIT_X_ENABLED;
-    }
-    else if (axis == AXIS_Y)
-    {
-        pin = LIMIT_PIN_Y;
-        useNC = LIMIT_Y_USE_NC;
-        enabled = LIMIT_Y_ENABLED;
-    }
-    else
-    {
-        pin = LIMIT_PIN_Z;
-        useNC = LIMIT_Z_USE_NC;
-        enabled = LIMIT_Z_ENABLED;
-    }
+  if (axis == AXIS_X)
+  {
+    pin = LIMIT_PIN_X;
+    useNC = LIMIT_X_USE_NC;
+    enabled = LIMIT_X_ENABLED;
+  }
+  else if (axis == AXIS_Y)
+  {
+    pin = LIMIT_PIN_Y;
+    useNC = LIMIT_Y_USE_NC;
+    enabled = LIMIT_Y_ENABLED;
+  }
+  else
+  {
+    pin = LIMIT_PIN_Z;
+    useNC = LIMIT_Z_USE_NC;
+    enabled = LIMIT_Z_ENABLED;
+  }
 
-    if (!enabled)
-    {
-        return false;
-    }
+  if (!enabled)
+  {
+    return false;
+  }
 
-    if (!interpretLimit(digitalRead(pin), useNC))
-    {
-        return false;
-    }
+  if (!interpretLimit(digitalRead(pin), useNC))
+  {
+    return false;
+  }
 
-    delayMicroseconds(LIMIT_CONFIRM_US);
-    return interpretLimit(digitalRead(pin), useNC);
+  delayMicroseconds(LIMIT_CONFIRM_US);
+  return interpretLimit(digitalRead(pin), useNC);
 }
 
 int8_t limitEndOf(uint8_t axis)
 {
-    if (axis == AXIS_X)
-    {
-        return LIMIT_X_AT_END;
-    }
-    if (axis == AXIS_Y)
-    {
-        return LIMIT_Y_AT_END;
-    }
-    return LIMIT_Z_AT_END;
+  if (axis == AXIS_X)
+  {
+    return LIMIT_X_AT_END;
+  }
+  if (axis == AXIS_Y)
+  {
+    return LIMIT_Y_AT_END;
+  }
+  return LIMIT_Z_AT_END;
 }
 
 bool isPhysicalBlocked(uint8_t axis, int8_t sign)
 {
-    if (sign != limitEndOf(axis))
-    {
-        return false;
-    }
+  if (sign != limitEndOf(axis))
+  {
+    return false;
+  }
 
-    if (!isLimitHit(axis))
-    {
-        return false;
-    }
+  if (!isLimitHit(axis))
+  {
+    return false;
+  }
 
-    if (SOFT_ZERO_ON_LIMIT_HIT)
-    {
-        axisPos[axis] = 0;
-        axisHomed[axis] = true;
-    }
+  if (SOFT_ZERO_ON_LIMIT_HIT)
+  {
+    axisPos[axis] = 0;
+    axisHomed[axis] = true;
+  }
 
-    return true;
+  return true;
 }
 
 // ============================================================
@@ -1315,74 +1315,74 @@ bool isPhysicalBlocked(uint8_t axis, int8_t sign)
 
 int8_t softEndOf(uint8_t axis)
 {
-    if (axis == AXIS_X)
-    {
-        return SOFT_LIMIT_X_AT_END;
-    }
-    if (axis == AXIS_Y)
-    {
-        return SOFT_LIMIT_Y_AT_END;
-    }
-    return SOFT_LIMIT_Z_AT_END;
+  if (axis == AXIS_X)
+  {
+    return SOFT_LIMIT_X_AT_END;
+  }
+  if (axis == AXIS_Y)
+  {
+    return SOFT_LIMIT_Y_AT_END;
+  }
+  return SOFT_LIMIT_Z_AT_END;
 }
 
 long softTravelOf(uint8_t axis)
 {
-    if (axis == AXIS_X)
-    {
-        return SOFT_LIMIT_X_TRAVEL;
-    }
-    if (axis == AXIS_Y)
-    {
-        return SOFT_LIMIT_Y_TRAVEL;
-    }
-    return SOFT_LIMIT_Z_TRAVEL;
+  if (axis == AXIS_X)
+  {
+    return SOFT_LIMIT_X_TRAVEL;
+  }
+  if (axis == AXIS_Y)
+  {
+    return SOFT_LIMIT_Y_TRAVEL;
+  }
+  return SOFT_LIMIT_Z_TRAVEL;
 }
 
 bool softEnabledOn(uint8_t axis)
 {
-    bool enabled;
-    if (axis == AXIS_X)
-    {
-        enabled = SOFT_LIMIT_X_ENABLED;
-    }
-    else if (axis == AXIS_Y)
-    {
-        enabled = SOFT_LIMIT_Y_ENABLED;
-    }
-    else
-    {
-        enabled = SOFT_LIMIT_Z_ENABLED;
-    }
-    return enabled && softTravelOf(axis) != SOFT_LIMIT_INFINITE;
+  bool enabled;
+  if (axis == AXIS_X)
+  {
+    enabled = SOFT_LIMIT_X_ENABLED;
+  }
+  else if (axis == AXIS_Y)
+  {
+    enabled = SOFT_LIMIT_Y_ENABLED;
+  }
+  else
+  {
+    enabled = SOFT_LIMIT_Z_ENABLED;
+  }
+  return enabled && softTravelOf(axis) != SOFT_LIMIT_INFINITE;
 }
 
 long softStepsRemaining(uint8_t axis, int8_t sign)
 {
-    if (!softEnabledOn(axis))
-    {
-        return -1;
-    }
-    if (sign != softEndOf(axis))
-    {
-        return -1;
-    }
+  if (!softEnabledOn(axis))
+  {
+    return -1;
+  }
+  if (sign != softEndOf(axis))
+  {
+    return -1;
+  }
 
-    long cap = softTravelOf(axis);
-    long travelled = axisPos[axis] * sign;
-    long remaining = cap - travelled;
+  long cap = softTravelOf(axis);
+  long travelled = axisPos[axis] * sign;
+  long remaining = cap - travelled;
 
-    return (remaining > 0) ? remaining : 0;
+  return (remaining > 0) ? remaining : 0;
 }
 
 bool isSoftBlocked(uint8_t axis, int8_t sign)
 {
-    long remaining = softStepsRemaining(axis, sign);
-    if (remaining < 0)
-    {
-        return false;
-    }
-    return remaining == 0;
+  long remaining = softStepsRemaining(axis, sign);
+  if (remaining < 0)
+  {
+    return false;
+  }
+  return remaining == 0;
 }
 
 // ============================================================
@@ -1391,60 +1391,60 @@ bool isSoftBlocked(uint8_t axis, int8_t sign)
 
 uint8_t blockReason(uint8_t axis, int8_t sign)
 {
-    if (isPhysicalBlocked(axis, sign))
-    {
-        return BLOCK_PHYSICAL;
-    }
-    if (isSoftBlocked(axis, sign))
-    {
-        return BLOCK_SOFTWARE;
-    }
-    return BLOCK_NONE;
+  if (isPhysicalBlocked(axis, sign))
+  {
+    return BLOCK_PHYSICAL;
+  }
+  if (isSoftBlocked(axis, sign))
+  {
+    return BLOCK_SOFTWARE;
+  }
+  return BLOCK_NONE;
 }
 
 void printBlockMessage(uint8_t reason, uint8_t axis, int8_t sign)
 {
-    if (reason == BLOCK_SOFTWARE)
+  if (reason == BLOCK_SOFTWARE)
+  {
+    Serial.print("  BLOCKED - ");
+    Serial.print(axisName(axis));
+    Serial.print(" SOFTWARE limit reached (");
+    Serial.print(softTravelOf(axis));
+    Serial.println(" steps of travel used).");
+    if (SOFT_LIMIT_VERBOSE)
     {
-        Serial.print("  BLOCKED - ");
-        Serial.print(axisName(axis));
-        Serial.print(" SOFTWARE limit reached (");
-        Serial.print(softTravelOf(axis));
-        Serial.println(" steps of travel used).");
-        if (SOFT_LIMIT_VERBOSE)
-        {
-            Serial.print("  Position ");
-            Serial.print(axisName(axis));
-            Serial.print(" = ");
-            Serial.print(axisPos[axis]);
-            Serial.println(". Move the opposite way to free travel.");
-        }
+      Serial.print("  Position ");
+      Serial.print(axisName(axis));
+      Serial.print(" = ");
+      Serial.print(axisPos[axis]);
+      Serial.println(". Move the opposite way to free travel.");
     }
-    else
-    {
-        Serial.print("  BLOCKED - ");
-        Serial.print(axisName(axis));
-        Serial.println(" limit switch is active in this direction.");
-        Serial.println("  Move the opposite way to back off the switch.");
-    }
+  }
+  else
+  {
+    Serial.print("  BLOCKED - ");
+    Serial.print(axisName(axis));
+    Serial.println(" limit switch is active in this direction.");
+    Serial.println("  Move the opposite way to back off the switch.");
+  }
 }
 
 const char *axisName(uint8_t axis)
 {
-    if (axis == AXIS_X)
-    {
-        return "X";
-    }
-    if (axis == AXIS_Y)
-    {
-        return "Y";
-    }
-    return "Z";
+  if (axis == AXIS_X)
+  {
+    return "X";
+  }
+  if (axis == AXIS_Y)
+  {
+    return "Y";
+  }
+  return "Z";
 }
 
 const char *signName(int8_t sign)
 {
-    return (sign == DIR_NEG) ? "-" : "+";
+  return (sign == DIR_NEG) ? "-" : "+";
 }
 
 // ============================================================
@@ -1453,172 +1453,172 @@ const char *signName(int8_t sign)
 
 void printLimitStatus()
 {
-    Serial.println();
-    Serial.println("--- PHYSICAL LIMIT SWITCHES ---");
+  Serial.println();
+  Serial.println("--- PHYSICAL LIMIT SWITCHES ---");
 
-    Serial.print("X (pin ");
-    Serial.print(LIMIT_PIN_X);
-    Serial.print(", ");
-    Serial.print(LIMIT_X_USE_NC ? "NC" : "NO");
-    Serial.print(", guards X");
-    Serial.print(signName(LIMIT_X_AT_END));
-    Serial.print("): ");
-    if (!LIMIT_X_ENABLED)
-        Serial.println("DISABLED IN CONFIG");
-    else if (isLimitHit(AXIS_X))
-        Serial.println("*** LIMIT HIT ***");
-    else
-        Serial.println("clear");
+  Serial.print("X (pin ");
+  Serial.print(LIMIT_PIN_X);
+  Serial.print(", ");
+  Serial.print(LIMIT_X_USE_NC ? "NC" : "NO");
+  Serial.print(", guards X");
+  Serial.print(signName(LIMIT_X_AT_END));
+  Serial.print("): ");
+  if (!LIMIT_X_ENABLED)
+    Serial.println("DISABLED IN CONFIG");
+  else if (isLimitHit(AXIS_X))
+    Serial.println("*** LIMIT HIT ***");
+  else
+    Serial.println("clear");
 
-    Serial.print("Y (pin ");
-    Serial.print(LIMIT_PIN_Y);
-    Serial.print(", ");
-    Serial.print(LIMIT_Y_USE_NC ? "NC" : "NO");
-    Serial.print(", guards Y");
-    Serial.print(signName(LIMIT_Y_AT_END));
-    Serial.print("): ");
-    if (!LIMIT_Y_ENABLED)
-        Serial.println("DISABLED IN CONFIG");
-    else if (isLimitHit(AXIS_Y))
-        Serial.println("*** LIMIT HIT ***");
-    else
-        Serial.println("clear");
+  Serial.print("Y (pin ");
+  Serial.print(LIMIT_PIN_Y);
+  Serial.print(", ");
+  Serial.print(LIMIT_Y_USE_NC ? "NC" : "NO");
+  Serial.print(", guards Y");
+  Serial.print(signName(LIMIT_Y_AT_END));
+  Serial.print("): ");
+  if (!LIMIT_Y_ENABLED)
+    Serial.println("DISABLED IN CONFIG");
+  else if (isLimitHit(AXIS_Y))
+    Serial.println("*** LIMIT HIT ***");
+  else
+    Serial.println("clear");
 
-    Serial.print("Z (pin ");
-    Serial.print(LIMIT_PIN_Z);
-    Serial.print(", ");
-    Serial.print(LIMIT_Z_USE_NC ? "NC" : "NO");
-    Serial.print(", guards Z");
-    Serial.print(signName(LIMIT_Z_AT_END));
-    Serial.print("): ");
-    if (!LIMIT_Z_ENABLED)
-        Serial.println("DISABLED IN CONFIG");
-    else if (isLimitHit(AXIS_Z))
-        Serial.println("*** LIMIT HIT ***");
-    else
-        Serial.println("clear");
+  Serial.print("Z (pin ");
+  Serial.print(LIMIT_PIN_Z);
+  Serial.print(", ");
+  Serial.print(LIMIT_Z_USE_NC ? "NC" : "NO");
+  Serial.print(", guards Z");
+  Serial.print(signName(LIMIT_Z_AT_END));
+  Serial.print("): ");
+  if (!LIMIT_Z_ENABLED)
+    Serial.println("DISABLED IN CONFIG");
+  else if (isLimitHit(AXIS_Z))
+    Serial.println("*** LIMIT HIT ***");
+  else
+    Serial.println("clear");
 }
 
 void printSoftLimitLine(uint8_t axis)
 {
-    Serial.print(axisName(axis));
-    Serial.print(" (guards ");
-    Serial.print(axisName(axis));
-    Serial.print(signName(softEndOf(axis)));
-    Serial.print("): ");
+  Serial.print(axisName(axis));
+  Serial.print(" (guards ");
+  Serial.print(axisName(axis));
+  Serial.print(signName(softEndOf(axis)));
+  Serial.print("): ");
 
-    if (!softEnabledOn(axis))
-    {
-        Serial.println("INFINITE / disabled");
-        return;
-    }
+  if (!softEnabledOn(axis))
+  {
+    Serial.println("INFINITE / disabled");
+    return;
+  }
 
-    long remaining = softStepsRemaining(axis, softEndOf(axis));
+  long remaining = softStepsRemaining(axis, softEndOf(axis));
 
-    Serial.print("cap ");
-    Serial.print(softTravelOf(axis));
-    Serial.print(" steps, ");
-    Serial.print(remaining);
-    Serial.print(" left");
-    if (remaining == 0)
-        Serial.println("  *** AT SOFT LIMIT ***");
-    else
-        Serial.println();
+  Serial.print("cap ");
+  Serial.print(softTravelOf(axis));
+  Serial.print(" steps, ");
+  Serial.print(remaining);
+  Serial.print(" left");
+  if (remaining == 0)
+    Serial.println("  *** AT SOFT LIMIT ***");
+  else
+    Serial.println();
 }
 
 void printSoftLimitStatus()
 {
-    Serial.println();
-    Serial.println("--- SOFTWARE LIMITS ---");
-    printSoftLimitLine(AXIS_X);
-    printSoftLimitLine(AXIS_Y);
-    printSoftLimitLine(AXIS_Z);
+  Serial.println();
+  Serial.println("--- SOFTWARE LIMITS ---");
+  printSoftLimitLine(AXIS_X);
+  printSoftLimitLine(AXIS_Y);
+  printSoftLimitLine(AXIS_Z);
 }
 
 void printPosition()
 {
-    Serial.println("--------------------------------------");
-    for (uint8_t a = 0; a < AXIS_COUNT; a++)
+  Serial.println("--------------------------------------");
+  for (uint8_t a = 0; a < AXIS_COUNT; a++)
+  {
+    Serial.print("  POS ");
+    Serial.print(axisName(a));
+    Serial.print("\t: ");
+    if (axisPos[a] > 0)
+      Serial.print("+");
+    Serial.print(axisPos[a]);
+    Serial.print(" steps");
+
+    if (!axisHomed[a])
     {
-        Serial.print("  POS ");
-        Serial.print(axisName(a));
-        Serial.print("\t: ");
-        if (axisPos[a] > 0)
-            Serial.print("+");
-        Serial.print(axisPos[a]);
-        Serial.print(" steps");
-
-        if (!axisHomed[a])
-        {
-            Serial.print("  (NOT HOMED)");
-        }
-
-        if (SHOW_DISTANCE)
-        {
-            Serial.print("  (");
-            Serial.print(axisPos[a] / STEPS_PER_UNIT, 3);
-            Serial.print(" ");
-            Serial.print(DISTANCE_UNIT);
-            Serial.print(")");
-        }
-        Serial.println();
+      Serial.print("  (NOT HOMED)");
     }
+
+    if (SHOW_DISTANCE)
+    {
+      Serial.print("  (");
+      Serial.print(axisPos[a] / STEPS_PER_UNIT, 3);
+      Serial.print(" ");
+      Serial.print(DISTANCE_UNIT);
+      Serial.print(")");
+    }
+    Serial.println();
+  }
 }
 
 void printServoStatus()
 {
-    Serial.println();
-    Serial.println("--- GRIPPER SERVO ---");
-    Serial.print("Pin ");
-    Serial.print(SERVO_PIN);
-    Serial.print(": ");
-    Serial.println(servoIsOpen ? "OPEN" : "CLOSED");
+  Serial.println();
+  Serial.println("--- GRIPPER SERVO ---");
+  Serial.print("Pin ");
+  Serial.print(SERVO_PIN);
+  Serial.print(": ");
+  Serial.println(servoIsOpen ? "OPEN" : "CLOSED");
 }
 
 void printAuxStepperStatus()
 {
-    Serial.println();
-    Serial.println("--- AUX STEPPER (28BYJ-48) ---");
-    Serial.print("Pins IN1-IN4: ");
-    Serial.print(AUX_STEPPER_IN1);
-    Serial.print(", ");
-    Serial.print(AUX_STEPPER_IN2);
-    Serial.print(", ");
-    Serial.print(AUX_STEPPER_IN3);
-    Serial.print(", ");
-    Serial.println(AUX_STEPPER_IN4);
-    Serial.print("Net position: ");
-    if (auxStepperPos > 0)
-        Serial.print("+");
-    Serial.print(auxStepperPos);
-    Serial.println(" steps (since power-on)");
+  Serial.println();
+  Serial.println("--- AUX STEPPER (28BYJ-48) ---");
+  Serial.print("Pins IN1-IN4: ");
+  Serial.print(AUX_STEPPER_IN1);
+  Serial.print(", ");
+  Serial.print(AUX_STEPPER_IN2);
+  Serial.print(", ");
+  Serial.print(AUX_STEPPER_IN3);
+  Serial.print(", ");
+  Serial.println(AUX_STEPPER_IN4);
+  Serial.print("Net position: ");
+  if (auxStepperPos > 0)
+    Serial.print("+");
+  Serial.print(auxStepperPos);
+  Serial.println(" steps (since power-on)");
 }
 
 void printGridConfig()
 {
-    Serial.println();
-    Serial.println("--- GRID ---");
-    Serial.print("Envelope : ");
-    Serial.print(gridTravelOf(AXIS_X));
-    Serial.print(" x ");
-    Serial.print(gridTravelOf(AXIS_Y));
-    Serial.println(" steps");
+  Serial.println();
+  Serial.println("--- GRID ---");
+  Serial.print("Envelope : ");
+  Serial.print(gridTravelOf(AXIS_X));
+  Serial.print(" x ");
+  Serial.print(gridTravelOf(AXIS_Y));
+  Serial.println(" steps");
 
-    Serial.print("Division : ");
-    Serial.print(GRID_COLS);
-    Serial.print(" cols x ");
-    Serial.print(GRID_ROWS);
-    Serial.print(" rows  = ");
-    Serial.print(GRID_COLS * GRID_ROWS);
-    Serial.println(" cells");
+  Serial.print("Division : ");
+  Serial.print(GRID_COLS);
+  Serial.print(" cols x ");
+  Serial.print(GRID_ROWS);
+  Serial.print(" rows  = ");
+  Serial.print(GRID_COLS * GRID_ROWS);
+  Serial.println(" cells");
 
-    Serial.print("Cell size: ~");
-    Serial.print((float)gridTravelOf(AXIS_X) / (float)GRID_COLS, 2);
-    Serial.print(" x ");
-    Serial.print((float)gridTravelOf(AXIS_Y) / (float)GRID_ROWS, 2);
-    Serial.println(" steps");
+  Serial.print("Cell size: ~");
+  Serial.print((float)gridTravelOf(AXIS_X) / (float)GRID_COLS, 2);
+  Serial.print(" x ");
+  Serial.print((float)gridTravelOf(AXIS_Y) / (float)GRID_ROWS, 2);
+  Serial.println(" steps");
 
-    Serial.println("col 1 = X switch side, row 1 = Y switch side");
+  Serial.println("col 1 = X switch side, row 1 = Y switch side");
 }
 
 // ============================================================
@@ -1627,108 +1627,108 @@ void printGridConfig()
 
 void printGrid()
 {
+  Serial.println();
+  Serial.println("======================================");
+  Serial.println("GRID MAP");
+  Serial.println("======================================");
+
+  printGridConfig();
+
+  long liveCol = positionToIndex(AXIS_X, axisPos[AXIS_X]);
+  long liveRow = positionToIndex(AXIS_Y, axisPos[AXIS_Y]);
+
+  Serial.println();
+  Serial.print("Machine pos : X ");
+  Serial.print(axisPos[AXIS_X]);
+  Serial.print("  /  Y ");
+  Serial.println(axisPos[AXIS_Y]);
+
+  Serial.print("Current cell: ");
+  if (!axisHomed[AXIS_X] || !axisHomed[AXIS_Y])
+  {
+    Serial.println("UNKNOWN - not homed yet (send 0)");
+  }
+  else if (liveCol == 0 || liveRow == 0)
+  {
+    Serial.println("outside the grid envelope");
+  }
+  else
+  {
+    Serial.print("[");
+    Serial.print(liveCol);
+    Serial.print(",");
+    Serial.print(liveRow);
+    Serial.println("]");
+  }
+
+  if (curCol > 0 && curRow > 0)
+  {
+    Serial.print("Last commanded cell: [");
+    Serial.print(curCol);
+    Serial.print(",");
+    Serial.print(curRow);
+    Serial.println("]");
+  }
+
+  if (GRID_COLS > GRID_MAP_MAX_COLS || GRID_ROWS > GRID_MAP_MAX_ROWS)
+  {
     Serial.println();
+    Serial.print("Map not drawn - grid larger than ");
+    Serial.print(GRID_MAP_MAX_COLS);
+    Serial.print("x");
+    Serial.print(GRID_MAP_MAX_ROWS);
+    Serial.println(" is unreadable here.");
     Serial.println("======================================");
-    Serial.println("GRID MAP");
-    Serial.println("======================================");
+    return;
+  }
 
-    printGridConfig();
+  Serial.println();
+  Serial.println("  # = machine   . = empty cell");
+  Serial.println("  (top row = far Y end, left col = X switch)");
+  Serial.println();
 
-    long liveCol = positionToIndex(AXIS_X, axisPos[AXIS_X]);
-    long liveRow = positionToIndex(AXIS_Y, axisPos[AXIS_Y]);
+  for (long r = GRID_ROWS; r >= 1; r--)
+  {
+    // Right-aligned row label, 3 wide.
+    if (r < 100)
+      Serial.print(" ");
+    if (r < 10)
+      Serial.print(" ");
+    Serial.print(r);
+    Serial.print(" |");
 
-    Serial.println();
-    Serial.print("Machine pos : X ");
-    Serial.print(axisPos[AXIS_X]);
-    Serial.print("  /  Y ");
-    Serial.println(axisPos[AXIS_Y]);
-
-    Serial.print("Current cell: ");
-    if (!axisHomed[AXIS_X] || !axisHomed[AXIS_Y])
-    {
-        Serial.println("UNKNOWN - not homed yet (send 0)");
-    }
-    else if (liveCol == 0 || liveRow == 0)
-    {
-        Serial.println("outside the grid envelope");
-    }
-    else
-    {
-        Serial.print("[");
-        Serial.print(liveCol);
-        Serial.print(",");
-        Serial.print(liveRow);
-        Serial.println("]");
-    }
-
-    if (curCol > 0 && curRow > 0)
-    {
-        Serial.print("Last commanded cell: [");
-        Serial.print(curCol);
-        Serial.print(",");
-        Serial.print(curRow);
-        Serial.println("]");
-    }
-
-    if (GRID_COLS > GRID_MAP_MAX_COLS || GRID_ROWS > GRID_MAP_MAX_ROWS)
-    {
-        Serial.println();
-        Serial.print("Map not drawn - grid larger than ");
-        Serial.print(GRID_MAP_MAX_COLS);
-        Serial.print("x");
-        Serial.print(GRID_MAP_MAX_ROWS);
-        Serial.println(" is unreadable here.");
-        Serial.println("======================================");
-        return;
-    }
-
-    Serial.println();
-    Serial.println("  # = machine   . = empty cell");
-    Serial.println("  (top row = far Y end, left col = X switch)");
-    Serial.println();
-
-    for (long r = GRID_ROWS; r >= 1; r--)
-    {
-        // Right-aligned row label, 3 wide.
-        if (r < 100)
-            Serial.print(" ");
-        if (r < 10)
-            Serial.print(" ");
-        Serial.print(r);
-        Serial.print(" |");
-
-        for (long c = 1; c <= GRID_COLS; c++)
-        {
-            if (c == liveCol && r == liveRow && axisHomed[AXIS_X] && axisHomed[AXIS_Y])
-            {
-                Serial.print(" #");
-            }
-            else
-            {
-                Serial.print(" .");
-            }
-        }
-        Serial.println();
-    }
-
-    // Bottom rule.
-    Serial.print("    +");
     for (long c = 1; c <= GRID_COLS; c++)
     {
-        Serial.print("--");
+      if (c == liveCol && r == liveRow && axisHomed[AXIS_X] && axisHomed[AXIS_Y])
+      {
+        Serial.print(" #");
+      }
+      else
+      {
+        Serial.print(" .");
+      }
     }
     Serial.println();
+  }
 
-    // Column numbers, last digit only (keeps the map aligned).
-    Serial.print("     ");
-    for (long c = 1; c <= GRID_COLS; c++)
-    {
-        Serial.print(c % 10);
-        Serial.print(" ");
-    }
-    Serial.println();
-    Serial.println("     ^ origin corner is bottom-left [1,1]");
-    Serial.println("======================================");
+  // Bottom rule.
+  Serial.print("    +");
+  for (long c = 1; c <= GRID_COLS; c++)
+  {
+    Serial.print("--");
+  }
+  Serial.println();
+
+  // Column numbers, last digit only (keeps the map aligned).
+  Serial.print("     ");
+  for (long c = 1; c <= GRID_COLS; c++)
+  {
+    Serial.print(c % 10);
+    Serial.print(" ");
+  }
+  Serial.println();
+  Serial.println("     ^ origin corner is bottom-left [1,1]");
+  Serial.println("======================================");
 }
 
 // ============================================================
@@ -1737,93 +1737,93 @@ void printGrid()
 
 void resetStepCounts()
 {
-    for (uint8_t i = 0; i < MOVE_COUNT; i++)
-    {
-        stepCounts[i] = 0;
-    }
-    Serial.println();
-    Serial.println("STEP COUNTERS RESET TO ZERO");
-    Serial.println("(position and software limits are NOT affected - use 8)");
+  for (uint8_t i = 0; i < MOVE_COUNT; i++)
+  {
+    stepCounts[i] = 0;
+  }
+  Serial.println();
+  Serial.println("STEP COUNTERS RESET TO ZERO");
+  Serial.println("(position and software limits are NOT affected - use 8)");
 }
 
 void zeroPosition()
 {
-    for (uint8_t a = 0; a < AXIS_COUNT; a++)
-    {
-        axisPos[a] = 0;
-        axisHomed[a] = false; // a manual zero is NOT a homed origin
-    }
-    curCol = 0;
-    curRow = 0;
+  for (uint8_t a = 0; a < AXIS_COUNT; a++)
+  {
+    axisPos[a] = 0;
+    axisHomed[a] = false; // a manual zero is NOT a homed origin
+  }
+  curCol = 0;
+  curRow = 0;
 
-    Serial.println();
-    Serial.println("POSITION ZEROED - this point is now the origin");
-    Serial.println("NOTE: grid moves still require a real home (0).");
-    printSoftLimitStatus();
+  Serial.println();
+  Serial.println("POSITION ZEROED - this point is now the origin");
+  Serial.println("NOTE: grid moves still require a real home (0).");
+  printSoftLimitStatus();
 }
 
 long netSteps(uint8_t axis)
 {
-    long net = 0;
-    for (uint8_t i = 0; i < MOVE_COUNT; i++)
+  long net = 0;
+  for (uint8_t i = 0; i < MOVE_COUNT; i++)
+  {
+    if (MOVES[i].axis == axis)
     {
-        if (MOVES[i].axis == axis)
-        {
-            net += (long)stepCounts[i] * MOVES[i].sign;
-        }
+      net += (long)stepCounts[i] * MOVES[i].sign;
     }
-    return net;
+  }
+  return net;
 }
 
 void printStepCounts()
 {
-    Serial.println();
-    Serial.println("======================================");
-    Serial.println("STEP COUNTERS (since power-on / reset)");
-    Serial.println("======================================");
+  Serial.println();
+  Serial.println("======================================");
+  Serial.println("STEP COUNTERS (since power-on / reset)");
+  Serial.println("======================================");
 
-    for (uint8_t i = 0; i < MOVE_COUNT; i++)
-    {
-        Serial.print("  ");
-        Serial.print(MOVES[i].label);
-        Serial.print("\t: ");
-        Serial.print(stepCounts[i]);
-        Serial.println(" steps");
-    }
+  for (uint8_t i = 0; i < MOVE_COUNT; i++)
+  {
+    Serial.print("  ");
+    Serial.print(MOVES[i].label);
+    Serial.print("\t: ");
+    Serial.print(stepCounts[i]);
+    Serial.println(" steps");
+  }
 
-    Serial.println("--------------------------------------");
-    printNetLine("X", netSteps(AXIS_X));
-    printNetLine("Y", netSteps(AXIS_Y));
-    printNetLine("Z", netSteps(AXIS_Z));
-    printPosition();
-    Serial.println("======================================");
+  Serial.println("--------------------------------------");
+  printNetLine("X", netSteps(AXIS_X));
+  printNetLine("Y", netSteps(AXIS_Y));
+  printNetLine("Z", netSteps(AXIS_Z));
+  printPosition();
+  Serial.println("======================================");
 
-    printLimitStatus();
-    printSoftLimitStatus();
-    printGridConfig();
-    printServoStatus();
-    printAuxStepperStatus();
+  printLimitStatus();
+  printSoftLimitStatus();
+  printGridConfig();
+  printServoStatus();
+  printAuxStepperStatus();
 }
 
 void printNetLine(const char *axisLabel, long net)
 {
-    Serial.print("  NET ");
-    Serial.print(axisLabel);
-    Serial.print("\t: ");
-    if (net > 0)
-        Serial.print("+");
-    Serial.print(net);
-    Serial.print(" steps");
+  Serial.print("  NET ");
+  Serial.print(axisLabel);
+  Serial.print("\t: ");
+  if (net > 0)
+    Serial.print("+");
+  Serial.print(net);
+  Serial.print(" steps");
 
-    if (SHOW_DISTANCE)
-    {
-        Serial.print("  (");
-        Serial.print(net / STEPS_PER_UNIT, 3);
-        Serial.print(" ");
-        Serial.print(DISTANCE_UNIT);
-        Serial.print(")");
-    }
-    Serial.println();
+  if (SHOW_DISTANCE)
+  {
+    Serial.print("  (");
+    Serial.print(net / STEPS_PER_UNIT, 3);
+    Serial.print(" ");
+    Serial.print(DISTANCE_UNIT);
+    Serial.print(")");
+  }
+  Serial.println();
 }
 
 // ============================================================
@@ -1832,35 +1832,35 @@ void printNetLine(const char *axisLabel, long net)
 
 void printInstructions()
 {
-    Serial.println("======================================");
-    Serial.println("Dual TB6600 CNC Grid Control - MEGA 2560");
-    Serial.println("======================================");
-    Serial.print("Jog size per command: ");
-    Serial.println(stepsPerMove);
-    Serial.println("--------------------------------------");
-    Serial.println("1 = Y-   (M1 CW  / M2 CCW)  [limit: pin 31]");
-    Serial.println("2 = Y+   (M1 CCW / M2 CW )  [soft limit]");
-    Serial.println("3 = X-   (M1 CW  / M2 CW )  [limit: pin 30]");
-    Serial.println("4 = X+   (M1 CCW / M2 CCW)  [soft limit]");
-    Serial.println("5 = Show counters / position / limits");
-    Serial.println("6 = Reset step counters");
-    Serial.println("7 = Disable both motors");
-    Serial.println("8 = Zero position (manual, NOT a home)");
-    Serial.println("9 = Show ASCII grid map");
-    Serial.println("0 = HOME / go to origin (X/Y switches only)");
-    Serial.println("--------------------------------------");
-    Serial.println("D = Z-   (M3 CW )           [limit: pin 28]");
-    Serial.println("U = Z+   (M3 CCW)           [soft limit: INFINITE]");
-    Serial.println("--------------------------------------");
-    Serial.println("O = Servo OPEN              [pin 6]");
-    Serial.println("C = Servo CLOSE             [pin 6]");
-    Serial.println("--------------------------------------");
-    Serial.println("R  = Aux stepper ~90 deg CW   [28BYJ-48, pins 36-39]");
-    Serial.println("RR = Aux stepper ~90 deg CCW  [28BYJ-48, pins 36-39]");
-    Serial.println("--------------------------------------");
-    Serial.println("G <col> <row>   goto cell, e.g.  G 3 5");
-    Serial.println("S <cols> <rows> resize grid, e.g. S 20 39");
-    Serial.println("?               reprint this help");
-    Serial.println("(D, U, O, C, R, RR, G and S need a newline / Enter)");
-    Serial.println("======================================");
+  Serial.println("======================================");
+  Serial.println("Dual TB6600 CNC Grid Control - MEGA 2560");
+  Serial.println("======================================");
+  Serial.print("Jog size per command: ");
+  Serial.println(stepsPerMove);
+  Serial.println("--------------------------------------");
+  Serial.println("1 = Y-   (M1 CW  / M2 CCW)  [limit: pin 31]");
+  Serial.println("2 = Y+   (M1 CCW / M2 CW )  [soft limit]");
+  Serial.println("3 = X-   (M1 CW  / M2 CW )  [limit: pin 30]");
+  Serial.println("4 = X+   (M1 CCW / M2 CCW)  [soft limit]");
+  Serial.println("5 = Show counters / position / limits");
+  Serial.println("6 = Reset step counters");
+  Serial.println("7 = Disable both motors");
+  Serial.println("8 = Zero position (manual, NOT a home)");
+  Serial.println("9 = Show ASCII grid map");
+  Serial.println("0 = HOME / go to origin (X/Y switches only)");
+  Serial.println("--------------------------------------");
+  Serial.println("D = Z-   (M3 CW )           [limit: pin 28]");
+  Serial.println("U = Z+   (M3 CCW)           [soft limit: INFINITE]");
+  Serial.println("--------------------------------------");
+  Serial.println("O = Servo OPEN              [pin 6]");
+  Serial.println("C = Servo CLOSE             [pin 6]");
+  Serial.println("--------------------------------------");
+  Serial.println("R  = Aux stepper ~90 deg CW   [28BYJ-48, pins 36-39]");
+  Serial.println("RR = Aux stepper ~90 deg CCW  [28BYJ-48, pins 36-39]");
+  Serial.println("--------------------------------------");
+  Serial.println("G <col> <row>   goto cell, e.g.  G 3 5");
+  Serial.println("S <cols> <rows> resize grid, e.g. S 20 39");
+  Serial.println("?               reprint this help");
+  Serial.println("(D, U, O, C, R, RR, G and S need a newline / Enter)");
+  Serial.println("======================================");
 }
