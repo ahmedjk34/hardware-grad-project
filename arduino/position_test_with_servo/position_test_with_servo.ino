@@ -54,16 +54,16 @@
   Each axis travels AWAY from its own switch. The two switches sit at
   OPPOSITE ends now, so the two axes no longer share a sign:
 
-      X switch at the X+ end  ->  X runs   0  ...  -1295   (soft limit)
-      Y switch at the Y- end  ->  Y runs   0  ...  +2550   (soft limit)
+      X switch at the X+ end  ->  X runs   0  ...  -5100   (soft limit)
+      Y switch at the Y- end  ->  Y runs   0  ...  +8500   (soft limit)
 
-  So the work envelope is 1295 x 2550 steps, living in the rectangle
-  X in [-1295, 0], Y in [0, +2550]. Grid indices hide this sign mess:
+  So the work envelope is 5100 x 8500 steps, living in the rectangle
+  X in [-5100, 0], Y in [0, +8500]. Grid indices hide this sign mess:
 
       col 1  = nearest the X switch (X = 0 side, the X+ end)
-      col N  = far end of X travel  (X = -1295 side)
+      col N  = far end of X travel  (X = -5100 side)
       row 1  = nearest the Y switch (Y = 0 side)
-      row M  = far end of Y travel  (Y = +2550 side)
+      row M  = far end of Y travel  (Y = +8500 side)
 
   Generalised in code as: each axis extends from 0 in the direction
   softEndOf(axis), for softTravelOf(axis) steps. Change the soft
@@ -172,7 +172,7 @@ long auxStepperPos = 0;
 // ============================================================
 
 // Half-period of the step pulse, in microseconds.
-unsigned int STEP_DELAY = 750;
+unsigned int STEP_DELAY = 650;
 
 // How many steps a single MANUAL jog command (1-4) moves.
 int stepsPerMove = 300;
@@ -279,8 +279,8 @@ const uint8_t LIMIT_CHECK_EVERY_N_STEPS = 1;
 
 const long SOFT_LIMIT_INFINITE = 0; // sentinel: no cap at all
 
-long SOFT_LIMIT_X_TRAVEL = SOFT_LIMIT_INFINITE; // X- travel cap, in steps
-long SOFT_LIMIT_Y_TRAVEL = SOFT_LIMIT_INFINITE; // Y+ travel cap, in steps
+long SOFT_LIMIT_X_TRAVEL = 5100; // X- travel cap, in steps
+long SOFT_LIMIT_Y_TRAVEL = 8500; // Y+ travel cap, in steps
 long SOFT_LIMIT_Z_TRAVEL = 1400; // Z+ travel cap - in steps
 
 const int8_t SOFT_LIMIT_X_AT_END = DIR_NEG; // guards the X- end
@@ -301,7 +301,7 @@ const bool SOFT_LIMIT_VERBOSE = true;
 // SECTION 6C - GRID CONFIGURATION            <<< NEW
 // ============================================================
 //
-// The envelope (1295 x 2550 steps) is divided into COLS x ROWS
+// The envelope (5100 x 8500 steps) is divided into COLS x ROWS
 // equal rectangles. The machine parks at the CENTRE of a cell.
 //
 // Cell size does NOT have to divide evenly into the travel. Targets
@@ -311,28 +311,30 @@ const bool SOFT_LIMIT_VERBOSE = true;
 // ------------------------------------------------------------
 //   HOW FINE CAN THIS GO?
 // ------------------------------------------------------------
-//   Arithmetically the floor is 1 step per cell (1295 x 2550
-//   = 3.3 million cells), which is meaningless - it is far below
+//   Arithmetically the floor is 1 step per cell (5100 x 8500
+//   = 43.35 million cells), which is meaningless - it is far below
 //   what the machine can repeat mechanically.
 //
-//   If you want cells that are EXACTLY square in whole steps, the
-//   limit is gcd(1295, 2550) = 5, giving 5x5 step cells and a
-//   259 x 510 grid. That is the true "maximum" answer.
+//   The envelope is a clean 3:5 ratio (5100:8500), so ANY grid whose
+//   cols:rows is 3:5 gives EXACTLY square cells in whole steps:
+//        COLS   ROWS   CELL (X x Y)      CELLS
+//           6 x   10     850 x 850          60
+//          12 x   20     425 x 425         240   <- square, same scale
+//          30 x   50     170 x 170        1500      as the default
+//          60 x  100      85 x  85        6000
+//         300 x  500      17 x  17      150000
+//        5100 x 8500       1 x   1    43350000   <- 1 step per cell
 //
-//   Practical near-square presets (cell sizes in steps):
-//        COLS   ROWS   CELL (X x Y)   CELLS
-//         10  x  20     129.5 x 127.5     200   <- default, readable
-//         20  x  39      64.8 x  65.4     780
-//         35  x  69      37.0 x  37.0    2415   <- very near perfect
-//        259  x 510       5.0 x   5.0  132090   <- exact-square max
+//   NOTE: the 10 x 20 default below is NOT square - it gives
+//   510 x 425 step cells. Use 12 x 20 if you want square ones.
 //
 //   Change these here, or live with:  S <cols> <rows>
 
 long GRID_COLS = 10;
 long GRID_ROWS = 20;
 
-const long GRID_COLS_MAX = 1295; // 1 step per cell
-const long GRID_ROWS_MAX = 2550;
+const long GRID_COLS_MAX = 5100; // 1 step per cell
+const long GRID_ROWS_MAX = 8500;
 
 // The ASCII map is only drawn when the grid is small enough to be
 // readable. Bigger grids print a numeric summary instead.
@@ -353,8 +355,8 @@ const long HOME_CHUNK_STEPS = 200;
 
 // Safety stop: if an axis has travelled this far without finding its
 // switch, something is wrong (broken switch, unplugged, wrong pin).
-const long HOME_MAX_STEPS_X = 1295L * 2 + 500;
-const long HOME_MAX_STEPS_Y = 2550L * 2 + 500;
+const long HOME_MAX_STEPS_X = 5100L * 2 + 500;
+const long HOME_MAX_STEPS_Y = 8500L * 2 + 500;
 
 const bool HOME_VERBOSE = true;
 

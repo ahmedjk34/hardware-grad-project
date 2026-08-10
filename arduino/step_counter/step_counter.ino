@@ -34,8 +34,8 @@
     Pin 31 = Y AXIS limit switch, mounted at the Y- end of travel
 
   SOFTWARE LIMITS  (the ends with NO switch fitted)
-    X- end : 1295 steps of travel allowed from origin
-    Y+ end : infinite (disabled) for now
+    X- end : 5100 steps of travel allowed from origin
+    Y+ end : 8500 steps of travel allowed from origin
 
     A software limit works exactly like a switch: it blocks ONLY the
     direction that drives into it. Moving back the other way is always
@@ -211,8 +211,8 @@ const uint8_t LIMIT_CHECK_EVERY_N_STEPS = 1;
 
 const long SOFT_LIMIT_INFINITE = 0; // sentinel: no cap at all
 
-long SOFT_LIMIT_X_TRAVEL = 1295;              // X- travel cap, in steps
-long SOFT_LIMIT_Y_TRAVEL = 2550; // Y+ : infinite for now
+long SOFT_LIMIT_X_TRAVEL = 5100;              // X- travel cap, in steps
+long SOFT_LIMIT_Y_TRAVEL = 8500; // Y+ travel cap, in steps
 
 // ------------------------------------------------------------
 //   WHICH END EACH SOFTWARE LIMIT GUARDS
