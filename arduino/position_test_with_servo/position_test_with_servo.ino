@@ -11,10 +11,10 @@
   ============================================================
 
   SERIAL COMMANDS
-    1 = Y-   (Motor 1 CW  / Motor 2 CCW)   <-- physical limit switch end
-    2 = Y+   (Motor 1 CCW / Motor 2 CW )   <-- SOFTWARE limit end
-    3 = X-   (Motor 1 CW  / Motor 2 CW )   <-- physical limit switch end
-    4 = X+   (Motor 1 CCW / Motor 2 CCW)   <-- SOFTWARE limit end
+    1 = X-   (Motor 1 CW  / Motor 2 CCW)   <-- physical limit switch end
+    2 = X+   (Motor 1 CCW / Motor 2 CW )   <-- SOFTWARE limit end
+    3 = Y-   (Motor 1 CW  / Motor 2 CW )   <-- physical limit switch end
+    4 = Y+   (Motor 1 CCW / Motor 2 CCW)   <-- SOFTWARE limit end
     5 = Show step counters + position + limit status
     6 = Reset step counters to zero
     7 = Disable both motors (release holding torque)
@@ -223,11 +223,22 @@ const uint8_t MOVE_COUNT = 6;
 
 // X/Y entries pulse STEP_PIN1+STEP_PIN2 together (coupled drive).
 // Z entries pulse STEP_PIN3 alone. See moveSteps().
+//
+// IMPORTANT: which AXIS each motor-direction pair drives was swapped
+// after the rig was physically re-oriented. The pair that used to walk
+// the long axis now walks the short one:
+//     M1 CW  + M2 CCW  ->  X-   (short axis, switch on pin 30)
+//     M1 CCW + M2 CW   ->  X+
+//     M1 CW  + M2 CW   ->  Y-   (long axis,  switch on pin 31)
+//     M1 CCW + M2 CCW  ->  Y+
+// The axis NAMES, travel caps, switch pins and grid all kept their old
+// meaning - only this table moved. Verify against the hardware before
+// changing it back.
 const MoveDef MOVES[MOVE_COUNT] = {
-    {"Y-", MOTOR1_CW, MOTOR2_CCW, false, AXIS_Y, DIR_NEG},
-    {"Y+", MOTOR1_CCW, MOTOR2_CW, false, AXIS_Y, DIR_POS},
-    {"X-", MOTOR1_CW, MOTOR2_CW, false, AXIS_X, DIR_NEG},
-    {"X+", MOTOR1_CCW, MOTOR2_CCW, false, AXIS_X, DIR_POS},
+    {"X-", MOTOR1_CW, MOTOR2_CCW, false, AXIS_X, DIR_NEG},
+    {"X+", MOTOR1_CCW, MOTOR2_CW, false, AXIS_X, DIR_POS},
+    {"Y-", MOTOR1_CW, MOTOR2_CW, false, AXIS_Y, DIR_NEG},
+    {"Y+", MOTOR1_CCW, MOTOR2_CCW, false, AXIS_Y, DIR_POS},
     {"Z-", false, false, MOTOR3_CW, AXIS_Z, DIR_NEG},
     {"Z+", false, false, MOTOR3_CCW, AXIS_Z, DIR_POS}};
 
@@ -371,8 +382,8 @@ const char CMD_ZERO_POSITION = '8';
 const char CMD_SHOW_GRID = '9';
 const char CMD_GO_ORIGIN = '0';
 
-const char CMD_MOVE_Z_NEG = 'D'; // Z-  (software limit end)
-const char CMD_MOVE_Z_POS = 'U'; // Z+  (physical limit switch end)
+const char CMD_MOVE_Z_NEG = 'D'; // Z-  (physical limit switch end)
+const char CMD_MOVE_Z_POS = 'U'; // Z+  (software limit end)
 
 const char CMD_SERVO_OPEN = 'O';
 const char CMD_SERVO_CLOSE = 'C';
@@ -1838,10 +1849,10 @@ void printInstructions()
   Serial.print("Jog size per command: ");
   Serial.println(stepsPerMove);
   Serial.println("--------------------------------------");
-  Serial.println("1 = Y-   (M1 CW  / M2 CCW)  [limit: pin 31]");
-  Serial.println("2 = Y+   (M1 CCW / M2 CW )  [soft limit]");
-  Serial.println("3 = X-   (M1 CW  / M2 CW )  [limit: pin 30]");
-  Serial.println("4 = X+   (M1 CCW / M2 CCW)  [soft limit]");
+  Serial.println("1 = X-   (M1 CW  / M2 CCW)  [limit: pin 30]");
+  Serial.println("2 = X+   (M1 CCW / M2 CW )  [soft limit]");
+  Serial.println("3 = Y-   (M1 CW  / M2 CW )  [limit: pin 31]");
+  Serial.println("4 = Y+   (M1 CCW / M2 CCW)  [soft limit]");
   Serial.println("5 = Show counters / position / limits");
   Serial.println("6 = Reset step counters");
   Serial.println("7 = Disable both motors");

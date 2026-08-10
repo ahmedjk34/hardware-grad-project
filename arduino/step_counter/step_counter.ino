@@ -9,21 +9,25 @@
   axis direction, then stops and holds position.
 
   SERIAL COMMANDS
-    1 = Y-   (Motor 1 CW  / Motor 2 CCW)   <-- physical limit switch end
-    2 = Y+   (Motor 1 CCW / Motor 2 CW )   <-- SOFTWARE limit end
-    3 = X-   (Motor 1 CW  / Motor 2 CW )   <-- physical limit switch end
-    4 = X+   (Motor 1 CCW / Motor 2 CCW)   <-- SOFTWARE limit end
+    1 = X-   (Motor 1 CW  / Motor 2 CCW)   <-- physical limit switch end
+    2 = X+   (Motor 1 CCW / Motor 2 CW )   <-- SOFTWARE limit end
+    3 = Y-   (Motor 1 CW  / Motor 2 CW )   <-- physical limit switch end
+    4 = Y+   (Motor 1 CCW / Motor 2 CCW)   <-- SOFTWARE limit end
     5 = Show step counters + position + limit status
     6 = Reset step counters to zero
     7 = Disable both motors (release holding torque)
     8 = ZERO the position counters (set "here" as origin 0,0)
 
   VERIFIED MOTOR / AXIS MAPPING
-    These pairings were confirmed by physical testing on the machine:
-      M1 CW  + M2 CW   ->  X-
-      M1 CW  + M2 CCW  ->  Y-
-      M1 CCW + M2 CW   ->  Y+
-      M1 CCW + M2 CCW  ->  X+
+    These pairings were confirmed by physical testing on the machine.
+    They SWAPPED when the rig was physically re-oriented - the pair that
+    used to walk the long axis now walks the short one:
+      M1 CW  + M2 CCW  ->  X-   (short axis, switch on pin 30)
+      M1 CCW + M2 CW   ->  X+
+      M1 CW  + M2 CW   ->  Y-   (long axis,  switch on pin 31)
+      M1 CCW + M2 CCW  ->  Y+
+    The axis NAMES, travel caps and switch pins all kept their old
+    meaning - only this mapping moved.
 
   PHYSICAL LIMIT SWITCHES
     Pin 30 = X AXIS limit switch, mounted at the X- end of travel
@@ -139,17 +143,17 @@ struct MoveDef
 const uint8_t MOVE_COUNT = 4;
 
 const MoveDef MOVES[MOVE_COUNT] = {
-    // Command '1'  -  toward the Y limit switch (pin 31)
-    {"Y-", MOTOR1_CW, MOTOR2_CCW, AXIS_Y, DIR_NEG},
+    // Command '1'  -  toward the X limit switch (pin 30)
+    {"X-", MOTOR1_CW, MOTOR2_CCW, AXIS_X, DIR_NEG},
 
-    // Command '2'  -  away from the Y switch, toward the Y SOFT limit
-    {"Y+", MOTOR1_CCW, MOTOR2_CW, AXIS_Y, DIR_POS},
+    // Command '2'  -  away from the X switch, toward the X SOFT limit
+    {"X+", MOTOR1_CCW, MOTOR2_CW, AXIS_X, DIR_POS},
 
-    // Command '3'  -  toward the X limit switch (pin 30)
-    {"X-", MOTOR1_CW, MOTOR2_CW, AXIS_X, DIR_NEG},
+    // Command '3'  -  toward the Y limit switch (pin 31)
+    {"Y-", MOTOR1_CW, MOTOR2_CW, AXIS_Y, DIR_NEG},
 
-    // Command '4'  -  away from the X switch, toward the X SOFT limit
-    {"X+", MOTOR1_CCW, MOTOR2_CCW, AXIS_X, DIR_POS}};
+    // Command '4'  -  away from the Y switch, toward the Y SOFT limit
+    {"Y+", MOTOR1_CCW, MOTOR2_CCW, AXIS_Y, DIR_POS}};
 
 // ============================================================
 // SECTION 6 - PHYSICAL LIMIT SWITCH CONFIGURATION
@@ -243,7 +247,7 @@ const bool SOFT_LIMIT_VERBOSE = true;
 //
 // Counters increment once per step pulse ACTUALLY sent, so an
 // aborted move only counts the steps the machine really made.
-// Index matches the MOVES table above: 0=Y-, 1=Y+, 2=X-, 3=X+
+// Index matches the MOVES table above: 0=X-, 1=X+, 2=Y-, 3=Y+
 
 unsigned long stepCounts[MOVE_COUNT] = {0, 0, 0, 0};
 
@@ -873,10 +877,10 @@ void printInstructions()
     Serial.print("Step size per command: ");
     Serial.println(stepsPerMove);
     Serial.println("--------------------------------------");
-    Serial.println("1 = Y-   (M1 CW  / M2 CCW)  [limit: pin 31]");
-    Serial.println("2 = Y+   (M1 CCW / M2 CW )  [soft limit]");
-    Serial.println("3 = X-   (M1 CW  / M2 CW )  [limit: pin 30]");
-    Serial.println("4 = X+   (M1 CCW / M2 CCW)  [soft limit]");
+    Serial.println("1 = X-   (M1 CW  / M2 CCW)  [limit: pin 30]");
+    Serial.println("2 = X+   (M1 CCW / M2 CW )  [soft limit]");
+    Serial.println("3 = Y-   (M1 CW  / M2 CW )  [limit: pin 31]");
+    Serial.println("4 = Y+   (M1 CCW / M2 CCW)  [soft limit]");
     Serial.println("5 = Show counters / position / limits");
     Serial.println("6 = Reset step counters");
     Serial.println("7 = Disable both motors");
