@@ -9,8 +9,8 @@
   axis direction, then stops and holds position.
 
   SERIAL COMMANDS
-    1 = X-   (Motor 1 CW  / Motor 2 CW )   <-- physical limit switch end
-    2 = X+   (Motor 1 CCW / Motor 2 CCW)   <-- SOFTWARE limit end
+    1 = X-   (Motor 1 CW  / Motor 2 CW )   <-- SOFTWARE limit end
+    2 = X+   (Motor 1 CCW / Motor 2 CCW)   <-- physical limit switch end
     3 = Y-   (Motor 1 CW  / Motor 2 CCW)   <-- physical limit switch end
     4 = Y+   (Motor 1 CCW / Motor 2 CW )   <-- SOFTWARE limit end
     5 = Show step counters + position + limit status
@@ -21,20 +21,20 @@
   VERIFIED MOTOR / AXIS MAPPING
     Confirmed by physical testing on the machine, after the rig was
     re-oriented and motor 2 was rewired:
-      M1 CW  + M2 CW   ->  X-   (short axis, switch on pin 30)
-      M1 CCW + M2 CCW  ->  X+
-      M1 CW  + M2 CCW  ->  Y-   (long axis,  switch on pin 31)
-      M1 CCW + M2 CW   ->  Y+
+      M1 CW  + M2 CW   ->  X-   (short axis, toward the X SOFT limit)
+      M1 CCW + M2 CCW  ->  X+   (toward the X switch, pin 30)
+      M1 CW  + M2 CCW  ->  Y-   (long axis, toward the Y switch, pin 31)
+      M1 CCW + M2 CW   ->  Y+   (toward the Y SOFT limit)
     Motors turning the SAME sense walk X; opposed senses walk Y. The
     axis names, travel caps and switch pins all kept their original
     meaning.
 
   PHYSICAL LIMIT SWITCHES
-    Pin 30 = X AXIS limit switch, mounted at the X- end of travel
+    Pin 30 = X AXIS limit switch, mounted at the X+ end of travel
     Pin 31 = Y AXIS limit switch, mounted at the Y- end of travel
 
   SOFTWARE LIMITS  (the ends with NO switch fitted)
-    X+ end : 1295 steps of travel allowed from origin
+    X- end : 1295 steps of travel allowed from origin
     Y+ end : infinite (disabled) for now
 
     A software limit works exactly like a switch: it blocks ONLY the
@@ -150,10 +150,10 @@ struct MoveDef
 const uint8_t MOVE_COUNT = 4;
 
 const MoveDef MOVES[MOVE_COUNT] = {
-    // Command '1'  -  toward the X limit switch (pin 30)
+    // Command '1'  -  away from the X switch, toward the X SOFT limit
     {"X-", MOTOR1_CW, MOTOR2_CW, AXIS_X, DIR_NEG},
 
-    // Command '2'  -  away from the X switch, toward the X SOFT limit
+    // Command '2'  -  toward the X limit switch (pin 30)
     {"X+", MOTOR1_CCW, MOTOR2_CCW, AXIS_X, DIR_POS},
 
     // Command '3'  -  toward the Y limit switch (pin 31)
@@ -178,7 +178,7 @@ const bool LIMIT_X_USE_NC = true;
 const bool LIMIT_Y_USE_NC = true;
 
 // --- Where each switch is physically mounted ---
-const int8_t LIMIT_X_AT_END = DIR_NEG; // X switch is at the X- end
+const int8_t LIMIT_X_AT_END = DIR_POS; // X switch is at the X+ end
 const int8_t LIMIT_Y_AT_END = DIR_NEG; // Y switch is at the Y- end
 
 // --- Master enable ---
@@ -211,7 +211,7 @@ const uint8_t LIMIT_CHECK_EVERY_N_STEPS = 1;
 
 const long SOFT_LIMIT_INFINITE = 0; // sentinel: no cap at all
 
-long SOFT_LIMIT_X_TRAVEL = 1295;              // X+ travel cap, in steps
+long SOFT_LIMIT_X_TRAVEL = 1295;              // X- travel cap, in steps
 long SOFT_LIMIT_Y_TRAVEL = 2550; // Y+ : infinite for now
 
 // ------------------------------------------------------------
@@ -222,7 +222,7 @@ long SOFT_LIMIT_Y_TRAVEL = 2550; // Y+ : infinite for now
 //   DIR_NEG -> caps how far NEGATIVE the axis may go (pos >= -cap)
 //   DIR_POS -> caps how far POSITIVE the axis may go (pos <= +cap)
 
-const int8_t SOFT_LIMIT_X_AT_END = DIR_POS; // guards the X+ end
+const int8_t SOFT_LIMIT_X_AT_END = DIR_NEG; // guards the X- end
 const int8_t SOFT_LIMIT_Y_AT_END = DIR_POS; // guards the Y+ end
 
 // ------------------------------------------------------------
@@ -301,7 +301,7 @@ void setup()
     pinMode(EN_PIN2, OUTPUT);
 
     // Limit switches: internal pull-ups, works for both NC and NO wiring
-    pinMode(LIMIT_PIN_X, INPUT_PULLUP); // X axis switch, X- end
+    pinMode(LIMIT_PIN_X, INPUT_PULLUP); // X axis switch, X+ end
     pinMode(LIMIT_PIN_Y, INPUT_PULLUP); // Y axis switch, Y- end
 
     digitalWrite(STEP_PIN1, LOW);
@@ -884,8 +884,8 @@ void printInstructions()
     Serial.print("Step size per command: ");
     Serial.println(stepsPerMove);
     Serial.println("--------------------------------------");
-    Serial.println("1 = X-   (M1 CW  / M2 CW )  [limit: pin 30]");
-    Serial.println("2 = X+   (M1 CCW / M2 CCW)  [soft limit]");
+    Serial.println("1 = X-   (M1 CW  / M2 CW )  [soft limit]");
+    Serial.println("2 = X+   (M1 CCW / M2 CCW)  [limit: pin 30]");
     Serial.println("3 = Y-   (M1 CW  / M2 CCW)  [limit: pin 31]");
     Serial.println("4 = Y+   (M1 CCW / M2 CW )  [soft limit]");
     Serial.println("5 = Show counters / position / limits");

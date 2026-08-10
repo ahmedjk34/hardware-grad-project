@@ -6,8 +6,8 @@
   ============================================================
 
   SERIAL COMMANDS
-    1 = X-   (Motor 1 CW  / Motor 2 CW )   <-- physical limit switch end
-    2 = X+   (Motor 1 CCW / Motor 2 CCW)   <-- SOFTWARE limit end
+    1 = X-   (Motor 1 CW  / Motor 2 CW )   <-- SOFTWARE limit end
+    2 = X+   (Motor 1 CCW / Motor 2 CCW)   <-- physical limit switch end
     3 = Y-   (Motor 1 CW  / Motor 2 CCW)   <-- physical limit switch end
     4 = Y+   (Motor 1 CCW / Motor 2 CW )   <-- SOFTWARE limit end
     5 = Show step counters + position + limit status
@@ -31,16 +31,17 @@
   own axis the moment it trips. The corner where BOTH switches are
   pressed is therefore machine position (0, 0) = the ORIGIN.
 
-  From that corner the machine travels in the SAME sign on both axes:
+  Each axis travels AWAY from its own switch. The two switches sit at
+  OPPOSITE ends now, so the two axes no longer share a sign:
 
-      X switch at the X- end  ->  X runs   0  ...  +1295   (soft limit)
+      X switch at the X+ end  ->  X runs   0  ...  -1295   (soft limit)
       Y switch at the Y- end  ->  Y runs   0  ...  +2550   (soft limit)
 
   So the work envelope is 1295 x 2550 steps, living in the rectangle
-  X in [0, +1295], Y in [0, +2550]. Grid indices hide this sign mess:
+  X in [-1295, 0], Y in [0, +2550]. Grid indices hide this sign mess:
 
-      col 1  = nearest the X switch (X = 0 side)
-      col N  = far end of X travel  (X = +1295 side)
+      col 1  = nearest the X switch (X = 0 side, the X+ end)
+      col N  = far end of X travel  (X = -1295 side)
       row 1  = nearest the Y switch (Y = 0 side)
       row M  = far end of Y travel  (Y = +2550 side)
 
@@ -136,10 +137,10 @@ const uint8_t MOVE_COUNT = 4;
 
 // VERIFIED ON THE MACHINE after the rig was physically re-oriented and
 // motor 2 was rewired. Confirmed by watching the shafts turn:
-//     M1 CW  + M2 CW   ->  X-   (short axis, switch on pin 30)
-//     M1 CCW + M2 CCW  ->  X+
-//     M1 CW  + M2 CCW  ->  Y-   (long axis,  switch on pin 31)
-//     M1 CCW + M2 CW   ->  Y+
+//     M1 CW  + M2 CW   ->  X-   (short axis, toward the X SOFT limit)
+//     M1 CCW + M2 CCW  ->  X+   (toward the X switch, pin 30)
+//     M1 CW  + M2 CCW  ->  Y-   (long axis, toward the Y switch, pin 31)
+//     M1 CCW + M2 CW   ->  Y+   (toward the Y SOFT limit)
 // Motors turning the SAME sense walk X; opposed senses walk Y. The axis
 // names, travel caps, switch pins and grid all kept their original
 // meaning. Re-verify against the hardware before changing this.
@@ -159,7 +160,7 @@ const int LIMIT_PIN_Y = 31; // Y AXIS limit switch
 const bool LIMIT_X_USE_NC = true;
 const bool LIMIT_Y_USE_NC = true;
 
-const int8_t LIMIT_X_AT_END = DIR_NEG; // X switch is at the X- end
+const int8_t LIMIT_X_AT_END = DIR_POS; // X switch is at the X+ end
 const int8_t LIMIT_Y_AT_END = DIR_NEG; // Y switch is at the Y- end
 
 const bool LIMIT_X_ENABLED = true;
@@ -176,10 +177,10 @@ const uint8_t LIMIT_CHECK_EVERY_N_STEPS = 1;
 
 const long SOFT_LIMIT_INFINITE = 0; // sentinel: no cap at all
 
-long SOFT_LIMIT_X_TRAVEL = 1295; // X+ travel cap, in steps
+long SOFT_LIMIT_X_TRAVEL = 1295; // X- travel cap, in steps
 long SOFT_LIMIT_Y_TRAVEL = 2550; // Y+ travel cap, in steps
 
-const int8_t SOFT_LIMIT_X_AT_END = DIR_POS; // guards the X+ end
+const int8_t SOFT_LIMIT_X_AT_END = DIR_NEG; // guards the X- end
 const int8_t SOFT_LIMIT_Y_AT_END = DIR_POS; // guards the Y+ end
 
 const bool SOFT_LIMIT_X_ENABLED = true;
@@ -1516,8 +1517,8 @@ void printInstructions()
     Serial.print("Jog size per command: ");
     Serial.println(stepsPerMove);
     Serial.println("--------------------------------------");
-    Serial.println("1 = X-   (M1 CW  / M2 CW )  [limit: pin 30]");
-    Serial.println("2 = X+   (M1 CCW / M2 CCW)  [soft limit]");
+    Serial.println("1 = X-   (M1 CW  / M2 CW )  [soft limit]");
+    Serial.println("2 = X+   (M1 CCW / M2 CCW)  [limit: pin 30]");
     Serial.println("3 = Y-   (M1 CW  / M2 CCW)  [limit: pin 31]");
     Serial.println("4 = Y+   (M1 CCW / M2 CW )  [soft limit]");
     Serial.println("5 = Show counters / position / limits");
