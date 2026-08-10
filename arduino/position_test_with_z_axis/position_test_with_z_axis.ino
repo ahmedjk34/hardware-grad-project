@@ -9,10 +9,10 @@
   ============================================================
 
   SERIAL COMMANDS
-    1 = X-   (Motor 1 CW  / Motor 2 CCW)   <-- physical limit switch end
-    2 = X+   (Motor 1 CCW / Motor 2 CW )   <-- SOFTWARE limit end
-    3 = Y-   (Motor 1 CW  / Motor 2 CW )   <-- physical limit switch end
-    4 = Y+   (Motor 1 CCW / Motor 2 CCW)   <-- SOFTWARE limit end
+    1 = X-   (Motor 1 CW  / Motor 2 CW )   <-- physical limit switch end
+    2 = X+   (Motor 1 CCW / Motor 2 CCW)   <-- SOFTWARE limit end
+    3 = Y-   (Motor 1 CW  / Motor 2 CCW)   <-- physical limit switch end
+    4 = Y+   (Motor 1 CCW / Motor 2 CW )   <-- SOFTWARE limit end
     5 = Show step counters + position + limit status
     6 = Reset step counters to zero
     7 = Disable both motors (release holding torque)
@@ -74,10 +74,11 @@
 // SECTION 1 - MOTOR PIN CONFIGURATION
 // ============================================================
 
-// IMPORTANT: The driver wired to pins 2/3 (DIR_PIN1/STEP_PIN1) actually
-// drives CW on ACTIVE HIGH, not active low like the others. Its coil
-// wiring was physically reversed to compensate - do not "fix" this pin
-// polarity in software without re-checking the physical wiring first.
+// IMPORTANT: BOTH X/Y drivers now go CW on ACTIVE HIGH. The pins 2/3
+// driver (DIR_PIN1/STEP_PIN1) always did, because its coil wiring was
+// physically reversed; the pins 8/9 driver ended up the same after the
+// machine was rewired. Do not "fix" either polarity in software without
+// re-checking the physical wiring first - see SECTION 3.
 const int DIR_PIN1 = 2;
 const int STEP_PIN1 = 3;
 const int EN_PIN1 = 4;
@@ -116,8 +117,13 @@ const unsigned int DIR_SETTLE_MS = 5;
 const bool MOTOR1_CW = HIGH;
 const bool MOTOR1_CCW = LOW;
 
-const bool MOTOR2_CW = LOW;
-const bool MOTOR2_CCW = HIGH;
+// Motor 2 now turns CW on HIGH, same as motor 1 - its direction sense
+// inverted when the machine was rewired. These two values were swapped
+// to match what the shafts were observed to do. The pin levels each
+// command sends did NOT change, only the names for them, so motion is
+// identical to before the swap.
+const bool MOTOR2_CW = HIGH;
+const bool MOTOR2_CCW = LOW;
 
 // CW = -Z, CCW = +Z (per spec). Flip these two if the physical
 // direction ends up reversed once wired up.
@@ -155,21 +161,20 @@ const uint8_t MOVE_COUNT = 6;
 // X/Y entries pulse STEP_PIN1+STEP_PIN2 together (coupled drive).
 // Z entries pulse STEP_PIN3 alone. See moveSteps().
 //
-// IMPORTANT: which AXIS each motor-direction pair drives was swapped
-// after the rig was physically re-oriented. The pair that used to walk
-// the long axis now walks the short one:
-//     M1 CW  + M2 CCW  ->  X-   (short axis, switch on pin 30)
-//     M1 CCW + M2 CW   ->  X+
-//     M1 CW  + M2 CW   ->  Y-   (long axis,  switch on pin 31)
-//     M1 CCW + M2 CCW  ->  Y+
-// The axis NAMES, travel caps, switch pins and grid all kept their old
-// meaning - only this table moved. Verify against the hardware before
-// changing it back.
+// VERIFIED ON THE MACHINE after the rig was physically re-oriented and
+// motor 2 was rewired. Confirmed by watching the shafts turn:
+//     M1 CW  + M2 CW   ->  X-   (short axis, switch on pin 30)
+//     M1 CCW + M2 CCW  ->  X+
+//     M1 CW  + M2 CCW  ->  Y-   (long axis,  switch on pin 31)
+//     M1 CCW + M2 CW   ->  Y+
+// Motors turning the SAME sense walk X; opposed senses walk Y. The axis
+// names, travel caps, switch pins and grid all kept their original
+// meaning. Re-verify against the hardware before changing this.
 const MoveDef MOVES[MOVE_COUNT] = {
-    {"X-", MOTOR1_CW, MOTOR2_CCW, false, AXIS_X, DIR_NEG},
-    {"X+", MOTOR1_CCW, MOTOR2_CW, false, AXIS_X, DIR_POS},
-    {"Y-", MOTOR1_CW, MOTOR2_CW, false, AXIS_Y, DIR_NEG},
-    {"Y+", MOTOR1_CCW, MOTOR2_CCW, false, AXIS_Y, DIR_POS},
+    {"X-", MOTOR1_CW, MOTOR2_CW, false, AXIS_X, DIR_NEG},
+    {"X+", MOTOR1_CCW, MOTOR2_CCW, false, AXIS_X, DIR_POS},
+    {"Y-", MOTOR1_CW, MOTOR2_CCW, false, AXIS_Y, DIR_NEG},
+    {"Y+", MOTOR1_CCW, MOTOR2_CW, false, AXIS_Y, DIR_POS},
     {"Z-", false, false, MOTOR3_CW, AXIS_Z, DIR_NEG},
     {"Z+", false, false, MOTOR3_CCW, AXIS_Z, DIR_POS}};
 
@@ -1664,10 +1669,10 @@ void printInstructions()
     Serial.print("Jog size per command: ");
     Serial.println(stepsPerMove);
     Serial.println("--------------------------------------");
-    Serial.println("1 = X-   (M1 CW  / M2 CCW)  [limit: pin 30]");
-    Serial.println("2 = X+   (M1 CCW / M2 CW )  [soft limit]");
-    Serial.println("3 = Y-   (M1 CW  / M2 CW )  [limit: pin 31]");
-    Serial.println("4 = Y+   (M1 CCW / M2 CCW)  [soft limit]");
+    Serial.println("1 = X-   (M1 CW  / M2 CW )  [limit: pin 30]");
+    Serial.println("2 = X+   (M1 CCW / M2 CCW)  [soft limit]");
+    Serial.println("3 = Y-   (M1 CW  / M2 CCW)  [limit: pin 31]");
+    Serial.println("4 = Y+   (M1 CCW / M2 CW )  [soft limit]");
     Serial.println("5 = Show counters / position / limits");
     Serial.println("6 = Reset step counters");
     Serial.println("7 = Disable both motors");
