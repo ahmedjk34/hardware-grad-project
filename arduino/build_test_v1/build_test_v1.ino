@@ -218,12 +218,34 @@ long auxStepperPos = 0;
 // SECTION 2 - MOTION TUNING
 // ============================================================
 
+// ------------------------------------------------------------
+//   X/Y AND Z ARE TUNED SEPARATELY
+// ------------------------------------------------------------
+//   The Z axis is a single motor lifting against gravity - and, once
+//   a block is gripped, against a load. The pulse rate that suits the
+//   X/Y gantry is rarely the one that suits the lift, so Z has its
+//   own pulse delay and its own jog size. Change either without
+//   touching how the gantry behaves.
+//
+//   Every Z move goes through these: manual D/U jogs, homing, and
+//   the build sequence.
+
 // Half-period of the step pulse, in microseconds. One full step is
 // two of these, so 500 us => 1.00 ms per step => ~1000 steps/sec.
-unsigned int STEP_DELAY = 500;
+// RAISE the Z value to slow Z down (more torque, less chance of
+// losing steps under load); LOWER it to speed the lift up.
+unsigned int STEP_DELAY = 500;   // X and Y
 
-// How many steps a single MANUAL jog command (1-4) moves.
-int stepsPerMove = 150;
+unsigned int STEP_DELAY_Z = 950; // Z only
+
+// How many steps a single MANUAL jog moves.
+//   stepsPerMove  -> the 1-4 commands (X/Y)
+//   stepsPerMoveZ -> the D/U commands (Z)
+// Z is worth setting finer: 150 steps is only ~2.9 cm of X/Y travel
+// but is nearly a fifth of the whole Z range.
+int stepsPerMove = 150;  // X and Y
+
+int stepsPerMoveZ = 150; // Z only
 
 // Settle time after changing a DIR pin before the first step pulse.
 const unsigned int DIR_SETTLE_MS = 5;
@@ -1006,6 +1028,22 @@ bool parseTwoNumbers(const char *s, long *outA, long *outB)
 // MANUAL JOG MOVEMENT (commands 1-4)
 // ============================================================
 
+// ------------------------------------------------------------
+// Per-axis motion tuning. Z is independent of the X/Y pair in BOTH
+// pulse rate and jog size - every Z move reads these, so there is
+// one place to change and no way for the two to drift apart.
+// ------------------------------------------------------------
+
+unsigned int stepDelayOf(uint8_t axis)
+{
+  return (axis == AXIS_Z) ? STEP_DELAY_Z : STEP_DELAY;
+}
+
+int jogStepsOf(uint8_t axis)
+{
+  return (axis == AXIS_Z) ? stepsPerMoveZ : stepsPerMove;
+}
+
 void executeMove(uint8_t index)
 {
   const MoveDef &m = MOVES[index];
@@ -1025,7 +1063,9 @@ void executeMove(uint8_t index)
 
   setDirection(m.dir1, m.dir2, m.dir3);
 
-  unsigned long moved = moveSteps(stepsPerMove, m.axis, m.sign);
+  int jog = jogStepsOf(m.axis);
+
+  unsigned long moved = moveSteps(jog, m.axis, m.sign);
   stepCounts[index] += moved;
 
   // A manual jog invalidates the "we are sitting on cell N" idea.
@@ -1039,7 +1079,7 @@ void executeMove(uint8_t index)
   Serial.print(F("  Moved "));
   Serial.print(moved);
   Serial.print(F(" of "));
-  Serial.print(stepsPerMove);
+  Serial.print(jog);
   Serial.print(F(" steps  ["));
   Serial.print(m.label);
   Serial.print(F("]  pos "));
@@ -1047,7 +1087,7 @@ void executeMove(uint8_t index)
   Serial.print(F(" = "));
   Serial.println(axisPos[m.axis]);
 
-  if (moved < (unsigned long)stepsPerMove)
+  if (moved < (unsigned long)jog)
   {
     statShortMoves[m.axis]++;
     uint8_t why = blockReason(m.axis, m.sign);
@@ -1076,6 +1116,11 @@ unsigned long moveSteps(long steps, uint8_t axis, int8_t sign)
   uint8_t counter = 0;
   bool isZ = (axis == AXIS_Z);
 
+  // Read the axis' own pulse rate ONCE, not per step. Because every
+  // move funnels through here, this is what gives Z its own speed
+  // during homing and the build sequence, not just manual jogs.
+  unsigned int pulseDelay = stepDelayOf(axis);
+
   for (long i = 0; i < steps; i++)
   {
     if (counter == 0)
@@ -1100,7 +1145,7 @@ unsigned long moveSteps(long steps, uint8_t axis, int8_t sign)
       digitalWrite(STEP_PIN1, HIGH);
       digitalWrite(STEP_PIN2, HIGH);
     }
-    delayMicroseconds(STEP_DELAY);
+    delayMicroseconds(pulseDelay);
 
     if (isZ)
     {
@@ -1111,7 +1156,7 @@ unsigned long moveSteps(long steps, uint8_t axis, int8_t sign)
       digitalWrite(STEP_PIN1, LOW);
       digitalWrite(STEP_PIN2, LOW);
     }
-    delayMicroseconds(STEP_DELAY);
+    delayMicroseconds(pulseDelay);
 
     axisPos[axis] += sign;
     done++;
@@ -2857,6 +2902,10 @@ void printStepCounts()
 
   unsigned long grandTotal = 0;
 
+  // Each axis runs at its own rate, so the time estimate has to be
+  // accumulated per move rather than from one global step period.
+  float motionMs = 0.0;
+
   for (uint8_t i = 0; i < MOVE_COUNT; i++)
   {
     Serial.print(F("  "));
@@ -2865,6 +2914,7 @@ void printStepCounts()
     Serial.print(stepCounts[i]);
     Serial.println(F(" steps"));
     grandTotal += stepCounts[i];
+    motionMs += (float)stepCounts[i] * stepPeriodMs(MOVES[i].axis);
   }
 
   Serial.println(F("  ------------------------------------"));
@@ -2875,7 +2925,7 @@ void printStepCounts()
   Serial.print(F("  TOTAL\t: "));
   Serial.print(grandTotal);
   Serial.print(F(" pulses  (~"));
-  printDuration((unsigned long)(grandTotal * stepPeriodMs()));
+  printDuration((unsigned long)motionMs);
   Serial.println(F(" of motion)"));
 }
 
@@ -2883,15 +2933,16 @@ void printStepCounts()
 // COMPREHENSIVE REPORT  (command 5)                    <<< NEW
 // ============================================================
 
-// One full step is TWO half-periods.
-float stepPeriodMs()
+// One full step is TWO half-periods. Per axis, because Z runs at its
+// own rate.
+float stepPeriodMs(uint8_t axis)
 {
-  return (2.0 * (float)STEP_DELAY) / 1000.0;
+  return (2.0 * (float)stepDelayOf(axis)) / 1000.0;
 }
 
-float stepsPerSecond()
+float stepsPerSecond(uint8_t axis)
 {
-  float p = stepPeriodMs();
+  float p = stepPeriodMs(axis);
   return (p > 0.0) ? (1000.0 / p) : 0.0;
 }
 
@@ -2971,17 +3022,33 @@ void printMotionTuning()
   Serial.println();
   Serial.println(F("--- MOTION TUNING ---"));
 
-  Serial.print(F("Step pulse   : "));
+  Serial.print(F("X/Y pulse    : "));
   Serial.print(STEP_DELAY);
   Serial.print(F(" us half-period  ->  "));
-  Serial.print(stepPeriodMs(), 3);
+  Serial.print(stepPeriodMs(AXIS_X), 3);
   Serial.print(F(" ms/step  ->  "));
-  Serial.print(stepsPerSecond(), 1);
+  Serial.print(stepsPerSecond(AXIS_X), 1);
   Serial.println(F(" steps/s"));
 
-  Serial.print(F("Jog size     : "));
+  Serial.print(F("Z pulse      : "));
+  Serial.print(STEP_DELAY_Z);
+  Serial.print(F(" us half-period  ->  "));
+  Serial.print(stepPeriodMs(AXIS_Z), 3);
+  Serial.print(F(" ms/step  ->  "));
+  Serial.print(stepsPerSecond(AXIS_Z), 1);
+  Serial.print(F(" steps/s  ="));
+  Serial.print(stepsPerSecond(AXIS_Z) * zCmPerStep(), 2);
+  Serial.println(F(" cm/s"));
+
+  Serial.print(F("X/Y jog size : "));
   Serial.print(stepsPerMove);
-  Serial.println(F(" steps per 1-4 / D / U command"));
+  Serial.println(F(" steps per 1-4 command"));
+
+  Serial.print(F("Z jog size   : "));
+  Serial.print(stepsPerMoveZ);
+  Serial.print(F(" steps per D / U command  ="));
+  Serial.print((float)stepsPerMoveZ * zCmPerStep(), 2);
+  Serial.println(F(" cm"));
 
   Serial.print(F("DIR settle   : "));
   Serial.print(DIR_SETTLE_MS);
@@ -3397,8 +3464,15 @@ void printInstructions()
   Serial.println(F("======================================"));
   Serial.println(F("CNC Grid + BUILD Control - MEGA 2560"));
   Serial.println(F("======================================"));
-  Serial.print(F("Jog size per command: "));
-  Serial.println(stepsPerMove);
+  Serial.print(F("Jog size: X/Y "));
+  Serial.print(stepsPerMove);
+  Serial.print(F(" steps @ "));
+  Serial.print(STEP_DELAY);
+  Serial.print(F(" us  |  Z "));
+  Serial.print(stepsPerMoveZ);
+  Serial.print(F(" steps @ "));
+  Serial.print(STEP_DELAY_Z);
+  Serial.println(F(" us"));
   Serial.println(F("--------------------------------------"));
   Serial.println(F("1 = X-   (M1 CW  / M2 CW )  [soft limit]"));
   Serial.println(F("2 = X+   (M1 CCW / M2 CCW)  [limit: pin 30]"));
