@@ -354,6 +354,13 @@ const uint8_t LINE_BUF_SIZE = 32;
 char lineBuf[LINE_BUF_SIZE];
 uint8_t lineLen = 0;
 
+// When the last character landed - used only to decide that a lone
+// "0" / "0+" has stopped growing and can be run. A whole line arrives
+// from the Serial Monitor in one burst, so this only ever expires
+// between commands. See flushPendingZeroCommand().
+unsigned long lastCharAtMs = 0;
+const unsigned long ZERO_CMD_IDLE_MS = 50;
+
 // ============================================================
 // SETUP
 // ============================================================
@@ -427,7 +434,11 @@ void checkSerial()
         }
 
         // Fast path: a lone digit with nothing buffered is a command.
-        if (lineLen == 0 && c >= '0' && c <= '9')
+        //
+        // '0' is the ONE exception. It might be the start of "0+", so it
+        // has to wait and see what follows. The not-a-plus flush below and
+        // the idle flush after the loop make that wait invisible.
+        if (lineLen == 0 && c >= '1' && c <= '9')
         {
             handleSingleChar(c);
             continue;
@@ -438,9 +449,24 @@ void checkSerial()
             continue; // ignore leading spaces
         }
 
+        // A buffered '0' followed by anything that is NOT '+' was just a
+        // plain home. Run it now, then deal with c as a fresh command.
+        if (lineLen == 1 && lineBuf[0] == CMD_GO_ORIGIN && c != '+')
+        {
+            lineLen = 0;
+            handleSingleChar(CMD_GO_ORIGIN);
+
+            if (c >= '1' && c <= '9')
+            {
+                handleSingleChar(c);
+                continue;
+            }
+        }
+
         if (lineLen < LINE_BUF_SIZE - 1)
         {
             lineBuf[lineLen++] = c;
+            lastCharAtMs = millis();
         }
         else
         {
@@ -448,6 +474,36 @@ void checkSerial()
             Serial.println("  ERROR - command too long, ignored.");
         }
     }
+
+    flushPendingZeroCommand();
+}
+
+// "0" and "0+" are the only commands that can sit in the buffer with
+// nothing following them, because they are the only ones that had to
+// wait for a possible '+'. Without this they would be lost whenever
+// the Serial Monitor is set to "No line ending" - so once the line
+// has gone quiet, run what we have.
+//
+// Nothing else is flushed this way: every other multi-character
+// command still needs its newline, exactly as documented.
+void flushPendingZeroCommand()
+{
+    bool isPendingZero =
+            (lineLen == 1 && lineBuf[0] == CMD_GO_ORIGIN) ||
+            (lineLen == 2 && lineBuf[0] == CMD_GO_ORIGIN && lineBuf[1] == '+');
+
+    if (!isPendingZero)
+    {
+        return;
+    }
+    if ((millis() - lastCharAtMs) < ZERO_CMD_IDLE_MS)
+    {
+        return;
+    }
+
+    lineBuf[lineLen] = '\0';
+    handleLine(lineBuf);
+    lineLen = 0;
 }
 
 void handleLine(char *line)
@@ -475,6 +531,18 @@ void handleLine(char *line)
 
     switch (head)
     {
+    case CMD_GO_ORIGIN:
+        if (line[1] == '+' && line[2] == '\0')
+        {
+            goToOriginWithZ();
+        }
+        else
+        {
+            Serial.println();
+            Serial.println("  ERROR - use:  0 (home X/Y) or 0+ (reset Z too)");
+        }
+        break;
+
     case 'G':
         if (parseTwoNumbers(line + 1, &a, &b))
         {
@@ -831,14 +899,31 @@ void disableMotors()
 // HOMING / ORIGIN                              <<< NEW
 // ============================================================
 
+// Derived from the soft travel, so re-tuning a travel cap can never
+// leave a stale homing cap behind. Z is included - a full reset (0+)
+// homes it like any other axis.
 long homeMaxStepsOf(uint8_t axis)
 {
-    return (axis == AXIS_X) ? HOME_MAX_STEPS_X : HOME_MAX_STEPS_Y;
+    long travel = softTravelOf(axis);
+
+    if (travel <= 0)
+    {
+        return 20000; // no cap configured to scale from
+    }
+    return travel * 2 + 500;
 }
 
 bool limitEnabledOn(uint8_t axis)
 {
-    return (axis == AXIS_X) ? LIMIT_X_ENABLED : LIMIT_Y_ENABLED;
+    if (axis == AXIS_X)
+    {
+        return LIMIT_X_ENABLED;
+    }
+    if (axis == AXIS_Y)
+    {
+        return LIMIT_Y_ENABLED;
+    }
+    return LIMIT_Z_ENABLED;
 }
 
 // Drives toward the axis' physical switch until it trips.
@@ -910,6 +995,65 @@ bool homeAxis(uint8_t axis)
     Serial.println(" steps - switch never tripped.");
     Serial.println("  Check wiring, pin number, and NC/NO setting.");
     axisHomed[axis] = false;
+    return false;
+}
+
+// ------------------------------------------------------------
+// 0+  -  the "reset everything" homing.
+// ------------------------------------------------------------
+// Plain 0 homes X/Y and deliberately leaves Z alone. 0+ resets the
+// Z axis as well, which takes two moves rather than one:
+//
+//   Z DOWN into its physical switch  - the only true reference the
+//     axis has. A soft limit is just a number counted from the
+//     switch, so an axis that has never touched the switch cannot
+//     know where its top is. Resetting therefore means going DOWN
+//     first, even though the axis ends up at the top.
+//
+//   Z UP to the software limit       - where the claw wants to sit
+//     between jobs: clear of the bed and clear of anything built.
+//
+// Z is done BEFORE X/Y so the gantry never drags a low claw across
+// the bed - by the time X/Y move, the claw is parked at the top.
+bool goToOriginWithZ()
+{
+    Serial.println();
+    Serial.println("=== FULL RESET - Z, then X/Y ===");
+
+    // ---- 1. give Z a real zero ----
+    Serial.println("  [1/3] Z down into its limit switch (true zero)...");
+    if (!homeAxis(AXIS_Z))
+    {
+        Serial.println("  ABORTED - Z never found its switch.");
+        Serial.println("  X/Y were NOT homed: moving now could drag the claw.");
+        return false;
+    }
+
+    // ---- 2. park it at the top ----
+    Serial.print("  [2/3] Z up to the software limit (");
+    Serial.print(SOFT_LIMIT_Z_TRAVEL);
+    Serial.println(" steps)...");
+
+    bool okZ = moveAxisTo(AXIS_Z, SOFT_LIMIT_Z_TRAVEL * (long)softEndOf(AXIS_Z));
+    if (!okZ)
+    {
+        // Z has a valid zero and stopped somewhere known, so homing X/Y
+        // is still safe and still worth doing. Say so and carry on.
+        Serial.println("  WARNING - Z stopped short of the top.");
+    }
+
+    // ---- 3. now the claw is high, walk the gantry home ----
+    Serial.println("  [3/3] Homing X/Y...");
+    bool okXY = goToOrigin();
+
+    Serial.println();
+    if (okXY && okZ)
+    {
+        Serial.println("FULL RESET COMPLETE - X/Y at origin, Z parked at top.");
+        return true;
+    }
+
+    Serial.println("FULL RESET INCOMPLETE - see the warnings above.");
     return false;
 }
 
@@ -1726,6 +1870,7 @@ void printInstructions()
     Serial.println("8 = Zero position (manual, NOT a home)");
     Serial.println("9 = Show ASCII grid map");
     Serial.println("0 = HOME / go to origin (X/Y switches only)");
+    Serial.println("0+= FULL RESET: also zero Z and park it at the top");
     Serial.println("--------------------------------------");
     Serial.println("D = Z-   (M3 CW )           [limit: pin 28]");
     Serial.println("U = Z+   (M3 CCW)           [soft limit: INFINITE]");
