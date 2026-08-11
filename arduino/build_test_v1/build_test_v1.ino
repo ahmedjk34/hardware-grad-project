@@ -58,7 +58,7 @@
 
       X switch at the X+ end  ->  X runs   0  ...  -5050   (soft limit)
       Y switch at the Y- end  ->  Y runs   0  ...  +8500   (soft limit)
-      Z switch at the Z- end  ->  Z runs   0  ...  +1400   (soft limit)
+      Z switch at the Z- end  ->  Z runs   0  ...  +1350   (soft limit)
 
   So the work envelope is 5050 x 8500 steps, living in the rectangle
   X in [-5050, 0], Y in [0, +8500]. Grid indices hide this sign mess:
@@ -352,7 +352,7 @@ const long SOFT_LIMIT_INFINITE = 0; // sentinel: no cap at all
 
 long SOFT_LIMIT_X_TRAVEL = 5050; // X- travel cap, in steps
 long SOFT_LIMIT_Y_TRAVEL = 8500; // Y+ travel cap, in steps
-long SOFT_LIMIT_Z_TRAVEL = 1400; // Z+ travel cap, in steps
+long SOFT_LIMIT_Z_TRAVEL = 1350; // Z+ travel cap, in steps
 
 const int8_t SOFT_LIMIT_X_AT_END = DIR_NEG; // guards the X- end
 const int8_t SOFT_LIMIT_Y_AT_END = DIR_POS; // guards the Y+ end
@@ -466,10 +466,12 @@ const bool HOME_VERBOSE = true;
 //   Those two ends are SOFT_LIMIT_Z_TRAVEL steps apart, so:
 //
 //        steps per cm = SOFT_LIMIT_Z_TRAVEL / Z_TRAVEL_CM
-//                     = 1400 / 27.0
-//                     = 51.85 steps per cm
+//                     = 1350 / 27.0
+//                     = 50.00 steps per cm exactly
 //
-//   and one 1.5 cm block is 1.5 * 51.85 = ~77.8 steps.
+//   and one 1.5 cm block is 1.5 * 50 = 75 steps exactly. That the
+//   numbers come out round here is luck, not a requirement - the
+//   maths below rounds to the nearest step either way.
 //
 //   This is computed at RUN TIME by zStepsPerCm(), never hard-coded,
 //   so re-measuring the rig or re-tuning SOFT_LIMIT_Z_TRAVEL is a

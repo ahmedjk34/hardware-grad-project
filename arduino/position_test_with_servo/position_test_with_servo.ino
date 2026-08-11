@@ -295,7 +295,7 @@ const long SOFT_LIMIT_INFINITE = 0; // sentinel: no cap at all
 
 long SOFT_LIMIT_X_TRAVEL = 5050; // X- travel cap, in steps
 long SOFT_LIMIT_Y_TRAVEL = 8500; // Y+ travel cap, in steps
-long SOFT_LIMIT_Z_TRAVEL = 1400; // Z+ travel cap - in steps
+long SOFT_LIMIT_Z_TRAVEL = 1350; // Z+ travel cap - in steps
 
 const int8_t SOFT_LIMIT_X_AT_END = DIR_NEG; // guards the X- end
 const int8_t SOFT_LIMIT_Y_AT_END = DIR_POS; // guards the Y+ end
