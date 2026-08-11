@@ -172,10 +172,10 @@ long auxStepperPos = 0;
 // ============================================================
 
 // Half-period of the step pulse, in microseconds.
-unsigned int STEP_DELAY = 650;
+unsigned int STEP_DELAY = 500;
 
 // How many steps a single MANUAL jog command (1-4) moves.
-int stepsPerMove = 300;
+int stepsPerMove = 150;
 
 // Settle time after changing a DIR pin before the first step pulse.
 const unsigned int DIR_SETTLE_MS = 5;
@@ -279,7 +279,7 @@ const uint8_t LIMIT_CHECK_EVERY_N_STEPS = 1;
 
 const long SOFT_LIMIT_INFINITE = 0; // sentinel: no cap at all
 
-long SOFT_LIMIT_X_TRAVEL = 5100; // X- travel cap, in steps
+long SOFT_LIMIT_X_TRAVEL = 5050; // X- travel cap, in steps
 long SOFT_LIMIT_Y_TRAVEL = 8500; // Y+ travel cap, in steps
 long SOFT_LIMIT_Z_TRAVEL = 1400; // Z+ travel cap - in steps
 
