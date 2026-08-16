@@ -103,6 +103,17 @@
    10. Z down to the requested BLOCK LEVEL
    11. Open the claw                             (block is placed)
 
+  ...then it PARKS itself, so the rig never sits over the stack with
+  an open claw and the next B starts from a known state:
+
+   12. Z up to the software limit                (clear of the block)
+   13. X/Y home to the origin
+   14. Rotate the claw back to neutral           (if this build turned it)
+
+  Phases 12-14 are skipped if BUILD_PARK_AFTER_PLACE is false. A
+  failure in them is a WARNING, not a failed build - the block is
+  already down by then.
+
   ------------------------------------------------------------
   A NOTE ON F("...")  -  DO NOT DROP IT
   ------------------------------------------------------------
@@ -542,12 +553,21 @@ const float LEVEL_EPSILON = 0.001;
 // human can follow along / hit reset). 0 disables.
 unsigned int BUILD_PHASE_PAUSE_MS = 250;
 
-// After the block is released, lift the claw back to carry height.
-// The spec ends the cycle with "open claw" and the NEXT build starts
-// by going up anyway, so this is false by default. Set it true if you
-// ever drive X/Y by hand between builds - otherwise the open claw is
-// still buried in the stack.
-bool BUILD_RETRACT_AFTER_PLACE = false;
+// After the block is released, PARK the rig: lift Z clear of what was
+// just placed, walk X/Y back to the origin, and un-rotate the claw.
+//
+// This leaves the machine in exactly the state a build expects to
+// start from, so the rig is never left hanging over a stack with an
+// open claw - and the next B command finds everything already where
+// it wants it (its first two phases become no-ops).
+//
+// Set false only if you want the claw to stay put over the block it
+// just placed, e.g. while eyeballing placement accuracy by hand.
+bool BUILD_PARK_AFTER_PLACE = true;
+
+// How many phases a full build prints. Purely cosmetic - it only
+// feeds the "[BUILD n/N]" progress lines.
+const uint8_t BUILD_STEP_COUNT = 14;
 
 const bool BUILD_VERBOSE = true;
 
@@ -2112,7 +2132,9 @@ void buildStep(uint8_t n, const char *what)
   Serial.println();
   Serial.print(F("[BUILD "));
   Serial.print(n);
-  Serial.print(F("/11] "));
+  Serial.print(F("/"));
+  Serial.print(BUILD_STEP_COUNT);
+  Serial.print(F("] "));
   Serial.println(what);
 }
 
@@ -2158,8 +2180,42 @@ void countPlacedBlock(long level)
   }
 }
 
+// ------------------------------------------------------------
+// PHASES 12-14 - park the rig after the block is down.
+// ------------------------------------------------------------
+// Z has to come up FIRST: the claw is sitting inside the stack it
+// just added to, so any X/Y move before the lift would drag through
+// it. Then home X/Y, then undo any rotation this build applied.
+//
+// The block is already placed when this runs, so every failure here
+// is a warning rather than an abort - the build itself succeeded.
+bool buildPark()
+{
+  buildStep(12, "Raise Z clear of the block just placed");
+  if (!zGoTop())
+  {
+    Serial.println(F("  !! could not raise Z - NOT parking X/Y."));
+    Serial.println(F("  !! moving the gantry now could drag through the stack."));
+    return false;
+  }
+  buildPause();
+
+  buildStep(13, "Return X/Y to the origin");
+  if (!goToOrigin())
+  {
+    Serial.println(F("  !! X/Y did not reach the origin."));
+    return false;
+  }
+  buildPause();
+
+  buildStep(14, "Return the claw to its original rotation");
+  rotateClawTo(ROT_NONE);
+
+  return true;
+}
+
 // One complete pick-and-place cycle. See the header comment for the
-// eleven phases; each one bails out the moment something goes wrong,
+// phases; each one bails out the moment something goes wrong,
 // because carrying on with an unknown position would crash the rig.
 bool buildBlock(long col, long row, long level, int8_t wantRot)
 {
@@ -2254,6 +2310,8 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
 
   // ---- 3. undo the previous build's rotation, while still high ----
 
+  // Normally a no-op, because phase 14 already left the claw neutral.
+  // It stays as a safety net for a manual R/RR between builds.
   buildStep(3, "Return the claw to neutral before picking up");
   rotateClawTo(ROT_NONE);
   buildPause();
@@ -2321,14 +2379,12 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
   buildStep(11, "Open the claw (release the block)");
   openServoAndWait();
 
-  if (BUILD_RETRACT_AFTER_PLACE)
-  {
-    Serial.println();
-    Serial.println(F("  Retracting Z to carry height (BUILD_RETRACT_AFTER_PLACE)."));
-    zGoTop();
-  }
-
-  // ---- the block is down: book it ----
+  // ---- the block is down: book it BEFORE parking ----
+  //
+  // The placement is what the command was for, and it has succeeded
+  // by this point. Parking is tidy-up: if it goes wrong the block is
+  // still correctly placed, so it must not turn a good build into a
+  // failed one.
 
   unsigned long elapsed = millis() - buildStartMs;
 
@@ -2349,6 +2405,14 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
   statLastOk = true;
   statLastFailure = NULL;
 
+  // ---- 12-14. park the rig back at its rest state ----
+
+  bool parked = true;
+  if (BUILD_PARK_AFTER_PLACE)
+  {
+    parked = buildPark();
+  }
+
   Serial.println();
   Serial.println(F("======================================"));
   Serial.print(F("BUILD COMPLETE - block placed at ["));
@@ -2360,12 +2424,29 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
   Serial.print(F(" ("));
   Serial.print(levelToCm(level), 2);
   Serial.println(F(" cm)"));
-  Serial.print(F("Cycle time: "));
+  Serial.print(F("Place time: "));
   printDuration(elapsed);
   Serial.println();
-  Serial.print(F("Claw left rotated: "));
+
+  Serial.print(F("Claw rotation: "));
   Serial.println(rotationName(clawRotation));
-  Serial.println(F("(the next B will un-rotate it at the feeder)"));
+
+  if (!BUILD_PARK_AFTER_PLACE)
+  {
+    Serial.println(F("NOT PARKED - claw is still over the block it placed."));
+    Serial.println(F("(BUILD_PARK_AFTER_PLACE is false)"));
+  }
+  else if (parked)
+  {
+    Serial.println(F("PARKED - Z at the top, X/Y at the origin."));
+    Serial.println(F("Ready for the next B."));
+  }
+  else
+  {
+    Serial.println(F("!! BLOCK IS PLACED, BUT PARKING FAILED - see above."));
+    Serial.println(F("!! Check the rig before the next command."));
+  }
+
   Serial.println(F("======================================"));
   return true;
 }
@@ -3211,8 +3292,8 @@ void printMotionTuning()
 
   Serial.print(F("Build pause  : "));
   Serial.print(BUILD_PHASE_PAUSE_MS);
-  Serial.print(F(" ms/phase, retract after place: "));
-  Serial.println(BUILD_RETRACT_AFTER_PLACE ? "YES" : "no");
+  Serial.print(F(" ms/phase, park after place: "));
+  Serial.println(BUILD_PARK_AFTER_PLACE ? "YES" : "no");
 }
 
 // Position, travel used, travel left - per axis, in one table.
