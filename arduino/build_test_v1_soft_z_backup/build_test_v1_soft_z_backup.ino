@@ -24,11 +24,11 @@
     8 = ZERO the position counters (set "here" as origin 0,0)
     9 = Show ASCII grid map + current cell
     0 = HOME / GO TO ORIGIN (drive into both switches, X/Y only)
-    0+ = FULL RESET: Z down to its bottom switch, Z up to its TOP
-         switch, then home X/Y. Puts the rig in a known state.
+    0+ = FULL RESET: Z down to its switch, Z up to the soft limit,
+         then home X/Y. Use this to put the rig in a known state.
 
-    D = Z-   (Motor 3 CW )   <-- physical limit switch, pin 28 (GROUND)
-    U = Z+   (Motor 3 CCW)   <-- physical limit switch, pin 29 (TOP)
+    D = Z-   (Motor 3 CW )   <-- physical limit switch end
+    U = Z+   (Motor 3 CCW)   <-- SOFTWARE limit end
 
     O = Servo OPEN   (pin 6)
     C = Servo CLOSE  (pin 6)
@@ -52,16 +52,16 @@
   ------------------------------------------------------------
   COORDINATE SYSTEM  (this is the important part)
   ------------------------------------------------------------
-  SOFT_ZERO_ON_LIMIT_HIT is true, so each HOME switch zeros its own
-  axis the moment it trips. The corner where BOTH X/Y switches are
+  SOFT_ZERO_ON_LIMIT_HIT is true, so each physical switch zeros its
+  own axis the moment it trips. The corner where BOTH switches are
   pressed is therefore machine position (0, 0) = the ORIGIN.
 
-  Each axis travels AWAY from its own home switch. The two switches
-  sit at OPPOSITE ends now, so the two axes no longer share a sign:
+  Each axis travels AWAY from its own switch. The two switches sit at
+  OPPOSITE ends now, so the two axes no longer share a sign:
 
       X switch at the X+ end  ->  X runs   0  ...  -5050   (soft limit)
       Y switch at the Y- end  ->  Y runs   0  ...  +8500   (soft limit)
-      Z switch at the Z- end  ->  Z runs   0  ...  +1350   (TOP SWITCH)
+      Z switch at the Z- end  ->  Z runs   0  ...  +1350   (soft limit)
 
   So the work envelope is 5050 x 8500 steps, living in the rectangle
   X in [-5050, 0], Y in [0, +8500]. Grid indices hide this sign mess:
@@ -72,36 +72,13 @@
       row M  = far end of Y travel  (Y = +8500 side)
 
   Generalised in code as: each axis extends from 0 in the direction
-  travelEndOf(axis), for axisTravelOf(axis) steps - whether that far
-  end is held by a software cap (X/Y) or by a switch (Z). Change the
+  softEndOf(axis), for softTravelOf(axis) steps. Change the soft
   limits and the grid rescales itself automatically.
 
-  Z works the same way, except that BOTH of its ends are now real
-  switches: Z = 0 is the bottom switch on pin 28 (the GROUND / table
-  surface, claw all the way down) and the top of travel is the switch
-  on pin 29 - roughly +Z_TRAVEL_STEPS, but the switch, not the number,
-  is what actually stops the axis. SECTION 6E turns that step range
-  into centimetres and then into BLOCK LEVELS.
-
-  ------------------------------------------------------------
-  Z+ IS A HARDWARE END STOP NOW  (it used to be a software limit)
-  ------------------------------------------------------------
-  The Z+ end used to be guarded by a counted software limit, which
-  only worked while the step count was trustworthy. It is now a
-  physical switch on PIN 29, wired and treated exactly like the X, Y
-  and Z- switches, so:
-
-    * Z has NO software limit at all - SECTION 6B disables it.
-    * Z_TRAVEL_STEPS (SECTION 6E) survives as a CALIBRATION number:
-      it converts steps to centimetres and sizes the homing cap. It
-      no longer stops anything.
-    * "Z to the top" is now a SEEK - drive up until the switch trips -
-      instead of a move to a counted position. It therefore works even
-      when Z has never been homed.
-    * The rig MEASURES the real switch-to-switch distance whenever it
-      runs up from a true zero, and prints it next to Z_TRAVEL_STEPS
-      in the full report. If the two disagree, copy the measured
-      number into SECTION 6E.
+  Z works the same way: Z = 0 is the physical switch (the GROUND /
+  table surface, claw all the way down) and Z = +SOFT_LIMIT_Z_TRAVEL
+  is the top of travel. SECTION 6E turns that step range into
+  centimetres and then into BLOCK LEVELS.
 
   ------------------------------------------------------------
   GO-TO SEQUENCE
@@ -114,13 +91,13 @@
   ------------------------------------------------------------
   BUILD SEQUENCE  (the B command)                        <<< NEW
   ------------------------------------------------------------
-    1. Z up to the TOP SWITCH                    (clear of everything)
+    1. Z up to the software limit                (clear of everything)
     2. X/Y home to the origin                    (the block feeder)
     3. Un-rotate the claw if the LAST build rotated it
     4. Open the claw
     5. Z down to GROUND (into the Z switch - this also re-zeroes Z)
     6. Close the claw                            (block is now held)
-    7. Z up to the TOP SWITCH                    (carry height)
+    7. Z up to the software limit                (carry height)
     8. X/Y to the requested cell
     9. Rotate the claw if this build asked for R / RR
    10. Z down to the requested BLOCK LEVEL
@@ -129,7 +106,7 @@
   ...then it PARKS itself, so the rig never sits over the stack with
   an open claw and the next B starts from a known state:
 
-   12. Z up to the TOP SWITCH                    (clear of the block)
+   12. Z up to the software limit                (clear of the block)
    13. X/Y home to the origin
    14. Rotate the claw back to neutral           (if this build turned it)
 
@@ -358,78 +335,22 @@ const MoveDef MOVES[MOVE_COUNT] = {
 // ============================================================
 // SECTION 6 - PHYSICAL LIMIT SWITCH CONFIGURATION
 // ============================================================
-//
-// Every switch on the machine lives in ONE table. A switch is
-// described by WHICH END OF WHICH AXIS it guards, not by its axis
-// alone - which is exactly what lets Z carry two of them:
-//
-//     X    one switch  at the X+ end          pin 30
-//     Y    one switch  at the Y- end          pin 31
-//     Z    TWO switches:
-//              Z-  bottom / GROUND            pin 28
-//              Z+  top of travel              pin 29   <<< was software
-//
-// The Z+ switch REPLACED the Z+ software limit. Nothing about it is
-// special-cased: it is read, debounced, counted and obeyed by the
-// same code as every other end stop.
-//
-// ------------------------------------------------------------
-//   isHome  -  which switch is an axis' ZERO?
-// ------------------------------------------------------------
-//   An axis needs exactly one switch that means "you are at position
-//   0". That is the one homing drives into, and the one that re-zeros
-//   the counter under SOFT_ZERO_ON_LIMIT_HIT.
-//
-//   Z- is Z's home switch because it is the GROUND reference the
-//   block levels are measured from. Z+ is a FAR-END switch: it stops
-//   the axis and reports where the top is, but it does not redefine
-//   zero. See applyLimitReference().
 
-const int LIMIT_PIN_X = 30;     // X AXIS limit switch
-const int LIMIT_PIN_Y = 31;     // Y AXIS limit switch
-const int LIMIT_PIN_Z_BOT = 28; // Z AXIS bottom (GROUND) limit switch
-const int LIMIT_PIN_Z_TOP = 29; // Z AXIS top limit switch   <<< NEW
+const int LIMIT_PIN_X = 30; // X AXIS limit switch
+const int LIMIT_PIN_Y = 31; // Y AXIS limit switch
+const int LIMIT_PIN_Z = 28; // Z AXIS limit switch
 
-struct LimitSwitch
-{
-  uint8_t axis;
-  int8_t end;   // DIR_NEG / DIR_POS - which end of the axis it guards
-  uint8_t pin;
-  bool useNC;   // true = normally-closed wiring
-  bool enabled; // false = ignore this switch completely
-  bool isHome;  // true = tripping it means "this axis is at 0"
-};
+const bool LIMIT_X_USE_NC = true;
+const bool LIMIT_Y_USE_NC = true;
+const bool LIMIT_Z_USE_NC = true;
 
-const uint8_t LIMIT_COUNT = 4;
+const int8_t LIMIT_X_AT_END = DIR_POS; // X switch is at the X+ end
+const int8_t LIMIT_Y_AT_END = DIR_NEG; // Y switch is at the Y- end
+const int8_t LIMIT_Z_AT_END = DIR_NEG; // Z switch is at the Z- end (down)
 
-// The order here is the order every report prints them in.
-const LimitSwitch LIMITS[LIMIT_COUNT] = {
-    {AXIS_X, DIR_POS, LIMIT_PIN_X, true, true, true},
-    {AXIS_Y, DIR_NEG, LIMIT_PIN_Y, true, true, true},
-    {AXIS_Z, DIR_NEG, LIMIT_PIN_Z_BOT, true, true, true},
-    {AXIS_Z, DIR_POS, LIMIT_PIN_Z_TOP, true, true, false}};
-
-// ------------------------------------------------------------
-//   WHAT THE Z+ SWITCH DOES TO THE POSITION COUNTER
-// ------------------------------------------------------------
-//   When Z runs up into the top switch it can either KEEP the step
-//   count it just made, or ADOPT Z_TRAVEL_STEPS as its position.
-//
-//   Keeping the count (false, the default) is more accurate whenever
-//   Z already has a true zero from the bottom switch: the count came
-//   from the real hardware this run, while Z_TRAVEL_STEPS is a
-//   hand-entered constant that may be slightly stale. A build always
-//   re-zeros at the bottom before it places anything, so the count is
-//   never left to drift for long.
-//
-//   Set true only if you would rather trust the constant - e.g. if
-//   the lift skips steps often enough that the count is the less
-//   reliable of the two.
-//
-//   NOTE: when Z has NO zero at all (never homed), the top switch
-//   always adopts Z_TRAVEL_STEPS regardless of this setting - a
-//   rough reference beats no reference.
-const bool Z_TOP_REFERENCES_POSITION = false;
+const bool LIMIT_X_ENABLED = true;
+const bool LIMIT_Y_ENABLED = true;
+const bool LIMIT_Z_ENABLED = true;
 
 const unsigned int LIMIT_CONFIRM_US = 200;
 const uint8_t LIMIT_CHECK_EVERY_N_STEPS = 1;
@@ -438,42 +359,26 @@ const uint8_t LIMIT_CHECK_EVERY_N_STEPS = 1;
 // SECTION 6B - SOFTWARE LIMIT CONFIGURATION
 // ============================================================
 //
-// These numbers define the size of the grid envelope.
-//
-// ------------------------------------------------------------
-//   Z IS NOT HERE ANY MORE
-// ------------------------------------------------------------
-//   Z used to be capped by a counted software limit at the Z+ end.
-//   That end is now the physical switch on pin 29 (SECTION 6), so the
-//   Z software limit is DISABLED and there is no Z travel cap to set.
-//
-//   The step count that used to live here as SOFT_LIMIT_Z_TRAVEL has
-//   moved to SECTION 6E as Z_TRAVEL_STEPS, where it is a CALIBRATION
-//   number - it converts steps into centimetres and sizes the Z
-//   homing cap. It does not stop the axis; the switch does.
-//
-//   A soft limit only ever guards the end an axis travels TOWARD,
-//   which is always the end away from its home switch. So for every
-//   axis, SOFT_LIMIT_*_AT_END == travelEndOf(axis) by construction.
+// These numbers ALSO define the size of the grid envelope, and
+// SOFT_LIMIT_Z_TRAVEL is what SECTION 6E converts into centimetres.
 
 const long SOFT_LIMIT_INFINITE = 0; // sentinel: no cap at all
 
-long SOFT_LIMIT_X_TRAVEL = 5050;                  // X- travel cap, in steps
-long SOFT_LIMIT_Y_TRAVEL = 8500;                  // Y+ travel cap, in steps
-const long SOFT_LIMIT_Z_TRAVEL = SOFT_LIMIT_INFINITE; // Z: switch, not a cap
+long SOFT_LIMIT_X_TRAVEL = 5050; // X- travel cap, in steps
+long SOFT_LIMIT_Y_TRAVEL = 8500; // Y+ travel cap, in steps
+long SOFT_LIMIT_Z_TRAVEL = 1350; // Z+ travel cap, in steps
 
 const int8_t SOFT_LIMIT_X_AT_END = DIR_NEG; // guards the X- end
 const int8_t SOFT_LIMIT_Y_AT_END = DIR_POS; // guards the Y+ end
-const int8_t SOFT_LIMIT_Z_AT_END = DIR_POS; // (unused - Z has no cap)
+const int8_t SOFT_LIMIT_Z_AT_END = DIR_POS; // guards the Z+ end (up)
 
 const bool SOFT_LIMIT_X_ENABLED = true;
 const bool SOFT_LIMIT_Y_ENABLED = true;
-const bool SOFT_LIMIT_Z_ENABLED = false; // pin 29 replaced it
+const bool SOFT_LIMIT_Z_ENABLED = true;
 
-// Re-zero an axis automatically the moment its HOME switch trips.
+// Re-zero an axis automatically the moment its PHYSICAL switch trips.
 // REQUIRED for the grid AND for the build levels to mean anything -
-// leave this true. Far-end switches (Z+) never re-zero; see
-// applyLimitReference().
+// leave this true.
 const bool SOFT_ZERO_ON_LIMIT_HIT = true;
 
 const bool SOFT_LIMIT_VERBOSE = true;
@@ -520,7 +425,7 @@ long GRID_ROWS = 20;
 // allowed grid range follows it automatically.
 long gridCountMaxOf(uint8_t axis)
 {
-  return axisTravelOf(axis);
+  return softTravelOf(axis);
 }
 
 // The ASCII map is only drawn when the grid is small enough to be
@@ -564,17 +469,17 @@ const bool HOME_VERBOSE = true;
 // other code needs touching.
 //
 // ------------------------------------------------------------
-//   THE TWO MEASUREMENTS THAT MATTER
+//   THE ONE MEASUREMENT THAT MATTERS
 // ------------------------------------------------------------
-//   Both ends of Z travel are physical switches, so the travel is a
-//   fixed property of the hardware. It is described twice - once in
-//   steps, once in centimetres - and the ratio is the scale factor
-//   the whole build system runs on:
+//   Z_TRAVEL_CM is the REAL, TAPE-MEASURED distance the claw covers
+//   between the two ends of its travel:
 //
-//        bottom = the Z- switch, pin 28   (Z = 0 steps, GROUND)
-//        top    = the Z+ switch, pin 29   (Z ~ Z_TRAVEL_STEPS)
+//        bottom = the Z physical limit switch  (Z = 0 steps, GROUND)
+//        top    = the Z software limit         (Z = SOFT_LIMIT_Z_TRAVEL)
 //
-//        steps per cm = Z_TRAVEL_STEPS / Z_TRAVEL_CM
+//   Those two ends are SOFT_LIMIT_Z_TRAVEL steps apart, so:
+//
+//        steps per cm = SOFT_LIMIT_Z_TRAVEL / Z_TRAVEL_CM
 //                     = 1350 / 27.0
 //                     = 50.00 steps per cm exactly
 //
@@ -583,30 +488,8 @@ const bool HOME_VERBOSE = true;
 //   maths below rounds to the nearest step either way.
 //
 //   This is computed at RUN TIME by zStepsPerCm(), never hard-coded,
-//   so re-measuring the rig is a one-line change. Send  Z  to print
-//   the resulting table.
-//
-// ------------------------------------------------------------
-//   YOU DO NOT HAVE TO GUESS Z_TRAVEL_STEPS
-// ------------------------------------------------------------
-//   Since pin 29 went in, the machine measures the step distance
-//   itself: any run up into the top switch that STARTED from a true
-//   zero records what it counted. Send 0+ (bottom, then top), then 5,
-//   and the report prints the measured value beside this constant.
-//   If they disagree, put the measured number here - Z_TRAVEL_CM is
-//   still yours to tape-measure.
-//
-//   Getting it wrong no longer risks a crash, because the switch
-//   stops the axis either way. It only skews the cm <-> step scale,
-//   which shows up as blocks landing slightly high or low.
-
-// Steps between the two Z switches. CALIBRATION ONLY - the pin 29
-// switch is what actually stops the axis at the top.
-long Z_TRAVEL_STEPS = 1350;
-
-// What the rig last measured between the switches, 0 = not measured
-// yet this session. Recorded by applyLimitReference().
-long zTravelMeasured = 0;
+//   so re-measuring the rig or re-tuning SOFT_LIMIT_Z_TRAVEL is a
+//   one-line change. Send  Z  to print the resulting table.
 
 // Real-world height of the full Z travel, in centimetres.
 float Z_TRAVEL_CM = 27.0;
@@ -725,16 +608,6 @@ long axisPos[AXIS_COUNT] = {0, 0, 0};
 // (Z is set true the moment its physical switch trips, same as X/Y.)
 bool axisHomed[AXIS_COUNT] = {false, false, false};
 
-// Where that position came from: true = the axis' HOME switch set it,
-// which is the only reference precise enough to measure against.
-//
-// Z can also be positioned by its TOP switch, which is a guess taken
-// from Z_TRAVEL_STEPS rather than something counted - good enough to
-// work with, not good enough to calibrate from. Keeping the two
-// apart is what stops a top-switch guess being reported back as a
-// measurement of itself. See applyLimitReference().
-bool axisRefAtHome[AXIS_COUNT] = {false, false, false};
-
 const bool SHOW_DISTANCE = false;
 const float STEPS_PER_UNIT = 200.0;
 const char *DISTANCE_UNIT = "mm";
@@ -762,19 +635,13 @@ unsigned long statBadCommands = 0;  // unparseable / unknown lines
 // --- per axis ---
 unsigned long statHomeRuns[AXIS_COUNT] = {0, 0, 0};
 unsigned long statHomeFails[AXIS_COUNT] = {0, 0, 0};
+unsigned long statLimitTrips[AXIS_COUNT] = {0, 0, 0};  // switch hit events
 unsigned long statSoftBlocks[AXIS_COUNT] = {0, 0, 0};  // soft limit refusals
 unsigned long statShortMoves[AXIS_COUNT] = {0, 0, 0};  // moves that stopped early
 
-// --- per SWITCH, not per axis ---
-//
-// Z has two of them, and "the Z switch was hit" would be an ambiguous
-// thing to count. Per-axis totals are summed on demand by
-// axisSwitchTrips() for the axis table.
-unsigned long statSwitchTrips[LIMIT_COUNT] = {0, 0, 0, 0};
-
 // Edge detection, so one physical trip counts once instead of once
 // per step spent sitting on the switch.
-bool limitWasActive[LIMIT_COUNT] = {false, false, false, false};
+bool limitWasActive[AXIS_COUNT] = {false, false, false};
 bool softWasActive[AXIS_COUNT] = {false, false, false};
 
 // --- gripper + rotation ---
@@ -821,8 +688,8 @@ const char CMD_ZERO_POSITION = '8';
 const char CMD_SHOW_GRID = '9';
 const char CMD_GO_ORIGIN = '0';
 
-const char CMD_MOVE_Z_NEG = 'D'; // Z-  (bottom limit switch, pin 28)
-const char CMD_MOVE_Z_POS = 'U'; // Z+  (top limit switch, pin 29)
+const char CMD_MOVE_Z_NEG = 'D'; // Z-  (physical limit switch end)
+const char CMD_MOVE_Z_POS = 'U'; // Z+  (software limit end)
 
 const char CMD_SERVO_OPEN = 'O';
 const char CMD_SERVO_CLOSE = 'C';
@@ -872,11 +739,9 @@ void setup()
   pinMode(DIR_PIN3, OUTPUT);
   pinMode(STEP_PIN3, OUTPUT);
 
-  // Every switch in the table, however many there are.
-  for (uint8_t i = 0; i < LIMIT_COUNT; i++)
-  {
-    pinMode(LIMITS[i].pin, INPUT_PULLUP);
-  }
+  pinMode(LIMIT_PIN_X, INPUT_PULLUP);
+  pinMode(LIMIT_PIN_Y, INPUT_PULLUP);
+  pinMode(LIMIT_PIN_Z, INPUT_PULLUP);
 
   digitalWrite(STEP_PIN1, LOW);
   digitalWrite(STEP_PIN2, LOW);
@@ -910,7 +775,6 @@ void setup()
   Serial.println();
   Serial.println(F(">> Position is UNKNOWN until you home. Send 0 to home."));
   Serial.println(F(">> B homes everything itself, including Z."));
-  Serial.println(F(">> Z+ is a HARDWARE end stop (pin 29), not a soft limit."));
 }
 
 // ============================================================
@@ -1610,135 +1474,103 @@ void rotateClawTo(int8_t target)
 
 long homeMaxStepsOf(uint8_t axis)
 {
-  long travel = axisTravelOf(axis);
+  long travel = softTravelOf(axis);
 
   if (travel <= 0)
   {
-    return HOME_MAX_STEPS_FALLBACK; // nothing configured to scale from
+    return HOME_MAX_STEPS_FALLBACK; // no cap configured to scale from
   }
   return travel * HOME_MAX_MULTIPLIER + HOME_MAX_SLACK_STEPS;
 }
 
-// ------------------------------------------------------------
-// Drives toward the switch at ONE END of an axis until it trips.
-// ------------------------------------------------------------
-// This used to be homeAxis() and could only ever run toward the home
-// switch, because that was the only switch an axis had. Z+ on pin 29
-// changed that: "go to the top of Z" is now the same operation as
-// "home Z", just aimed at the other end, so both go through here.
-//
-// isPhysicalBlocked() is what notices the contact, and
-// applyLimitReference() is what the contact means for the position -
-// this function only walks until one of them says stop.
-bool seekLimit(uint8_t axis, int8_t end)
+bool limitEnabledOn(uint8_t axis)
 {
-  int8_t idx = findLimitIndex(axis, end);
-  bool isHomeSeek = (idx >= 0) && LIMITS[idx].isHome;
-
-  statHomeRuns[axis]++;
-
-  if (idx < 0 || !LIMITS[idx].enabled)
+  if (axis == AXIS_X)
   {
-    Serial.print(F("  CANNOT SEEK "));
+    return LIMIT_X_ENABLED;
+  }
+  if (axis == AXIS_Y)
+  {
+    return LIMIT_Y_ENABLED;
+  }
+  return LIMIT_Z_ENABLED;
+}
+
+// Drives toward the axis' physical switch until it trips.
+// The switch itself sets axisPos to 0 via isPhysicalBlocked().
+bool homeAxis(uint8_t axis)
+{
+  if (!limitEnabledOn(axis))
+  {
+    Serial.print(F("  CANNOT HOME "));
     Serial.print(axisName(axis));
-    Serial.print(signName(end));
-    Serial.println(F(" - no enabled limit switch at that end."));
-    if (isHomeSeek)
-    {
-      axisHomed[axis] = false;
-    }
+    Serial.println(F(" - its limit switch is DISABLED in config."));
+    axisHomed[axis] = false;
+    statHomeRuns[axis]++;
     statHomeFails[axis]++;
     return false;
   }
 
+  int8_t sign = limitEndOf(axis);
   long travelled = 0;
   long maxSteps = homeMaxStepsOf(axis);
 
+  statHomeRuns[axis]++;
+
   if (HOME_VERBOSE)
   {
-    if (isHomeSeek)
-    {
-      Serial.print(F("  Homing "));
-    }
-    else
-    {
-      Serial.print(F("  Seeking "));
-    }
+    Serial.print(F("  Homing "));
     Serial.print(axisName(axis));
-    Serial.print(signName(end));
-    Serial.print(F(" (pin "));
-    Serial.print(LIMITS[idx].pin);
-    Serial.print(F(") ..."));
+    Serial.print(signName(sign));
+    Serial.print(F(" ..."));
   }
 
   while (travelled < maxSteps)
   {
-    if (isPhysicalBlocked(axis, end))
+    if (isPhysicalBlocked(axis, sign))
     {
+      axisPos[axis] = 0; // belt and braces; the check already did it
+      axisHomed[axis] = true;
       if (HOME_VERBOSE)
       {
         Serial.print(F(" switch found after "));
         Serial.print(travelled);
-        Serial.print(F(" steps. "));
-        if (isHomeSeek)
-        {
-          Serial.println(F("Axis zeroed."));
-        }
-        else
-        {
-          Serial.println(F("At the end stop."));
-        }
+        Serial.println(F(" steps. Axis zeroed."));
       }
       return true;
     }
 
-    unsigned long moved = moveAxisSteps(axis, (long)end * HOME_CHUNK_STEPS);
+    unsigned long moved = moveAxisSteps(axis, (long)sign * HOME_CHUNK_STEPS);
     travelled += (long)moved;
 
     if (moved == 0)
     {
-      break; // something is blocking and it is not this switch
+      break; // something is blocking and it is not the switch
     }
   }
 
   // Fell out without finding the switch.
-  if (isPhysicalBlocked(axis, end))
+  if (isPhysicalBlocked(axis, sign))
   {
+    axisPos[axis] = 0;
+    axisHomed[axis] = true;
     if (HOME_VERBOSE)
     {
-      if (isHomeSeek)
-      {
-        Serial.println(F(" switch found. Axis zeroed."));
-      }
-      else
-      {
-        Serial.println(F(" switch found. At the end stop."));
-      }
+      Serial.println(F(" switch found. Axis zeroed."));
     }
     return true;
   }
 
   Serial.println();
-  Serial.print(F("  SEEK FAILED on "));
+  Serial.print(F("  HOMING FAILED on "));
   Serial.print(axisName(axis));
-  Serial.print(signName(end));
   Serial.print(F(" after "));
   Serial.print(travelled);
   Serial.println(F(" steps - switch never tripped."));
   Serial.println(F("  Check wiring, pin number, and NC/NO setting."));
-  if (isHomeSeek)
-  {
-    axisHomed[axis] = false;
-  }
+  axisHomed[axis] = false;
   statHomeFails[axis]++;
   return false;
-}
-
-// Drives toward the axis' HOME switch until it trips.
-// The switch itself sets axisPos to 0 via isPhysicalBlocked().
-bool homeAxis(uint8_t axis)
-{
-  return seekLimit(axis, homeEndOf(axis));
 }
 
 // ------------------------------------------------------------
@@ -1747,15 +1579,15 @@ bool homeAxis(uint8_t axis)
 // Plain 0 homes X/Y and deliberately leaves Z alone. 0+ resets the
 // Z axis as well, which takes two moves rather than one:
 //
-//   Z DOWN into its BOTTOM switch    - the axis' true zero, and the
-//     GROUND the block levels are measured from. Both ends are
-//     switches now, so this run is no longer needed to find the top -
-//     but it is still needed to know what any height MEANS.
+//   Z DOWN into its physical switch  - the only true reference the
+//     axis has. A soft limit is just a number counted from the
+//     switch, so an axis that has never touched the switch cannot
+//     know where its top is. Resetting therefore means going DOWN
+//     first, even though the axis ends up at the top.
 //
-//   Z UP into its TOP switch         - where the claw wants to sit
+//   Z UP to the software limit       - where the claw wants to sit
 //     between jobs: clear of the bed, clear of anything built, and
-//     exactly where a build expects to start from. Doing it in this
-//     order also measures the switch-to-switch distance for free.
+//     exactly where a build expects to start from.
 //
 // Z is done BEFORE X/Y so the gantry never drags a low claw across
 // the bed - by the time X/Y move, the claw is parked at the top.
@@ -1765,27 +1597,25 @@ bool goToOriginWithZ()
   Serial.println(F("=== FULL RESET - Z, then X/Y ==="));
 
   // ---- 1. give Z a real zero ----
-  Serial.println(F("  [1/3] Z down into its BOTTOM switch (true zero)..."));
+  Serial.println(F("  [1/3] Z down into its limit switch (true zero)..."));
   if (!homeAxis(AXIS_Z))
   {
-    Serial.println(F("  ABORTED - Z never found its bottom switch."));
+    Serial.println(F("  ABORTED - Z never found its switch."));
     Serial.println(F("  X/Y were NOT homed: moving now could drag the claw."));
     return false;
   }
 
   // ---- 2. park it at the top ----
-  Serial.println(F("  [2/3] Z up into its TOP switch (pin 29)..."));
+  Serial.print(F("  [2/3] Z up to the software limit ("));
+  Serial.print(SOFT_LIMIT_Z_TRAVEL);
+  Serial.println(F(" steps)..."));
 
-  bool okZ = zGoTop();
+  bool okZ = moveAxisTo(AXIS_Z, zTopPosition());
   if (!okZ)
   {
     // Z has a valid zero and stopped somewhere known, so homing X/Y
     // is still safe and still worth doing. Say so and carry on.
-    Serial.println(F("  WARNING - Z never reached the top switch."));
-  }
-  else
-  {
-    printZTravelMeasurement();
+    Serial.println(F("  WARNING - Z stopped short of the top."));
   }
 
   // ---- 3. now the claw is high, walk the gantry home ----
@@ -1795,7 +1625,7 @@ bool goToOriginWithZ()
   Serial.println();
   if (okXY && okZ)
   {
-    Serial.println(F("FULL RESET COMPLETE - X/Y at origin, Z on its top switch."));
+    Serial.println(F("FULL RESET COMPLETE - X/Y at origin, Z parked at top."));
     return true;
   }
 
@@ -1828,18 +1658,16 @@ bool goToOrigin()
 // GRID MATH
 // ============================================================
 
-// Envelope size and direction of travel for an axis. The grid only
-// ever covers X and Y, whose far ends are software limits, so this is
-// still the soft cap - taken through axisTravelOf so the two can
-// never drift apart.
+// Envelope size and direction of travel for an axis, taken straight
+// from the software limits so the two can never drift apart.
 long gridTravelOf(uint8_t axis)
 {
-  return axisTravelOf(axis);
+  return softTravelOf(axis);
 }
 
 int8_t gridDirOf(uint8_t axis)
 {
-  return travelEndOf(axis);
+  return softEndOf(axis);
 }
 
 long gridCountOf(uint8_t axis)
@@ -2030,8 +1858,8 @@ bool gotoCell(long col, long row)
 // Z HEIGHT MATH  -  steps <-> cm <-> block levels      <<< NEW
 // ============================================================
 //
-// Nothing below is hard-coded. Every number falls out of the two
-// SECTION 6E measurements, Z_TRAVEL_STEPS and Z_TRAVEL_CM.
+// Nothing below is hard-coded. Every number falls out of
+// SOFT_LIMIT_Z_TRAVEL and the SECTION 6E measurements.
 
 // The whole conversion, in one place:
 //     steps per cm = Z travel in steps / Z travel in cm
@@ -2041,7 +1869,7 @@ float zStepsPerCm()
   {
     return 0.0;
   }
-  return (float)Z_TRAVEL_STEPS / Z_TRAVEL_CM;
+  return (float)SOFT_LIMIT_Z_TRAVEL / Z_TRAVEL_CM;
 }
 
 float zCmPerStep()
@@ -2087,9 +1915,8 @@ float levelToCm(long level)
 }
 
 // Same level as an absolute Z machine position, in steps.
-// Clamped into the known travel so a bad margin cannot ask for a
-// height the rig does not have. The top switch would stop the axis
-// anyway - this just keeps the reported target honest.
+// Clamped into the real travel so a bad margin can never command
+// the axis past its own software limit.
 long levelToZSteps(long level)
 {
   if (level <= 0)
@@ -2103,46 +1930,50 @@ long levelToZSteps(long level)
   {
     steps = 0;
   }
-  if (steps > Z_TRAVEL_STEPS)
+  if (steps > SOFT_LIMIT_Z_TRAVEL)
   {
-    steps = Z_TRAVEL_STEPS;
+    steps = SOFT_LIMIT_Z_TRAVEL;
   }
 
-  // Z counts UP from its bottom switch, in the travelEndOf direction.
-  return steps * (long)travelEndOf(AXIS_Z);
+  // Z counts UP from its switch in the softEndOf(AXIS_Z) direction.
+  return steps * (long)softEndOf(AXIS_Z);
 }
 
-// There is deliberately no zTopPosition() any more. The top of Z is
-// not a number to move to - it is the pin 29 switch. Use zGoTop().
+// Top of travel - the carry height every build flies at.
+long zTopPosition()
+{
+  return SOFT_LIMIT_Z_TRAVEL * (long)softEndOf(AXIS_Z);
+}
 
 // ============================================================
 // Z MOVES USED BY THE BUILD                            <<< NEW
 // ============================================================
 
-// Raise Z until the TOP SWITCH stops it.
-//
-// This is the change pin 29 bought us. The old version could not run
-// until Z had been homed at the BOTTOM, because "the top" was a count
-// of steps and a count needs a zero to start from - so getting clear
-// of the bed meant going down into the bed first. Now the top is a
-// switch: drive at it and it stops you, homed or not.
+// Raise Z as far as the software limit allows.
 bool zGoTop()
 {
-  Serial.println(F("  Z up to the TOP switch ..."));
-
-  if (!seekLimit(AXIS_Z, travelEndOf(AXIS_Z)))
+  if (!axisHomed[AXIS_Z])
   {
-    Serial.println(F("  !! Z never reached its top switch (pin 29)."));
-    return false;
+    // Without a zero, "the software limit" is a guess. Find the
+    // switch first - it is the only trustworthy reference we have.
+    Serial.println(F("  Z not homed yet - finding the Z switch first."));
+    if (!homeAxis(AXIS_Z))
+    {
+      return false;
+    }
   }
-  return true;
+
+  Serial.print(F("  Z up to software limit ("));
+  Serial.print(zTopPosition());
+  Serial.println(F(" steps) ..."));
+  return moveAxisTo(AXIS_Z, zTopPosition());
 }
 
-// Drop Z onto the table - the bottom switch IS ground, so this
+// Drop Z onto the table - the physical switch IS ground, so this
 // re-zeroes the axis and kills any accumulated Z error every cycle.
 bool zGoGround()
 {
-  Serial.println(F("  Z down to GROUND (into the bottom Z switch) ..."));
+  Serial.println(F("  Z down to GROUND (into the Z switch) ..."));
   return homeAxis(AXIS_Z);
 }
 
@@ -2152,16 +1983,6 @@ bool zGoLevel(long level)
   if (level <= 0)
   {
     return zGoGround();
-  }
-
-  // Levels are absolute heights above GROUND, so they only mean
-  // something once the bottom switch has given Z a zero. The build
-  // sequence always grounds first; this catches every other caller.
-  if (!axisHomed[AXIS_Z])
-  {
-    Serial.println(F("  !! Z has no zero - cannot place at a level."));
-    Serial.println(F("  !! Send 0+ (or run a build) to reference Z first."));
-    return false;
   }
 
   long target = levelToZSteps(level);
@@ -2429,27 +2250,11 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
     return buildReject("cell out of range");
   }
 
-  // A build needs BOTH Z switches: the bottom one to find GROUND and
-  // pick the block up, the top one to fly it over the stack.
-  if (!limitEnabledAt(AXIS_Z, homeEndOf(AXIS_Z)))
+  if (!softEnabledOn(AXIS_Z))
   {
-    Serial.print(F("  ERROR - build needs the BOTTOM Z switch (pin "));
-    Serial.print(LIMIT_PIN_Z_BOT);
-    Serial.println(F("). Check SECTION 6."));
-    return buildReject("bottom Z limit switch disabled");
-  }
-  if (!limitEnabledAt(AXIS_Z, travelEndOf(AXIS_Z)))
-  {
-    Serial.print(F("  ERROR - build needs the TOP Z switch (pin "));
-    Serial.print(LIMIT_PIN_Z_TOP);
-    Serial.println(F("). Check SECTION 6."));
-    return buildReject("top Z limit switch disabled");
-  }
-  if (Z_TRAVEL_STEPS <= 0)
-  {
-    Serial.println(F("  ERROR - Z_TRAVEL_STEPS must be greater than zero,"));
-    Serial.println(F("  it is what scales cm to steps. Check SECTION 6E."));
-    return buildReject("Z step calibration is zero");
+    Serial.println(F("  ERROR - build needs the Z software limit enabled"));
+    Serial.println(F("  and non-zero. Check SECTION 6B."));
+    return buildReject("Z software limit disabled");
   }
   if (Z_TRAVEL_CM <= 0.0 || BLOCK_HEIGHT_CM <= 0.0)
   {
@@ -2485,10 +2290,10 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
 
   // ---- 1. get clear of whatever is already built ----
 
-  buildStep(1, "Raise Z into the top switch (clearance)");
+  buildStep(1, "Raise Z to the software limit (clearance)");
   if (!zGoTop())
   {
-    buildAbort("could not raise Z to the top switch");
+    buildAbort("could not raise Z to the top of travel");
     return false;
   }
   buildPause();
@@ -2519,7 +2324,7 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
 
   // ---- 5. down to ground (this also re-zeroes Z) ----
 
-  buildStep(5, "Lower Z to GROUND (bottom Z switch)");
+  buildStep(5, "Lower Z to GROUND (Z limit switch)");
   if (!zGoGround())
   {
     buildAbort("Z never reached the ground switch");
@@ -2535,7 +2340,7 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
 
   // ---- 7. lift to carry height ----
 
-  buildStep(7, "Raise Z into the top switch (carry height)");
+  buildStep(7, "Raise Z to the software limit (carry height)");
   if (!zGoTop())
   {
     buildAbort("could not lift the block to carry height");
@@ -2662,180 +2467,86 @@ bool interpretLimit(int pinState, bool useNC)
   }
 }
 
-// ------------------------------------------------------------
-// Looking switches up in the table.
-// ------------------------------------------------------------
-// Everything below asks "is there a switch at THIS end of THIS axis",
-// which is what makes a second switch on Z cost nothing: Z+ is found
-// by the same lookup that finds X+ or Y-.
-
-// The switch guarding one end of one axis, or -1 if that end is open.
-int8_t findLimitIndex(uint8_t axis, int8_t end)
+bool isLimitHit(uint8_t axis)
 {
-  for (uint8_t i = 0; i < LIMIT_COUNT; i++)
+  int pin;
+  bool useNC;
+  bool enabled;
+
+  if (axis == AXIS_X)
   {
-    if (LIMITS[i].axis == axis && LIMITS[i].end == end)
-    {
-      return (int8_t)i;
-    }
+    pin = LIMIT_PIN_X;
+    useNC = LIMIT_X_USE_NC;
+    enabled = LIMIT_X_ENABLED;
   }
-  return -1;
-}
-
-// The switch that defines position 0 for an axis.
-int8_t homeLimitIndexOf(uint8_t axis)
-{
-  for (uint8_t i = 0; i < LIMIT_COUNT; i++)
+  else if (axis == AXIS_Y)
   {
-    if (LIMITS[i].axis == axis && LIMITS[i].isHome)
-    {
-      return (int8_t)i;
-    }
+    pin = LIMIT_PIN_Y;
+    useNC = LIMIT_Y_USE_NC;
+    enabled = LIMIT_Y_ENABLED;
   }
-  return -1;
-}
-
-// Which end of the axis its home switch sits at. Homing drives this
-// way; the axis then travels the opposite way.
-int8_t homeEndOf(uint8_t axis)
-{
-  int8_t idx = homeLimitIndexOf(axis);
-  return (idx >= 0) ? LIMITS[idx].end : DIR_NEG;
-}
-
-// The direction an axis travels AWAY from its home switch - the
-// direction its positions count up in.
-int8_t travelEndOf(uint8_t axis)
-{
-  return (int8_t)(-homeEndOf(axis));
-}
-
-// How far an axis can go, in steps, whatever enforces the far end:
-// X/Y are held by a software cap, Z by the pin 29 switch. Used for
-// homing caps, grid maths and the position table, so none of them
-// need to care which kind of limit an axis has.
-long axisTravelOf(uint8_t axis)
-{
-  if (axis == AXIS_Z)
+  else
   {
-    return Z_TRAVEL_STEPS; // calibration, not a cap - see SECTION 6E
+    pin = LIMIT_PIN_Z;
+    useNC = LIMIT_Z_USE_NC;
+    enabled = LIMIT_Z_ENABLED;
   }
-  return softTravelOf(axis);
-}
 
-bool limitEnabledAt(uint8_t axis, int8_t end)
-{
-  int8_t idx = findLimitIndex(axis, end);
-  return (idx >= 0) && LIMITS[idx].enabled;
-}
-
-// Debounced read of one switch by table index.
-bool isLimitHitAt(int8_t idx)
-{
-  if (idx < 0)
+  if (!enabled)
   {
     return false;
   }
 
-  const LimitSwitch &sw = LIMITS[idx];
-
-  if (!sw.enabled)
-  {
-    return false;
-  }
-  if (!interpretLimit(digitalRead(sw.pin), sw.useNC))
+  if (!interpretLimit(digitalRead(pin), useNC))
   {
     return false;
   }
 
   delayMicroseconds(LIMIT_CONFIRM_US);
-  return interpretLimit(digitalRead(sw.pin), sw.useNC);
+  return interpretLimit(digitalRead(pin), useNC);
 }
 
-unsigned long axisSwitchTrips(uint8_t axis)
+int8_t limitEndOf(uint8_t axis)
 {
-  unsigned long total = 0;
-  for (uint8_t i = 0; i < LIMIT_COUNT; i++)
+  if (axis == AXIS_X)
   {
-    if (LIMITS[i].axis == axis)
-    {
-      total += statSwitchTrips[i];
-    }
+    return LIMIT_X_AT_END;
   }
-  return total;
-}
-
-// ------------------------------------------------------------
-// What a switch does to the position counter when it trips.
-// ------------------------------------------------------------
-// A HOME switch (X+, Y-, Z-) means "you are at 0" and says so.
-//
-// A FAR-END switch - today only Z+ on pin 29 - means "you are at the
-// far end", which is a weaker statement: the exact step count out
-// there is a property of the hardware, not something the switch can
-// tell us. So it does the useful thing instead and RECORDS what was
-// counted, which is the number Z_TRAVEL_STEPS wants to be.
-void applyLimitReference(int8_t idx)
-{
-  const LimitSwitch &sw = LIMITS[idx];
-  uint8_t axis = sw.axis;
-
-  if (sw.isHome)
+  if (axis == AXIS_Y)
   {
-    if (SOFT_ZERO_ON_LIMIT_HIT)
-    {
-      axisPos[axis] = 0;
-      axisHomed[axis] = true;
-      axisRefAtHome[axis] = true;
-    }
-    return;
+    return LIMIT_Y_AT_END;
   }
-
-  if (axisRefAtHome[axis])
-  {
-    // We climbed here from a true zero, so the count IS the real
-    // switch-to-switch distance. Keep it (see SECTION 6).
-    zTravelMeasured = axisPos[axis] * (long)travelEndOf(axis);
-
-    if (!Z_TOP_REFERENCES_POSITION)
-    {
-      return;
-    }
-  }
-
-  // Either the axis had no zero to count from, or we were told to
-  // trust the constant over the count. Adopt the configured travel -
-  // and remember that this position is a constant, not a measurement,
-  // so resting here cannot be mistaken for measuring the travel.
-  axisPos[axis] = axisTravelOf(axis) * (long)travelEndOf(axis);
-  axisHomed[axis] = true;
-  axisRefAtHome[axis] = false;
+  return LIMIT_Z_AT_END;
 }
 
 bool isPhysicalBlocked(uint8_t axis, int8_t sign)
 {
-  int8_t idx = findLimitIndex(axis, sign);
-  if (idx < 0)
+  if (sign != limitEndOf(axis))
   {
-    return false; // no switch guards this direction
+    return false;
   }
 
-  if (!isLimitHitAt(idx))
+  if (!isLimitHit(axis))
   {
     // Approaching and still clear - arm the edge detector so the next
     // contact is counted as a fresh trip.
-    limitWasActive[idx] = false;
+    limitWasActive[axis] = false;
     return false;
   }
 
   // Count the CONTACT, not the thousand steps spent resting on it.
-  if (!limitWasActive[idx])
+  if (!limitWasActive[axis])
   {
-    limitWasActive[idx] = true;
-    statSwitchTrips[idx]++;
+    limitWasActive[axis] = true;
+    statLimitTrips[axis]++;
   }
 
-  applyLimitReference(idx);
+  if (SOFT_ZERO_ON_LIMIT_HIT)
+  {
+    axisPos[axis] = 0;
+    axisHomed[axis] = true;
+  }
+
   return true;
 }
 
@@ -2994,70 +2705,52 @@ const char *signName(int8_t sign)
 // STATUS REPORTS
 // ============================================================
 
-// One line per switch in the table, so adding a switch adds a line
-// here with no extra code. Z prints twice now: Z- and Z+.
 void printLimitStatus()
 {
   Serial.println();
   Serial.println(F("--- PHYSICAL LIMIT SWITCHES ---"));
 
-  for (uint8_t i = 0; i < LIMIT_COUNT; i++)
-  {
-    const LimitSwitch &sw = LIMITS[i];
+  Serial.print(F("X (pin "));
+  Serial.print(LIMIT_PIN_X);
+  Serial.print(F(", "));
+  Serial.print(LIMIT_X_USE_NC ? "NC" : "NO");
+  Serial.print(F(", guards X"));
+  Serial.print(signName(LIMIT_X_AT_END));
+  Serial.print(F("): "));
+  if (!LIMIT_X_ENABLED)
+    Serial.println(F("DISABLED IN CONFIG"));
+  else if (isLimitHit(AXIS_X))
+    Serial.println(F("*** LIMIT HIT ***"));
+  else
+    Serial.println(F("clear"));
 
-    Serial.print(axisName(sw.axis));
-    Serial.print(signName(sw.end));
-    Serial.print(F(" (pin "));
-    Serial.print(sw.pin);
-    Serial.print(F(", "));
-    Serial.print(sw.useNC ? "NC" : "NO");
-    Serial.print(sw.isHome ? ", HOME/zero" : ", far end");
-    Serial.print(F("): "));
+  Serial.print(F("Y (pin "));
+  Serial.print(LIMIT_PIN_Y);
+  Serial.print(F(", "));
+  Serial.print(LIMIT_Y_USE_NC ? "NC" : "NO");
+  Serial.print(F(", guards Y"));
+  Serial.print(signName(LIMIT_Y_AT_END));
+  Serial.print(F("): "));
+  if (!LIMIT_Y_ENABLED)
+    Serial.println(F("DISABLED IN CONFIG"));
+  else if (isLimitHit(AXIS_Y))
+    Serial.println(F("*** LIMIT HIT ***"));
+  else
+    Serial.println(F("clear"));
 
-    if (!sw.enabled)
-      Serial.print(F("DISABLED IN CONFIG"));
-    else if (isLimitHitAt((int8_t)i))
-      Serial.print(F("*** LIMIT HIT ***"));
-    else
-      Serial.print(F("clear"));
-
-    Serial.print(F("   "));
-    Serial.print(statSwitchTrips[i]);
-    Serial.println(F(" trips"));
-  }
-}
-
-// What the rig last counted between the two Z switches, against what
-// SECTION 6E says it should be. This is the calibration feedback the
-// top switch made possible - before pin 29 there was nothing at the
-// top to measure against.
-void printZTravelMeasurement()
-{
-  if (zTravelMeasured <= 0)
-  {
-    return;
-  }
-
-  long diff = zTravelMeasured - Z_TRAVEL_STEPS;
-
-  Serial.print(F("  Z switch-to-switch: measured "));
-  Serial.print(zTravelMeasured);
-  Serial.print(F(" steps, configured "));
-  Serial.print(Z_TRAVEL_STEPS);
-  Serial.print(F("  (diff "));
-  if (diff > 0)
-  {
-    Serial.print(F("+"));
-  }
-  Serial.print(diff);
-  Serial.println(F(")"));
-
-  if (diff != 0)
-  {
-    Serial.print(F("  -> set Z_TRAVEL_STEPS = "));
-    Serial.print(zTravelMeasured);
-    Serial.println(F(" in SECTION 6E to match the rig."));
-  }
+  Serial.print(F("Z (pin "));
+  Serial.print(LIMIT_PIN_Z);
+  Serial.print(F(", "));
+  Serial.print(LIMIT_Z_USE_NC ? "NC" : "NO");
+  Serial.print(F(", guards Z"));
+  Serial.print(signName(LIMIT_Z_AT_END));
+  Serial.print(F("): "));
+  if (!LIMIT_Z_ENABLED)
+    Serial.println(F("DISABLED IN CONFIG"));
+  else if (isLimitHit(AXIS_Z))
+    Serial.println(F("*** LIMIT HIT ***"));
+  else
+    Serial.println(F("clear"));
 }
 
 void printSoftLimitLine(uint8_t axis)
@@ -3070,17 +2763,7 @@ void printSoftLimitLine(uint8_t axis)
 
   if (!softEnabledOn(axis))
   {
-    // Z is the deliberate case: its far end is the pin 29 switch, so
-    // it is meant to have no software cap at all.
-    if (limitEnabledAt(axis, travelEndOf(axis)))
-    {
-      Serial.print(F("none - hardware switch on pin "));
-      Serial.println(LIMITS[findLimitIndex(axis, travelEndOf(axis))].pin);
-    }
-    else
-    {
-      Serial.println(F("INFINITE / disabled"));
-    }
+    Serial.println(F("INFINITE / disabled"));
     return;
   }
 
@@ -3104,7 +2787,6 @@ void printSoftLimitStatus()
   printSoftLimitLine(AXIS_X);
   printSoftLimitLine(AXIS_Y);
   printSoftLimitLine(AXIS_Z);
-  Serial.println(F("(both ends of Z are real switches - see above)"));
 }
 
 void printServoStatus()
@@ -3249,31 +2931,10 @@ void printBuildConfig()
   Serial.println(F("--- Z / BUILD CALIBRATION ---"));
 
   Serial.print(F("Z travel     : "));
-  Serial.print(Z_TRAVEL_STEPS);
+  Serial.print(SOFT_LIMIT_Z_TRAVEL);
   Serial.print(F(" steps  =  "));
   Serial.print(Z_TRAVEL_CM, 2);
-  Serial.print(F(" cm  (pin "));
-  Serial.print(LIMIT_PIN_Z_BOT);
-  Serial.print(F(" -> pin "));
-  Serial.print(LIMIT_PIN_Z_TOP);
-  Serial.println(F(")"));
-
-  Serial.print(F("Z measured   : "));
-  if (zTravelMeasured > 0)
-  {
-    Serial.print(zTravelMeasured);
-    Serial.print(F(" steps between the switches  (diff "));
-    if (zTravelMeasured - Z_TRAVEL_STEPS > 0)
-    {
-      Serial.print(F("+"));
-    }
-    Serial.print(zTravelMeasured - Z_TRAVEL_STEPS);
-    Serial.println(F(")"));
-  }
-  else
-  {
-    Serial.println(F("not measured yet - send 0+ to measure it"));
-  }
+  Serial.println(F(" cm  (switch -> soft limit)"));
 
   Serial.print(F("Scale        : "));
   Serial.print(zStepsPerCm(), 4);
@@ -3324,7 +2985,7 @@ void printLevelTable()
 
   for (long L = 0; L <= maxLevel; L++)
   {
-    long steps = levelToZSteps(L) * (long)travelEndOf(AXIS_Z);
+    long steps = levelToZSteps(L) * (long)softEndOf(AXIS_Z);
 
     if (L < 10)
       Serial.print(F(" "));
@@ -3337,7 +2998,7 @@ void printLevelTable()
     Serial.println(steps);
   }
 
-  Serial.println(F("level 0 = the bottom Z switch, not a computed value"));
+  Serial.println(F("level 0 = the physical Z switch, not a computed value"));
 }
 
 // ============================================================
@@ -3427,8 +3088,7 @@ void zeroPosition()
   for (uint8_t a = 0; a < AXIS_COUNT; a++)
   {
     axisPos[a] = 0;
-    axisHomed[a] = false;     // a manual zero is NOT a homed origin
-    axisRefAtHome[a] = false; // ...and definitely not a switch one
+    axisHomed[a] = false; // a manual zero is NOT a homed origin
   }
   curCol = 0;
   curRow = 0;
@@ -3645,8 +3305,8 @@ void printPositionTable()
 
   for (uint8_t a = 0; a < AXIS_COUNT; a++)
   {
-    long travel = axisTravelOf(a);
-    long used = axisPos[a] * (long)travelEndOf(a); // distance from home
+    long travel = softTravelOf(a);
+    long used = axisPos[a] * (long)softEndOf(a); // distance from the switch
     long left = travel - used;
 
     Serial.print(F("  "));
@@ -3661,7 +3321,7 @@ void printPositionTable()
     Serial.print(axisHomed[a] ? "yes " : "NO  ");
     Serial.print(F("\t "));
 
-    if (travel > 0)
+    if (softEnabledOn(a))
     {
       Serial.print(used);
       Serial.print(F("/"));
@@ -3730,7 +3390,7 @@ void printAxisEventStats()
 {
   Serial.println();
   Serial.println(F("--- AXIS EVENTS ---"));
-  Serial.println(F("axis  seeks  failed  switch hits  soft blocks  short moves"));
+  Serial.println(F("axis  homings  failed  switch hits  soft blocks  short moves"));
 
   for (uint8_t a = 0; a < AXIS_COUNT; a++)
   {
@@ -3741,15 +3401,13 @@ void printAxisEventStats()
     Serial.print(F("\t "));
     Serial.print(statHomeFails[a]);
     Serial.print(F("\t "));
-    Serial.print(axisSwitchTrips(a)); // both Z switches, summed
+    Serial.print(statLimitTrips[a]);
     Serial.print(F("\t\t "));
     Serial.print(statSoftBlocks[a]);
     Serial.print(F("\t\t "));
     Serial.println(statShortMoves[a]);
   }
   Serial.println(F("(switch hits and soft blocks count ARRIVALS, not steps)"));
-  Serial.println(F("(Z seeks include runs to the TOP switch; per-switch hit"));
-  Serial.println(F(" counts are in the limit switch section)"));
 }
 
 void printBuildStats()
@@ -3945,13 +3603,9 @@ void resetStatistics()
   {
     statHomeRuns[a] = 0;
     statHomeFails[a] = 0;
+    statLimitTrips[a] = 0;
     statSoftBlocks[a] = 0;
     statShortMoves[a] = 0;
-  }
-
-  for (uint8_t i = 0; i < LIMIT_COUNT; i++)
-  {
-    statSwitchTrips[i] = 0;
   }
 
   statJogs = 0;
@@ -4047,10 +3701,10 @@ void printInstructions()
   Serial.println(F("8 = Zero position (manual, NOT a home)"));
   Serial.println(F("9 = Show ASCII grid map"));
   Serial.println(F("0 = HOME / go to origin (X/Y switches only)"));
-  Serial.println(F("0+= FULL RESET: also zero Z and park it on the top switch"));
+  Serial.println(F("0+= FULL RESET: also zero Z and park it at the top"));
   Serial.println(F("--------------------------------------"));
-  Serial.println(F("D = Z-   (M3 CW )           [limit: pin 28, GROUND]"));
-  Serial.println(F("U = Z+   (M3 CCW)           [limit: pin 29, TOP]"));
+  Serial.println(F("D = Z-   (M3 CW )           [limit: pin 28]"));
+  Serial.println(F("U = Z+   (M3 CCW)           [soft limit]"));
   Serial.println(F("--------------------------------------"));
   Serial.println(F("O = Servo OPEN              [pin 6]"));
   Serial.println(F("C = Servo CLOSE             [pin 6]"));
