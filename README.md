@@ -1,106 +1,34 @@
-# Camera Debugging Tools
+# Hardware Grad Project
 
-## Run
+A gantry rig that places blocks on a flat working surface, with an overhead
+camera watching the work area.
 
-```bash
-source .venv/bin/activate
-python debugging/undistorted_viewer.py  # live fisheye-corrected preview
-python debugging/camera_viewer.py   # pick a device, preview it
-python debugging/grid_viewer.py     # preview with a hoverable grid overlay
-python tests/grid_viewer_35cm_vertical_20cm_horizontal.py  # grid overlay + real-world cm/m measurements
-```
+The repository is split by platform:
 
-Or without activating:
-
-```bash
-.venv/bin/python debugging/undistorted_viewer.py
-.venv/bin/python debugging/camera_viewer.py
-.venv/bin/python debugging/grid_viewer.py
-.venv/bin/python tests/grid_viewer_35cm_vertical_20cm_horizontal.py
-```
-
-Pick a device from the list, then press `q` or `Esc` in the popup window to quit.
-
-`grid_viewer.py` overlays an 8x8 grid on the feed — hover any block to see its
-row/col index, start point, end point, and size.
-
-## Fisheye correction (`debugging/undistorted_viewer.py`)
-
-Live preview of the OV5647 160° fisheye, remapped to a rectilinear (straight-line)
-projection. Runs at 1296×972 — the OV5647's binned mode, which is the widest 4:3
-readout, so the full 160° field is preserved. The 1080p mode is a **centre crop**
-and is deliberately not used.
-
-> **The lens parameters are estimates, not a calibration.** They come from the
-> vendor's "160°" FOV number plus an assumed ideal projection curve. Straight
-> edges will look substantially straight; distances are not measurement-grade.
-> The HUD says `ESTIMATED` until a real calibration replaces it.
-
-```bash
-.venv/bin/python debugging/undistorted_viewer.py                      # defaults
-.venv/bin/python debugging/undistorted_viewer.py --output-fov 140 --output-scale 1.5
-.venv/bin/python debugging/undistorted_viewer.py --backend v4l2 --device /dev/video0
-```
-
-Tune by eye against a real straight edge, then press `w` to save:
-
-| key | effect |
+| Directory | What it holds |
 | --- | --- |
-| `q` / `Esc` | quit |
-| `u` | toggle correction on/off |
-| `b` | raw \| corrected side by side |
-| `g` | grid overlay (judge straightness against it) |
-| `[` `]` | lens FOV ∓2° — **the main correction-strength knob** |
-| `-` `=` | output FOV ∓5° (how much of the 160° to render) |
-| `m` | cycle projection model |
-| `s` | save raw + corrected snapshot to `captures/` |
-| `w` | write current params to `config/lens_profile.json` |
-| `r` | reset to defaults |
+| [arduino/](arduino/) | Firmware sketches for the motion rig — stepper positioning, Z axis, servo, step counting |
+| [python/](python/) | Everything on the Raspberry Pi: camera capture, lens correction, preview and measurement tools |
 
-If edges still bow **outward** (barrel remains), press `]`. If they bow **inward**
-(over-corrected), press `[`.
+## Hardware
 
-Parameters live in [config/lens_profile.json](config/lens_profile.json). Later,
-checkerboard/ChArUco calibration writes real `camera_matrix` / `dist_coeffs` /
-`calibration_size` into the same file and
-[fisheye_undistort.py](debugging/fisheye_undistort.py) switches to the OpenCV
-fisheye model automatically — the output geometry and the rest of the pipeline
-stay unchanged.
+- **Controller:** Raspberry Pi 5
+- **Motion:** Arduino-driven gantry (X / Y / Z, plus servo)
+- **Camera:** DORHEA Raspberry Pi Camera Module — OV5647 sensor, 5 MP, 160° fisheye lens
+- **Mounting:** camera ~50 cm above the surface, pointing straight down, roughly centred
+- **Workspace:** ~60 cm × 30 cm planar area
 
-### On the Raspberry Pi 5
+## Getting started
 
-The Pi 5's CSI camera is only reachable through libcamera/Picamera2 — the
-`/dev/video*` nodes carry raw Bayer, so `cv2.VideoCapture` will not work on the
-OV5647 there.
+- Python tools, setup and usage → **[python/README.md](python/README.md)**
+- Per-tool walkthrough → **[python/GUIDE.md](python/GUIDE.md)**
+- Firmware → open the relevant sketch in `arduino/` with the Arduino IDE
 
-Install **both** OpenCV and Picamera2 from apt, then make a venv that can see
-system packages:
+## Status
 
-```bash
-sudo apt update
-sudo apt install -y python3-picamera2 python3-opencv python3-numpy
-python3 -m venv --system-site-packages .venv
-.venv/bin/python -c "import cv2, picamera2; print(cv2.__version__)"
-```
-
-> **Do not `pip install opencv-python` on the Pi.** The apt `python3-picamera2`
-> is compiled against the system numpy; the pip OpenCV wheel drags a newer numpy
-> into the venv and breaks `import picamera2` with an ABI error. Use apt for
-> both, and let the venv stay empty. (On the x86 dev machine there is no
-> Picamera2, so `pip install opencv-python` there is fine.)
-
-`cv2.imshow` needs a desktop session — run it on the Pi's own screen, or over
-VNC. Plain `ssh` has no display; `ssh -X` works but is slow at 1296×972.
-
-`tests/grid_viewer_35cm_vertical_20cm_horizontal.py` is the same grid, calibrated
-to a frame that spans 20cm across X (horizontal) and 35cm across Y (vertical) —
-hover a block to see its pixel bounds plus real-world start/end and size in cm
-and meters, per axis. Edit `FRAME_WIDTH_CM`/`FRAME_HEIGHT_CM` at the top of the
-file if your setup's physical dimensions change.
-
-## First-time setup (if `.venv` doesn't exist yet)
-
-```bash
-python3 -m venv .venv
-.venv/bin/pip install opencv-python
-```
+The camera pipeline currently ends at a corrected live preview. Block detection,
+homography, workspace mapping and robot-coordinate output are not implemented
+yet. Lens correction runs on **estimated** parameters — no checkerboard
+calibration has been performed, so the image is visually straightened but not
+measurement-grade. See [python/README.md](python/README.md) for what that means
+in practice.

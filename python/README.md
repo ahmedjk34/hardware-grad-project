@@ -1,0 +1,126 @@
+# Python — Camera & Vision
+
+Camera capture, fisheye lens correction, and preview/measurement tools for the
+Raspberry Pi 5 + OV5647 160° fisheye setup.
+
+For a detailed walkthrough of every tool — what each is for, when to reach for
+it, and how to read its output — see **[GUIDE.md](GUIDE.md)**. This file covers
+setup and layout.
+
+## Layout
+
+```
+python/
+├── camera_viewer.py          raw preview — "is the camera alive?"
+├── grid_viewer.py            grid overlay labelled in pixels
+├── measured_grid_viewer.py   grid overlay labelled in centimetres
+├── undistorted_viewer.py     live fisheye-corrected preview  ← the main tool
+├── config/
+│   └── lens_profile.json     lens parameters (currently estimated)
+└── vision/                   importable library — no windows, no argv, no prints
+    ├── camera_source.py      Picamera2 on the Pi, V4L2 elsewhere
+    ├── devices.py            /dev/video* enumeration and picker
+    ├── fisheye.py            the fisheye → rectilinear correction
+    └── overlays.py           shared OpenCV drawing helpers
+```
+
+The four scripts at the top level are the things you run. `vision/` is the
+library they share — it deliberately contains no UI, so the later
+block-detection and robot-coordinate stages can import it without dragging a
+preview along.
+
+## Setup — Raspberry Pi 5
+
+The Pi 5's CSI camera is reachable **only** through libcamera/Picamera2. Its
+`/dev/video*` nodes carry raw Bayer sensor data, so `cv2.VideoCapture` cannot
+read the OV5647 there at all.
+
+```bash
+sudo apt update
+sudo apt install -y python3-picamera2 python3-opencv python3-numpy
+
+cd ~/hardware-grad-project
+python3 -m venv --system-site-packages .venv
+source .venv/bin/activate
+
+python -c "import cv2, picamera2; print('opencv', cv2.__version__)"
+```
+
+> **Do not `pip install opencv-python` on the Pi.** The apt `python3-picamera2`
+> is compiled against the system numpy; the pip OpenCV wheel pulls a newer numpy
+> into the venv and breaks `import picamera2` with an ABI error. Install both
+> from apt and leave the venv empty of pip packages.
+
+`--system-site-packages` is what lets the venv see the apt-installed `cv2` and
+`picamera2`. Without it, a plain venv sees neither — you can also skip the venv
+entirely and just run `python3 undistorted_viewer.py`.
+
+**A display is required.** `cv2.imshow` needs a desktop session, so run these on
+the Pi's own screen or over VNC. Plain `ssh` has no display; `ssh -X` works but
+is slow at 1296×972.
+
+## Setup — x86 dev machine
+
+No Picamera2 here, so the tools fall back to V4L2 and a USB webcam. Everything
+except the CSI capture path can be developed and tested this way.
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install opencv-python
+```
+
+## Running
+
+```bash
+cd python
+python undistorted_viewer.py        # or camera_viewer.py, grid_viewer.py, ...
+```
+
+Every tool takes `--help`, and they share these flags:
+
+| Flag | Meaning |
+| --- | --- |
+| `--backend {auto,picamera2,v4l2}` | `auto` tries Picamera2 then falls back |
+| `--device /dev/video0` | V4L2 path; skips the interactive picker |
+| `--width` / `--height` | capture resolution (default 1296×972) |
+
+If you see `Picamera2 unavailable (...); falling back to V4L2` **on the Pi**,
+that message is the real error — the fallback will not produce a usable image
+from the CSI camera.
+
+## About the lens correction
+
+Parameters live in [config/lens_profile.json](config/lens_profile.json) and are
+**estimated, not calibrated**. They come from the vendor's "160°" FOV number
+plus an assumed ideal projection curve; the principal point is assumed to be the
+exact image centre and tangential distortion is assumed to be zero.
+
+That is enough to make straight edges look substantially straight, and nowhere
+near enough to measure with. `undistorted_viewer.py` shows `ESTIMATED` in amber
+on the HUD until real calibration data replaces it.
+
+The default capture mode is 1296×972 — the OV5647's binned readout, which is the
+widest 4:3 mode and so preserves the full 160° field. The 1920×1080 mode is a
+sensor **centre crop**, not a downscale, and is deliberately never selected.
+
+### After checkerboard calibration
+
+Write real `camera_matrix`, `dist_coeffs` and `calibration_size` from
+`cv2.fisheye.calibrate` into the same JSON. `vision/fisheye.py` detects them and
+switches to the OpenCV fisheye model automatically — output geometry, camera
+source and tools all stay unchanged, and the HUD flips to `CALIBRATED`.
+
+## Verification
+
+The correction geometry was checked numerically by tracing output pixels back to
+the ground plane and measuring deviation from a straight ground line:
+
+- assumptions exactly right → **0.003 cm** residual (numerical noise; the mapping is exact)
+- FOV really 160° but assumed 150° → **~1.7 cm** bow
+- FOV really 160° but assumed 140° → **~5.0 cm** bow
+- lens really equisolid, assumed equidistant → **~0.09 cm**
+- lens really orthographic, assumed equidistant → **~0.9 cm**
+
+The FOV number dominates, which is why it is the primary tuning knob. The
+Picamera2 capture path has **not** been verified on real hardware — it was
+written on an x86 machine with no CSI camera.
