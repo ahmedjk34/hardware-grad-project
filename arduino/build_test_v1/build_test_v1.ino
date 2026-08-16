@@ -6,12 +6,12 @@
 
   Plus a THIRD, independent motor driving a Z axis (single motor,
   not coupled to the X/Y pair), a GRIPPER SERVO on pin 6 with just
-  two positions (OPEN and CLOSE), and a FOURTH, independent
+  two positions (OPEN and CLOSE), and a FOURTH, independentB 
   28BYJ-48 + ULN2003 stepper that only jogs +/-90 degrees on command.
 
   NEW IN build_tesT_v1:  the  B  (BUILD) command - one full
   pick-and-place cycle expressed in BLOCK LEVELS instead of steps.
-  ============================================================
+  ============================================================C
 
   SERIAL COMMANDS
     1 = X-   (Motor 1 CW  / Motor 2 CW )   <-- SOFTWARE limit end
