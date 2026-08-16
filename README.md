@@ -71,14 +71,26 @@ stay unchanged.
 
 The Pi 5's CSI camera is only reachable through libcamera/Picamera2 — the
 `/dev/video*` nodes carry raw Bayer, so `cv2.VideoCapture` will not work on the
-OV5647 there. `python3-picamera2` is an apt package, so the venv must be able to
-see system packages:
+OV5647 there.
+
+Install **both** OpenCV and Picamera2 from apt, then make a venv that can see
+system packages:
 
 ```bash
-sudo apt install -y python3-picamera2
+sudo apt update
+sudo apt install -y python3-picamera2 python3-opencv python3-numpy
 python3 -m venv --system-site-packages .venv
-.venv/bin/pip install opencv-python
+.venv/bin/python -c "import cv2, picamera2; print(cv2.__version__)"
 ```
+
+> **Do not `pip install opencv-python` on the Pi.** The apt `python3-picamera2`
+> is compiled against the system numpy; the pip OpenCV wheel drags a newer numpy
+> into the venv and breaks `import picamera2` with an ABI error. Use apt for
+> both, and let the venv stay empty. (On the x86 dev machine there is no
+> Picamera2, so `pip install opencv-python` there is fine.)
+
+`cv2.imshow` needs a desktop session — run it on the Pi's own screen, or over
+VNC. Plain `ssh` has no display; `ssh -X` works but is slow at 1296×972.
 
 `tests/grid_viewer_35cm_vertical_20cm_horizontal.py` is the same grid, calibrated
 to a frame that spans 20cm across X (horizontal) and 35cm across Y (vertical) —
