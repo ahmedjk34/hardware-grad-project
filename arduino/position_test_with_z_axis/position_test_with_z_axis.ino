@@ -279,6 +279,9 @@ long SOFT_LIMIT_Y_TRAVEL = 8500; // Y+ travel cap, in steps
 // the axis has never been zeroed. It stops nothing; the switch does.
 long Z_TRAVEL_STEPS = 1350;
 
+// Measured physical distance between the Z- and Z+ hardware switches.
+const float Z_TRAVEL_CM = 26.5;
+
 // What the rig last counted between the two Z switches. 0 = not
 // measured yet. Recorded by applyLimitReference(), reported by 0+.
 long zTravelMeasured = 0;
