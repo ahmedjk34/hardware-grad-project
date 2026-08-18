@@ -575,12 +575,11 @@ const bool HOME_VERBOSE = true;
 //        top    = the Z+ switch, pin 29   (Z ~ Z_TRAVEL_STEPS)
 //
 //        steps per cm = Z_TRAVEL_STEPS / Z_TRAVEL_CM
-//                     = 1350 / 27.0
-//                     = 50.00 steps per cm exactly
+//                     = 1350 / 26.5
+//                     = 50.9434 steps per cm approximately
 //
-//   and one 1.5 cm block is 1.5 * 50 = 75 steps exactly. That the
-//   numbers come out round here is luck, not a requirement - the
-//   maths below rounds to the nearest step either way.
+//   and one 1.5 cm block is approximately 76.42 steps. The maths
+//   below rounds to the nearest step.
 //
 //   This is computed at RUN TIME by zStepsPerCm(), never hard-coded,
 //   so re-measuring the rig is a one-line change. Send  Z  to print
@@ -609,7 +608,7 @@ long Z_TRAVEL_STEPS = 1350;
 long zTravelMeasured = 0;
 
 // Real-world height of the full Z travel, in centimetres.
-float Z_TRAVEL_CM = 27.0;
+float Z_TRAVEL_CM = 26.5;
 
 // Height of one block, in centimetres. Levels are multiples of this:
 //   level 0 = GROUND (drive into the physical switch)
@@ -645,7 +644,7 @@ long Z_MARGIN_FIXED_STEPS = 0;      // raw step trim, applied last
 // ------------------------------------------------------------
 //   HOW HIGH ARE WE ALLOWED TO BUILD?
 // ------------------------------------------------------------
-//   The claw can physically reach Z_TRAVEL_CM (27 cm), but building
+//   The claw can physically reach Z_TRAVEL_CM (26.5 cm), but building
 //   that high leaves no room to fly a block over the stack. Cap the
 //   BUILD height lower than the travel and keep the difference as
 //   headroom: carry height is always the full software limit, so
