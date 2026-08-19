@@ -11,12 +11,114 @@ below assume you are in the `python/` directory with the venv active.
 
 | I want to… | Use |
 | --- | --- |
+| **Correct the fisheye AND measure on the result** | [`undistorted_grid_viewer.py`](#undistorted_grid_viewerpy) |
 | Check the camera is connected and working | [`camera_viewer.py`](#camera_viewerpy) |
 | Read pixel coordinates off the image | [`grid_viewer.py`](#grid_viewerpy) |
 | Estimate real-world sizes in centimetres | [`measured_grid_viewer.py`](#measured_grid_viewerpy) |
 | Remove the fisheye distortion / tune the lens model | [`undistorted_viewer.py`](#undistorted_viewerpy) |
 
-All four exit on `q` or `Esc`, or when you close the window.
+All of them exit on `q` or `Esc`, or when you close the window.
+
+The first is the other two grid tools and the undistortion tool merged, and is
+the one to reach for by default. The single-purpose viewers are kept because
+each is short enough to read end to end when you want to see one stage in
+isolation.
+
+---
+
+## `undistorted_grid_viewer.py`
+
+**Use it for:** everything — the corrected preview, tuning the lens model, and
+reading positions and sizes off the result. It is the combination that actually
+makes sense, because a centimetre grid is only meaningful on a corrected image.
+
+```bash
+python undistorted_grid_viewer.py
+python undistorted_grid_viewer.py --hq                       # sharpest
+python undistorted_grid_viewer.py --frame-width-cm 60 --frame-height-cm 45
+```
+
+### Driving it — three input channels
+
+OpenCV hands a keystroke to the program **only while the image window has
+focus**. Not the terminal. Over VNC or `ssh -X`, often not until the window has
+been clicked. This is nearly always the cause of "I press keys and nothing
+happens", and there is no way to tell from the outside whether the key arrived.
+
+So this tool takes the same commands three ways, and echoes every one of them
+into a log at the bottom of the frame:
+
+| Channel | How | Needs window focus |
+| --- | --- | --- |
+| **Terminal** | type `fov 158` + Enter in the shell you launched it from | **no** |
+| **In-window prompt** | press `:`, type, press Enter (Esc cancels, ↑/↓ for history) | yes |
+| **Sliders and keys** | trackbars along the top of the window; single-key shortcuts | mouse: no / keys: yes |
+
+Every keypress is reported, *including ones that are not bound* — so if you
+press a key and nothing at all appears in the log, the window does not have
+focus and the terminal channel is what you want.
+
+### Commands
+
+Run `help` (in either the terminal or the `:` prompt) for the live list. Numeric
+commands take an absolute value **or a signed step**, so `fov 158` and `fov +2`
+both work, and choices accept any unambiguous prefix (`model stereo`).
+
+| Command | Does |
+| --- | --- |
+| `fov <deg\|+N\|-N>` | quoted lens FOV — the main correction knob |
+| `out <deg>` | how much of the lens cone to render |
+| `scale <f>` | output size relative to the capture |
+| `model <name>` | projection curve |
+| `ref <diagonal\|horizontal>` | which FOV the lens number refers to |
+| `interp <name>` | resampling kernel: `linear`, `cubic`, `lanczos4` |
+| `rows <n>` / `cols <n>` | grid divisions |
+| `grid <off\|px\|cm>` | grid overlay and its units |
+| `view <corrected\|raw\|both>` | which image to show |
+| `wcm <cm>` / `hcm <cm>` | the measured span of the whole frame |
+| `mip [on\|off]`, `hover [on\|off]` | bare word toggles |
+| `show` | dump every current parameter into the log |
+| `save` / `snap` / `reset` / `help` / `quit` | as named |
+
+### Keys
+
+| Key | Effect |
+| --- | --- |
+| `:` | open the command prompt |
+| `?` | show / hide the key list on the frame |
+| `u` | cycle view: corrected → raw → both |
+| `g` | cycle grid: off → px → cm |
+| `[` `]` | lens FOV ∓2° — **the main correction-strength knob** |
+| `-` `=` | output FOV ∓5° |
+| `,` `.` | output scale ∓0.1 |
+| `m` / `i` | cycle projection model / interpolation kernel |
+| `h` | toggle the hovered-cell readout |
+| `c` | clear the measurement points |
+| `s` / `w` / `r` | snapshot / write profile / reset |
+| `q`, `Esc` | quit |
+
+### Mouse
+
+Hover a grid cell to read its bounds in pixels and, on the corrected view with
+`grid cm`, in centimetres. Left-click two points to measure the distance between
+them; right-click clears them.
+
+### The centimetre readings
+
+`--frame-width-cm` / `--frame-height-cm` (live: `wcm` / `hcm`) say what physical
+rectangle the **whole frame** spans. Everything in centimetres is that span
+scaled linearly, which assumes a flat plane viewed square-on — so:
+
+- it is only offered on the **corrected** view. Ask for `grid cm` on the raw
+  fisheye and you get pixels plus a warning, because centimetres per pixel there
+  grows by a factor of three toward the edges.
+- it is still an estimate on the corrected view, because the correction itself
+  is built on an estimated FOV rather than a calibration.
+- it only describes objects lying in the plane you measured the span against.
+  A block 5 cm tall reads wide.
+
+Treat it as a working approximation, not a measurement, until the checkerboard
+calibration lands.
 
 ---
 

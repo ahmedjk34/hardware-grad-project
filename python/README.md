@@ -11,23 +11,29 @@ setup and layout.
 
 ```
 python/
-├── camera_viewer.py          raw preview — "is the camera alive?"
-├── grid_viewer.py            grid overlay labelled in pixels
-├── measured_grid_viewer.py   grid overlay labelled in centimetres
-├── undistorted_viewer.py     live fisheye-corrected preview  ← the main tool
+├── undistorted_grid_viewer.py  correction + measurement grid  ← the main tool
+├── camera_viewer.py            raw preview — "is the camera alive?"
+├── grid_viewer.py              grid overlay labelled in pixels
+├── measured_grid_viewer.py     grid overlay labelled in centimetres
+├── undistorted_viewer.py       live fisheye-corrected preview
 ├── config/
-│   └── lens_profile.json     lens parameters (currently estimated)
-└── vision/                   importable library — no windows, no argv, no prints
-    ├── camera_source.py      Picamera2 on the Pi, V4L2 elsewhere
-    ├── devices.py            /dev/video* enumeration and picker
-    ├── fisheye.py            the fisheye → rectilinear correction
-    └── overlays.py           shared OpenCV drawing helpers
+│   └── lens_profile.json       lens parameters (currently estimated)
+└── vision/                     importable library — no windows, no argv, no prints
+    ├── camera_source.py        Picamera2 on the Pi, V4L2 elsewhere
+    ├── commands.py             the typed-command engine the viewers share
+    ├── devices.py              /dev/video* enumeration and picker
+    ├── fisheye.py              the fisheye → rectilinear correction
+    └── overlays.py             shared OpenCV drawing helpers
 ```
 
-The four scripts at the top level are the things you run. `vision/` is the
-library they share — it deliberately contains no UI, so the later
-block-detection and robot-coordinate stages can import it without dragging a
-preview along.
+The scripts at the top level are the things you run.
+`undistorted_grid_viewer.py` is the combined one and is what you normally want;
+the four single-purpose viewers below it are kept because each is small enough
+to read in one sitting when you want to know what one stage does on its own.
+
+`vision/` is the library they share — it deliberately contains no UI, so the
+later block-detection and robot-coordinate stages can import it without dragging
+a preview along.
 
 ## Setup — Raspberry Pi 5
 
@@ -72,18 +78,21 @@ python3 -m venv .venv
 ## Running
 
 ```bash
+cd ~/hardware-grad-project
+python3 -m venv --system-site-packages .venv
+source .venv/bin/activate
 cd python
-python undistorted_viewer.py        # or camera_viewer.py, grid_viewer.py, ...
+python undistorted_viewer.py
 ```
 
 Every tool takes `--help`, and they share these flags:
 
-| Flag | Meaning |
-| --- | --- |
-| `--backend {auto,picamera2,v4l2}` | `auto` tries Picamera2 then falls back |
-| `--device /dev/video0` | V4L2 path; skips the interactive picker |
-| `--width` / `--height` | capture resolution (default 1296×972) |
-| `--hq` | capture the full 2592×1944 sensor readout (`undistorted_viewer.py` only) |
+| Flag                              | Meaning                                                                  |
+| --------------------------------- | ------------------------------------------------------------------------ |
+| `--backend {auto,picamera2,v4l2}` | `auto` tries Picamera2 then falls back                                   |
+| `--device /dev/video0`            | V4L2 path; skips the interactive picker                                  |
+| `--width` / `--height`            | capture resolution (default 1296×972)                                    |
+| `--hq`                            | capture the full 2592×1944 sensor readout (`undistorted_viewer.py` only) |
 
 If you see `Picamera2 unavailable (...); falling back to V4L2` **on the Pi**,
 that message is the real error — the fallback will not produce a usable image
@@ -117,7 +126,7 @@ captures the full 2592×1944 sensor readout instead of the 2×2-binned 1296×972
 one and renders the same output size from it, roughly doubling the detail at the
 edges at the cost of running at ~15 fps.
 
-If the *raw* image (press `u`) is soft too, the problem is upstream of all of
+If the _raw_ image (press `u`) is soft too, the problem is upstream of all of
 this — check the lens focus ring and the light level. See
 [GUIDE.md](GUIDE.md#why-the-corrected-image-looks-soft) for the full rundown.
 
