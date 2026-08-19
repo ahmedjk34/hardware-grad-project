@@ -149,6 +149,13 @@ Write `python/rig_console.py`, roughly 40 lines:
 - one background thread printing everything received
 - main loop reading your typed lines and sending them with a `\n`
 
+Run it on the Pi:
+
+```bash
+cd python
+../.venv/bin/python rig_console.py
+```
+
 Then test it against the commands the sketch already has:
 
 | Type this | Expect |

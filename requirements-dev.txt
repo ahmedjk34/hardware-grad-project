@@ -1,6 +1,6 @@
 # x86 dev machine ONLY. Do not install this on the Raspberry Pi.
 #
-#     python3 -m venv .venv
+#     python3 -m venv .venv        # `python -m venv` on the Pi
 #     .venv/bin/pip install -r requirements-dev.txt
 #
 # These come from apt on the Pi (python3-opencv, python3-numpy) because

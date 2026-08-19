@@ -2,6 +2,9 @@
 #
 #     .venv/bin/pip install -r requirements.txt
 #
+# Using .venv/bin/pip rather than a bare `pip` on purpose: it works the same
+# on the Pi and the desktop, which disagree about `python` vs `python3`.
+#
 # Everything in this file must be pure Python with no compiled extensions and
 # no numpy dependency. That is what makes it safe inside the Pi's
 # --system-site-packages venv, where the apt-installed picamera2 and OpenCV are

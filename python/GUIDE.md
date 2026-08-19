@@ -32,6 +32,11 @@ isolation.
 reading positions and sizes off the result. It is the combination that actually
 makes sense, because a centimetre grid is only meaningful on a corrected image.
 
+> Every `python ...` line below assumes the venv is **activated**
+> (`source .venv/bin/activate`). Inside a venv `python` always exists, on
+> both machines. Without activating, use `.venv/bin/python` instead — the Pi
+> and the desktop disagree about whether a bare `python3` exists.
+
 ```bash
 python undistorted_grid_viewer.py
 python undistorted_grid_viewer.py --hq                       # sharpest

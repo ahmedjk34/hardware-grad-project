@@ -116,6 +116,13 @@ dependency?** Then it goes in `requirements.txt`. Otherwise it goes in
     pip show <pkg> | grep Requires      # what it drags in
     find .venv/lib/*/site-packages/<pkg> -name "*.so"   # compiled? then no
 
+**The two machines disagree about `python` vs `python3`.** The Pi has `python`;
+the x86 desktop has `python3`. This matters in exactly one place — the command
+that *creates* the venv. Everywhere else, invoke `.venv/bin/python` or
+`.venv/bin/pip`, which exist on both. Never hardcode `python3` in a script that
+runs on the Pi: `scripts/flash.sh` detects the interpreter instead, and anything
+new should do the same.
+
 **There is no Arduino toolchain on the dev desktop.** `arduino-cli compile` runs
 on the Pi and is the only real syntax check. Locally, a `.ino` edit can be
 checked with a stub-Arduino g++ harness — that proves it parses, not that it
