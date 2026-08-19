@@ -6,9 +6,13 @@ Flash this one. Everything on the Python side is written against the commands
 it accepts and the text it prints back.
 
 ```
-arduino-cli compile --fqbn arduino:avr:mega:cpu=atmega2560 arduino/build_test_v1
-arduino-cli upload -p /dev/ttyACM0 --fqbn arduino:avr:mega:cpu=atmega2560 arduino/build_test_v1
+./scripts/flash.sh            # compile, then upload
+./scripts/flash.sh compile    # syntax check only
+./scripts/flash.sh boards     # what is actually plugged in
 ```
+
+The script reads the port, the board FQBN and the sketch path out of
+`config/rig.json`, so none of them are written down twice.
 
 Board is an Arduino MEGA 2560. Serial is **9600 baud**. Multi-character
 commands need a newline; single digits do not.

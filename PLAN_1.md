@@ -97,19 +97,22 @@ sudo usermod -aG dialout $USER
 Plug the cable in and check the Pi sees the board:
 
 ```bash
-arduino-cli board list
+./scripts/flash.sh boards
 ```
 
 You want a line showing `/dev/ttyACM0` and a Mega. If it says `/dev/ttyUSB0`
-instead, the board is a clone with a CH340 chip — that is fine, just use that
-port everywhere including `rig.json`.
+instead, the board is a clone with a CH340 chip — that is fine, put that port in
+`config/rig.json` and everything else follows.
 
 Compile, then upload:
 
 ```bash
-arduino-cli compile --fqbn arduino:avr:mega:cpu=atmega2560 arduino/build_test_v1
-arduino-cli upload -p /dev/ttyACM0 --fqbn arduino:avr:mega:cpu=atmega2560 arduino/build_test_v1
+./scripts/flash.sh
 ```
+
+`scripts/flash.sh` reads the port, the board FQBN and the sketch path from
+`config/rig.json`. Run `./scripts/flash.sh compile` for a syntax check without
+touching the board.
 
 Two things to know:
 
@@ -118,7 +121,7 @@ Two things to know:
 - You cannot upload while something else has the port open. Close any serial
   monitor first.
 
-**Done when:** `arduino-cli upload` succeeds from the Pi and the rig's lights
+**Done when:** `./scripts/flash.sh` succeeds from the Pi and the rig's lights
 behave as they do after an IDE upload.
 
 ---

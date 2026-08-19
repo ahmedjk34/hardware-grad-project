@@ -1,4 +1,8 @@
 {
+  "board": {
+    "fqbn": "arduino:avr:mega:cpu=atmega2560",
+    "sketch": "arduino/build_test_v1"
+  },
   "serial": {
     "port": "/dev/ttyACM0",
     "baud": 9600
