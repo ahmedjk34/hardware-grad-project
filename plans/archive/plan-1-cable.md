@@ -1,5 +1,9 @@
 # Plan 1 — Get the cable working
 
+> **ARCHIVED — superseded by [plan-2-click-to-build.md](../plan-2-click-to-build.md).**
+> All four steps were built. Steps 1 and 2 are verified; steps 3 and 4 need the
+> Pi and the board to confirm. Kept as the record of how the link was set up.
+
 **Goal.** The Pi can flash the Arduino and talk to it. Nothing about cameras,
 clicking, or grids. When this is done, the Arduino IDE is no longer needed and
 the Pi is in charge.
@@ -180,5 +184,5 @@ Once step 4 works, we write **Plan 2**: turning `rig_console.py` into something
 the camera viewer can call, and mapping a click on the image to a `col row`.
 
 Notes and research for that — the exact strings the firmware prints, the GPIO
-pin situation, the timing constraints — are parked in `PLAN_2_PARKED.md`. Ignore
+pin situation, the timing constraints — are parked in `plan-2-research-notes.md`, beside this file. Ignore
 it for now.

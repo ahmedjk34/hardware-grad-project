@@ -20,6 +20,8 @@ The repository is split by platform:
 
 ## Getting started
 
+- What we are building next → **[plans/](plans/)**
+- Rules for editing shared config → **[AGENTS.md](AGENTS.md)**
 - Python tools, setup and usage → **[python/README.md](python/README.md)**
 - Per-tool walkthrough → **[python/GUIDE.md](python/GUIDE.md)**
 - Firmware → open the relevant sketch in `arduino/` with the Arduino IDE

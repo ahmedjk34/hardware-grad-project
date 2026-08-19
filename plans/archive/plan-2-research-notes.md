@@ -1,4 +1,12 @@
-# Plan — Click-to-Build: Raspberry Pi → Arduino
+# Research notes — Click-to-Build (superseded)
+
+> **This was the first draft of Plan 2, written before Plan 1 was built.**
+> The active plan is [../plan-2-click-to-build.md](../plan-2-click-to-build.md).
+> Much of the phasing here is done or obsolete — the config, the flash script
+> and the serial console all exist now, and v1 (not v2) is the frozen firmware.
+> Kept for the detail the short plan omits: the exact strings the firmware
+> prints, the GPIO UART pinout and level-shifting requirement, and the timing
+> and buffer constraints.
 
 **Goal.** Click a cell in the undistorted camera view on the Pi; the rig places a
 block in the corresponding machine cell.
