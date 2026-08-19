@@ -11,12 +11,14 @@ setup and layout.
 
 ```
 python/
-├── undistorted_grid_viewer.py  correction + measurement grid  ← the main tool
 ├── rig_console.py              type commands at the Arduino over USB
-├── camera_viewer.py            raw preview — "is the camera alive?"
-├── grid_viewer.py              grid overlay labelled in pixels
-├── measured_grid_viewer.py     grid overlay labelled in centimetres
-├── undistorted_viewer.py       live fisheye-corrected preview
+├── grid/                       tools that draw a measurement grid
+│   ├── undistorted_grid_viewer.py  correction + grid  ← the main tool
+│   ├── grid_viewer.py              grid overlay labelled in pixels
+│   └── measured_grid_viewer.py     grid overlay labelled in centimetres
+├── camera/                     tools that are just a preview
+│   ├── camera_viewer.py            raw preview — "is the camera alive?"
+│   └── undistorted_viewer.py       live fisheye-corrected preview
 ├── config/
 │   └── lens_profile.json       lens parameters (currently estimated)
 ├── rig/                        importable library — the Arduino side
@@ -29,10 +31,14 @@ python/
     └── overlays.py             shared OpenCV drawing helpers
 ```
 
-The scripts at the top level are the things you run.
-`undistorted_grid_viewer.py` is the combined one and is what you normally want;
-the four single-purpose viewers below it are kept because each is small enough
-to read in one sitting when you want to know what one stage does on its own.
+`grid/` and `camera/` hold the things you run. `grid/undistorted_grid_viewer.py`
+is the combined one and is what you normally want; the four single-purpose
+viewers beside it are kept because each is small enough to read in one sitting
+when you want to know what one stage does on its own.
+
+They can be launched from anywhere — each puts `python/` on the import path
+itself, so both `python grid/grid_viewer.py` (from `python/`) and
+`python python/grid/grid_viewer.py` (from the repo root) work.
 
 `vision/` is the library they share — it deliberately contains no UI, so the
 later block-detection and robot-coordinate stages can import it without dragging
@@ -116,7 +122,7 @@ cd ~/hardware-grad-project
 python -m venv --system-site-packages .venv
 source .venv/bin/activate
 cd python
-python undistorted_viewer.py
+python camera/undistorted_viewer.py
 ```
 
 Every tool takes `--help`, and they share these flags:

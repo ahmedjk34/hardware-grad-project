@@ -59,7 +59,7 @@ the sketch is the trap: the Pi will silently overwrite it on the next connect.
 | Where | What |
 | --- | --- |
 | `config/rig.json` → `frame` | the only copy |
-| `undistorted_grid_viewer.py`, `measured_grid_viewer.py` | read it via `rig.config.load()` |
+| `grid/undistorted_grid_viewer.py`, `grid/measured_grid_viewer.py` | read it via `rig.config.load()` |
 
 Already centralised. The rule here is: **do not reintroduce a module-level
 constant.** Both viewers used to carry their own copy and drifted.

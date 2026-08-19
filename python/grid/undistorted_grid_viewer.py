@@ -66,6 +66,11 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+# This tool lives one folder down, so python/ is not on the import path when it
+# is run directly. Put it there before the shared libraries below are imported —
+# without this, `python grid/grid_viewer.py` dies on `import vision`.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from rig import config as rig_config
 
 from vision.camera_source import (
@@ -109,7 +114,7 @@ from vision.overlays import (
     draw_info_box,
 )
 
-CAPTURE_DIR = Path(__file__).resolve().parent / "captures"
+CAPTURE_DIR = Path(__file__).resolve().parents[1] / "captures"
 INTERP_NAMES = list(INTERPOLATIONS)
 VIEWS = ("corrected", "raw", "both")
 GRID_MODES = ("off", "px", "cm")

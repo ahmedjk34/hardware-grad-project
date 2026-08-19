@@ -15,8 +15,14 @@ Press 'q' or Esc in the window to quit.
 
 import argparse
 import sys
+from pathlib import Path
 
 import cv2
+
+# This tool lives one folder down, so python/ is not on the import path when it
+# is run directly. Put it there before the shared libraries below are imported —
+# without this, `python grid/grid_viewer.py` dies on `import vision`.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from vision.camera_source import DEFAULT_SIZE, open_camera
 from vision.overlays import draw_cell_info, draw_grid, hovered_cell

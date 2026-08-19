@@ -38,9 +38,9 @@ makes sense, because a centimetre grid is only meaningful on a corrected image.
 > and the desktop disagree about whether a bare `python3` exists.
 
 ```bash
-python undistorted_grid_viewer.py
-python undistorted_grid_viewer.py --hq                       # sharpest
-python undistorted_grid_viewer.py --frame-width-cm 60 --frame-height-cm 45
+python grid/undistorted_grid_viewer.py
+python grid/undistorted_grid_viewer.py --hq                       # sharpest
+python grid/undistorted_grid_viewer.py --frame-width-cm 60 --frame-height-cm 45
 ```
 
 ### Driving it — three input channels
@@ -134,10 +134,10 @@ first thing to run after touching wiring, and the tool to use when adjusting
 focus, exposure or physical framing.
 
 ```bash
-python camera_viewer.py                    # auto-detect the camera
-python camera_viewer.py --backend v4l2     # force the /dev/video* picker
-python camera_viewer.py --device /dev/video0
-python camera_viewer.py --width 640 --height 480
+python camera/camera_viewer.py                    # auto-detect the camera
+python camera/camera_viewer.py --backend v4l2     # force the /dev/video* picker
+python camera/camera_viewer.py --device /dev/video0
+python camera/camera_viewer.py --width 640 --height 480
 ```
 
 With `--backend v4l2` and no `--device`, it lists every capture device it finds
@@ -155,8 +155,8 @@ it is what `undistorted_viewer.py` fixes.
 to see its row/column index and pixel bounds.
 
 ```bash
-python grid_viewer.py
-python grid_viewer.py --rows 6 --cols 12   # any grid size
+python grid/grid_viewer.py
+python grid/grid_viewer.py --rows 6 --cols 12   # any grid size
 ```
 
 **Hover readout:**
@@ -180,8 +180,8 @@ effect.
 centimetres and metres instead of pixels.
 
 ```bash
-python measured_grid_viewer.py                                  # built-in defaults
-python measured_grid_viewer.py --frame-width-cm 60 --frame-height-cm 30
+python grid/measured_grid_viewer.py                                  # built-in defaults
+python grid/measured_grid_viewer.py --frame-width-cm 60 --frame-height-cm 30
 ```
 
 You tell it the physical span of the **whole frame** — measure it by hand with a
@@ -211,10 +211,10 @@ Y: 13.13cm -> 17.50cm  (h=4.37cm / 0.0437m)
 This is the main camera tool.
 
 ```bash
-python undistorted_viewer.py                                   # defaults
-python undistorted_viewer.py --hq                              # sharpest
-python undistorted_viewer.py --output-fov 140 --output-scale 1.5
-python undistorted_viewer.py --backend v4l2 --device /dev/video0
+python camera/undistorted_viewer.py                                   # defaults
+python camera/undistorted_viewer.py --hq                              # sharpest
+python camera/undistorted_viewer.py --output-fov 140 --output-scale 1.5
+python camera/undistorted_viewer.py --backend v4l2 --device /dev/video0
 ```
 
 ### Keys
@@ -353,7 +353,7 @@ This is a *projection extent* choice, not a crop to the workspace — nothing is
 being trimmed to make the picture look tidy. To keep more field:
 
 ```bash
-python undistorted_viewer.py --output-fov 150 --output-scale 1.5
+python camera/undistorted_viewer.py --output-fov 150 --output-scale 1.5
 ```
 
 `--output-scale` matters here: without it, a wider output FOV is bought by
