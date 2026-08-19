@@ -14,8 +14,22 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIG="$ROOT/config/rig.json"
 ACTION="${1:-both}"
 
+# Which interpreter: the venv's if it exists (always called `python` inside a
+# venv, on every machine), otherwise whichever of python3/python this box has.
+# The Pi and the dev desktop do not agree on that name.
+if [ -x "$ROOT/.venv/bin/python" ]; then
+  PYTHON="$ROOT/.venv/bin/python"
+elif command -v python3 >/dev/null 2>&1; then
+  PYTHON=python3
+elif command -v python >/dev/null 2>&1; then
+  PYTHON=python
+else
+  echo "!! No python interpreter found (tried .venv/bin/python, python3, python)." >&2
+  exit 1
+fi
+
 read_cfg() {  # read_cfg <section> <key>
-  python3 -c "import json,sys; print(json.load(open('$CONFIG'))['$1']['$2'])"
+  "$PYTHON" -c "import json,sys; print(json.load(open('$CONFIG'))['$1']['$2'])"
 }
 
 if ! command -v arduino-cli >/dev/null 2>&1; then

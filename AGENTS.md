@@ -102,11 +102,19 @@ referenced by path, not by value.
 
 ## Environment rules that will bite you
 
-**On the Pi, install with `apt`, never `pip`.** The venv is built with
-`--system-site-packages` so it can see the apt `python3-picamera2` and
-`python3-opencv`. A `pip install` pulls a newer numpy into the venv and breaks
-`import picamera2` with an ABI error. This applies to every new dependency —
-`pyserial` is `sudo apt install python3-serial`.
+**On the Pi, numpy and OpenCV come from apt. Everything else goes in the venv.**
+The venv is built with `--system-site-packages` so it can see the apt
+`python3-picamera2` and `python3-opencv`, which are compiled against the system
+numpy. Pip-installing `numpy` or `opencv-python` shadows that and breaks
+`import picamera2` with an ABI error.
+
+Every other dependency installs into the venv normally, on both machines. The
+test for a new package is: **pure Python, no compiled extension, no numpy
+dependency?** Then it goes in `requirements.txt`. Otherwise it goes in
+`requirements-dev.txt` and the Pi gets it from apt instead.
+
+    pip show <pkg> | grep Requires      # what it drags in
+    find .venv/lib/*/site-packages/<pkg> -name "*.so"   # compiled? then no
 
 **There is no Arduino toolchain on the dev desktop.** `arduino-cli compile` runs
 on the Pi and is the only real syntax check. Locally, a `.ino` edit can be

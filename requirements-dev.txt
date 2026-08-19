@@ -1,0 +1,14 @@
+# x86 dev machine ONLY. Do not install this on the Raspberry Pi.
+#
+#     python3 -m venv .venv
+#     .venv/bin/pip install -r requirements-dev.txt
+#
+# These come from apt on the Pi (python3-opencv, python3-numpy) because
+# picamera2 is compiled against the system numpy. Installing the pip wheels
+# into the Pi's venv shadows it and breaks `import picamera2` with an ABI
+# error — the one mistake that costs an afternoon.
+
+-r requirements.txt
+
+opencv-python>=4.8
+numpy>=1.24

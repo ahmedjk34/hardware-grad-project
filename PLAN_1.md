@@ -131,12 +131,15 @@ behave as they do after an IDE upload.
 A single script. Type a line, it goes to the Arduino; whatever the Arduino says
 comes back on screen. No parsing, no cleverness.
 
-Install pyserial **from apt, not pip** — the same rule as OpenCV, because pip
-into that venv breaks `picamera2`:
+Install pyserial into the venv, on either machine:
 
 ```bash
-sudo apt install python3-serial
+.venv/bin/pip install -r requirements.txt
 ```
+
+This is safe on the Pi despite the usual pip warning: `pyserial` is pure Python
+with no dependencies, so there is no numpy for it to shadow. Only `numpy` and
+`opencv-python` have to come from apt there — see `python/README.md`.
 
 Write `python/rig_console.py`, roughly 40 lines:
 

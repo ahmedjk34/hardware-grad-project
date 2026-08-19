@@ -1,0 +1,12 @@
+# Runtime dependencies. Safe on BOTH machines — install into the venv:
+#
+#     .venv/bin/pip install -r requirements.txt
+#
+# Everything in this file must be pure Python with no compiled extensions and
+# no numpy dependency. That is what makes it safe inside the Pi's
+# --system-site-packages venv, where the apt-installed picamera2 and OpenCV are
+# built against the SYSTEM numpy and a pip-installed one would break them.
+#
+# Anything that does not meet that bar goes in requirements-dev.txt instead.
+
+pyserial>=3.5

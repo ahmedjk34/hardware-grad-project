@@ -12,12 +12,15 @@ setup and layout.
 ```
 python/
 ├── undistorted_grid_viewer.py  correction + measurement grid  ← the main tool
+├── rig_console.py              type commands at the Arduino over USB
 ├── camera_viewer.py            raw preview — "is the camera alive?"
 ├── grid_viewer.py              grid overlay labelled in pixels
 ├── measured_grid_viewer.py     grid overlay labelled in centimetres
 ├── undistorted_viewer.py       live fisheye-corrected preview
 ├── config/
 │   └── lens_profile.json       lens parameters (currently estimated)
+├── rig/                        importable library — the Arduino side
+│   └── config.py               loads config/rig.json
 └── vision/                     importable library — no windows, no argv, no prints
     ├── camera_source.py        Picamera2 on the Pi, V4L2 elsewhere
     ├── commands.py             the typed-command engine the viewers share
@@ -35,6 +38,20 @@ to read in one sitting when you want to know what one stage does on its own.
 later block-detection and robot-coordinate stages can import it without dragging
 a preview along.
 
+## `python` or `python3`?
+
+The two machines disagree, and it only matters once.
+
+| Machine | Interpreter that creates the venv |
+| --- | --- |
+| Raspberry Pi 5 | `python` |
+| x86 dev desktop | `python3` |
+
+**After the venv exists, the difference goes away.** A venv always provides
+`bin/python`, on every machine — so every command below the venv line uses
+`.venv/bin/python` (or plain `python` once the venv is activated) and is
+identical on both. `scripts/flash.sh` works this out for itself.
+
 ## Setup — Raspberry Pi 5
 
 The Pi 5's CSI camera is reachable **only** through libcamera/Picamera2. Its
@@ -42,24 +59,35 @@ The Pi 5's CSI camera is reachable **only** through libcamera/Picamera2. Its
 read the OV5647 there at all.
 
 ```bash
+# 1. The two things that MUST come from apt, because picamera2 is compiled
+#    against the system numpy and the pip wheels would shadow it.
 sudo apt update
 sudo apt install -y python3-picamera2 python3-opencv python3-numpy
 
+# 2. The venv, which can see them thanks to --system-site-packages.
+#    On the Pi the interpreter is `python`; on the x86 desktop it is `python3`.
 cd ~/hardware-grad-project
-python3 -m venv --system-site-packages .venv
-source .venv/bin/activate
+python -m venv --system-site-packages .venv
 
-python -c "import cv2, picamera2; print('opencv', cv2.__version__)"
+# 3. Everything else, into the venv like normal.
+.venv/bin/pip install -r requirements.txt
+
+# 4. Check both halves work.
+.venv/bin/python -c "import cv2, picamera2, serial; print('opencv', cv2.__version__)"
 ```
 
-> **Do not `pip install opencv-python` on the Pi.** The apt `python3-picamera2`
-> is compiled against the system numpy; the pip OpenCV wheel pulls a newer numpy
-> into the venv and breaks `import picamera2` with an ABI error. Install both
-> from apt and leave the venv empty of pip packages.
+> **Never `pip install opencv-python` or `numpy` on the Pi.** The apt
+> `python3-picamera2` is compiled against the system numpy; a pip wheel pulls a
+> newer numpy into the venv, shadows the system one, and breaks
+> `import picamera2` with an ABI error.
+>
+> That restriction is narrower than it looks. `requirements.txt` holds only
+> pure-Python packages with no numpy dependency, so it is safe to pip install
+> into this venv — and that is where those packages belong. The packages that
+> are *not* safe live in `requirements-dev.txt`, which is for the x86 machine.
 
 `--system-site-packages` is what lets the venv see the apt-installed `cv2` and
-`picamera2`. Without it, a plain venv sees neither — you can also skip the venv
-entirely and just run `python3 undistorted_viewer.py`.
+`picamera2`. Without it, a plain venv sees neither.
 
 **A display is required.** `cv2.imshow` needs a desktop session, so run these on
 the Pi's own screen or over VNC. Plain `ssh` has no display; `ssh -X` works but
@@ -71,15 +99,21 @@ No Picamera2 here, so the tools fall back to V4L2 and a USB webcam. Everything
 except the CSI capture path can be developed and tested this way.
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install opencv-python
+python3 -m venv .venv          # `python` on the Pi — see the note below
+.venv/bin/pip install -r requirements-dev.txt
+
+.venv/bin/python -c "import cv2, serial; print('opencv', cv2.__version__)"
 ```
+
+A plain venv here — no `--system-site-packages`, because there is no apt
+picamera2 to see. `requirements-dev.txt` pulls in `requirements.txt` as well,
+so this one command gets everything.
 
 ## Running
 
 ```bash
 cd ~/hardware-grad-project
-python3 -m venv --system-site-packages .venv
+python -m venv --system-site-packages .venv
 source .venv/bin/activate
 cd python
 python undistorted_viewer.py
