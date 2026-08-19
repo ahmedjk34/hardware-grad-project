@@ -25,13 +25,14 @@ import sys
 
 import cv2
 
+from rig import config as rig_config
 from vision.camera_source import DEFAULT_SIZE, open_camera
 from vision.overlays import draw_cell_info, draw_grid, hovered_cell
 
-# Physical span of the *whole frame*, measured by hand. Edit these (or pass the
-# flags) whenever the camera height or mounting changes.
-FRAME_WIDTH_CM = 20.0   # horizontal (X) span of the full frame
-FRAME_HEIGHT_CM = 35.0  # vertical (Y) span of the full frame
+# Physical span of the *whole frame*, measured by hand. Edit it in
+# config/rig.json (or pass the flags) whenever the camera height or mounting
+# changes — undistorted_grid_viewer.py reads the same two numbers.
+FRAME_CM = rig_config.load()["frame"]
 
 state = {"mouse_x": -1, "mouse_y": -1}
 
@@ -51,8 +52,8 @@ def parse_args():
     parser.add_argument("--height", type=int, default=DEFAULT_SIZE[1])
     parser.add_argument("--rows", type=int, default=8)
     parser.add_argument("--cols", type=int, default=8)
-    parser.add_argument("--frame-width-cm", type=float, default=FRAME_WIDTH_CM)
-    parser.add_argument("--frame-height-cm", type=float, default=FRAME_HEIGHT_CM)
+    parser.add_argument("--frame-width-cm", type=float, default=FRAME_CM["width_cm"])
+    parser.add_argument("--frame-height-cm", type=float, default=FRAME_CM["height_cm"])
     return parser.parse_args()
 
 

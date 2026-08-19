@@ -66,6 +66,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from rig import config as rig_config
+
 from vision.camera_source import (
     DEFAULT_SIZE,
     FULL_RES_SIZE,
@@ -112,10 +114,9 @@ INTERP_NAMES = list(INTERPOLATIONS)
 VIEWS = ("corrected", "raw", "both")
 GRID_MODES = ("off", "px", "cm")
 
-# Physical span of the whole frame, measured by hand. Same defaults as
-# measured_grid_viewer.py so readings carry over.
-FRAME_WIDTH_CM = 20.0
-FRAME_HEIGHT_CM = 35.0
+# Physical span of the whole frame, measured by hand. Lives in config/rig.json
+# so this tool and measured_grid_viewer.py cannot drift apart.
+FRAME_CM = rig_config.load()["frame"]
 
 
 class Viewer:
@@ -437,9 +438,9 @@ def parse_args():
     grid.add_argument("--cols", type=int, default=8)
     grid.add_argument("--grid", choices=list(GRID_MODES), default="cm",
                       help="initial grid mode (default cm)")
-    grid.add_argument("--frame-width-cm", type=float, default=FRAME_WIDTH_CM,
+    grid.add_argument("--frame-width-cm", type=float, default=FRAME_CM["width_cm"],
                       help="measured horizontal span of the whole frame")
-    grid.add_argument("--frame-height-cm", type=float, default=FRAME_HEIGHT_CM,
+    grid.add_argument("--frame-height-cm", type=float, default=FRAME_CM["height_cm"],
                       help="measured vertical span of the whole frame")
 
     sensor = parser.add_argument_group("image quality (Picamera2 only)")
