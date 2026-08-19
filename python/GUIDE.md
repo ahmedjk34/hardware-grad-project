@@ -105,6 +105,7 @@ This is the main camera tool.
 
 ```bash
 python undistorted_viewer.py                                   # defaults
+python undistorted_viewer.py --hq                              # sharpest
 python undistorted_viewer.py --output-fov 140 --output-scale 1.5
 python undistorted_viewer.py --backend v4l2 --device /dev/video0
 ```
@@ -120,6 +121,8 @@ python undistorted_viewer.py --backend v4l2 --device /dev/video0
 | `[` `]` | lens FOV ∓2° — **the main correction-strength knob** |
 | `-` `=` | output FOV ∓5° |
 | `m` | cycle projection model |
+| `,` `.` | output scale ∓0.1 |
+| `i` | cycle interpolation kernel |
 | `s` | save raw + corrected snapshot to `captures/` |
 | `w` | write current parameters to `config/lens_profile.json` |
 | `r` | reset to defaults |
@@ -147,8 +150,12 @@ something rather than just changed it.
 PROFILE: ESTIMATED (uncalibrated)          ← amber until real calibration exists
 lens FOV 160deg (diagonal)  model equidistant
 output FOV 120deg  1296x972  scale 1.00
-in 1296x972   28.4 fps  view CORRECTED
+in 1296x972   28.4 fps  cubic  view CORRECTED
+SAMPLE src px/out px: centre 1.24  edge 0.34  (83% magnified)
 ```
+
+The last line is the sharpness budget — see
+[Why the corrected image looks soft](#why-the-corrected-image-looks-soft).
 
 ### Options
 
@@ -162,6 +169,72 @@ in 1296x972   28.4 fps  view CORRECTED
 | `--display-scale` | 1.0 | Scales the window only — processing is unaffected. |
 | `--profile` | `config/lens_profile.json` | Which profile to load and save. |
 | `--swap-rb` | off | Fix inverted red/blue channels. |
+| `--hq` | off | Capture the full 2592×1944 sensor readout, render a half-size output. Same field of view, ~2× the real detail at the edges, ~15 fps. |
+| `--interp` | cubic | Resampling kernel: `linear`, `cubic`, `lanczos4`. |
+| `--no-mip` | off | Skip pyramid filtering of the shrunk regions. Faster; aliases. |
+| `--sharpness` | ISP default | ISP sharpening amount; `0` disables it. |
+| `--denoise` | ISP default | `off`, `fast`, `hq`. |
+| `--shutter` | auto | Fixed exposure time in µs. |
+| `--gain` | auto | Fixed analogue gain. |
+| `--awb` | auto | White balance preset. |
+| `--list-modes` | — | Print the sensor's modes and exit. |
+
+The last six are Picamera2-only and are ignored (with a note) on V4L2.
+
+### Why the corrected image looks soft
+
+Undistortion never resamples 1:1. `tan(θ)` grows much faster than `θ`, so the
+edges of the output are stretched far harder than the centre. At the default
+160° lens / 120° output / scale 1.0 the numbers are:
+
+| | source px per output px | meaning |
+| --- | --- | --- |
+| centre | 1.24 | slightly supersampled — fine |
+| edge | 0.34 | each output pixel interpolated from a third of a source pixel |
+
+That 0.34 is ~3× empty magnification. No interpolation kernel recovers detail
+that was never captured, so the corners will look soft no matter what. The HUD's
+`SAMPLE` line reports both numbers live, so the cost of a parameter change is
+visible while making it.
+
+**The one fix that adds real detail is `--hq`.** The default capture mode,
+1296×972, is the OV5647's 2×2-binned readout — half the linear resolution the
+sensor can produce. `--hq` captures the full 2592×1944 instead and renders the
+same 1296×972 output from it, which takes `edge` from 0.34 to 0.69. Same field
+of view, twice the detail where it is most needed. The cost is frame rate: the
+sensor caps at about 15 fps at full resolution.
+
+Everything else redistributes sharpness rather than adding it:
+
+- `--output-scale` / `--output-fov` set how hard the stretch is. Lowering the
+  scale gives a smaller but crisper image.
+- `--interp cubic` (now the default, was linear) resolves an upscale visibly
+  better; `lanczos4` is a smaller step again.
+
+Once the capture resolution exceeds the output resolution, parts of the frame
+are being *shrunk* rather than stretched, and point sampling there aliases —
+shimmering on fine texture, moiré on checkerboards, which matters directly for
+the calibration step. `build_maps` detects this and builds mip levels for the
+affected regions automatically; `--no-mip` turns it off if you need the frame
+rate back.
+
+### If the raw frame is already soft
+
+Press `u` and look at the uncorrected image. If that is soft too, none of the
+above applies — the detail is missing before the correction runs. In order of
+likelihood:
+
+1. **Lens focus.** These M12 fisheye modules are manual focus and frequently
+   ship focused nowhere useful. Loosen the lock ring and turn the lens while
+   watching the preview.
+2. **Light.** In a dim room the auto exposure picks a long shutter *and* high
+   gain; the result is motion blur plus sensor noise, which the ISP's denoise
+   then smears into mush. Add light, or pin the exposure: `--shutter 8000
+   --gain 1.5`.
+3. **ISP denoise.** `--denoise hq` keeps far more fine texture than the video
+   default (`fast`) does.
+4. **Colour cast** rather than softness — try `--awb tungsten` (or another
+   preset), and `--swap-rb` if red and blue look exchanged.
 
 ### Why the output FOV defaults to 120°, not 160°
 

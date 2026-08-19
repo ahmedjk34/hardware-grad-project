@@ -83,6 +83,7 @@ Every tool takes `--help`, and they share these flags:
 | `--backend {auto,picamera2,v4l2}` | `auto` tries Picamera2 then falls back |
 | `--device /dev/video0` | V4L2 path; skips the interactive picker |
 | `--width` / `--height` | capture resolution (default 1296×972) |
+| `--hq` | capture the full 2592×1944 sensor readout (`undistorted_viewer.py` only) |
 
 If you see `Picamera2 unavailable (...); falling back to V4L2` **on the Pi**,
 that message is the real error — the fallback will not produce a usable image
@@ -102,6 +103,23 @@ on the HUD until real calibration data replaces it.
 The default capture mode is 1296×972 — the OV5647's binned readout, which is the
 widest 4:3 mode and so preserves the full 160° field. The 1920×1080 mode is a
 sensor **centre crop**, not a downscale, and is deliberately never selected.
+
+## About sharpness
+
+Rectilinear correction magnifies the edges of the frame about 3× and slightly
+shrinks the centre, so the corrected image is inherently softer at the edges
+than the raw one. The HUD's `SAMPLE` line reports this as source pixels per
+output pixel; `edge 0.34` means each output pixel there was interpolated from a
+third of a source pixel.
+
+`--hq` is the fix that adds real detail rather than redistributing it: it
+captures the full 2592×1944 sensor readout instead of the 2×2-binned 1296×972
+one and renders the same output size from it, roughly doubling the detail at the
+edges at the cost of running at ~15 fps.
+
+If the *raw* image (press `u`) is soft too, the problem is upstream of all of
+this — check the lens focus ring and the light level. See
+[GUIDE.md](GUIDE.md#why-the-corrected-image-looks-soft) for the full rundown.
 
 ### After checkerboard calibration
 
