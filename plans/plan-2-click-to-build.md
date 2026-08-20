@@ -152,6 +152,8 @@ wrong mapping costs you nothing.
 
 ## Step 5 — Click to build
 
+**Implemented as the manually confirmed `camera/rig_build_v1.py` V1.**
+
 Wire it together: click → cell → confirm → `B <col> <row> <level>`.
 
 Three rules, all of them safety rather than polish:

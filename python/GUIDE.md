@@ -13,6 +13,7 @@ below assume you are in the `python/` directory with the venv active.
 | --- | --- |
 | **Run the configured camera feed for the vision pipeline** | [`camera_feed.py`](#camera_feedpy) |
 | **See/calibrate the Arduino block grid on the camera** | [`gridded_camera_feed.py`](#gridded_camera_feedpy) |
+| **Select a camera cell and build there** | [`rig_build_v1.py`](#rig_build_v1py) |
 | **Correct the fisheye AND measure on the result** | [`undistorted_grid_viewer.py`](#undistorted_grid_viewerpy) |
 | **Tune every camera setting and save them to JSON** | [`camera_studio.py`](#camera_studiopy) |
 | Check the camera is connected and working | [`camera_viewer.py`](#camera_viewerpy) |
@@ -102,6 +103,41 @@ invalidates the old map and returns to the amber approximation.
 The JSON deliberately does not duplicate `5050×7500` motor safety limits. The
 Pi maps pixels through centimetres to a logical cell; the Arduino remains the
 only authority that converts the selected cell to step pulses.
+
+---
+
+## `rig_build_v1.py`
+
+**Use it for:** manually selecting one calibrated camera cell and commanding
+one complete Arduino build there.
+
+```bash
+python camera/rig_build_v1.py
+python camera/rig_build_v1.py --level 0
+python camera/rig_build_v1.py --level 2 --rotation R
+```
+
+Startup opens the configured serial port, waits for the Mega reboot banner and
+pushes the JSON grid count. It then opens the same corrected/detected camera
+pipeline as `camera_feed.py`. A saved, matching `workspace_map.json` is required
+for target selection; an amber approximate grid cannot issue a build.
+
+Workflow:
+
+1. If necessary, press `c` and complete the same four-corner calibration.
+2. Left-click a cell. The magenta outline and build panel show the selection.
+3. Set the stack level with `[` / `]`; `o` cycles `NR`, `R`, `RR`.
+4. Read the displayed command, such as `B 3 4 0`.
+5. Press `b` or Enter to confirm and send it.
+
+The camera pauses while the synchronous firmware build runs; serial output
+continues in the terminal. Clicks cannot queue during that period. `placed`
+clears the selection and requires a fresh click. A safe `rejected` result keeps
+the selection for correction. `aborted`, reset, timeout or cable loss locks the
+session—inspect the rig and restart; do not retry or auto-home.
+
+Here “level” is the firmware's Z block-stack level: `0` ground, `1` one block
+high, and so on. It is not a raw Z step count.
 
 ---
 

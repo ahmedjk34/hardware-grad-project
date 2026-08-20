@@ -16,7 +16,7 @@ python/
 │   ├── undistorted_grid_viewer.py  correction + grid  ← the main tool
 │   ├── grid_viewer.py              grid overlay labelled in pixels
 │   └── measured_grid_viewer.py     grid overlay labelled in centimetres
-├── camera/                     tools that are just a preview
+├── camera/                     configured preview, grid calibration and build UI
 │   ├── camera_feed.py              config-driven runtime feed ← the main camera script
 │   ├── gridded_camera_feed.py      same feed + calibrated physical machine grid
 │   ├── rig_build_v1.py             select calibrated cell + confirm Arduino build
@@ -29,9 +29,11 @@ python/
 ├── rig/                        importable library — the Arduino side
 │   ├── config.py               loads config/rig.json
 │   ├── grid.py                 the machine's cells, and which way round they sit
+│   ├── build_controller.py     selection/confirmation outcome safety state
 │   └── link.py                 the serial link: send a command, wait for the answer
 ├── tests/
 │   ├── test_block_detector.py  block detection against the committed captures
+│   ├── test_build_controller.py camera-build confirmation and lockout rules
 │   ├── test_grid.py            the cell numbering, against the firmware's own map
 │   └── test_link.py            link.py against a fake board — no rig needed
 └── vision/                     importable library — no windows, no argv, no prints

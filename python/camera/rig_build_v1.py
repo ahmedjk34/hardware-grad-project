@@ -72,7 +72,7 @@ from rig.workspace import WORKSPACE_MAP_PATH, WorkspaceMap  # noqa: E402
 from vision.block_detector import detect_blocks  # noqa: E402
 from vision.camera_source import open_camera  # noqa: E402
 from vision.fisheye import INTERPOLATIONS, build_maps, undistort  # noqa: E402
-from vision.overlays import HOVER_COLOR, draw_info_box  # noqa: E402
+from vision.overlays import draw_info_box  # noqa: E402
 
 
 SELECTED_COLOR = (255, 80, 255)
