@@ -808,6 +808,94 @@ uint16_t statBlocksAtLevel[LEVEL_HISTOGRAM_SIZE];
 unsigned long statBlocksPlaced = 0;
 
 // ============================================================
+// SECTION 7C - MACHINE ACKNOWLEDGEMENTS
+// ============================================================
+//
+// Everything else this sketch prints is written for a human. These
+// lines are written for the Raspberry Pi. One per outcome, always
+// starting with '@' - a character no other line in this sketch begins
+// with, so the Pi filters them out with a single test and a human
+// reading the Serial Monitor can ignore them by eye.
+//
+//     @<seq> <KIND> [reason text | key=value ...]
+//
+// The human text is NEVER removed. An ack is printed BESIDE it, so a
+// Serial Monitor session reads exactly as it always did.
+//
+// The kinds:
+//     OK    finished, block placed, rig parked - safe
+//     ERR   refused before anything moved (bad command)
+//     SAFE  failed before anything moved
+//     HELD  failed PART WAY THROUGH. The claw may still be gripping a
+//           block and the position is unknown. NEEDS A HUMAN.
+//
+// SAFE and HELD are separate KINDS rather than a flag on one kind on
+// purpose: it means code on the Pi cannot lump them together with a
+// generic "if not ok: retry". The retry is what breaks the rig.
+//
+// The sequence number is assigned HERE, not by the Pi, so that the
+// command grammar stays type-able by hand in a Serial Monitor. The rig
+// runs one command at a time, so "the ack after my command" is never
+// ambiguous. Seq 0 means nobody asked - BOOT and READY.
+//
+// F() everywhere, as always - see the note at the top of the file.
+
+uint16_t ackSeq = 0;
+
+void ackStart(const __FlashStringHelper *kind)
+{
+  Serial.print('@');
+  Serial.print(ackSeq);
+  Serial.print(' ');
+  Serial.print(kind);
+}
+
+void ackField(const __FlashStringHelper *name, long value)
+{
+  Serial.print(' ');
+  Serial.print(name);
+  Serial.print('=');
+  Serial.print(value);
+}
+
+// One complete ack with a trailing reason. The const char* overload
+// takes the SAME pointer the prose above it already printed, so it
+// costs no extra SRAM.
+void ackReason(const __FlashStringHelper *kind, const char *why)
+{
+  ackStart(kind);
+  Serial.print(' ');
+  Serial.println(why);
+}
+
+void ackReason(const __FlashStringHelper *kind, const __FlashStringHelper *why)
+{
+  ackStart(kind);
+  Serial.print(' ');
+  Serial.println(why);
+}
+
+// The first machine line after a reset. Opening the serial port
+// reboots the board, so the Pi sees this on every connect - and an
+// unexpected one mid-command means the board reset under us.
+void ackBoot()
+{
+  Serial.println(F("@0 BOOT fw=build_test_v1"));
+}
+
+// The LAST line of setup(). This is the Pi's sync marker: everything
+// before it is banner, everything after it is a response. Matching the
+// banner by its wording is what this replaces.
+void ackReady()
+{
+  Serial.print(F("@0 READY grid="));
+  Serial.print(GRID_COLS);
+  Serial.print('x');
+  Serial.print(GRID_ROWS);
+  Serial.println();
+}
+
+// ============================================================
 // SECTION 8 - COMMAND CHARACTERS
 // ============================================================
 
@@ -898,6 +986,8 @@ void setup()
   Serial.begin(9600);
   delay(1000);
 
+  ackBoot();
+
   printInstructions();
   printLimitStatus();
   printSoftLimitStatus();
@@ -910,6 +1000,8 @@ void setup()
   Serial.println(F(">> Position is UNKNOWN until you home. Send 0 to home."));
   Serial.println(F(">> B homes everything itself, including Z."));
   Serial.println(F(">> Z+ is a HARDWARE end stop (pin 29), not a soft limit."));
+
+  ackReady();
 }
 
 // ============================================================
@@ -2272,10 +2364,16 @@ void handleBuildCommand(const char *args)
   long v[3] = {0, 0, 0};
   uint8_t endIndex = 0;
 
+  // Every build attempt gets a sequence number, including the ones
+  // that turn out to be malformed - otherwise a bad command produces
+  // no ack at all and the Pi sits waiting for its timeout.
+  ackSeq++;
+
   if (parseNumbers(args, v, 3, &endIndex) < 3)
   {
     statBadCommands++;
     printBuildUsage();
+    ackReason(F("ERR"), F("expected: B <col> <row> <level> [R|RR|NR]"));
     return;
   }
 
@@ -2286,6 +2384,7 @@ void handleBuildCommand(const char *args)
     Serial.println();
     Serial.println(F("  ERROR - rotation must be R, RR or NR (or left out)."));
     printBuildUsage();
+    ackReason(F("ERR"), F("rotation must be R, RR or NR"));
     return;
   }
 
@@ -2326,6 +2425,8 @@ bool buildReject(const char *why)
   Serial.print(F("  BUILD REJECTED - "));
   Serial.println(why);
   Serial.println(F("  Nothing moved."));
+
+  ackReason(F("SAFE"), why);
   return false;
 }
 
@@ -2341,6 +2442,8 @@ void buildAbort(const char *why)
   Serial.print(F("*** BUILD ABORTED - "));
   Serial.println(why);
   Serial.println(F("*** The claw may still be holding a block. Check the rig."));
+
+  ackReason(F("HELD"), why);
 }
 
 // Records a placed block against its level.
@@ -2642,6 +2745,22 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
   }
 
   Serial.println(F("======================================"));
+
+  // Placed but not parked is NOT a success: the block is down, but the
+  // rig is somewhere unknown. That is the HELD case, same as an abort.
+  if (parked)
+  {
+    ackStart(F("OK"));
+    ackField(F("col"), col);
+    ackField(F("row"), row);
+    ackField(F("level"), level);
+    Serial.println();
+  }
+  else
+  {
+    ackReason(F("HELD"), F("block placed but parking failed"));
+  }
+
   return true;
 }
 

@@ -18,6 +18,7 @@ Plan 1 built the cable. What exists now:
 | Flash script | `scripts/flash.sh` | compile + upload, reads the config |
 | Serial console | `python/rig_console.py` | type a line, the rig gets it |
 | Firmware, frozen | `arduino/build_test_v1/` | everything else is in `arduino/archive/` |
+| Machine acks | `build_test_v1.ino` SECTION 7C | `@` lines beside the prose. **Written, never flashed** |
 
 **Precondition.** This plan assumes Plan 1 steps 3 and 4 have actually been run
 on the Pi with the board attached — `./scripts/flash.sh` succeeded, and
@@ -74,14 +75,29 @@ in a Python REPL.
 
 ## Step 2 — Know when a build has finished
 
-Teach `link.py` to send a command and then wait for one of the three outcomes in
-the table above, with a timeout.
+The firmware now also prints a machine-readable line beside each of those prose
+messages — `@3 OK col=3 row=5 level=0`, `@3 SAFE ...`, `@3 HELD ...`. Read those
+instead of the prose: they are a fixed token in a fixed position.
+
+**Flash the firmware and eyeball those lines in `rig_console.py` before writing
+any parser.** They are compile-verified but have never run on the board.
+
+Keep prose matching as a fallback and log when it fires. Delete the fallback
+once it has not fired in a while. Details and the full kind list are in
+[ack-protocol.md](ack-protocol.md).
+
+Teach `link.py` to send a command and then wait for one terminal outcome, with a
+timeout.
 
 While you are there, do the connect sequence properly:
 
-1. open the port, let the reboot banner arrive
+1. open the port and read until `@0 READY` — that line is the end of the banner,
+   so no more guessing by wording
 2. send `S <cols> <rows>` from `config/rig.json` — the board forgot its grid
 3. send `0+` to put the rig in a known state
+
+An unexpected `@0 BOOT` at any other time means the board reset underneath you.
+Treat it as a disconnect: the rig has forgotten its grid and its homing.
 
 Refuse to send a second command while one is in flight. Not a nicety: the rig is
 not listening, so the second command sits in a 64-byte buffer and arrives late.
@@ -145,9 +161,11 @@ mystery whether the thing is listening.
 
 ## Later, not now
 
-- **Machine-readable acks in the firmware** (`OK B 3 5 0` beside the prose).
-  Would make Step 2 trivial instead of fiddly. Deliberately deferred: changing
-  firmware and Python at the same time means a failure has two possible causes.
+- **The rest of the ack protocol** — `RECV`, `BUSY`, `RUN` progress events and
+  a watchdog. The safety-critical subset is already in the firmware; the rest
+  waits for a reason to exist. `RUN` in particular buys a progress bar, not
+  safety — the firmware bounds its own motions and reports its own failures.
+  See [ack-protocol.md](ack-protocol.md).
 - **Baud 9600 → 115200.** One line each side. Worth doing once the link is
   boring, not before.
 - **Checkerboard lens calibration.** The corrected image is straightened, not

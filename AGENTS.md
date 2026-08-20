@@ -64,7 +64,23 @@ the sketch is the trap: the Pi will silently overwrite it on the next connect.
 Already centralised. The rule here is: **do not reintroduce a module-level
 constant.** Both viewers used to carry their own copy and drifted.
 
-### 5. Firmware command vocabulary
+### 5. The `@` acknowledgement lines
+
+| Where | What |
+| --- | --- |
+| `build_test_v1.ino` SECTION 7C | emits `@<seq> <KIND> ...` |
+| the Pi's parser (not written yet) | reads them |
+| `plans/ack-protocol.md` | the kind list, and the reasoning |
+
+`OK`, `ERR`, `SAFE`, `HELD`, `BOOT`, `READY`. **`SAFE` and `HELD` are not
+interchangeable**: `SAFE` means nothing moved, `HELD` means the claw may still
+be gripping a block at an unknown position. Never collapse them into one
+"failed" branch on the Pi.
+
+Adding a kind means updating the firmware, the Pi parser and that document
+together. Every ack literal is `F()`, like everything else the sketch prints.
+
+### 6. Firmware command vocabulary
 
 The sketch's commands (`B`, `G`, `S`, `0`, `0+`, `5`, `9`, `Z`, `U`, `D`, `O`,
 `C`, `R`, `RR`) are the contract between the two machines.
