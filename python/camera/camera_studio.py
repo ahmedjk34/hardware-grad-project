@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Live camera + fisheye tuning bench, with a control panel and a JSON save.
+"""Live camera + fisheye tuning bench, with a Tk control centre and JSON save.
 
 This is undistorted_viewer.py opened all the way up. Everything that decides
 what the picture looks like — the lens correction, the sensor's own controls,
@@ -28,21 +28,19 @@ Four layers, each overriding the one before:
   3. config/camera_settings.json, or whatever --settings names;
   4. the command-line flags.
 
-One fixed-size application window, in two halves
-------------------------------------------------
-The top ~77% is a camera VIEWPORT with the feed embedded in it. The bottom is
-the control panel: a row of clickable buttons, then a labelled TEXT FIELD for
-every parameter. Click a field, type a value, press Enter, and the picture
-changes as you watch. Up/Down step it without typing. Drag a rectangle on the
-image to crop to it.
+One application window, two genuinely separate regions
+-------------------------------------------------------
+The top ~77% is a fixed camera VIEWPORT. The bottom is a Tk control centre:
+real text entries, read-only dropdowns, buttons, status labels and an arbitrary
+command entry. Click an entry, type a value and press Enter; Up/Down step it.
+Choosing a dropdown applies immediately. Drag a rectangle on the image to crop.
 
 The window is a fixed rectangle that the image is fitted INTO — not a window
 sized around the image. That distinction is the whole layout: zoom, crop,
 `scale`, `rotate` and the raw/corrected toggle all change the size of the
-rendered picture, and if the window followed it, every control in the panel
-would jump somewhere else each time you used one. Here the viewport and the
-panel are both fixed, so the fields stay where you left them and the image is
-letterboxed inside the viewport instead.
+rendered picture. The viewport and controls are independent widgets, so neither
+can magnify, pan or resize the other; the image is letterboxed inside its fixed
+viewport instead.
 
 `--window WxH` sets the viewport; the default is the corrected output size,
 which is what undistorted_viewer.py shows. Nothing after startup changes it. In
@@ -63,36 +61,27 @@ The SAMPLE line reports the real cost: at zoom 2 you should see `centre` roughly
 halve, and if it drops well under 1.00 the answer is `--hq`, not a sharper
 interpolation kernel.
 
-Three ways to drive it
-----------------------
-OpenCV only delivers keystrokes while the *image window* has focus — not the
-terminal, and over VNC or ssh -X often not until the window has been clicked.
-"I press keys and nothing happens" is nearly always that. So there are four
-input channels, and every one of them echoes what it did into the panel:
+Four ways to drive it
+---------------------
+Tk sends keyboard input to the focused widget. Single-key shortcuts belong to
+the window, but are suspended while an entry or dropdown has focus so typing
+`158` cannot also change k1, centre X and centre Y. Every input path echoes its
+result into the log:
 
   1. TYPE IN THE TERMINAL. Commands typed into the shell that launched this tool
      are read from stdin and applied. This needs no window focus at all and is
      the one that always works. Try `help`.
-  2. TYPE IN THE WINDOW. Press ':' to open a prompt in the panel, type a
-     command, press Enter. Each character appears as it arrives, so if nothing
-     appears the window does not have focus.
-  3. CLICK AND TYPE. Click any field in the panel and it becomes editable —
-     type, Enter commits, Esc cancels, Tab moves to the next field, and Up/Down
-     step the value in place without typing at all.
-     Fields whose value is one of a fixed set (model, interp, awb, flip...) are
-     DROPDOWNS instead, marked with a small caret: click to open the list, click
-     an entry or use Up/Down to pick, and a letter jumps to the next entry
-     starting with it. Entries apply as they are highlighted, so a projection
-     model can be chosen by watching the picture rather than by reading the
-     word.
-  4. CLICK AND DRAG. The buttons under the image, and a drag on the image to
-     crop to a rectangle.
+  2. TYPE IN THE WINDOW. Use the command entry at the bottom and press Enter.
+  3. CLICK AND TYPE. Continuous fields are entries: Enter commits, Up/Down
+     steps, and Esc or leaving the field reverts an unfinished edit. Fixed-set
+     fields are read-only dropdowns and apply immediately.
+  4. CLICK AND DRAG. Use the buttons, or drag on the image to crop a rectangle.
 
 Plus the single-key shortcuts below, which work whenever no field has focus.
 
 Keys
 ----
-  :  command prompt      ?  key list        q / Esc  quit
+  :  focus command box   ?  help window     q / Esc  quit
   u  view: corrected / raw / both           n  correction on / off
   [ ]  lens FOV -/+ 2 deg                   m  cycle projection model
   - =  output FOV -/+ 5 deg                 i  cycle interpolation kernel
@@ -105,11 +94,9 @@ Keys
   v  fit / native sizing                    r  reset everything
   s  save the JSON                          p  snapshot PNGs
 
-'?' draws the key list over the image rather than into the panel, so that
-showing it cannot resize the window either.
-
-While a field has focus it takes the keyboard instead: Enter commits, Up/Down
-step the value, Tab moves to the next field, Esc lets go without committing.
+While an entry or dropdown has focus it takes the keyboard instead. That focus
+guard is load-bearing: without it, digits typed into a field would also fire the
+numeric lens shortcuts.
 
 Commands
 --------
@@ -150,8 +137,10 @@ import json
 import sys
 import threading
 import time
+import tkinter as tk
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from tkinter import ttk
 
 import cv2
 import numpy as np
@@ -173,7 +162,6 @@ from vision.camera_source import (
 from vision.commands import (
     CommandError,
     CommandSet,
-    EditBuffer,
     MessageLog,
     need_args,
     parse_choice,
@@ -190,14 +178,8 @@ from vision.fisheye import (
     undistort,
 )
 from vision.overlays import (
-    ERR_COLOR,
     FONT,
-    HINT_COLOR,
     LABEL_COLOR,
-    OK_COLOR,
-    PROMPT_COLOR,
-    TEXT_COLOR,
-    WARN_COLOR,
     draw_grid,
     draw_info_box,
 )
@@ -211,66 +193,11 @@ FIT_MODES = ("fit", "native")
 FLIPS = ("none", "h", "v", "both")
 ROTATIONS = (0, 90, 180, 270)
 
-# Panel geometry. The panel is a solid strip drawn UNDER the image, not an
-# overlay on it — the whole point of this tool is to see the picture unobscured
-# while the numbers that produced it sit somewhere fixed. There are deliberately
-# no cv2 trackbars: eight of them stacked above the image cost ~350 px of screen
-# that the picture wants, and a slider cannot show you that a value is 158.
-PANEL_BG = (26, 26, 26)
+# The camera feed is still a numpy image, but the control centre is not. Tk owns
+# the layout and input now; this colour is only the letterbox inside the video
+# widget. There are deliberately no cv2 trackbars.
 VIEWPORT_BG = (12, 12, 12)
-PANEL_MIN_WIDTH = 900
-
-# The window is ONE fixed-size application window: a camera viewport on top and
-# the control panel under it, neither of which moves when the picture does.
-#
-# It used to be the other way round — the canvas was sized from the image, so
-# zooming, cropping or changing `scale` resized the window and reflowed every
-# field in the panel. Controls that move when you use them are unusable, so the
-# viewport is now a fixed rectangle that the image is fitted INTO, and the panel
-# is laid out against a width that never changes.
-MIN_IMAGE_FRACTION = 0.70   # the picture never gets less than this much height
-PANEL_RULE = (70, 70, 70)   # the line between the two halves
-BUTTON_H = 26
-BUTTON_GAP = 6
-PANEL_LINE = 17
-PANEL_PAD = 8
-LOG_LINES = 3
-
-# One editable field: label, box, and the gap between them.
-FIELD_H = 21
-FIELD_GAP = 14
-FIELD_ROW_GAP = 7
-LABEL_SCALE = 0.38
-VALUE_SCALE = 0.44
-BOX_BG = (44, 44, 44)
-BOX_BG_FOCUS = (70, 62, 30)
-BOX_EDGE = (105, 105, 105)
-GROUP_COLOR = (150, 190, 255)
-GROUP_WIDTH = 62          # left gutter the group labels live in
-
-# Fields whose value is one of a fixed set get a dropdown instead of a text box.
-# Typing "equidistant" correctly is not a thing anyone should have to do, and a
-# free-text box is a lie about the field: it invites input that can only ever be
-# rejected. The list opens UPWARD, over the viewport, because the panel sits at
-# the bottom of the window and there is never room below.
-DROP_BG = (38, 38, 38)
-DROP_BG_HOVER = (90, 78, 36)
-DROP_EDGE = (150, 150, 150)
-DROP_ROW_H = 21
-CARET = 9                 # width of the little triangle marking a dropdown
-
-# waitKeyEx arrow codes. GTK and Qt disagree and both turn up on a Pi desktop.
-# Deliberately NOT the short 81-84 forms: those are what the MASKED waitKey
-# returns, and they are also Shift+Q/R/S/T — which would turn "shift-Q to quit"
-# into a pan. waitKeyEx reports the long codes, so there is no need for them.
-KEY_LEFT = (65361, 2424832)
-KEY_RIGHT = (65363, 2555904)
-KEY_UP = (65362, 2490368)
-KEY_DOWN = (65364, 2621440)
-KEY_BACKSPACE = (8, 127, 65288)
-KEY_ENTER = (13, 10)
-KEY_ESC = (27,)
-KEY_TAB = (9, 65289)
+LOG_LINES = 4
 
 # Smallest drag that counts as a crop rather than a click, in image pixels. A
 # click is how you dismiss a half-started drag, so it must not crop to a speck.
@@ -342,22 +269,14 @@ class Studio:
         self.last_raw = None           # kept so 'snap' writes clean images,
         self.last_corrected = None     # i.e. without the grid drawn on them
 
-        self.mouse = (-1, -1)          # window coords, straight from the callback
         self.drag = None               # (start, current) in image coords, mid-crop
-        self.pending_clicks = []       # (x, y) in window coords, awaiting layout
-        self.layout = None             # where the image and buttons ended up
         self.pending = []              # command lines queued by the stdin thread
-        self.focus = None              # index into FIELDS of the field being edited
-        self.field_text = ""           # what has been typed into a TEXT field
-        self.dropdown = None           # highlighted option, when the field is a list
 
         self.dirty = True              # rebuild the remap tables before next frame
         self.sensor_dirty = True       # push sensor controls before next frame
         self.running = True
         self.log = MessageLog()
-        self.edit = EditBuffer()
         self.commands = self._build_commands()
-        self.buttons = self._build_buttons()
 
     # --- lens parameters ---------------------------------------------------
     # Each setter reports what changed, in the words the log and the panel show.
@@ -963,10 +882,14 @@ class Studio:
                 " (the settings file is untouched — 'load' re-reads it)")
 
     def _cmd_help(self, args):
+        # The command layer cannot create widgets: terminal input may arrive on
+        # its reader thread. The Tk tick notices this flag on the UI thread and
+        # opens (or raises) the help window there.
+        self.show_keys = True
         for line in self.commands.help_lines():
             self.log.add(True, line)
         print("\n".join(self.commands.help_lines()))
-        return "commands listed in the terminal (and scrolling past above)"
+        return "help opened (commands also listed in the terminal)"
 
     def _cmd_quit(self, args):
         self.running = False
@@ -1145,33 +1068,28 @@ class Studio:
                 for i, text in enumerate(lines)] + \
                [f"       camera: {self.sensor_status}"]
 
-    # --- the button row ----------------------------------------------------
-
-    def _build_buttons(self):
-        """(label, command line, width) for the clickable row under the image.
-
-        Every button is literally a command line, so there is no third code path
-        to keep in step with the keys and the typed commands — the button IS the
-        command, and it lands in the log the same way.
-        """
-        return [
-            ("SAVE JSON", "save", 104),
-            ("SNAP PNG", "snap", 94),
-            ("ZOOM +", "zoom +0.25", 78),
-            ("ZOOM -", "zoom -0.25", 78),
-            ("CROP", "crop", 62),
-            ("UNDO CROP", "uncrop", 104),
-            ("NO CROP", "nocrop", 88),
-            ("REFIT", "refit", 66),
-            ("RAW/CORR", "view", 96),      # rewritten below to cycle
-            ("GRID", "grid", 62),
-            ("RESET", "reset", 70),
-            ("HELP", "help", 62),
-        ]
-
-
 def next_view(studio):
     return VIEWS[(VIEWS.index(studio.view) + 1) % len(VIEWS)]
+
+
+# Every button is literally a command line. RAW/CORR is expanded to the next
+# concrete view at click time; keeping that tiny exception here still leaves the
+# command engine as the only place that mutates Studio.
+BUTTONS = [
+    ("SAVE JSON", "save"),
+    ("SNAP PNG", "snap"),
+    ("ZOOM +", "zoom +0.25"),
+    ("ZOOM -", "zoom -0.25"),
+    ("CROP", "crop"),
+    ("UNDO CROP", "uncrop"),
+    ("NO CROP", "nocrop"),
+    ("REFIT", "refit"),
+    ("RAW/CORR", "view"),
+    ("GRID", "grid"),
+    ("RESET", "reset"),
+    ("HELP", "help"),
+    ("QUIT", "quit"),
+]
 
 
 # --- input channel 1: the terminal ------------------------------------------
@@ -1311,263 +1229,6 @@ def build_fields():
 FIELDS = build_fields()
 
 
-def field_value(studio, index):
-    return FIELDS[index].get(studio)
-
-
-def focus_field(studio, index):
-    """Give a field the keyboard. Opens a dropdown, or a pre-filled text box.
-
-    Text boxes are pre-filled rather than blanked because most edits here are a
-    nudge — 158 to 160 — and a box that empties itself when clicked has thrown
-    away the one number you were about to adjust. Everything numeric also
-    accepts `+2` and `-2`, so a relative tweak never needs it retyped either way.
-    """
-    field = FIELDS[index]
-    studio.focus = index
-    if field.choices:
-        current = field_value(studio, index)
-        studio.dropdown = (field.choices.index(current)
-                           if current in field.choices else 0)
-        studio.field_text = ""
-        return f"{field.label}: pick one (Up/Down, Enter closes, Esc cancels)"
-    studio.dropdown = None
-    studio.field_text = field_value(studio, index)
-    return (f"{field.label}: type a value and press Enter "
-            "(Up/Down step it, Tab moves on, Esc cancels)")
-
-
-def blur_field(studio):
-    studio.focus = None
-    studio.field_text = ""
-    studio.dropdown = None
-
-
-def choose_option(studio, option_index):
-    """Apply one entry of an open dropdown, and leave the list open.
-
-    Applied immediately rather than on Enter so the effect is visible while the
-    list is still up — picking a projection model is a thing you do by looking
-    at the picture, not by reading the word.
-    """
-    field = FIELDS[studio.focus]
-    studio.dropdown = option_index % len(field.choices)
-    result = studio.commands.execute(
-        f"{field.command} {field.choices[studio.dropdown]}")
-    return result.ok, result.message
-
-
-def step_field(studio, direction):
-    """Up/Down on the focused field — the part that replaced the sliders.
-
-    Runs the same command a typed value would, so a stepped change is logged,
-    clamped, echoed and saved identically. Returns that command's own message.
-    """
-    field = FIELDS[studio.focus]
-    if field.choices:
-        # Moving the highlight in an open dropdown, which also applies it.
-        return choose_option(studio, (studio.dropdown or 0) + direction)
-    if field.step is None:
-        return False, f"{field.label} has no step — type a value instead"
-
-    if field_value(studio, studio.focus) == AUTO and field.start is not None:
-        # Nothing to add to. Jump to a sane starting point instead, so the first
-        # press does something visible rather than failing the range check.
-        argument = f"{field.start:g}"
-    else:
-        argument = f"{'+' if direction > 0 else '-'}{abs(field.step):g}"
-
-    result = studio.commands.execute(f"{field.command} {argument}")
-    studio.field_text = field_value(studio, studio.focus)
-    return result.ok, result.message
-
-
-def commit_field(studio):
-    """Enter on the focused field: run its command with whatever was typed.
-
-    A dropdown has nothing to commit — its entries apply as they are highlighted
-    — so Enter there just reports where it landed.
-    """
-    field = FIELDS[studio.focus]
-    if field.choices:
-        return True, f"{field.label} {field_value(studio, studio.focus)}"
-    text = studio.field_text.strip()
-    if not text:
-        return True, f"{field.label} left as it was"
-    result = studio.commands.execute(f"{field.command} {text}")
-    studio.field_text = field_value(studio, studio.focus)
-    return result.ok, result.message
-
-
-def handle_field_key(key, studio):
-    """Keys while a field has focus. Returns (ok, message), or None to just redraw.
-
-    Enter commits and lets go; Tab commits and moves on, which is how the whole
-    panel can be walked from the keyboard without touching the mouse.
-    """
-    if key in KEY_ESC:
-        blur_field(studio)
-        return True, "field closed, nothing changed"
-    if key in KEY_ENTER:
-        ok, message = commit_field(studio)
-        blur_field(studio)
-        return ok, message
-    if key in KEY_TAB:
-        ok, message = commit_field(studio)
-        focus_field(studio, (studio.focus + 1) % len(FIELDS))
-        return ok, f"{message}  ->  {FIELDS[studio.focus].label}"
-    if key in KEY_UP:
-        return step_field(studio, +1)
-    if key in KEY_DOWN:
-        return step_field(studio, -1)
-    field = FIELDS[studio.focus]
-    if field.choices:
-        # Type-ahead: a letter jumps to the next option starting with it, so a
-        # long list like awb is one keystroke rather than seven Downs.
-        if 32 <= key <= 126:
-            letter = chr(key).lower()
-            start = (studio.dropdown or 0) + 1
-            order = [(start + n) % len(field.choices) for n in range(len(field.choices))]
-            for n in order:
-                if field.choices[n].lower().startswith(letter):
-                    return choose_option(studio, n)
-            return False, f"no {field.label} option starts with '{letter}'"
-        return None
-
-    if key in KEY_BACKSPACE:
-        studio.field_text = studio.field_text[:-1]
-        return None
-    if 32 <= key <= 126:
-        studio.field_text += chr(key)
-        return None
-    return None
-
-
-# --- input channel 3: the mouse ----------------------------------------------
-
-def on_mouse(event, x, y, flags, studio):
-    """Cursor tracking, button clicks and the crop drag.
-
-    Coordinates are stored raw, in window pixels, and converted by the render
-    loop — only there is the layout (and --display-scale) known. This keeps the
-    callback trivial, which matters because it runs on OpenCV's UI thread.
-    """
-    studio.mouse = (x, y)
-    if event == cv2.EVENT_LBUTTONDOWN:
-        studio.pending_clicks.append(("down", x, y))
-    elif event == cv2.EVENT_MOUSEMOVE and studio.drag is not None:
-        studio.pending_clicks.append(("move", x, y))
-    elif event == cv2.EVENT_LBUTTONUP:
-        studio.pending_clicks.append(("up", x, y))
-    elif event == cv2.EVENT_RBUTTONDOWN:
-        # A right-click abandons a drag in progress: the drag rectangle is the
-        # one action here with no keyboard escape once it has started.
-        studio.drag = None
-        studio.log.add(True, "crop drag cancelled")
-
-
-# --- input channel 4: keys ---------------------------------------------------
-
-def handle_key(key, studio):
-    """Single-key shortcuts. Returns (ok, message), always.
-
-    Every key produces feedback, including keys that do nothing — an
-    unrecognised key still says so on screen, which is what distinguishes "that
-    key isn't bound" from "the window never received it".
-    """
-    p = studio.profile
-
-    if key in (ord("q"), 27):
-        studio.running = False
-        return True, "quitting"
-    if key == ord(":"):
-        studio.edit.open()
-        return True, "command prompt open — type, then Enter (Esc cancels)"
-    if key == ord("?"):
-        studio.show_keys = not studio.show_keys
-        return True, f"key list {'shown' if studio.show_keys else 'hidden'}"
-
-    # the correction
-    if key == ord("["):
-        return True, studio.set_lens_fov(p.lens_fov_deg - 2)
-    if key == ord("]"):
-        return True, studio.set_lens_fov(p.lens_fov_deg + 2)
-    if key == ord("-"):
-        return True, studio.set_output_fov(p.output_fov_deg - 5)
-    if key in (ord("="), ord("+")):
-        return True, studio.set_output_fov(p.output_fov_deg + 5)
-    if key == ord(","):
-        return True, studio.set_output_scale(p.output_scale - 0.1)
-    if key == ord("."):
-        return True, studio.set_output_scale(p.output_scale + 0.1)
-    if key == ord("1"):
-        return True, studio.set_k1(p.k1 - 0.01)
-    if key == ord("2"):
-        return True, studio.set_k1(p.k1 + 0.01)
-    if key == ord("3"):
-        return True, studio.set_k2(p.k2 - 0.01)
-    if key == ord("4"):
-        return True, studio.set_k2(p.k2 + 0.01)
-    if key == ord("5"):
-        return True, studio.set_centre_dx(p.centre_dx - 2)
-    if key == ord("6"):
-        return True, studio.set_centre_dx(p.centre_dx + 2)
-    if key == ord("7"):
-        return True, studio.set_centre_dy(p.centre_dy - 2)
-    if key == ord("8"):
-        return True, studio.set_centre_dy(p.centre_dy + 2)
-    if key == ord("m"):
-        return True, studio.set_model(
-            MODEL_NAMES[(MODEL_NAMES.index(p.model) + 1) % len(MODEL_NAMES)])
-    if key == ord("i"):
-        return True, studio.set_interp(
-            INTERP_NAMES[(INTERP_NAMES.index(studio.interp) + 1) % len(INTERP_NAMES)])
-    if key == ord("n"):
-        return True, studio.commands.execute("undistort").message
-
-    # zoom, pan, crop
-    if key == ord("x"):
-        return True, studio.set_zoom(studio.zoom * 1.25)
-    if key == ord("z"):
-        return True, studio.set_zoom(studio.zoom / 1.25)
-    if key == ord("0"):
-        studio.zoom = 1.0
-        x0, y0, x1, y1 = studio.crop_rect()
-        return True, "zoom reset — " + studio.set_pan((x0 + x1) / 2, (y0 + y1) / 2)
-    if key in KEY_LEFT:
-        return True, studio.nudge_pan(-0.1, 0)
-    if key in KEY_RIGHT:
-        return True, studio.nudge_pan(0.1, 0)
-    if key in KEY_UP:
-        return True, studio.nudge_pan(0, -0.1)
-    if key in KEY_DOWN:
-        return True, studio.nudge_pan(0, 0.1)
-    if key == ord("c"):
-        result = studio.commands.execute("crop")
-        return result.ok, result.message
-    if key in KEY_BACKSPACE:
-        result = studio.commands.execute("uncrop")
-        return result.ok, result.message
-    if key == ord("f"):
-        return True, studio.commands.execute("refit").message
-    if key == ord("v"):
-        nxt = FIT_MODES[(FIT_MODES.index(studio.fit_mode) + 1) % len(FIT_MODES)]
-        return True, studio.commands.execute(f"fitmode {nxt}").message
-
-    # views and files
-    if key == ord("u"):
-        return True, studio.commands.execute(f"view {next_view(studio)}").message
-    if key == ord("g"):
-        return True, studio.commands.execute("grid").message
-    for code, line in ((ord("s"), "save"), (ord("p"), "snap"), (ord("r"), "reset")):
-        if key == code:
-            result = studio.commands.execute(line)
-            return result.ok, result.message
-
-    label = chr(key) if 32 <= key <= 126 else "?"
-    return False, f"key '{label}' ({key}) is not bound — press '?' for the list"
-
-
 # --- rendering ---------------------------------------------------------------
 
 def save_snapshot(raw, corrected, profile):
@@ -1629,254 +1290,6 @@ def side_by_side(raw, corrected):
     return pair
 
 
-def text_width(text, scale):
-    return cv2.getTextSize(text, FONT, scale, 1)[0][0]
-
-
-def field_cell_width(field):
-    """Total width of one `label [ value ]` cell.
-
-    The box is sized from the field's declared character count rather than from
-    its current value, so a number growing from 9 to 10 does not shove every
-    field to its right along the row. Dropdowns get a little more, for the caret.
-    """
-    box = 12 + text_width("0" * field.chars, VALUE_SCALE)
-    if field.choices:
-        box += CARET + 6
-    return text_width(field.label, LABEL_SCALE) + 7 + box, box
-
-
-def layout_field_rows(width):
-    """Flow the fields into rows that fit `width`. Pure geometry, no drawing.
-
-    Returns a list of rows, each a list of (field index, x, cell width, box
-    width). A field with a `group` starts a new row, so the four groups always
-    read as four blocks however wide the window is; long groups wrap within
-    themselves.
-    """
-    rows, row = [], []
-    x = PANEL_PAD + GROUP_WIDTH
-    for i, field in enumerate(FIELDS):
-        cell, box = field_cell_width(field)
-        if (field.group and row) or (x + cell > width - PANEL_PAD and row):
-            rows.append(row)
-            row, x = [], PANEL_PAD + GROUP_WIDTH
-        row.append((i, x, cell, box))
-        x += cell + FIELD_GAP
-    if row:
-        rows.append(row)
-    return rows
-
-
-def draw_fields(panel, studio, y):
-    """Draw every field and return its hit rectangle.
-
-    The whole cell — label included — is clickable, not just the box: a 40-pixel
-    target that needs precision is a worse control than the slider it replaced.
-    """
-    rects, boxes = [], {}
-    rows = layout_field_rows(panel.shape[1])
-    group = ""
-    for row in rows:
-        first = FIELDS[row[0][0]]
-        if first.group:
-            group = first.group
-            cv2.putText(panel, group, (PANEL_PAD, y + FIELD_H - 6), FONT,
-                        LABEL_SCALE, GROUP_COLOR, 1, cv2.LINE_AA)
-
-        for index, x, cell, box in row:
-            field = FIELDS[index]
-            focused = studio.focus == index
-            label_w = text_width(field.label, LABEL_SCALE)
-            cv2.putText(panel, field.label, (x, y + FIELD_H - 6), FONT,
-                        LABEL_SCALE, HINT_COLOR, 1, cv2.LINE_AA)
-
-            bx = x + label_w + 7
-            cv2.rectangle(panel, (bx, y), (bx + box, y + FIELD_H),
-                          BOX_BG_FOCUS if focused else BOX_BG, -1)
-            cv2.rectangle(panel, (bx, y), (bx + box, y + FIELD_H),
-                          PROMPT_COLOR if focused else BOX_EDGE, 1)
-
-            # While a TEXT field is focused the box shows what is being typed,
-            # not the live value — otherwise a half-typed "1" would read as the
-            # real setting. A dropdown always shows the real value, because its
-            # entries apply as they are highlighted.
-            if focused and not field.choices:
-                text = studio.field_text + "_"
-            else:
-                text = field.get(studio)
-            cv2.putText(panel, text, (bx + 5, y + FIELD_H - 6), FONT, VALUE_SCALE,
-                        PROMPT_COLOR if focused else TEXT_COLOR, 1, cv2.LINE_AA)
-
-            if field.choices:
-                draw_caret(panel, bx + box - CARET - 5, y + FIELD_H // 2,
-                           PROMPT_COLOR if focused else BOX_EDGE)
-            rects.append((x, y, bx + box, y + FIELD_H, index))
-            boxes[index] = (bx, y, bx + box, y + FIELD_H)
-        y += FIELD_H + FIELD_ROW_GAP
-    return rects, boxes, y
-
-
-def draw_caret(panel, x, y, color):
-    """The small filled triangle that marks a field as a list, not a text box."""
-    cv2.fillPoly(panel, [np.array([[x, y - 2], [x + CARET, y - 2],
-                                   [x + CARET // 2, y + 3]], np.int32)], color)
-
-
-def draw_dropdown(canvas, studio, panel_y):
-    """The open option list, drawn over the viewport above its field.
-
-    Upward, because the panel is at the bottom of the window and there is never
-    room below it. Returns the hit rectangles in CANVAS coordinates — the popup
-    is the one thing that lives outside the panel, so it cannot share the
-    panel-relative hit test the fields and buttons use.
-    """
-    if studio.focus is None:
-        return []
-    field = FIELDS[studio.focus]
-    box = (studio.layout or {}).get("field_box", {}).get(studio.focus)
-    if not field.choices or box is None:
-        return []
-
-    bx, by, bx2, _ = box
-    width = max(bx2 - bx, 16 + max(text_width(c, VALUE_SCALE) for c in field.choices))
-    width = min(width, canvas.shape[1] - bx - 4)
-    height = DROP_ROW_H * len(field.choices) + 2
-    top = max(0, panel_y + by - height - 3)
-
-    cv2.rectangle(canvas, (bx, top), (bx + width, top + height), DROP_BG, -1)
-    cv2.rectangle(canvas, (bx, top), (bx + width, top + height), DROP_EDGE, 1)
-
-    rects = []
-    for n, option in enumerate(field.choices):
-        oy = top + 1 + n * DROP_ROW_H
-        if n == studio.dropdown:
-            cv2.rectangle(canvas, (bx + 1, oy), (bx + width - 1, oy + DROP_ROW_H),
-                          DROP_BG_HOVER, -1)
-        cv2.putText(canvas, option, (bx + 8, oy + DROP_ROW_H - 6), FONT, VALUE_SCALE,
-                    PROMPT_COLOR if n == studio.dropdown else TEXT_COLOR, 1, cv2.LINE_AA)
-        rects.append((bx, oy, bx + width, oy + DROP_ROW_H, n))
-    return rects
-
-
-def panel_height(width):
-    """How tall the control strip needs to be for what it holds.
-
-    A function of the window WIDTH alone — the number of fields is fixed, so at
-    a fixed width the row count is fixed and the panel never changes height.
-    That is the whole point: the '?' key list is drawn over the image rather
-    than added here, precisely so that pressing it cannot resize the window.
-    """
-    rows = len(layout_field_rows(width))
-    lines = 2 + LOG_LINES + 1          # derived, camera status, log, prompt
-    return (PANEL_PAD * 2 + BUTTON_H + BUTTON_GAP
-            + rows * (FIELD_H + FIELD_ROW_GAP) + FIELD_ROW_GAP
-            + PANEL_LINE * lines)
-
-
-def key_list_lines():
-    return [l for l in __doc__.split("Keys\n----")[1]
-            .split("Commands\n--------")[0].strip().splitlines()]
-
-
-def draw_buttons(panel, studio, y):
-    """Lay the button row out left to right, and record where each one landed.
-
-    Returns the hit rectangles, which is the only thing the click handler needs
-    — so the drawing and the hit-testing cannot disagree about position.
-    """
-    rects = []
-    x = PANEL_PAD
-    for label, command, width in studio.buttons:
-        if x + width > panel.shape[1] - PANEL_PAD:
-            break   # narrow window: drop the tail rather than draw off the edge
-        cv2.rectangle(panel, (x, y), (x + width, y + BUTTON_H), (58, 58, 58), -1)
-        cv2.rectangle(panel, (x, y), (x + width, y + BUTTON_H), (110, 110, 110), 1)
-        (tw, th), _ = cv2.getTextSize(label, FONT, 0.42, 1)
-        cv2.putText(panel, label, (x + (width - tw) // 2, y + (BUTTON_H + th) // 2),
-                    FONT, 0.42, TEXT_COLOR, 1, cv2.LINE_AA)
-        rects.append((x, y, x + width, y + BUTTON_H, command))
-        x += width + BUTTON_GAP
-    return rects
-
-
-def draw_panel(studio, width, fps):
-    """The control strip: buttons, an editable field per parameter, the log.
-
-    Deliberately BELOW the image rather than over it. The tool exists to judge
-    whether an edge is straight, and a translucent panel sitting on the picture
-    is exactly what stops you being able to.
-
-    Note what is a FIELD and what is a LINE: anything you can set is a field, and
-    the two lines under them are the things you cannot — what the correction is
-    costing in sharpness, and what the camera did with the settings it was sent.
-    """
-    panel = np.full((panel_height(width), width, 3), PANEL_BG, np.uint8)
-    cv2.line(panel, (0, 0), (width, 0), PANEL_RULE, 1)
-    y = PANEL_PAD
-    buttons = draw_buttons(panel, studio, y)
-    y += BUTTON_H + BUTTON_GAP
-    fields, boxes, y = draw_fields(panel, studio, y)
-    y += FIELD_ROW_GAP
-
-    def line(text, color=TEXT_COLOR, scale=0.42):
-        nonlocal y
-        y += PANEL_LINE
-        cv2.putText(panel, text, (PANEL_PAD, y - 4), FONT, scale, color, 1, cv2.LINE_AA)
-
-    line(studio.derived_line(fps),
-         WARN_COLOR if not studio.profile.calibrated else OK_COLOR)
-    line(f"camera: {studio.sensor_status}", HINT_COLOR)
-
-    for ok, text in studio.log.recent(count=LOG_LINES, max_age=12.0):
-        line(text, OK_COLOR if ok else ERR_COLOR)
-
-    if studio.edit.active:
-        line(studio.edit.render(), PROMPT_COLOR, scale=0.5)
-    elif studio.focus is not None and FIELDS[studio.focus].choices:
-        line(f"choosing {FIELDS[studio.focus].label} — Up/Down or click to pick "
-             "(it applies at once), Enter closes, Esc cancels", PROMPT_COLOR)
-    elif studio.focus is not None:
-        line(f"editing {FIELDS[studio.focus].label} — Enter commits, Up/Down step, "
-             f"Tab next, Esc cancels", PROMPT_COLOR)
-    else:
-        line("click a field to edit it, drag on the image to crop, ':' for a "
-             f"command, '?' for keys   |   {fps:5.1f} fps   |   {studio.settings_path}",
-             HINT_COLOR)
-    return panel, buttons, fields, boxes
-
-
-def display_note(studio):
-    """Warn when the viewport is showing something other than 1:1.
-
-    Only possible in `native` mode or after `refit`, where the render is
-    deliberately not the window's size. Worth saying out loud, because judging
-    sharpness off a downscaled preview is how you conclude the correction is
-    fine when it is not.
-    """
-    lay = studio.layout
-    if lay is None:
-        return None
-    scale = lay.get("image_scale", 1.0)
-    if scale >= 0.999:
-        return None
-    return (f"display only: the {lay['render_w']}x{lay['render_h']} render is "
-            f"shown at {scale * 100:.0f}% to fit the viewport — 'fill' undoes it")
-
-
-def draw_key_list(image, studio):
-    """The '?' key list, drawn OVER the image rather than added to the panel.
-
-    It is transient help, not a control, and putting it in the panel would make
-    a keypress resize the window — the exact thing the fixed layout exists to
-    stop.
-    """
-    if not studio.show_keys:
-        return
-    lines = ["KEYS  (press '?' to hide)"] + key_list_lines()
-    draw_info_box(image, lines, origin=(14, 14), scale=0.44)
-
-
 def draw_drag(image, studio):
     """The crop rectangle being dragged, with its size in output pixels."""
     if studio.drag is None:
@@ -1895,192 +1308,562 @@ def draw_drag(image, studio):
                 (0, 255, 0), 1, cv2.LINE_AA)
 
 
-def window_size(studio):
-    """The fixed (width, viewport height, panel height) of the whole window.
+# --- Tk application ---------------------------------------------------------
 
-    Computed from the viewport, which is set once at startup and never moves
-    again, so every one of these is constant for the life of the session — no
-    matter what zoom, crop, scale or rotation do to the image itself.
+class StudioWindow:
+    """The Tk presentation layer around Studio's UI-agnostic state.
 
-    The one adjustment: if the panel would take more than 1 - MIN_IMAGE_FRACTION
-    of the window, the VIEWPORT grows rather than the picture being squeezed.
-    The camera is what this tool is for.
+    Every mutation still goes through CommandSet. Tk owns only StringVars,
+    focus, layout and scheduling; replacing this class must not change what a
+    command means or what gets written to JSON.
     """
-    width = max(studio.viewport[0], PANEL_MIN_WIDTH)
-    panel_h = panel_height(width)
-    viewport_h = max(studio.viewport[1],
-                     int(round(panel_h * MIN_IMAGE_FRACTION
-                               / (1.0 - MIN_IMAGE_FRACTION))))
-    return width, viewport_h, panel_h
 
+    def __init__(self, root, studio, camera):
+        self.root = root
+        self.studio = studio
+        self.camera = camera
+        self._photo = None
+        self._image_item = None
+        self._image_layout = None
+        self._help_window = None
+        self._after_id = None
+        self._closing = False
+        self._fps = 0.0
+        self._last_frame_at = time.perf_counter()
+        self._autosave_state = None
+        self._last_display_note = None
 
-def compose(image, studio, fps):
-    """The application window: camera viewport on top, control panel under it.
+        self.field_vars = []
+        self.field_widgets = []
+        self.log_labels = []
 
-    The image is fitted INTO the viewport rather than the window being fitted
-    around the image. It is centred, letterboxed, and only ever scaled DOWN —
-    in `fit` mode the correction already renders at the viewport size, so the
-    scale here is exactly 1.0 and nothing is resampled twice. It drops below 1
-    only in `native` mode or after `refit`, when the render is deliberately a
-    different size from the window.
-    """
-    width, viewport_h, _ = window_size(studio)
-    panel, buttons, fields, boxes = draw_panel(studio, width, fps)
+        self.root.title("Camera Studio")
+        self.root.protocol("WM_DELETE_WINDOW", self.close)
+        self._configure_styles()
+        self._build_widgets()
+        self._bind_shortcuts()
 
-    render_h, render_w = image.shape[:2]
-    ih, iw = render_h, render_w
-    scale = min(width / iw, viewport_h / ih, 1.0)
-    if scale < 1.0:
-        iw, ih = max(1, int(iw * scale)), max(1, int(ih * scale))
-        image = cv2.resize(image, (iw, ih), interpolation=cv2.INTER_AREA)
+        # Let Tk calculate the real ttk panel height once, then freeze the
+        # application geometry. The camera canvas is already fixed in pixels;
+        # this prevents a theme or a changing status string moving the controls.
+        self.root.update_idletasks()
+        self.root.resizable(False, False)
 
-    viewport = np.full((viewport_h, width, 3), VIEWPORT_BG, np.uint8)
-    x_off, y_off = (width - iw) // 2, (viewport_h - ih) // 2
-    viewport[y_off:y_off + ih, x_off:x_off + iw] = image
+    def _configure_styles(self):
+        style = ttk.Style(self.root)
+        style.configure("Studio.Group.TLabel", foreground="#4678b8")
+        style.configure("Studio.Derived.TLabel", foreground="#a46800")
+        style.configure("Studio.Calibrated.TLabel", foreground="#187a18")
+        style.configure("Studio.Status.TLabel", foreground="#555555")
+        style.configure("Studio.LogOk.TLabel", foreground="#187a18")
+        style.configure("Studio.LogError.TLabel", foreground="#b02020")
 
-    canvas = np.vstack([viewport, panel])
-    studio.layout = {
-        "image_x": x_off,
-        "image_y": y_off,
-        "image_w": iw,
-        "image_h": ih,
-        "image_scale": scale,      # displayed pixels per rendered pixel
-        "render_w": render_w,      # the image BEFORE the viewport fit; a crop
-        "render_h": render_h,      # drag is normalised against these
-        "panel_y": viewport_h,
-        "buttons": buttons,
-        "fields": fields,
-        "field_box": boxes,
-    }
-    # Last, and onto the finished canvas: the list has to sit over the viewport,
-    # which the panel it belongs to cannot reach.
-    studio.layout["dropdown"] = draw_dropdown(canvas, studio, viewport_h)
-    return canvas
+    def _build_widgets(self):
+        vw, vh = self.studio.viewport
+        video_frame = ttk.Frame(self.root)
+        video_frame.pack(side="top", fill="x")
+        self.video = tk.Canvas(video_frame, width=vw, height=vh,
+                               background="#0c0c0c", highlightthickness=0,
+                               takefocus=True)
+        self.video.pack(anchor="n")
+        self.video.bind("<Button-1>", self._drag_start)
+        self.video.bind("<B1-Motion>", self._drag_move)
+        self.video.bind("<ButtonRelease-1>", self._drag_end)
+        self.video.bind("<Button-3>", self._drag_cancel)
 
+        controls = ttk.Frame(self.root, padding=(6, 5))
+        controls.pack(side="bottom", fill="x")
 
-def window_to_image(studio, x, y):
-    """Window coordinates -> pixel coordinates in the RENDERED image.
+        buttons = ttk.Frame(controls)
+        buttons.pack(fill="x", pady=(0, 4))
+        for label, command in BUTTONS:
+            ttk.Button(buttons, text=label,
+                       command=lambda line=command: self._run_button(line)) \
+                .pack(side="left", padx=(0, 4))
 
-    Two transforms to undo, in this order: --display-scale, which resizes the
-    finished canvas, and the viewport fit, which may have scaled the image down
-    to get it into the window. Returning coordinates in the rendered image
-    rather than the displayed one is what lets a crop drag mean the same thing
-    whether or not the window happened to be too small.
+        fields = ttk.Frame(controls)
+        fields.pack(fill="x")
+        row = None
+        column = 0
+        for index, field in enumerate(FIELDS):
+            if row is None or field.group:
+                row = ttk.Frame(fields)
+                row.pack(fill="x", pady=1)
+                ttk.Label(row, text=field.group, width=7,
+                          style="Studio.Group.TLabel").grid(
+                              row=0, column=0, padx=(0, 4), sticky="w")
+                column = 1
 
-    Returns None when the point is not on the image — the panel, or the
-    letterbox around it.
-    """
-    lay = studio.layout
-    if lay is None:
+            ttk.Label(row, text=field.label).grid(
+                row=0, column=column, padx=(0, 3), sticky="e")
+            var = tk.StringVar(value=field.get(self.studio))
+            if field.choices is not None:
+                widget = ttk.Combobox(row, textvariable=var,
+                                      values=field.choices, state="readonly",
+                                      width=field.chars)
+                widget.bind("<<ComboboxSelected>>",
+                            lambda event, i=index: self._choose_field(i))
+            else:
+                widget = ttk.Entry(row, textvariable=var, width=field.chars)
+                widget.bind("<Return>",
+                            lambda event, i=index: self._entry_commit(i))
+                widget.bind("<Up>",
+                            lambda event, i=index: self._entry_step(i, +1))
+                widget.bind("<Down>",
+                            lambda event, i=index: self._entry_step(i, -1))
+                widget.bind("<Escape>",
+                            lambda event, i=index: self._revert_field(i))
+                widget.bind("<FocusOut>",
+                            lambda event, i=index: self._revert_field(i))
+            widget.grid(row=0, column=column + 1, padx=(0, 7), sticky="w")
+            self.field_vars.append(var)
+            self.field_widgets.append(widget)
+            column += 2
+
+        self.derived_label = ttk.Label(controls, anchor="w",
+                                       style="Studio.Derived.TLabel")
+        self.derived_label.pack(fill="x", pady=(4, 0))
+        self.camera_label = ttk.Label(controls, anchor="w",
+                                      style="Studio.Status.TLabel")
+        self.camera_label.pack(fill="x")
+        for _ in range(LOG_LINES):
+            label = ttk.Label(controls, anchor="w", style="Studio.LogOk.TLabel")
+            label.pack(fill="x")
+            self.log_labels.append(label)
+
+        command_row = ttk.Frame(controls)
+        command_row.pack(fill="x", pady=(3, 0))
+        ttk.Label(command_row, text="command").pack(side="left", padx=(0, 4))
+        self.command_var = tk.StringVar()
+        self.command_entry = ttk.Entry(command_row, textvariable=self.command_var)
+        self.command_entry.pack(side="left", fill="x", expand=True)
+        self.command_entry.bind("<Return>", self._submit_command)
+        self.command_entry.bind("<Escape>", self._clear_command)
+
+    def _execute(self, line, *, echo_terminal=False):
+        """Run one command and put its own result into the shared log."""
+        result = self.studio.commands.execute(line)
+        self.studio.log.push(result)
+        if result is not None and echo_terminal:
+            print(("OK: " if result.ok else "ERR: ") + result.message)
+        if self.studio.show_keys:
+            self.studio.show_keys = False
+            self.show_help()
+        return result
+
+    def _run_button(self, line):
+        if line == "view":
+            line = f"view {next_view(self.studio)}"
+        self._execute(line)
+
+    def _entry_commit(self, index):
+        field = FIELDS[index]
+        value = self.field_vars[index].get().strip()
+        if value:
+            self._execute(f"{field.command} {value}")
+        self.field_vars[index].set(field.get(self.studio))
+        return "break"
+
+    def _entry_step(self, index, direction):
+        field = FIELDS[index]
+        if field.step is None:
+            self.studio.log.add(False, f"{field.label} has no step — type a value instead")
+            return "break"
+        if field.get(self.studio) == AUTO and field.start is not None:
+            # There is no number to add to in auto mode. The metadata supplies a
+            # useful first manual value, exactly as the old field editor did.
+            value = f"{field.start:g}"
+        else:
+            sign = "+" if direction > 0 else "-"
+            value = f"{sign}{abs(field.step):g}"
+        self._execute(f"{field.command} {value}")
+        self.field_vars[index].set(field.get(self.studio))
+        return "break"
+
+    def _choose_field(self, index):
+        field = FIELDS[index]
+        self._execute(f"{field.command} {self.field_vars[index].get()}")
+
+    def _revert_field(self, index):
+        self.field_vars[index].set(FIELDS[index].get(self.studio))
+        return "break"
+
+    def _submit_command(self, event=None):
+        line = self.command_var.get().strip()
+        if line:
+            self._execute(line)
+        self.command_var.set("")
+        return "break"
+
+    def _clear_command(self, event=None):
+        self.command_var.set("")
+        return "break"
+
+    def _refresh_widgets(self):
+        # A per-frame refresh is what makes terminal commands, shortcuts and
+        # buttons visible in the fields. The focused widget is load-bearing:
+        # replacing its StringVar while somebody types would make entries lose
+        # half-written values at camera frame rate.
+        try:
+            focused = self.root.focus_get()
+        except tk.TclError:
+            focused = None
+        for field, var, widget in zip(FIELDS, self.field_vars, self.field_widgets):
+            if widget is not focused:
+                value = field.get(self.studio)
+                if var.get() != value:
+                    var.set(value)
+
+        self.derived_label.configure(
+            text=self.studio.derived_line(self._fps),
+            style=("Studio.Calibrated.TLabel" if self.studio.profile.calibrated
+                   else "Studio.Derived.TLabel"))
+        self.camera_label.configure(text=f"camera: {self.studio.sensor_status}")
+        recent = self.studio.log.recent(count=LOG_LINES, max_age=12.0)
+        padded = [(True, "")] * (LOG_LINES - len(recent)) + recent
+        for label, (ok, message) in zip(self.log_labels, padded):
+            label.configure(text=message,
+                            style=("Studio.LogOk.TLabel" if ok
+                                   else "Studio.LogError.TLabel"))
+
+    def _bind_shortcuts(self):
+        self.root.bind("<KeyPress>", self._shortcut)
+
+    @staticmethod
+    def _is_text_widget(widget):
+        return widget is not None and widget.winfo_class() in {
+            "Entry", "TEntry", "TCombobox"
+        }
+
+    def _shortcut(self, event):
+        # Root bindings also run after a child widget's class binding. Guarding
+        # on focus is therefore essential: without it, typing 158 into an Entry
+        # would also fire the 1, 5 and 8 lens shortcuts.
+        if self._is_text_widget(self.root.focus_get()):
+            return None
+
+        p = self.studio.profile
+        char = event.char
+        keysym = event.keysym
+        line = None
+        if char == ":":
+            self.command_entry.focus_set()
+            return "break"
+        if char == "?":
+            line = "help"
+        elif char == "[":
+            line = "fov -2"
+        elif char == "]":
+            line = "fov +2"
+        elif char == "-":
+            line = "out -5"
+        elif char in ("=", "+"):
+            line = "out +5"
+        elif char == ",":
+            line = "scale -0.1"
+        elif char == ".":
+            line = "scale +0.1"
+        elif char in "12345678":
+            line = {
+                "1": "k1 -0.01", "2": "k1 +0.01",
+                "3": "k2 -0.01", "4": "k2 +0.01",
+                "5": "cx -2", "6": "cx +2",
+                "7": "cy -2", "8": "cy +2",
+            }[char]
+        elif char == "m":
+            model = MODEL_NAMES[(MODEL_NAMES.index(p.model) + 1) % len(MODEL_NAMES)]
+            line = f"model {model}"
+        elif char == "i":
+            interp = INTERP_NAMES[(INTERP_NAMES.index(self.studio.interp) + 1)
+                                  % len(INTERP_NAMES)]
+            line = f"interp {interp}"
+        elif char == "n":
+            line = "undistort"
+        elif char == "x":
+            line = f"zoom {self.studio.zoom * 1.25:g}"
+        elif char == "z":
+            line = f"zoom {self.studio.zoom / 1.25:g}"
+        elif char == "0":
+            self._execute("zoom 1")
+            line = "pan centre"
+        elif keysym == "Left":
+            line = "pan -0.1 0"
+        elif keysym == "Right":
+            line = "pan 0.1 0"
+        elif keysym == "Up":
+            line = "pan 0 -0.1"
+        elif keysym == "Down":
+            line = "pan 0 0.1"
+        elif char == "c":
+            line = "crop"
+        elif keysym == "BackSpace":
+            line = "uncrop"
+        elif char == "f":
+            line = "refit"
+        elif char == "v":
+            mode = FIT_MODES[(FIT_MODES.index(self.studio.fit_mode) + 1)
+                             % len(FIT_MODES)]
+            line = f"fitmode {mode}"
+        elif char == "u":
+            line = f"view {next_view(self.studio)}"
+        elif char == "g":
+            line = "grid"
+        elif char == "s":
+            line = "save"
+        elif char == "p":
+            line = "snap"
+        elif char == "r":
+            line = "reset"
+        elif char == "q" or keysym == "Escape":
+            line = "quit"
+
+        if line is not None:
+            self._execute(line)
+            return "break"
+        if char and char.isprintable():
+            self.studio.log.add(False, f"key '{char}' is not bound — press '?' for help")
         return None
-    if studio.args.display_scale != 1.0:
-        x, y = x / studio.args.display_scale, y / studio.args.display_scale
-    dx, dy = int(x) - lay["image_x"], int(y) - lay["image_y"]
-    if not (0 <= dx < lay["image_w"] and 0 <= dy < lay["image_h"]):
-        return None
-    scale = lay.get("image_scale", 1.0) or 1.0
-    return int(dx / scale), int(dy / scale)
 
+    def _widget_to_image(self, x, y):
+        """Video-widget coordinates -> pixels in the rendered image.
 
-def hit_dropdown(studio, x, y):
-    """Which option of the open list is under a click, if any.
+        The PPM contains the whole fixed viewport. This undoes only the
+        letterbox offset and its fit scale; the controls are separate widgets,
+        so there is no panel offset or OpenCV display-scale transform anymore.
+        """
+        lay = self._image_layout
+        if lay is None:
+            return None
+        dx, dy = int(x) - lay["image_x"], int(y) - lay["image_y"]
+        if not (0 <= dx < lay["image_w"] and 0 <= dy < lay["image_h"]):
+            return None
+        scale = lay["image_scale"] or 1.0
+        return (min(lay["render_w"] - 1, int(dx / scale)),
+                min(lay["render_h"] - 1, int(dy / scale)))
 
-    Separate from hit_panel because the popup is drawn onto the whole canvas
-    rather than into the panel, so its rectangles are already absolute.
-    """
-    lay = studio.layout
-    if not lay or not lay.get("dropdown"):
-        return None
-    if studio.args.display_scale != 1.0:
-        x, y = x / studio.args.display_scale, y / studio.args.display_scale
-    for x0, y0, x1, y1, option in lay["dropdown"]:
-        if x0 <= int(x) <= x1 and y0 <= int(y) <= y1:
-            return option
-    return None
+    def _drag_start(self, event):
+        self.video.focus_set()
+        point = self._widget_to_image(event.x, event.y)
+        if point is None:
+            return
+        if self.studio.view == "both":
+            self.studio.log.add(False, "cropping needs a single view — press 'u'")
+            return
+        self.studio.drag = (point, point)
 
+    def _drag_move(self, event):
+        if self.studio.drag is None:
+            return
+        point = self._widget_to_image(event.x, event.y)
+        if point is not None:
+            self.studio.drag = (self.studio.drag[0], point)
 
-def hit_panel(studio, x, y, key):
-    """What is under a window-coordinate click, in the panel row named by `key`.
+    def _drag_end(self, event):
+        if self.studio.drag is None:
+            return
+        point = self._widget_to_image(event.x, event.y)
+        if point is not None:
+            self.studio.drag = (self.studio.drag[0], point)
+        (sx, sy), (ex, ey) = self.studio.drag
+        self.studio.drag = None
+        x0, x1 = sorted((sx, ex))
+        y0, y1 = sorted((sy, ey))
+        if x1 - x0 < MIN_CROP_PX or y1 - y0 < MIN_CROP_PX:
+            self.studio.log.add(False, "that drag was too small to be a crop — "
+                                f"drag a box at least {MIN_CROP_PX} px across")
+            return
+        lay = self._image_layout
+        rect = (x0 / lay["render_w"], y0 / lay["render_h"],
+                x1 / lay["render_w"], y1 / lay["render_h"])
+        vx0, vy0, vx1, vy1 = self.studio.roi()
+        vw, vh = vx1 - vx0, vy1 - vy0
+        absolute = (vx0 + rect[0] * vw, vy0 + rect[1] * vh,
+                    vx0 + rect[2] * vw, vy0 + rect[3] * vh)
+        # A drag is another command source. Use the absolute crop syntax so its
+        # normalisation, composition and validation stay in the command layer.
+        # The pointer rectangle is relative to the currently visible ROI, so it
+        # must be composed into full-output coordinates before that command.
+        self._execute("crop " + " ".join(f"{v:.9f}" for v in absolute))
 
-    Returns the payload of the rectangle hit — a command line for "buttons", a
-    field index for "fields" — or None. Both rows store the same 5-tuple shape
-    for exactly this reason.
-    """
-    lay = studio.layout
-    if lay is None:
-        return None
-    if studio.args.display_scale != 1.0:
-        x, y = x / studio.args.display_scale, y / studio.args.display_scale
-    py = int(y) - lay["panel_y"]
-    for x0, y0, x1, y1, payload in lay.get(key, ()):
-        if x0 <= int(x) <= x1 and y0 <= py <= y1:
-            return payload
-    return None
+    def _drag_cancel(self, event=None):
+        self.studio.drag = None
+        self.studio.log.add(True, "crop drag cancelled")
 
+    def _letterbox(self, image):
+        """Fit the rendered image into the immutable video viewport, down only."""
+        vw, vh = self.studio.viewport
+        render_h, render_w = image.shape[:2]
+        scale = min(vw / render_w, vh / render_h, 1.0)
+        iw = max(1, int(render_w * scale))
+        ih = max(1, int(render_h * scale))
+        shown = image
+        if scale < 1.0:
+            shown = cv2.resize(image, (iw, ih), interpolation=cv2.INTER_AREA)
+        canvas = np.full((vh, vw, 3), VIEWPORT_BG, np.uint8)
+        x_off, y_off = (vw - iw) // 2, (vh - ih) // 2
+        canvas[y_off:y_off + ih, x_off:x_off + iw] = shown
+        self._image_layout = {
+            "image_x": x_off, "image_y": y_off,
+            "image_w": iw, "image_h": ih, "image_scale": scale,
+            "render_w": render_w, "render_h": render_h,
+        }
+        return canvas
 
-def process_mouse(studio):
-    """Turn the queued mouse events into crops, button presses and drag state.
+    def _push_image(self, frame):
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        header = b"P6 %d %d 255 " % (rgb.shape[1], rgb.shape[0])
+        photo = tk.PhotoImage(data=header + rgb.tobytes())
+        # Tk keeps only a Tcl-side image name. Without a Python reference the
+        # PhotoImage is collected and the video widget silently goes blank.
+        self._photo = photo
+        if self._image_item is None:
+            self._image_item = self.video.create_image(0, 0, anchor="nw", image=photo)
+        else:
+            self.video.itemconfigure(self._image_item, image=photo)
 
-    Run from the render loop rather than the callback because it needs the
-    layout, which only exists once a frame has been composed.
-    """
-    events, studio.pending_clicks = studio.pending_clicks, []
-    for kind, x, y in events:
-        if kind == "down":
-            # The open list is drawn on top of everything, so it is tested
-            # first — otherwise a click landing on it would fall through to
-            # whatever the viewport has underneath.
-            option = hit_dropdown(studio, x, y)
-            if option is not None:
-                studio.log.add(*choose_option(studio, option))
-                blur_field(studio)
-                continue
+    def _viewport_note(self):
+        lay = self._image_layout
+        if not lay or lay["image_scale"] >= 0.999:
+            return None
+        return (f"display only: the {lay['render_w']}x{lay['render_h']} render is "
+                f"shown at {lay['image_scale'] * 100:.0f}% to fit the viewport — "
+                "'fill' undoes it")
 
-            index = hit_panel(studio, x, y, "fields")
-            if index is not None:
-                studio.log.add(True, focus_field(studio, index))
-                continue
+    def _autosave(self):
+        if not self.studio.autosave:
+            return
+        settings = self.studio.settings_dict()
+        state = json.dumps([settings[k] for k in
+                            ("lens", "correction", "framing", "sensor", "capture")],
+                           default=str)
+        if state != self._autosave_state:
+            self._autosave_state = state
+            self.studio.write_settings(self.studio.settings_path)
 
-            command = hit_panel(studio, x, y, "buttons")
-            if command is not None:
-                # RAW/CORR is the one button that cycles rather than sets.
-                if command == "view":
-                    command = f"view {next_view(studio)}"
-                studio.log.push(studio.commands.execute(command))
-                continue
+    def show_help(self):
+        if self._help_window is not None and self._help_window.winfo_exists():
+            self._help_window.deiconify()
+            self._help_window.lift()
+            return
+        win = tk.Toplevel(self.root)
+        win.title("Camera Studio Help")
+        win.geometry("900x650")
+        self._help_window = win
+        frame = ttk.Frame(win, padding=8)
+        frame.pack(fill="both", expand=True)
+        text = tk.Text(frame, wrap="none", font="TkFixedFont")
+        scroll_y = ttk.Scrollbar(frame, orient="vertical", command=text.yview)
+        scroll_x = ttk.Scrollbar(frame, orient="horizontal", command=text.xview)
+        text.configure(yscrollcommand=scroll_y.set, xscrollcommand=scroll_x.set)
+        text.grid(row=0, column=0, sticky="nsew")
+        scroll_y.grid(row=0, column=1, sticky="ns")
+        scroll_x.grid(row=1, column=0, sticky="ew")
+        frame.rowconfigure(0, weight=1)
+        frame.columnconfigure(0, weight=1)
+        keys = __doc__.split("Keys\n----", 1)[1].split("Commands\n--------", 1)[0]
+        body = "KEYBOARD SHORTCUTS\n" + keys.strip() + "\n\nCOMMANDS\n" + \
+               "\n".join(self.studio.commands.help_lines())
+        text.insert("1.0", body)
+        text.configure(state="disabled")
+        ttk.Button(frame, text="CLOSE", command=win.destroy).grid(
+            row=2, column=0, pady=(6, 0), sticky="e")
 
-            # A click anywhere else lets go of the field being edited, the way
-            # clicking off a text box does everywhere else. Deliberately without
-            # committing: an abandoned edit should not take effect.
-            if studio.focus is not None:
-                blur_field(studio)
+    def tick(self):
+        """Capture and render one frame, then give control back to Tk."""
+        if self._closing or not self.studio.running:
+            self.close()
+            return
+        try:
+            ok, frame = self.camera.read()
+            if not ok or frame is None:
+                print("Failed to read frame from camera.")
+                self.studio.log.add(False, "failed to read frame from camera")
+                self.close()
+                return
+            if self.studio.swap_rb:
+                frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            frame = self.studio.orient(frame)
 
-            point = window_to_image(studio, x, y)
-            if point is not None:
-                if studio.view == "both":
-                    studio.log.add(False,
-                                   "cropping needs a single view — press 'u'")
-                else:
-                    studio.drag = (point, point)
-        elif kind == "move" and studio.drag is not None:
-            point = window_to_image(studio, x, y)
-            if point is not None:
-                studio.drag = (studio.drag[0], point)
-        elif kind == "up" and studio.drag is not None:
-            (sx, sy), (ex, ey) = studio.drag
-            studio.drag = None
-            lay = studio.layout
-            x0, x1 = sorted((sx, ex))
-            y0, y1 = sorted((sy, ey))
-            # In rendered pixels, so a window scaled down for display still
-            # needs the same real drag rather than a suspiciously easy one.
-            if x1 - x0 < MIN_CROP_PX or y1 - y0 < MIN_CROP_PX:
-                studio.log.add(False, "that drag was too small to be a crop — "
-                                      f"drag a box at least {MIN_CROP_PX} px across")
-                continue
-            rect = (x0 / lay["render_w"], y0 / lay["render_h"],
-                    x1 / lay["render_w"], y1 / lay["render_h"])
-            studio.log.add(True, studio.push_crop(rect))
+            if self.studio.sensor_dirty:
+                self.studio.log.add(
+                    True, f"sensor: {self.studio.apply_sensor(self.camera)}")
+
+            # Camera drivers may return a size they did not promise, and a 90°
+            # rotation swaps axes. A map is valid for exactly one input size.
+            if frame.shape[1::-1] != self.studio.capture_size:
+                self.camera.size = frame.shape[1::-1]
+                self.studio.dirty = True
+            if self.studio.dirty:
+                self.studio.rebuild(frame.shape[1::-1])
+
+            if self.studio.correct:
+                corrected = undistort(frame, self.studio.maps)
+            else:
+                corrected = crop_resize(frame, self.studio.roi(),
+                                        self.studio.maps.out_size,
+                                        INTERPOLATIONS[self.studio.interp])
+            self.studio.last_raw, self.studio.last_corrected = frame, corrected
+
+            if self.studio.view in ("both", "raw"):
+                raw_view = crop_resize(frame, self.studio.roi(),
+                                       self.studio.maps.out_size,
+                                       INTERPOLATIONS[self.studio.interp])
+                image = (side_by_side(raw_view, corrected)
+                         if self.studio.view == "both" else raw_view.copy())
+            else:
+                image = corrected.copy()
+
+            if self.studio.show_grid:
+                draw_grid(image, 8, 8)
+            if not self.studio.correct:
+                draw_info_box(image, ["CORRECTION OFF — press 'n'"],
+                              origin=(8, 8), highlight_first=True)
+            draw_drag(image, self.studio)
+            self._push_image(self._letterbox(image))
+
+            now = time.perf_counter()
+            dt, self._last_frame_at = now - self._last_frame_at, now
+            if dt > 0:
+                rate = 1.0 / dt
+                self._fps = 0.9 * self._fps + 0.1 * rate if self._fps else rate
+
+            note = self._viewport_note()
+            if note != self._last_display_note:
+                self._last_display_note = note
+                if note:
+                    self.studio.log.add(False, note)
+
+            for line in self.studio.drain_pending():
+                self._execute(line, echo_terminal=True)
+            self._refresh_widgets()
+            self._autosave()
+        except Exception as exc:
+            print(f"Camera Studio stopped: {exc!r}")
+            self.studio.log.add(False, f"stopped: {exc!r}")
+            self.close()
+            return
+
+        if self.studio.running:
+            self._after_id = self.root.after(1, self.tick)
+        else:
+            self.close()
+
+    def close(self):
+        if self._closing:
+            return
+        self._closing = True
+        self.studio.running = False
+        if self._after_id is not None:
+            try:
+                self.root.after_cancel(self._after_id)
+            except tk.TclError:
+                pass
+            self._after_id = None
+        self.camera.release()
+        try:
+            self.root.destroy()
+        except tk.TclError:
+            pass
 
 
 # --- setup -------------------------------------------------------------------
@@ -2303,130 +2086,25 @@ def main():
         print("  " + line)
     print("\nCommands — type them right here in this terminal, then Enter:")
     print("\n".join(studio.commands.help_lines()))
-    print("\nOr press ':' in the window to type them there; '?' lists the keys.")
+    print("\nThe command entry is at the bottom of the Tk window; '?' opens help.")
     print(f"'save' writes {studio.settings_path}\n")
 
-    window = "Camera Studio"
-    cv2.namedWindow(window, cv2.WINDOW_AUTOSIZE)
-    cv2.setMouseCallback(window, on_mouse, studio)
-    start_stdin_reader(studio)
-
-    fps, last = 0.0, time.perf_counter()
-    autosave_state = None
-    last_note = None
     try:
-        while studio.running:
-            ok, frame = camera.read()
-            if not ok or frame is None:
-                print("Failed to read frame from camera.")
-                break
-            if studio.swap_rb:
-                frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-            frame = studio.orient(frame)
-
-            if studio.sensor_dirty:
-                studio.log.add(True, f"sensor: {studio.apply_sensor(camera)}")
-
-            # The driver can hand back a size we didn't ask for, and a rotation
-            # swaps width and height. The maps are built for one exact input size.
-            if frame.shape[1::-1] != studio.capture_size:
-                camera.size = frame.shape[1::-1]
-                studio.dirty = True
-            if studio.dirty:
-                studio.rebuild(frame.shape[1::-1])
-
-            if studio.correct:
-                corrected = undistort(frame, studio.maps)
-            else:
-                # No remap to fold the ROI into, so crop and scale it here.
-                corrected = crop_resize(frame, studio.roi(), studio.maps.out_size,
-                                        INTERPOLATIONS[studio.interp])
-            studio.last_raw, studio.last_corrected = frame, corrected
-
-            if studio.view in ("both", "raw"):
-                # The SAME normalised ROI is applied to the raw frame, so the two
-                # halves show the same part of the scene. It is only approximate
-                # — the raw fisheye and the rectilinear output do not cover the
-                # field identically — but at zoom 1 with no crop it is exactly
-                # the whole-frame A/B comparison you want, which is the case it
-                # is looked at in.
-                raw_view = crop_resize(frame, studio.roi(), studio.maps.out_size,
-                                       INTERPOLATIONS[studio.interp])
-                image = (side_by_side(raw_view, corrected) if studio.view == "both"
-                         else raw_view.copy())
-            else:
-                # copy() so the grid never contaminates the snapshot images.
-                image = corrected.copy()
-
-            if studio.show_grid:
-                draw_grid(image, 8, 8)
-            draw_key_list(image, studio)
-            if not studio.correct:
-                draw_info_box(image, ["CORRECTION OFF — press 'n'"],
-                              origin=(8, 8), highlight_first=True)
-            draw_drag(image, studio)
-
-            now = time.perf_counter()
-            dt, last = now - last, now
-            if dt > 0:
-                # Exponential moving average: a raw instantaneous rate is too
-                # jumpy to read off the screen.
-                fps = 0.9 * fps + 0.1 * (1.0 / dt) if fps else 1.0 / dt
-
-            canvas = compose(image, studio, fps)
-            note = display_note(studio)
-            if note != last_note:
-                last_note = note
-                if note:
-                    studio.log.add(False, note)
-            if args.display_scale != 1.0:
-                canvas = cv2.resize(canvas, None, fx=args.display_scale,
-                                    fy=args.display_scale, interpolation=cv2.INTER_AREA)
-            cv2.imshow(window, canvas)
-
-            process_mouse(studio)
-
-            for line in studio.drain_pending():
-                result = studio.commands.execute(line)
-                if result is not None:
-                    studio.log.push(result)
-                    print(("OK: " if result.ok else "ERR: ") + result.message)
-
-            key = cv2.waitKeyEx(1)
-            if key != -1:
-                if studio.focus is not None:
-                    feedback = handle_field_key(key, studio)
-                    if feedback is not None:
-                        studio.log.add(*feedback)
-                elif studio.edit.active:
-                    line = studio.edit.key(key)
-                    if line:
-                        studio.log.push(studio.commands.execute(line))
-                    elif line == "":
-                        studio.log.add(True, "prompt closed")
-                else:
-                    ok_key, message = handle_key(key, studio)
-                    studio.log.add(ok_key, message)
-
-            if studio.autosave:
-                # Compare the settings themselves, not a dirty flag: the flags
-                # are cleared by rebuild() further up. Only the sections a user
-                # can change are hashed — "saved_at" and the sampling figures
-                # would make every single frame look like a change.
-                settings = studio.settings_dict()
-                state = json.dumps([settings[k] for k in
-                                    ("lens", "correction", "framing", "sensor",
-                                     "capture")], default=str)
-                if state != autosave_state:
-                    autosave_state = state
-                    studio.write_settings(studio.settings_path)
-
-            if cv2.getWindowProperty(window, cv2.WND_PROP_VISIBLE) < 1:
-                break
-    finally:
-        studio.running = False
+        root = tk.Tk()
+    except tk.TclError as exc:
         camera.release()
-        cv2.destroyAllWindows()
+        print(f"Cannot open the Tk window: {exc}")
+        print("A desktop display is required (the Pi also needs python3-tk).")
+        sys.exit(1)
+
+    window = StudioWindow(root, studio, camera)
+    start_stdin_reader(studio)
+    window._refresh_widgets()
+    window._after_id = root.after(0, window.tick)
+    try:
+        root.mainloop()
+    finally:
+        window.close()
 
 
 if __name__ == "__main__":

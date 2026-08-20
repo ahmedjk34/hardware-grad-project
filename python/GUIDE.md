@@ -200,37 +200,24 @@ would silently outrank the settings file.
 
 ### The window
 
-**One fixed-size application window, in two halves.** The top ~77% is a camera
-viewport with the feed embedded in it, unobscured — you cannot judge whether an
-edge is straight through a translucent HUD. The bottom is the control panel: a
-row of clickable buttons, then a labelled **text field** for every parameter,
-then the log.
+**One Tk window, two genuinely separate widget regions.** The top ~77% is a
+fixed-size camera canvas. The bottom is a `ttk` control centre: real entries,
+read-only dropdowns, buttons and status labels. The controls are not pixels in
+the camera image, so an image operation can never zoom, pan or rescale them.
 
-The window is a fixed rectangle that the image is fitted **into**, not a window
-sized around the image. That distinction is the whole layout. Zoom, crop,
-`scale`, `rotate` and the raw/corrected toggle all change how big the rendered
-picture is; if the window followed it, every control in the panel would jump
-somewhere else each time you used one. Here the viewport and the panel are both
-fixed, the image is letterboxed inside the viewport, and the fields stay exactly
-where you left them — verified across 26 operations that used to resize it.
+The viewport is fixed for the session. `--window WxH` chooses it; otherwise it
+is the corrected output size, exactly as in `undistorted_viewer.py`. Zoom,
+crop, `scale`, rotation and raw/corrected view changes only alter the image
+letterboxed inside that viewport. A render is only scaled down when it cannot
+fit. In `fit` mode the correction renders directly at the viewport size, so
+there is no second resample.
 
-`--window WxH` sets the viewport size. The default is the corrected output size,
-which is what `undistorted_viewer.py` shows. Nothing after startup changes it,
-including `?` — the key list draws over the image rather than into the panel for
-exactly that reason. If the panel would ever take more than 30% of the window,
-the viewport grows rather than the picture being squeezed.
+`native` mode and `refit` deliberately render at another size. When the result
+is larger than the viewport, the status log says how far it was reduced;
+`fill` restores a viewport-sized render.
 
-In `fit` mode the correction renders **directly at the viewport size**, so what
-you see is never resampled twice. `native` mode and `refit` deliberately render
-at a different size; when that overflows the viewport it is scaled down for
-display and the panel says so, because judging sharpness off a downscaled
-preview is how you conclude the correction is fine when it is not. `fill` puts
-it back.
-
-There are deliberately **no cv2 trackbars**. Eight of them stacked above the
-image cost about 350 px of screen that the picture wants, and a slider cannot
-show you that a value is 158 rather than 157.
-
+There are deliberately no OpenCV trackbars. The exact value remains visible in
+a real text entry, and a fixed-choice parameter is a real dropdown.
 ### The fields
 
 Two kinds, because a free-text box is a lie about a field that only accepts four
