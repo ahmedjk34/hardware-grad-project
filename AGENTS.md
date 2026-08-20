@@ -156,6 +156,7 @@ ack and is safe from rewording, but `S`, `G`, `0` and `0+` do not — for those,
 | `camera/camera_feed.py` | the canonical runtime feed that consumes the saved settings |
 | `camera/gridded_camera_feed.py` | the same runtime feed plus machine-grid calibration/overlay |
 | `camera/rig_build_v1.py` | camera-grid cell selection plus confirmed serial build |
+| `rig/build_job.py` | the worker thread that keeps that camera live during a build |
 | `camera/undistorted_viewer.py` | the standalone lens-tuning viewer |
 
 `camera_studio.py` is supposed to open showing **exactly what
@@ -190,8 +191,12 @@ of these rules when editing it:
 - A click selects and shows the exact `B <col> <row> <level> [R|RR]` command;
   it never moves hardware. `b`/Enter is the separate confirmation.
 - Send builds only through `rig.link.Rig.build()`, never a second raw serial
-  connection. The call stays synchronous so clicks cannot queue while the Mega
-  is deaf during motion.
+  connection. That call blocks for minutes, so `rig/build_job.py` runs it on one
+  worker thread and the camera loop keeps drawing. The UI must refuse every
+  controller mutation — select, level, rotation, deselect, calibrate, build,
+  quit — while `BuildJob.running`, so clicks still cannot queue while the Mega
+  is deaf during motion. Never run two builds at once, and never close the
+  serial port with one in flight: join the job first.
 - A successful build clears selection so key repeat cannot place twice in one
   cell. A safe rejection may retain it. `ABORTED`, reset, timeout or cable loss
   locks the session: no retry, no automatic home, no further build. A human

@@ -10,7 +10,9 @@ Safety rules
 ------------
 * The built-in approximate grid is immediately selectable; ``c`` is optional.
 * Click selects; Enter/``b`` is the separate confirmation that moves hardware.
-* The build call is synchronous, so clicks and commands cannot queue mid-build.
+* The build runs on its own worker thread so the camera keeps streaming, but the
+  UI refuses every state change until that build reports back: clicks and
+  commands still cannot queue mid-build, and only one build exists at a time.
 * ABORTED, cable/reset, or timeout locks the session. Inspect the rig and restart;
   this program never retries or automatically homes an unknown machine.
 
@@ -65,6 +67,7 @@ from rig.build_controller import (  # noqa: E402
     BuildStateError,
     ROTATIONS,
 )
+from rig.build_job import BUSY_MESSAGE, BuildJob  # noqa: E402
 from rig.config import CONFIG_PATH, load as load_rig_config  # noqa: E402
 from rig.grid import MachineGrid  # noqa: E402
 from rig.link import ABORTED, PLACED, REJECTED, Rig, RigError  # noqa: E402
@@ -162,6 +165,13 @@ def result_message(result):
     return f"firmware returned {result!r}"
 
 
+def outcome_message(outcome, controller):
+    """One status line for a finished :class:`BuildJob`."""
+    if outcome.result is not None:
+        return result_message(outcome.result)
+    return controller.locked_reason or str(outcome.error)
+
+
 def main():
     args = parse_args()
     if (args.level < 0 or args.display_scale <= 0 or args.min_area <= 0
@@ -205,6 +215,7 @@ def main():
         return 1
 
     controller = BuildController(rig, level=args.level, rotation=args.rotation)
+    job = BuildJob(controller, args.build_timeout)
 
     try:
         camera = open_camera(backend, size, device)
@@ -259,12 +270,21 @@ def main():
     input_size = None
     fps = 0.0
     last = time.perf_counter()
+    status = 0
     try:
         while True:
             ok, frame = camera.read()
             if not ok or frame is None:
                 print("Failed to read frame from camera.", file=sys.stderr)
-                return 1
+                status = 1
+                break
+
+            finished = job.poll()
+            if finished is not None:
+                ui["message"] = outcome_message(finished, controller)
+                print(f"[build] {'LOCKED: ' if finished.locked else ''}{ui['message']}",
+                      file=sys.stderr if finished.locked else sys.stdout)
+            building = job.running
 
             frame = frame_orientation(frame, capture)
             if maps is None or frame.shape[1::-1] != input_size:
@@ -304,6 +324,8 @@ def main():
                 point = ui["pending_select"]
                 ui["pending_select"] = None
                 try:
+                    if building:
+                        raise BuildStateError(BUSY_MESSAGE)
                     if not ui["show_grid"]:
                         raise BuildStateError("grid is hidden; press g before selecting")
                     cell = workspace.cell_at(point, image_size)
@@ -333,7 +355,8 @@ def main():
             if ui["calibrating"]:
                 draw_calibration(display, ui["calibration_points"])
             else:
-                draw_build_panel(display, controller, rig.port_name, ui["message"])
+                draw_build_panel(display, controller, rig.port_name, ui["message"],
+                                 building=building)
 
             shown = cv2.resize(
                 display, None, fx=args.display_scale, fy=args.display_scale,
@@ -343,9 +366,14 @@ def main():
             cv2.imshow(window, shown)
             key = cv2.waitKey(1) & 0xFF
             if key in (ord("q"), 27):
-                return 0
-            if key == ord("c"):
-                if controller.locked:
+                if building:
+                    ui["message"] = "build in progress; cannot quit until it reports"
+                else:
+                    break
+            elif key == ord("c"):
+                if building:
+                    ui["message"] = BUSY_MESSAGE
+                elif controller.locked:
                     ui["message"] = controller.locked_reason
                 else:
                     controller.clear_selection()
@@ -361,66 +389,58 @@ def main():
             elif key == ord("g"):
                 ui["show_grid"] = not ui["show_grid"]
             elif key in (ord("["), ord("-")):
-                controller.adjust_level(-1)
-                ui["message"] = f"build level set to {controller.level}"
+                if building:
+                    ui["message"] = BUSY_MESSAGE
+                else:
+                    controller.adjust_level(-1)
+                    ui["message"] = f"build level set to {controller.level}"
             elif key in (ord("]"), ord("+"), ord("=")):
-                controller.adjust_level(1)
-                ui["message"] = f"build level set to {controller.level}"
+                if building:
+                    ui["message"] = BUSY_MESSAGE
+                else:
+                    controller.adjust_level(1)
+                    ui["message"] = f"build level set to {controller.level}"
             elif key == ord("o"):
-                controller.cycle_rotation()
-                ui["message"] = f"rotation set to {controller.rotation}"
+                if building:
+                    ui["message"] = BUSY_MESSAGE
+                else:
+                    controller.cycle_rotation()
+                    ui["message"] = f"rotation set to {controller.rotation}"
             elif key == ord("d"):
-                controller.clear_selection()
-                ui["message"] = "selection cleared"
+                if building:
+                    ui["message"] = BUSY_MESSAGE
+                else:
+                    controller.clear_selection()
+                    ui["message"] = "selection cleared"
             elif key == ord("s"):
                 image_path, data_path = save_detection_snapshot(display, detections)
                 print(f"Saved {image_path} and {data_path}")
             elif key in (ord("b"), 10, 13):
                 try:
+                    if building:
+                        raise BuildStateError(BUSY_MESSAGE)
+                    if ui["calibrating"]:
+                        raise BuildStateError("finish or cancel (x) calibration first")
                     command = controller.command
-                    if command is None:
-                        raise BuildStateError("select a camera grid cell first")
+                    job.start()
                     ui["message"] = f"BUILDING: {command}"
-                    busy_display = view.copy() if args.no_enhance else \
-                        enhance_for_display(view)
-                    busy_display = draw_block_overlay(
-                        busy_display, detections, ui["hover"], fps,
-                        "COORDS: corrected pixels + selectable machine grid",
-                    )
-                    if ui["show_grid"]:
-                        draw_machine_grid(
-                            busy_display, workspace, grid, ui["hover"], calibrated
-                        )
-                        draw_selected_cell(busy_display, workspace, controller.selected)
-                        draw_grid_status(
-                            busy_display, grid, calibrated, rejection, enabled
-                        )
-                    draw_build_panel(
-                        busy_display, controller, rig.port_name, ui["message"],
-                        building=True,
-                    )
-                    busy_shown = cv2.resize(
-                        busy_display, None, fx=args.display_scale,
-                        fy=args.display_scale, interpolation=cv2.INTER_AREA,
-                    ) if args.display_scale != 1.0 else busy_display
-                    cv2.imshow(window, busy_shown)
-                    cv2.waitKey(1)
                     print(f"[build] sending {command}")
-                    result = controller.build(timeout=args.build_timeout)
-                    ui["message"] = result_message(result)
-                    print(f"[build] {ui['message']}")
                 except BuildStateError as exc:
                     ui["message"] = str(exc)
-                except RigError as exc:
-                    ui["message"] = controller.locked_reason or str(exc)
-                    print(f"[build] LOCKED: {ui['message']}", file=sys.stderr)
 
             if cv2.getWindowProperty(window, cv2.WND_PROP_VISIBLE) < 1:
-                return 0
+                break
     finally:
+        if job.running:
+            print("Waiting for the in-flight build before closing the serial port...")
+            job.join()
+            finished = job.poll()
+            if finished is not None:
+                print(f"[build] {outcome_message(finished, controller)}")
         camera.release()
         cv2.destroyAllWindows()
         rig.close()
+    return status
 
 
 if __name__ == "__main__":

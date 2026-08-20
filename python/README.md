@@ -30,10 +30,12 @@ python/
 │   ├── config.py               loads config/rig.json
 │   ├── grid.py                 the machine's cells, and which way round they sit
 │   ├── build_controller.py     selection/confirmation outcome safety state
+│   ├── build_job.py            runs one build off the UI thread, one at a time
 │   └── link.py                 the serial link: send a command, wait for the answer
 ├── tests/
 │   ├── test_block_detector.py  block detection against the committed captures
 │   ├── test_build_controller.py camera-build confirmation and lockout rules
+│   ├── test_build_job.py       the build worker thread and its one-at-a-time rule
 │   ├── test_grid.py            the cell numbering, against the firmware's own map
 │   └── test_link.py            link.py against a fake board — no rig needed
 └── vision/                     importable library — no windows, no argv, no prints
@@ -67,9 +69,11 @@ centre and matching `G` command.
 `camera/rig_build_v1.py` adds the serial link and is the first camera UI allowed
 to move hardware. Its approximate grid works immediately; a saved calibration
 refines the mapping but is optional. A click selects one cell, shows the exact
-`B` command, and sends it only after `b`/Enter. It blocks until the firmware
-reports placed/rejected/aborted; an unknown or aborted state locks the session
-for human inspection.
+`B` command, and sends it only after `b`/Enter. The firmware wait happens on a
+worker thread (`rig/build_job.py`), so the camera keeps streaming while the rig
+moves, but every key and click that would change the build state is refused
+until the firmware reports placed/rejected/aborted. An unknown or aborted state
+locks the session for human inspection.
 
 `grid/undistorted_grid_viewer.py` is the combined measurement tool and is what
 you normally want when checking the machine grid. The smaller viewers beside it
@@ -100,6 +104,8 @@ built from transcripts:
     ../.venv/bin/python tests/test_link.py
     ../.venv/bin/python tests/test_grid.py
     ../.venv/bin/python tests/test_block_detector.py
+    ../.venv/bin/python tests/test_build_controller.py
+    ../.venv/bin/python tests/test_build_job.py
 
 It proves the parsing and the cell numbering, not the machine. The other half of the testing is
 flashing the firmware and watching it.
