@@ -45,9 +45,10 @@ when you want to know what one stage does on its own.
 
 `camera/camera_studio.py` sits apart from all of them: it is not for *using* the
 camera but for *deciding what its settings should be*. Every lens, sensor, zoom,
-crop and orientation setting is adjustable live — as a labelled text field in a
-panel under the image, or as a typed command — and `save` writes the lot to
-`config/camera_settings.json`, which it also reads back at startup. The
+crop and orientation setting is adjustable live — through real Tk entries,
+dropdowns and buttons below a separate camera viewport, or as a typed command —
+and `save` writes the lot to `config/camera_settings.json`, which it also reads
+back at startup. The
 committed default in that file reproduces `undistorted_viewer.py` exactly, so it
 opens on a known picture. See [GUIDE.md](GUIDE.md#camera_studiopy).
 
@@ -95,7 +96,7 @@ read the OV5647 there at all.
 # 1. The two things that MUST come from apt, because picamera2 is compiled
 #    against the system numpy and the pip wheels would shadow it.
 sudo apt update
-sudo apt install -y python3-picamera2 python3-opencv python3-numpy
+sudo apt install -y python3-picamera2 python3-opencv python3-numpy python3-tk
 
 # 2. The venv, which can see them thanks to --system-site-packages.
 #    On the Pi the interpreter is `python`; on the x86 desktop it is `python3`.
@@ -122,9 +123,11 @@ python -m venv --system-site-packages .venv
 `--system-site-packages` is what lets the venv see the apt-installed `cv2` and
 `picamera2`. Without it, a plain venv sees neither.
 
-**A display is required.** `cv2.imshow` needs a desktop session, so run these on
-the Pi's own screen or over VNC. Plain `ssh` has no display; `ssh -X` works but
-is slow at 1296×972.
+**A display is required.** The OpenCV viewers and Camera Studio's Tk window need
+a desktop session, so run them on the Pi's own screen or over VNC. Plain `ssh`
+has no display; `ssh -X` works but is slow at 1296×972. Camera Studio also needs
+the apt-installed `python3-tk` shown above; do not replace its stdlib PPM image
+bridge with Pillow.
 
 ## Setup — x86 dev machine
 

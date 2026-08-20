@@ -200,65 +200,61 @@ would silently outrank the settings file.
 
 ### The window
 
-**One Tk window, two genuinely separate widget regions.** The top ~77% is a
-fixed-size camera canvas. The bottom is a `ttk` control centre: real entries,
-read-only dropdowns, buttons and status labels. The controls are not pixels in
-the camera image, so an image operation can never zoom, pan or rescale them.
+**One resizable Tk window, two genuinely separate widget regions.** The top is
+a camera canvas that receives whatever height remains. The bottom is a `ttk`
+control centre: real entries, read-only dropdowns, buttons and status labels.
+The controls are not pixels in the camera image, so image operations cannot
+zoom or pan them.
 
-The viewport is fixed for the session. `--window WxH` chooses it; otherwise it
-is the corrected output size, exactly as in `undistorted_viewer.py`. Zoom,
-crop, `scale`, rotation and raw/corrected view changes only alter the image
-letterboxed inside that viewport. A render is only scaled down when it cannot
-fit. In `fit` mode the correction renders directly at the viewport size, so
-there is no second resample.
+The window starts within the detected desktop bounds, even when the camera's
+render is 1296×972 or larger. Drag any edge or use the desktop's maximise button:
+the image is letterboxed into the current canvas, while buttons and field groups
+wrap onto extra rows when the window narrows. The controls therefore remain on
+screen instead of being pushed below or beyond it.
 
-`native` mode and `refit` deliberately render at another size. When the result
-is larger than the viewport, the status log says how far it was reduced;
-`fill` restores a viewport-sized render.
+`--window WxH` chooses the correction's processing viewport; otherwise it is
+the corrected output size used by `undistorted_viewer.py`. Resizing the Tk
+window changes only the display fit. It does not rebuild the correction maps,
+change the saved framing, or alter the byte-verified default render.
+
+`native` mode and `refit` deliberately render at another size. When a render is
+larger than the available canvas, the status log says how far it was reduced;
+enlarge the window for a 1:1 preview, or use `fill` to restore the processing
+viewport after a refit.
 
 There are deliberately no OpenCV trackbars. The exact value remains visible in
 a real text entry, and a fixed-choice parameter is a real dropdown.
+
 ### The fields
 
-Two kinds, because a free-text box is a lie about a field that only accepts four
-words — it invites input that can only ever be rejected.
+The panel is generated from the same 32-field table the command layer uses; no
+widget is hand-written. That table supplies each label, command name, displayed
+value, step size and fixed choices.
 
-**20 text fields**, for the continuous values (`lens fov`, `k1`, `scale`,
-`zoom`, `exposure`, `gain`…). Click one and it becomes editable, pre-filled with
-its current value:
+**20 entries** hold continuous or multi-number values (`fov`, `k1`, `scale`,
+`zoom`, `crop`, exposure, gain…).
 
-| Key | |
+| Key | Effect |
 | --- | --- |
-| type, then **Enter** | commits — the picture changes as you press it |
-| **Up / Down** | step the value in place, without typing; this is what replaced the sliders |
-| **Tab** | commit and move to the next field, so the whole panel can be walked from the keyboard |
-| **Esc**, or a click elsewhere | let go without committing |
+| **Enter** | run the field's command with the text in the entry |
+| **Up / Down** | run the same command with its positive or negative step |
+| **Esc**, or leave the entry | discard unfinished text and restore the real value |
 
-They also accept `+2` and `-2` for a relative nudge, and every sensor field
-accepts `auto`. Values out of range are **clamped with a note in the log**, not
-rejected — otherwise stepping a field down from its minimum would be an error
-rather than a no-op.
+Entries accept the same values as typed commands, including relative `+2` /
+`-2` forms and `auto`. Stepping a sensor field away from `auto` starts at a
+useful value; stepping past a limit clamps with a note instead of failing.
 
-**12 dropdowns**, for the fields whose value is one of a fixed set — `ref`,
-`model`, `correction`, `interp`, `mip`, `show`, `grid`, `sizing`, `flip`,
-`rotate`, `awb`, `denoise`. A small caret marks them. Click to open the list
-(it opens *upward*, over the viewport, since the panel sits at the bottom of the
-window), then click an entry, use Up/Down, or press a letter to jump to the next
-entry starting with it.
+**12 read-only dropdowns** hold fixed choices: `ref`, `model`, `correction`,
+`interp`, `mip`, `show`, `grid`, `sizing`, `flip`, `rotate`, `awb` and
+`denoise`. A selection runs its command immediately, so you can choose a
+projection or interpolation mode by watching the picture.
 
-Dropdown entries **apply as they are highlighted**, not on Enter, so a
-projection model or a white-balance preset is chosen by watching the picture
-rather than by reading the word. Enter closes the list; Esc closes it too.
+Every field action is a command string sent through the same command engine as
+terminal input, shortcuts and buttons. That is the contract that keeps all
+input paths from drifting.
 
-A field *is* a command, exactly like a button is: the label is what you read,
-the field's command is what runs, and the box (or the chosen entry) holds its
-argument. That is what
-keeps the panel, the typed commands, the keys and the buttons from drifting
-apart — one setter, four ways to reach it.
-
-The one line under the fields that is **not** a field is the derived one:
-whether the profile is calibrated, the size actually being rendered, and the
-`SAMPLE` sharpness figures. Those are results, so they get read, not edited.
+The derived line and `camera:` line are read-only status labels. Beneath them,
+four coloured log labels show recent success and error messages.
 
 | Button | Same as typing |
 | --- | --- |
@@ -269,30 +265,31 @@ whether the profile is calibrated, the size actually being rendered, and the
 | UNDO CROP | `uncrop` |
 | NO CROP | `nocrop` |
 | REFIT | `refit` |
-| RAW/CORR | `view` (cycles corrected → raw → both) |
+| RAW/CORR | cycles `view corrected`, `view raw`, `view both` |
 | GRID | `grid` |
 | RESET | `reset` |
 | HELP | `help` |
-
-Every button *is* a command line, so there is no third code path to keep in step
-with the keys and the typed commands — and a button press lands in the log the
-same way a typed one does.
+| QUIT | `quit` |
 
 ### Driving it — four input channels
 
-OpenCV delivers keystrokes only while the **image window** has focus, which over
-VNC or `ssh -X` often means "not until you have clicked it". So:
+1. **Terminal.** Type a command in the shell that launched the studio. The
+   stdin reader still works without window focus.
+2. **Command entry.** Type any command in the entry at the very bottom and
+   press Enter. Pressing `:` while no field has focus jumps there.
+3. **Fields and buttons.** Entries, dropdowns and buttons all execute command
+   strings through the same dispatcher.
+4. **Crop drag.** Drag on the video widget. The area outside the selection
+   dims; right-click cancels. Letterbox and fit scaling are undone before the
+   crop is converted to the rendered image's coordinates.
 
-1. **Type in the terminal.** Commands typed into the launching shell are read
-   from stdin. Needs no window focus at all; this is the one that always works.
-2. **Type in the window.** `:` opens a prompt in the panel. Each character
-   appears as it arrives — if nothing appears, the window does not have focus.
-3. **Click and type.** The fields above.
-4. **Click and drag.** The buttons, and a drag on the image to crop to a
-   rectangle. The area outside the drag dims, so you judge the crop on what will
-   remain rather than on an outline.
+Single-key shortcuts are bound to the Tk window. They are deliberately ignored
+while an Entry or Combobox has focus, so typing `158` edits only that field.
+A terminal command still updates all unfocused widgets on the next frame; a
+focused entry is left alone until you commit or leave it.
 
-Plus the single-key shortcuts, which work whenever no field has focus.
+`?` and the HELP button open a separate help window. The command entry replaces
+the former in-image `:` prompt.
 
 ### Fixing the fisheye
 
@@ -368,7 +365,7 @@ to a control it lacks is to return success and change nothing.
 ### Keys
 
 ```
-:  command prompt      ?  key list        q / Esc  quit
+:  focus command box   ?  help window     q / Esc  quit
 u  view: corrected / raw / both           n  correction on / off
 [ ]  lens FOV -/+ 2 deg                   m  cycle projection model
 - =  output FOV -/+ 5 deg                 i  cycle interpolation kernel
@@ -382,11 +379,9 @@ v  fit / native sizing                    r  reset everything
 s  save the JSON                          p  snapshot PNGs
 ```
 
-Every keypress is reported in the panel, **including unrecognised ones** — which
-is what distinguishes "that key isn't bound" from "the window never received it".
-
-The arrow keys do two things depending on focus: they pan the zoom window when
-no field is being edited, and step the focused field when one is. `reset` (`r`)
+Unrecognised printable keys are reported in the log. Arrow keys pan when the
+video or a button has focus and step an Entry when that Entry has focus;
+Comboboxes consume their own navigation keys. `reset` (`r`)
 goes back to the built-in defaults plus your command-line flags — it does *not*
 re-read the settings file, because `reset` is what you press when the tuning has
 gone somewhere strange and you want the known starting point back. `load` is the

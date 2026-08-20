@@ -28,29 +28,28 @@ Four layers, each overriding the one before:
   3. config/camera_settings.json, or whatever --settings names;
   4. the command-line flags.
 
-One application window, two genuinely separate regions
--------------------------------------------------------
-The top ~77% is a fixed camera VIEWPORT. The bottom is a Tk control centre:
+One resizable application window, two genuinely separate regions
+-----------------------------------------------------------------
+The top is a camera canvas that grows and shrinks with the window. The bottom
+is a Tk control centre:
 real text entries, read-only dropdowns, buttons, status labels and an arbitrary
 command entry. Click an entry, type a value and press Enter; Up/Down step it.
 Choosing a dropdown applies immediately. Drag a rectangle on the image to crop.
 
-The window is a fixed rectangle that the image is fitted INTO — not a window
-sized around the image. That distinction is the whole layout: zoom, crop,
-`scale`, `rotate` and the raw/corrected toggle all change the size of the
-rendered picture. The viewport and controls are independent widgets, so neither
-can magnify, pan or resize the other; the image is letterboxed inside its fixed
-viewport instead.
+The window starts inside the available desktop instead of insisting on the
+camera's full pixel size. Resizing gives the control centre the rows it needs,
+reflows fields and buttons at narrow widths, and gives the camera the remaining
+space. The image is letterboxed into that space, so controls can never be pushed
+off-screen by a 1296x972 or HQ frame.
 
-`--window WxH` sets the viewport; the default is the corrected output size,
-which is what undistorted_viewer.py shows. Nothing after startup changes it. In
-`fit` mode the correction renders directly at the viewport size, so what you see
-is never resampled twice.
+`--window WxH` sets the correction's processing viewport; the default is the
+corrected output size used by undistorted_viewer.py. Resizing the application
+changes only its display canvas, not the correction maps or saved geometry.
 
-It opens showing EXACTLY what undistorted_viewer.py shows: the same lens
-profile, the same 120-degree rectilinear output at the same size, correction on,
-no zoom, no crop, no grid. Everything below is a departure from that, and
-`reset` gets back to it.
+It opens rendering EXACTLY the same corrected image as undistorted_viewer.py:
+the same lens profile, the same 120-degree rectilinear output, correction on, no
+zoom, no crop, no grid. A smaller desktop may downscale that image for display;
+the underlying render and remap remain identical. `reset` gets back to them.
 
 Zoom and crop are not what they usually are
 -------------------------------------------
@@ -1068,6 +1067,7 @@ class Studio:
                 for i, text in enumerate(lines)] + \
                [f"       camera: {self.sensor_status}"]
 
+
 def next_view(studio):
     return VIEWS[(VIEWS.index(studio.view) + 1) % len(VIEWS)]
 
@@ -1122,7 +1122,7 @@ def start_stdin_reader(studio):
     return thread
 
 
-# --- input channel 3: the fields --------------------------------------------
+# --- field metadata shared by widgets and commands --------------------------
 
 @dataclass(frozen=True)
 class Field:
@@ -1332,9 +1332,13 @@ class StudioWindow:
         self._last_frame_at = time.perf_counter()
         self._autosave_state = None
         self._last_display_note = None
+        self._reflow_after = None
+        self._flow_width = None
 
         self.field_vars = []
         self.field_widgets = []
+        self._field_groups = []
+        self._button_widgets = []
         self.log_labels = []
 
         self.root.title("Camera Studio")
@@ -1343,11 +1347,25 @@ class StudioWindow:
         self._build_widgets()
         self._bind_shortcuts()
 
-        # Let Tk calculate the real ttk panel height once, then freeze the
-        # application geometry. The camera canvas is already fixed in pixels;
-        # this prevents a theme or a changing status string moving the controls.
+        # The correction's viewport is a processing size, not a demand that the
+        # desktop donate that many physical pixels. Start inside the available
+        # screen, then let the grid give the control centre its natural height
+        # and the camera whatever remains. Freezing the old requested geometry
+        # is what made a 1296x972 feed hide the panel on a 1080p display.
         self.root.update_idletasks()
-        self.root.resizable(False, False)
+        screen_w, screen_h = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+        requested_w = self.root.winfo_reqwidth()
+        requested_h = self.root.winfo_reqheight()
+        width = max(780, min(requested_w, screen_w - 80))
+        height = max(560, min(requested_h, screen_h - 100))
+        width, height = min(width, screen_w), min(height, screen_h)
+        x = max(0, (screen_w - width) // 2)
+        y = max(0, (screen_h - height) // 3)
+        self.root.geometry(f"{width}x{height}+{x}+{y}")
+        self.root.minsize(min(780, screen_w), min(560, screen_h))
+        self.root.resizable(True, True)
+        self.root.update_idletasks()
+        self._reflow_controls(force=True)
 
     def _configure_styles(self):
         style = ttk.Style(self.root)
@@ -1360,51 +1378,59 @@ class StudioWindow:
 
     def _build_widgets(self):
         vw, vh = self.studio.viewport
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(0, weight=1)
         video_frame = ttk.Frame(self.root)
-        video_frame.pack(side="top", fill="x")
+        video_frame.grid(row=0, column=0, sticky="nsew")
         self.video = tk.Canvas(video_frame, width=vw, height=vh,
                                background="#0c0c0c", highlightthickness=0,
                                takefocus=True)
-        self.video.pack(anchor="n")
+        self.video.pack(fill="both", expand=True)
         self.video.bind("<Button-1>", self._drag_start)
         self.video.bind("<B1-Motion>", self._drag_move)
         self.video.bind("<ButtonRelease-1>", self._drag_end)
         self.video.bind("<Button-3>", self._drag_cancel)
 
         controls = ttk.Frame(self.root, padding=(6, 5))
-        controls.pack(side="bottom", fill="x")
+        controls.grid(row=1, column=0, sticky="ew")
+        self.controls = controls
 
         buttons = ttk.Frame(controls)
         buttons.pack(fill="x", pady=(0, 4))
+        self.button_frame = buttons
         for label, command in BUTTONS:
-            ttk.Button(buttons, text=label,
-                       command=lambda line=command: self._run_button(line)) \
-                .pack(side="left", padx=(0, 4))
+            button = ttk.Button(buttons, text=label,
+                                command=lambda line=command: self._run_button(line))
+            self._button_widgets.append(button)
 
         fields = ttk.Frame(controls)
         fields.pack(fill="x")
-        row = None
-        column = 0
+        group_content = None
+        group_cells = None
         for index, field in enumerate(FIELDS):
-            if row is None or field.group:
-                row = ttk.Frame(fields)
-                row.pack(fill="x", pady=1)
-                ttk.Label(row, text=field.group, width=7,
+            if group_content is None or field.group:
+                group_row = ttk.Frame(fields)
+                group_row.pack(fill="x", pady=1)
+                group_row.columnconfigure(1, weight=1)
+                ttk.Label(group_row, text=field.group, width=7,
                           style="Studio.Group.TLabel").grid(
-                              row=0, column=0, padx=(0, 4), sticky="w")
-                column = 1
+                              row=0, column=0, padx=(0, 4), sticky="nw")
+                group_content = ttk.Frame(group_row)
+                group_content.grid(row=0, column=1, sticky="ew")
+                group_cells = []
+                self._field_groups.append((group_content, group_cells))
 
-            ttk.Label(row, text=field.label).grid(
-                row=0, column=column, padx=(0, 3), sticky="e")
+            cell = ttk.Frame(group_content)
+            ttk.Label(cell, text=field.label).pack(side="left", padx=(0, 3))
             var = tk.StringVar(value=field.get(self.studio))
             if field.choices is not None:
-                widget = ttk.Combobox(row, textvariable=var,
+                widget = ttk.Combobox(cell, textvariable=var,
                                       values=field.choices, state="readonly",
                                       width=field.chars)
                 widget.bind("<<ComboboxSelected>>",
                             lambda event, i=index: self._choose_field(i))
             else:
-                widget = ttk.Entry(row, textvariable=var, width=field.chars)
+                widget = ttk.Entry(cell, textvariable=var, width=field.chars)
                 widget.bind("<Return>",
                             lambda event, i=index: self._entry_commit(i))
                 widget.bind("<Up>",
@@ -1415,10 +1441,10 @@ class StudioWindow:
                             lambda event, i=index: self._revert_field(i))
                 widget.bind("<FocusOut>",
                             lambda event, i=index: self._revert_field(i))
-            widget.grid(row=0, column=column + 1, padx=(0, 7), sticky="w")
+            widget.pack(side="left")
+            group_cells.append(cell)
             self.field_vars.append(var)
             self.field_widgets.append(widget)
-            column += 2
 
         self.derived_label = ttk.Label(controls, anchor="w",
                                        style="Studio.Derived.TLabel")
@@ -1439,6 +1465,55 @@ class StudioWindow:
         self.command_entry.pack(side="left", fill="x", expand=True)
         self.command_entry.bind("<Return>", self._submit_command)
         self.command_entry.bind("<Escape>", self._clear_command)
+
+    @staticmethod
+    def _flow_widgets(container, widgets, width, gap=4):
+        """Place a horizontal widget list into as many rows as the width needs.
+
+        A Tk grid shares column widths between every row. That sounds helpful,
+        but differently sized fields then make a later row wider than the sum
+        used to wrap it. Explicit row positions keep the right edge honest at
+        narrow window sizes.
+        """
+        x = y = line_height = 0
+        for widget in widgets:
+            if widget.winfo_manager() == "grid":
+                widget.grid_forget()
+            else:
+                widget.place_forget()
+            widget_width = widget.winfo_reqwidth()
+            widget_height = widget.winfo_reqheight()
+            if x and x + widget_width > width:
+                x = 0
+                y += line_height + 2
+                line_height = 0
+            widget.place(x=x, y=y, width=widget_width, height=widget_height)
+            x += widget_width + gap
+            line_height = max(line_height, widget_height)
+        container.configure(height=max(1, y + line_height + 2))
+
+    def _reflow_controls(self, force=False):
+        """Wrap buttons and fields whenever the application width changes."""
+        width = max(320, self.controls.winfo_width() - 12)
+        if not force and width == self._flow_width:
+            return
+        self._flow_width = width
+        self._flow_widgets(self.button_frame, self._button_widgets, width)
+        for content, cells in self._field_groups:
+            actual = content.winfo_width()
+            group_width = max(240, actual if actual > 100 else width - 70)
+            self._flow_widgets(content, cells, min(width - 70, group_width), gap=7)
+
+    def _window_resized(self, event):
+        if event.widget is not self.root or self._closing:
+            return
+        if self._reflow_after is not None:
+            self.root.after_cancel(self._reflow_after)
+        self._reflow_after = self.root.after_idle(self._finish_reflow)
+
+    def _finish_reflow(self):
+        self._reflow_after = None
+        self._reflow_controls()
 
     def _execute(self, line, *, echo_terminal=False):
         """Run one command and put its own result into the shared log."""
@@ -1528,6 +1603,7 @@ class StudioWindow:
 
     def _bind_shortcuts(self):
         self.root.bind("<KeyPress>", self._shortcut)
+        self.root.bind("<Configure>", self._window_resized, add="+")
 
     @staticmethod
     def _is_text_widget(widget):
@@ -1627,9 +1703,9 @@ class StudioWindow:
     def _widget_to_image(self, x, y):
         """Video-widget coordinates -> pixels in the rendered image.
 
-        The PPM contains the whole fixed viewport. This undoes only the
-        letterbox offset and its fit scale; the controls are separate widgets,
-        so there is no panel offset or OpenCV display-scale transform anymore.
+        The PPM follows the current canvas size. This undoes only the letterbox
+        offset and its fit scale; the controls are separate widgets, so there
+        is no panel offset or OpenCV display-scale transform anymore.
         """
         lay = self._image_layout
         if lay is None:
@@ -1690,8 +1766,9 @@ class StudioWindow:
         self.studio.log.add(True, "crop drag cancelled")
 
     def _letterbox(self, image):
-        """Fit the rendered image into the immutable video viewport, down only."""
-        vw, vh = self.studio.viewport
+        """Fit the rendered image into the current video canvas, down only."""
+        vw = max(2, self.video.winfo_width())
+        vh = max(2, self.video.winfo_height())
         render_h, render_w = image.shape[:2]
         scale = min(vw / render_w, vh / render_h, 1.0)
         iw = max(1, int(render_w * scale))
@@ -1726,8 +1803,8 @@ class StudioWindow:
         if not lay or lay["image_scale"] >= 0.999:
             return None
         return (f"display only: the {lay['render_w']}x{lay['render_h']} render is "
-                f"shown at {lay['image_scale'] * 100:.0f}% to fit the viewport — "
-                "'fill' undoes it")
+                f"shown at {lay['image_scale'] * 100:.0f}% to fit the current "
+                "window — enlarge it for a 1:1 preview")
 
     def _autosave(self):
         if not self.studio.autosave:
@@ -1859,6 +1936,12 @@ class StudioWindow:
             except tk.TclError:
                 pass
             self._after_id = None
+        if self._reflow_after is not None:
+            try:
+                self.root.after_cancel(self._reflow_after)
+            except tk.TclError:
+                pass
+            self._reflow_after = None
         self.camera.release()
         try:
             self.root.destroy()
@@ -1884,14 +1967,14 @@ def parse_args():
                              "field of view, ~2x the real detail at the frame edges, "
                              "and the only thing that makes zooming worthwhile")
     parser.add_argument("--window", metavar="WxH", type=parse_size,
-                        help="size of the camera VIEWPORT, e.g. 1600x900. The "
-                             "window is that plus the control panel, and it "
-                             "never changes size afterwards. Default: the "
-                             "corrected output size, which is what "
-                             "undistorted_viewer.py shows")
+                        help="processing size of the camera viewport, e.g. "
+                             "1600x900. The resizable Tk canvas fits that render "
+                             "into the available window. Default: the corrected "
+                             "output size used by undistorted_viewer.py")
     parser.add_argument("--display-scale", type=float, default=1.0,
-                        help="scale the finished window; useful when the panel "
-                             "runs off a small screen. Does not affect processing")
+                        help="legacy OpenCV-UI option, retained for command-line "
+                             "compatibility but ignored by the responsive Tk "
+                             "window; resize it or use --window")
     parser.add_argument("--list-modes", action="store_true",
                         help="print the sensor's modes and exit")
 
