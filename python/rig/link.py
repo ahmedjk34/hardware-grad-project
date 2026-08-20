@@ -250,7 +250,7 @@ class Rig:
         self.port_name: str = cfg["serial"]["port"]
         self.baud: int = cfg["serial"]["baud"]
         # One object validates both the logical counts and their physical
-        # 1.5 x 7.5 cm footprint before anything is sent to the machine.
+        # 2.0 x 7.5 cm footprint before anything is sent to the machine.
         self.grid = MachineGrid.from_config(cfg)
         self.cols: int = self.grid.cols
         self.rows: int = self.grid.rows

@@ -32,9 +32,9 @@ The live sketch maps the tape-measured `34 cm × 40 cm` X/Y envelope to its
 - X: `5050 / 34 = 148.5294 steps/cm`
 - Y: `7500 / 40 = 187.5 steps/cm`
 
-The supported block orientation is `1.5 cm` along X and `7.5 cm` along Y. A
-`22 × 5` grid fits: its `33 × 37.5 cm` footprint is centred, leaving `0.5 cm`
-at each X edge and `1.25 cm` at each Y edge. `GRID_TRIM_X_CM` and
+The supported block orientation is `2 cm` along X and `7.5 cm` along Y. A
+`17 × 5` grid fits: its `34 × 37.5 cm` footprint fills X and is centred along
+Y, leaving `1.25 cm` at each Y edge. `GRID_TRIM_X_CM` and
 `GRID_TRIM_Y_CM` are signed calibration corrections for shifting that complete
 footprint; positive is away from the relevant home switch. After changing a
 trim, flash and verify corner cells with `G` before using `B`.

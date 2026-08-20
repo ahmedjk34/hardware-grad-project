@@ -112,7 +112,7 @@ instead of you reading the screen to find out.
 **Implemented in `camera/gridded_camera_feed.py`.**
 
 The viewer draws an 8×8 straightness ruler over the image. The rig thinks in a
-22×5 fixed-pitch block grid.
+17×5 fixed-pitch block grid.
 These are unrelated, which is the core mismatch to fix.
 
 The gridded canonical feed draws the grid from `config/rig.json` and labels the
@@ -136,8 +136,8 @@ unused edge strips rather than stretching the packed block cells over them.
 **Why four clicks instead of arithmetic.** The camera's rotation and mirroring
 relative to the rig is arbitrary, and the machine's axes run in opposite
 directions (`X` from 0 to −5050, `Y` from 0 to +7500). Those spans are
-calibrated as 34 cm × 40 cm; the packed 1.5 cm × 7.5 cm cells occupy 33 cm ×
-37.5 cm and are centred inside them. Four clicked corners
+calibrated as 34 cm × 40 cm; the packed 2 cm × 7.5 cm cells occupy 34 cm ×
+37.5 cm and are centred along Y. Four clicked corners
 absorb all of that with no sign-juggling. It also means cell accuracy does not
 depend on the lens numbers being correct — and they are still estimates, not a
 calibration.

@@ -3,7 +3,7 @@
 
     from rig.grid import MachineGrid
 
-    grid = MachineGrid.from_config()     # 22 cols x 5 rows, from config/rig.json
+    grid = MachineGrid.from_config()     # 17 cols x 5 rows, from config/rig.json
     grid.cell_at(0, 4)                   # image cell (left, bottom) -> (1, 1)
     grid.image_cell(3, 5)                # (col, row) -> the image cell to draw in
     print(grid.ascii_map())              # the same picture the rig's '9' prints

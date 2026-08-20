@@ -52,11 +52,11 @@ with tempfile.TemporaryDirectory() as directory:
     shifted = MachineGrid(
         cols=grid.cols,
         rows=grid.rows,
-        cell_width_cm=grid.cell_width_cm,
+        cell_width_cm=1.9,
         cell_height_cm=grid.cell_height_cm,
         workspace_width_cm=grid.workspace_width_cm,
         workspace_height_cm=grid.workspace_height_cm,
-        trim_x_cm=0.1,
+        trim_x_cm=grid.trim_x_cm,
         trim_y_cm=grid.trim_y_cm,
     )
     loaded, reason = load_workspace(path, shifted, projection)

@@ -108,13 +108,13 @@ from_cfg = MachineGrid.from_config()
 check("from_config matches rig.json", from_cfg.matches(), from_cfg.describe())
 check("bounds are 1-based, like cellInRange()",
       from_cfg.contains(1, 1) and not from_cfg.contains(0, 1)
-      and from_cfg.contains(22, 5) and not from_cfg.contains(23, 5))
-check("physical grid is 33x37.5 cm",
-      (from_cfg.packed_width_cm, from_cfg.packed_height_cm) == (33.0, 37.5))
+      and from_cfg.contains(17, 5) and not from_cfg.contains(18, 5))
+check("physical grid is 34x37.5 cm",
+      (from_cfg.packed_width_cm, from_cfg.packed_height_cm) == (34.0, 37.5))
 check("packed grid is centred in 34x40 cm",
-      (from_cfg.x_start_cm, from_cfg.y_start_cm) == (0.5, 1.25))
-check("first physical cell centre", from_cfg.cell_center_cm(1, 1) == (1.25, 5.0))
-check("last physical cell centre", from_cfg.cell_center_cm(22, 5) == (32.75, 35.0))
+      (from_cfg.x_start_cm, from_cfg.y_start_cm) == (0.0, 1.25))
+check("first physical cell centre", from_cfg.cell_center_cm(1, 1) == (1.0, 5.0))
+check("last physical cell centre", from_cfg.cell_center_cm(17, 5) == (33.0, 35.0))
 
 # The Mega cannot read rig.json, so its safe manual-monitor defaults are baked
 # into the sketch. Keep this executable check beside the AGENTS.md pairing rule
@@ -174,16 +174,16 @@ check("workspace rejects outside click",
       workspace.cell_at((0, 0), (640, 480)) is None)
 
 # Physical mapping uses the four corners of the full 34x40 cm envelope. The
-# packed 33x37.5 cm block grid retains its centred margins instead of being
+# packed 34x37.5 cm block grid retains its centred Y margins instead of being
 # stretched over that whole quadrilateral.
 physical_workspace = WorkspaceMap.from_grid(from_cfg, corners, (640, 480))
 check("physical workspace matches grid JSON", physical_workspace.matches_grid(from_cfg))
-first_centre = physical_workspace.pixel_at(1.25 / 34.0, 5.0 / 40.0, (640, 480))
-last_centre = physical_workspace.pixel_at(32.75 / 34.0, 35.0 / 40.0, (640, 480))
+first_centre = physical_workspace.pixel_at(1.0 / 34.0, 5.0 / 40.0, (640, 480))
+last_centre = physical_workspace.pixel_at(33.0 / 34.0, 35.0 / 40.0, (640, 480))
 check("physical camera map finds first cell",
       physical_workspace.cell_at(first_centre, (640, 480)) == (1, 1))
 check("physical camera map finds last cell",
-      physical_workspace.cell_at(last_centre, (640, 480)) == (22, 5))
+      physical_workspace.cell_at(last_centre, (640, 480)) == (17, 5))
 check("physical camera map preserves unused margins",
       physical_workspace.cell_at(corners[0], (640, 480)) is None)
 

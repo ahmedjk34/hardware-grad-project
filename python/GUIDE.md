@@ -85,7 +85,7 @@ python camera/gridded_camera_feed.py --display-scale 1.5
 ```
 
 It opens with an amber **APPROXIMATION ONLY** grid so you can see the configured
-22×5 layout immediately. That guess fills the image and is not evidence that
+17×5 layout immediately. That guess fills the image and is not evidence that
 camera and motor cells match. To calibrate:
 
 1. Press `c`.
@@ -230,8 +230,8 @@ them; right-click clears them.
 
 ### The machine grid
 
-`grid machine` (the default) draws the **rig's** grid: 22 × 5 cells read from
-`config/rig.json`, each representing one 1.5 cm X × 7.5 cm Y block footprint
+`grid machine` (the default) draws the **rig's** grid: 17 × 5 cells read from
+`config/rig.json`, each representing one 2 cm X × 7.5 cm Y block footprint
 and labelled with the `col,row` you would type into `G` or `B`. Hover a cell
 and it prints the commands for it. `map` prints the same
 picture the rig's own `9` prints, so the two can be held side by side.
@@ -248,10 +248,10 @@ the rig — `origin <bottom-left|bottom-right|top-left|top-right>` moves `[1,1]`
 and `swapaxes` handles a camera a quarter turn out. Eight combinations, and the
 edge labels carry a `c`/`r` prefix so none of them can be read ambiguously.
 
-`rows` / `cols` do not apply here. The physical 33 × 37.5 cm packed grid is
-centred inside the 34 × 40 cm motion envelope, with signed X/Y trims available
-for measured placement correction. Those two options still drive the px/cm
-ruler.
+`rows` / `cols` do not apply here. The physical 34 × 37.5 cm packed grid fills
+the 34 cm X motion envelope and is centred inside the 40 cm Y envelope, with
+signed X/Y trims available for measured placement correction. Those two options
+still drive the px/cm ruler.
 
 ### The centimetre readings
 

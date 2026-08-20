@@ -46,10 +46,10 @@ check("placed build requires fresh selection", controller.selected is None)
 rig = FakeRig([BuildResult(REJECTED, "bad level"),
                BuildResult(ABORTED, "Z switch not reached")])
 controller = BuildController(rig, level=2, rotation="R")
-controller.select((22, 5))
-check("rotation appears only when requested", controller.command == "B 22 5 2 R")
+controller.select((17, 5))
+check("rotation appears only when requested", controller.command == "B 17 5 2 R")
 result = controller.build()
-check("safe rejection keeps selection", result == REJECTED and controller.selected == (22, 5))
+check("safe rejection keeps selection", result == REJECTED and controller.selected == (17, 5))
 result = controller.build()
 check("aborted result locks controller", result == ABORTED and controller.locked)
 try:

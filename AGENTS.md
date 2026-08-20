@@ -72,9 +72,9 @@ Current default: **22 columns × 5 rows = 110 cells**.
 
 Current calibration is **34 cm X = 5050 steps** and **40 cm Y = 7500
 steps**, giving approximately **148.5294 X steps/cm** and **187.5 Y
-steps/cm**. Cells are **1.5 cm X × 7.5 cm Y**, in that one orientation only.
-The 22×5 packed grid is 33×37.5 cm and is centred, leaving 0.5 cm at each X
-edge and 1.25 cm at each Y edge before trims.
+steps/cm**. Cells are **2 cm X × 7.5 cm Y**, in that one orientation only.
+The 17×5 packed grid is 34×37.5 cm, filling X and leaving 1.25 cm at each Y
+edge before trims.
 
 The firmware owns the step counts and derives both steps/cm ratios at runtime;
 never hard-code either ratio and do not copy the `5050 × 7500` safety envelope

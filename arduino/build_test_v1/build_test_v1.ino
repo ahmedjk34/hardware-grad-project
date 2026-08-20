@@ -490,11 +490,11 @@ const bool SOFT_LIMIT_VERBOSE = true;
 // ============================================================
 //
 // One cell is one block footprint in the only supported orientation:
-// 1.5 cm along X and 7.5 cm along Y. The largest whole-block grid that
-// fits in 34 x 40 cm is therefore 22 cols x 5 rows.
+// 2.0 cm along X and 7.5 cm along Y. The largest whole-block grid that
+// fits in 34 x 40 cm is therefore 17 cols x 5 rows.
 //
-// The packed 33 x 37.5 cm grid is centred in the motion envelope. That
-// leaves 0.5 cm at both X edges and 1.25 cm at both Y edges. The signed
+// The packed 34 x 37.5 cm grid is centred in the motion envelope. That
+// leaves no unused X edge and 1.25 cm at both Y edges. The signed
 // trims move the entire packed grid away from (+) or toward (-) its home
 // switch. They are deliberately in centimetres: the conversion to steps
 // follows X/Y calibration automatically, like the Z build margins do.
@@ -506,18 +506,18 @@ const bool SOFT_LIMIT_VERBOSE = true;
 //   HOW MANY CELLS FIT?
 // ------------------------------------------------------------
 //   Counts are limited by physical pitch, not merely by whether one
-//   arithmetic step remains. With zero trim the maxima are 22 x 5.
+//   arithmetic step remains. With zero trim the maxima are 17 x 5.
 //   A non-zero trim consumes equal safety room at the opposite edge,
 //   so the maximum count may fall. Command S can choose a smaller
 //   centred grid but cannot squeeze cells or change their footprint.
 
-float GRID_CELL_X_CM = 1.5;
+float GRID_CELL_X_CM = 2.0;
 float GRID_CELL_Y_CM = 7.5;
 
 float GRID_TRIM_X_CM = 0.0; // signed whole-grid correction along X
 float GRID_TRIM_Y_CM = 0.0; // signed whole-grid correction along Y
 
-long GRID_COLS = 22;
+long GRID_COLS = 17;
 long GRID_ROWS = 5;
 
 // The ASCII map is only drawn when the grid is small enough to be

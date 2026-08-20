@@ -179,7 +179,7 @@ def draw_cell_labels(frame, nx, ny, text_of, color=LABEL_COLOR, min_cell=(52, 30
     anything else. overlays.py draws; it does not know about the rig.
 
     Returns False without drawing anything when the cells are smaller than
-    `min_cell`, so the 22x5 machine grid on a small preview degrades to just the
+    `min_cell`, so the 17x5 machine grid on a small preview degrades to just the
     edge labels instead of turning into a smear of overlapping digits. The default
     threshold is set where the machine grid stops being legible: it draws on the
     1296x972 output and gives up on a 640x480 one, where the bottom row's

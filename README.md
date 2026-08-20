@@ -17,7 +17,7 @@ The repository is split by platform:
 - **Camera:** DORHEA Raspberry Pi Camera Module — OV5647 sensor, 5 MP, 160° fisheye lens
 - **Mounting:** camera ~50 cm above the surface, pointing straight down, roughly centred
 - **Calibrated X/Y envelope:** approximately 34 cm × 40 cm
-- **Current block grid:** 22 × 5 cells, each 1.5 cm X × 7.5 cm Y
+- **Current block grid:** 17 × 5 cells, each 2 cm X × 7.5 cm Y
 
 ## Getting started
 
@@ -44,7 +44,7 @@ cd python
 ../.venv/bin/python camera/camera_feed.py
 ```
 
-To see the physical 22×5 machine grid on that same feed, run
+To see the physical 17×5 machine grid on that same feed, run
 `camera/gridded_camera_feed.py`. It shows an amber approximation initially;
 press `c` and click the four prompted 34×40 cm machine-envelope corners to save
 the calibrated overlay.
