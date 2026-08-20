@@ -1574,15 +1574,37 @@ class StudioWindow:
         self.command_var.set("")
         return "break"
 
+    def _focused_widget(self):
+        """Return the focused Python widget, including an open Combobox owner.
+
+        ttk builds each dropdown as a private Tcl widget named
+        ``<combobox>.popdown``. It is deliberately absent from Tkinter's Python
+        widget tree, so ``focus_get()`` raises ``KeyError('popdown')`` while the
+        list is open. Resolve that raw Tcl path back to its Combobox: besides
+        avoiding the crash, this makes the live refresh leave the active choice
+        alone until Tk reports ``<<ComboboxSelected>>``.
+        """
+        try:
+            return self.root.focus_get()
+        except KeyError:
+            try:
+                focus_path = str(self.root.tk.call("focus"))
+            except tk.TclError:
+                return None
+            for widget in self.field_widgets:
+                widget_path = str(widget)
+                if focus_path.startswith(widget_path + ".popdown"):
+                    return widget
+            return None
+        except tk.TclError:
+            return None
+
     def _refresh_widgets(self):
         # A per-frame refresh is what makes terminal commands, shortcuts and
         # buttons visible in the fields. The focused widget is load-bearing:
         # replacing its StringVar while somebody types would make entries lose
         # half-written values at camera frame rate.
-        try:
-            focused = self.root.focus_get()
-        except tk.TclError:
-            focused = None
+        focused = self._focused_widget()
         for field, var, widget in zip(FIELDS, self.field_vars, self.field_widgets):
             if widget is not focused:
                 value = field.get(self.studio)
@@ -1615,7 +1637,7 @@ class StudioWindow:
         # Root bindings also run after a child widget's class binding. Guarding
         # on focus is therefore essential: without it, typing 158 into an Entry
         # would also fire the 1, 5 and 8 lens shortcuts.
-        if self._is_text_widget(self.root.focus_get()):
+        if self._is_text_widget(self._focused_widget()):
             return None
 
         p = self.studio.profile
