@@ -126,6 +126,19 @@ class LensProfile:
     fov_reference: str = "diagonal"   # is lens_fov_deg the "diagonal" or "horizontal" FOV?
     model: str = "equidistant"        # one of MODEL_NAMES
 
+    # --- manual trim on top of the ideal model (all default to no-op) ---
+    # The curves in PROJECTIONS are a four-member family; a real moulded M12
+    # lens is not exactly on any of them. These are what is left to tune by hand
+    # once the FOV is close. k1/k2 reshape the radial curve without rescaling it
+    # (they are zero on the optical axis and grow toward the edge), which is a
+    # different correction from lens_fov_deg — that one scales every radius
+    # uniformly. centre_dx/dy move the assumed optical axis, for the common case
+    # of a sensor that is not quite centred behind the lens.
+    k1: float = 0.0                   # radial trim weighted by (theta/theta_max)^2
+    k2: float = 0.0                   # radial trim weighted by (theta/theta_max)^4
+    centre_dx: float = 0.0            # principal point offset from image centre, px
+    centre_dy: float = 0.0
+
     # --- desired output rendering ---
     output_fov_deg: float = 120.0     # how much of the source cone to re-project
     output_scale: float = 1.0         # output size relative to input; >1 preserves centre detail
@@ -155,6 +168,12 @@ class LensProfile:
             min(max(self.output_fov_deg, 10.0), MAX_OUTPUT_FOV_DEG, self.lens_fov_deg)
         )
         self.output_scale = float(min(max(self.output_scale, 0.1), 4.0))
+        # Past about +/-0.5 the trim stops being a trim: the radial curve turns
+        # back on itself and the remap folds the image over.
+        self.k1 = float(min(max(self.k1, -0.5), 0.5))
+        self.k2 = float(min(max(self.k2, -0.5), 0.5))
+        self.centre_dx = float(min(max(self.centre_dx, -2000.0), 2000.0))
+        self.centre_dy = float(min(max(self.centre_dy, -2000.0), 2000.0))
         if self.model not in PROJECTIONS:
             self.model = "equidistant"
         if self.fov_reference not in ("diagonal", "horizontal"):
@@ -198,6 +217,8 @@ class UndistortMaps:
     detail: np.ndarray             # source px per output px, MOST-stretched direction
     interpolation: int = cv2.INTER_CUBIC
     blend_weights: list[tuple[np.ndarray, np.ndarray]] = field(default_factory=list)
+    roi: tuple = (0.0, 0.0, 1.0, 1.0)      # sub-rect of the full output, normalised
+    full_out_size: tuple = (0, 0)          # (w, h) the output would be at roi = full
 
     @property
     def map1(self) -> np.ndarray:
@@ -231,27 +252,61 @@ def source_focal_px(profile: LensProfile, size: tuple[int, int]) -> float:
     return _reference_radius(w, h, profile.fov_reference) / r_at_theta_max
 
 
-def _output_geometry(profile: LensProfile, size: tuple[int, int]):
+def _output_geometry(profile: LensProfile, size: tuple[int, int],
+                     roi=None, view_size=None):
     """Size and intrinsics of the virtual pinhole camera we re-project onto.
 
     Shared by both the estimated and calibrated branches so that switching to
     real calibration data does not shift the output framing.
+
+    `roi` is a normalised (x0, y0, x1, y1) sub-rectangle of the full rectilinear
+    output, and `view_size` the (w, h) to render that sub-rectangle at. This is
+    how cropping and zooming are done: rather than rendering the whole frame and
+    then enlarging a piece of it — which interpolates twice and throws away the
+    detail the correction just fought for — the ROI is folded into the intrinsics
+    so the remap samples the ORIGINAL frame straight into the zoomed output. A
+    2x zoom therefore costs exactly what sampling_stats() says it costs, and
+    nothing extra.
+
+    With roi=None and view_size=None this returns precisely what it always did.
     """
     w, h = size
     ow = max(2, int(round(w * profile.output_scale)))
     oh = max(2, int(round(h * profile.output_scale)))
 
     # Rectilinear: r = f * tan(theta), so f follows from the output FOV we want.
+    # Always computed against the FULL output size — the output FOV describes the
+    # whole re-projected field, not whatever piece of it is currently on screen.
     theta_out = math.radians(profile.output_fov_deg) / 2.0
-    f_out = _reference_radius(ow, oh, profile.fov_reference) / math.tan(theta_out)
+    f_full = _reference_radius(ow, oh, profile.fov_reference) / math.tan(theta_out)
+
+    x0, y0, x1, y1 = roi if roi is not None else (0.0, 0.0, 1.0, 1.0)
+    px0, py0 = x0 * ow, y0 * oh
+    # A degenerate drag (a click, or a zero-height band) would divide by zero.
+    pw, ph = max(1e-6, (x1 - x0) * ow), max(1e-6, (y1 - y0) * oh)
+
+    if view_size is not None:
+        out_w, out_h = max(2, int(view_size[0])), max(2, int(view_size[1]))
+    else:
+        out_w, out_h = max(2, int(round(pw))), max(2, int(round(ph)))
+    sx, sy = out_w / pw, out_h / ph
+
+    # Output pixel u samples full-output coordinate px0 + (u + 0.5)/sx - 0.5
+    # (pixel-CENTRE convention, hence the half-pixels). Rearranged into the
+    # (u - cx) / fx form the maps want, that is fx = sx * f_full and the cx
+    # below. Anisotropic sx != sy is allowed, so a freehand crop of any aspect
+    # ratio can still be rendered into a fixed window.
+    fx, fy = f_full * sx, f_full * sy
+    cx = sx * ((ow - 1) / 2.0 + 0.5 - px0) - 0.5
+    cy = sy * ((oh - 1) / 2.0 + 0.5 - py0) - 0.5
 
     k_out = np.array(
-        [[f_out, 0.0, (ow - 1) / 2.0],
-         [0.0, f_out, (oh - 1) / 2.0],
+        [[fx, 0.0, cx],
+         [0.0, fy, cy],
          [0.0, 0.0, 1.0]],
         dtype=np.float64,
     )
-    return (ow, oh), f_out, k_out
+    return (out_w, out_h), (ow, oh), fx, k_out
 
 
 def build_maps(
@@ -259,6 +314,8 @@ def build_maps(
     size: tuple[int, int],
     interpolation: str = DEFAULT_INTERPOLATION,
     mip: bool = True,
+    roi=None,
+    view_size=None,
 ) -> UndistortMaps:
     """Precompute the remap tables for one input resolution.
 
@@ -271,15 +328,19 @@ def build_maps(
     they cost one extra remap per level per frame. Levels are only built where
     the geometry actually needs them, so leaving this on is free for
     configurations that never downscale.
+
+    `roi` and `view_size` crop and zoom by re-projecting only part of the output
+    field — see _output_geometry. Leaving both None renders the whole field, as
+    before.
     """
     profile.clamp()
-    (ow, oh), f_out, k_out = _output_geometry(profile, size)
+    out_size, full_out, f_out, k_out = _output_geometry(profile, size, roi, view_size)
 
     if profile.calibrated:
-        map_x, map_y = _calibrated_maps(profile, size, (ow, oh), k_out)
+        map_x, map_y = _calibrated_maps(profile, size, out_size, k_out)
         f_src = float(np.array(profile.camera_matrix, dtype=np.float64)[0, 0])
     else:
-        map_x, map_y = _estimated_maps(profile, size, (ow, oh), f_out)
+        map_x, map_y = _estimated_maps(profile, size, out_size, k_out)
         f_src = source_focal_px(profile, size)
 
     sampling, detail = _sampling_density(map_x, map_y)
@@ -287,7 +348,7 @@ def build_maps(
 
     return UndistortMaps(
         levels=levels,
-        out_size=(ow, oh),
+        out_size=out_size,
         source_focal_px=f_src,
         output_focal_px=f_out,
         output_camera_matrix=k_out,
@@ -295,26 +356,35 @@ def build_maps(
         detail=detail,
         interpolation=INTERPOLATIONS.get(interpolation, cv2.INTER_CUBIC),
         blend_weights=weights,
+        roi=tuple(roi) if roi is not None else (0.0, 0.0, 1.0, 1.0),
+        full_out_size=full_out,
     )
 
 
-def _estimated_maps(profile, size, out_size, f_out):
+def _estimated_maps(profile, size, out_size, k_out):
     """Build the table from the FOV estimate — the uncalibrated path.
 
     Works backwards, as remapping requires: for each OUTPUT pixel, find the
     SOURCE pixel it should be filled from. Returns float32 maps; the fixed-point
     conversion happens later, once per mip level.
+
+    The output intrinsics arrive as `k_out` rather than a bare focal length so
+    that a cropped or zoomed ROI — which shifts the principal point and can
+    scale the axes unequally — goes through exactly this same code path.
     """
     w, h = size
     ow, oh = out_size
     f_src = source_focal_px(profile, size)
     theta_max = math.radians(profile.lens_fov_deg) / 2.0
-    cx, cy = (w - 1) / 2.0, (h - 1) / 2.0      # assumed principal point
-    ocx, ocy = (ow - 1) / 2.0, (oh - 1) / 2.0
+    # Assumed principal point of the SOURCE image, plus the manual offset.
+    cx = (w - 1) / 2.0 + profile.centre_dx
+    cy = (h - 1) / 2.0 + profile.centre_dy
+    fx, fy = float(k_out[0, 0]), float(k_out[1, 1])
+    ocx, ocy = float(k_out[0, 2]), float(k_out[1, 2])
 
     # 1. Turn each output pixel into a normalised pinhole ray direction.
-    x = (np.arange(ow, dtype=np.float32) - ocx) / f_out
-    y = (np.arange(oh, dtype=np.float32) - ocy) / f_out
+    x = (np.arange(ow, dtype=np.float32) - ocx) / fx
+    y = (np.arange(oh, dtype=np.float32) - ocy) / fy
     x, y = np.meshgrid(x, y)
 
     # 2. Recover that ray's angle from the optical axis. For a pinhole camera
@@ -322,8 +392,16 @@ def _estimated_maps(profile, size, out_size, f_out):
     r_rect = np.hypot(x, y)
     theta = np.arctan(r_rect)
 
-    # 3. Ask the fisheye model where a ray at that angle actually landed.
+    # 3. Ask the fisheye model where a ray at that angle actually landed, then
+    #    apply the manual trim. It is normalised by theta_max so that k1 and k2
+    #    read as "push the sampling this fraction further out AT THE EDGE",
+    #    independent of the FOV, and vanish on the optical axis — which is what
+    #    makes them independent of lens_fov_deg rather than a second copy of it.
     r_src = f_src * PROJECTIONS[profile.model](theta).astype(np.float32)
+    if profile.k1 or profile.k2:
+        t = (theta / theta_max).astype(np.float32)
+        t2 = t * t
+        r_src = r_src * (1.0 + profile.k1 * t2 + profile.k2 * t2 * t2)
 
     # 4. Rescale the ray direction to that radius. r_src/r_rect has a finite
     #    limit on the optical axis, but is 0/0 numerically — guard that pixel.

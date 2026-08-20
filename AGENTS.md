@@ -45,6 +45,7 @@ Switching boards is then a one-line edit to `rig.json`.
 | --- | --- |
 | `config/rig.json` → `grid.cols` / `grid.rows` | **authoritative at runtime** |
 | `build_test_v1.ino:515-516` | `GRID_COLS` / `GRID_ROWS` — the compiled default |
+| `python/rig/grid.py` | `MachineGrid.from_config()` — what the viewers draw |
 
 The sketch uses no EEPROM, so nothing survives a reset — and opening the USB
 port resets the board. Every session therefore starts at the compiled default,
@@ -53,6 +54,28 @@ and the Pi pushes `S <cols> <rows>` on connect to overwrite it.
 The firmware default should still be kept equal to the config, so that a manual
 Arduino Serial Monitor session behaves the same as a Pi-driven one. Editing only
 the sketch is the trap: the Pi will silently overwrite it on the next connect.
+
+### 3b. Grid NUMBERING — the convention, not the count
+
+| Where | What |
+| --- | --- |
+| `build_test_v1.ino` `printGrid()` | draws the map that `9` prints |
+| `python/rig/grid.py` | `cell_at()` / `image_cell()` / `ascii_map()` |
+| `python/tests/test_grid.py` | holds the two to the same map |
+
+**1-based. Col 1 is the X switch side, row 1 is the Y switch side, and `[1,1]`
+is drawn bottom-left** — rows increase upward, columns rightward. The firmware
+says so in its own footer: `^ origin corner is bottom-left [1,1]`. Cells are
+written `[col,row]`, the same order as the arguments to `G` and `B`.
+
+`ascii_map()` reproduces `printGrid()` byte for byte on purpose, so a change to
+either can be caught by diffing them rather than by noticing that the claw went
+to the wrong place. If you reword that map, run `python/tests/test_grid.py`.
+
+Where the grid sits **on the camera image** is NOT part of this. That is the
+camera's business, it is not calibrated yet, and `MachineGrid.origin` /
+`swap_axes` are the placeholder until Plan 2 step 4 derives it from four
+clicked corners.
 
 ### 4. Frame span in centimetres
 

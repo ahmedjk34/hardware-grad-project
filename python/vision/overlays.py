@@ -171,6 +171,62 @@ def draw_grid_labels(frame, rows, cols, cm_per_px_x=None, cm_per_px_y=None):
                     FONT, 0.38, LABEL_COLOR, 1, cv2.LINE_AA)
 
 
+def draw_cell_labels(frame, nx, ny, text_of, color=LABEL_COLOR, min_cell=(52, 30)):
+    """Write `text_of(ix, iy)` in the middle of every cell, if they fit.
+
+    `text_of` keeps this function ignorant of what the cells mean — the machine
+    grid hands it one that returns "3,5", the same way the px grid could hand it
+    anything else. overlays.py draws; it does not know about the rig.
+
+    Returns False without drawing anything when the cells are smaller than
+    `min_cell`, so a 10x20 grid on a small preview degrades to just the edge
+    labels instead of turning into a smear of overlapping digits. The default
+    threshold is set where a 10x20 grid stops being legible: it draws on the
+    1296x972 output and gives up on a 640x480 one, where the bottom row's
+    labels would land on top of the edge labels.
+    """
+    h, w = frame.shape[:2]
+    cell_w, cell_h = w / nx, h / ny
+    if cell_w < min_cell[0] or cell_h < min_cell[1]:
+        return False
+
+    for iy in range(ny):
+        for ix in range(nx):
+            text = text_of(ix, iy)
+            (tw, th), _ = cv2.getTextSize(text, FONT, 0.36, 1)
+            x = round((ix + 0.5) * cell_w - tw / 2)
+            y = round((iy + 0.5) * cell_h + th / 2)
+            # Outline first: these sit on live camera image, not on a panel.
+            cv2.putText(frame, text, (x, y), FONT, 0.36, TEXT_BG_COLOR, 3, cv2.LINE_AA)
+            cv2.putText(frame, text, (x, y), FONT, 0.36, color, 1, cv2.LINE_AA)
+    return True
+
+
+def draw_axis_labels(frame, nx, ny, col_text, row_text, color=LABEL_COLOR):
+    """Column numbers along the BOTTOM edge, row numbers along the LEFT.
+
+    Same layout as the firmware's `9` map — columns under the grid, rows down
+    the left side — so the screen and the serial output can be read as the same
+    picture. That is deliberately NOT the layout draw_grid_labels() uses: that
+    one labels the grid *lines* along the top and left, because it is measuring
+    distances rather than naming cells.
+    """
+    h, w = frame.shape[:2]
+    cell_w, cell_h = w / nx, h / ny
+
+    def stamp(text, x, y):
+        cv2.putText(frame, text, (x, y), FONT, 0.42, TEXT_BG_COLOR, 3, cv2.LINE_AA)
+        cv2.putText(frame, text, (x, y), FONT, 0.42, color, 1, cv2.LINE_AA)
+
+    for ix in range(nx):
+        text = col_text(ix)
+        (tw, _), _ = cv2.getTextSize(text, FONT, 0.42, 1)
+        stamp(text, round((ix + 0.5) * cell_w - tw / 2), h - 5)
+    for iy in range(ny):
+        text = row_text(iy)
+        stamp(text, 4, round((iy + 0.5) * cell_h + 5))
+
+
 def draw_measure(frame, points, cm_per_px_x=None, cm_per_px_y=None):
     """Mark clicked points and, once there are two, the distance between them.
 

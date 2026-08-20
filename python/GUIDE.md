@@ -77,8 +77,11 @@ both work, and choices accept any unambiguous prefix (`model stereo`).
 | `model <name>` | projection curve |
 | `ref <diagonal\|horizontal>` | which FOV the lens number refers to |
 | `interp <name>` | resampling kernel: `linear`, `cubic`, `lanczos4` |
-| `rows <n>` / `cols <n>` | grid divisions |
-| `grid <off\|px\|cm>` | grid overlay and its units |
+| `rows <n>` / `cols <n>` | grid divisions — the px/cm ruler only |
+| `grid <machine\|off\|px\|cm>` | grid overlay: the rig's cells, or the ruler |
+| `origin <corner>` | which image corner holds machine cell `[1,1]` |
+| `swapaxes [on\|off]` | machine columns run down the image, not across |
+| `map` | print the rig's grid map — hold it next to `9` |
 | `view <corrected\|raw\|both>` | which image to show |
 | `wcm <cm>` / `hcm <cm>` | the measured span of the whole frame |
 | `mip [on\|off]`, `hover [on\|off]` | bare word toggles |
@@ -92,7 +95,7 @@ both work, and choices accept any unambiguous prefix (`model stereo`).
 | `:` | open the command prompt |
 | `?` | show / hide the key list on the frame |
 | `u` | cycle view: corrected → raw → both |
-| `g` | cycle grid: off → px → cm |
+| `g` | cycle grid: machine → off → px → cm |
 | `[` `]` | lens FOV ∓2° — **the main correction-strength knob** |
 | `-` `=` | output FOV ∓5° |
 | `,` `.` | output scale ∓0.1 |
@@ -107,6 +110,29 @@ both work, and choices accept any unambiguous prefix (`model stereo`).
 Hover a grid cell to read its bounds in pixels and, on the corrected view with
 `grid cm`, in centimetres. Left-click two points to measure the distance between
 them; right-click clears them.
+
+### The machine grid
+
+`grid machine` (the default) draws the **rig's** grid: 10 × 20 cells read from
+`config/rig.json`, each labelled with the `col,row` you would type into `G` or
+`B`. Hover a cell and it prints the commands for it. `map` prints the same
+picture the rig's own `9` prints, so the two can be held side by side.
+
+**Only the numbering is real. The position is not.** The grid is spread over the
+whole frame because nothing has yet told the software where the build area is,
+and the build area is almost certainly not the whole frame. The amber banner
+says so, and Plan 2 step 4 replaces the guess with four clicked corners.
+
+The numbering comes from `printGrid()` in the firmware: 1-based, col 1 on the X
+switch side, row 1 on the Y switch side, `[1,1]` drawn bottom-left. If it runs
+the wrong way on screen, the camera is mounted turned or mirrored relative to
+the rig — `origin <bottom-left|bottom-right|top-left|top-right>` moves `[1,1]`,
+and `swapaxes` handles a camera a quarter turn out. Eight combinations, and the
+edge labels carry a `c`/`r` prefix so none of them can be read ambiguously.
+
+`rows` / `cols` do not apply here — the rig divides its envelope into exactly
+these cells, so a machine grid with a different cell count would be a lie. Those
+two still drive the px/cm ruler.
 
 ### The centimetre readings
 

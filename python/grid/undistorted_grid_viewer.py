@@ -33,7 +33,7 @@ always tell whether the key reached the window.
 Keys
 ----
   :         open the command prompt        u  cycle view: corrected / raw / both
-  ?         show / hide the key list       g  cycle grid: off / px / cm
+  ?         show / hide the key list       g  cycle grid: machine / off / px / cm
   [ / ]     lens FOV -/+ 2 deg             h  toggle the hover cell readout
   - / =     output FOV -/+ 5 deg           m  cycle projection model
   , / .     output scale -/+ 0.1           i  cycle interpolation kernel
@@ -48,6 +48,22 @@ Commands
 --------
 Run `help` for the full list. The numeric ones take an absolute value or a
 signed step, so `fov 158` and `fov +2` both work.
+
+The machine grid
+----------------
+`grid machine` draws the rig's own grid — 10 x 20 out of config/rig.json, not
+the 8x8 straightness ruler — and labels every cell with the machine col/row you
+would type into `B` or `G`. `map` prints the same picture the rig's `9` command
+prints, so the two can be held side by side.
+
+**Its POSITION is not calibrated.** The cell COUNT and the NUMBERING are right;
+where the grid sits on the image is a guess that spans the whole frame, and the
+build area is almost certainly not the whole frame. The amber banner says so.
+Plan 2 step 4 replaces the guess with four clicked corners.
+
+If the numbering runs the wrong way on screen — the camera is mounted turned or
+mirrored relative to the rig — `origin <corner>` and `swapaxes` fix it. Eight
+combinations, no sign-juggling.
 
 What the numbers mean
 ---------------------
@@ -72,6 +88,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from rig import config as rig_config
+from rig.grid import ORIGIN_CORNERS, MachineGrid
 
 from vision.camera_source import (
     DEFAULT_SIZE,
@@ -105,7 +122,9 @@ from vision.overlays import (
     PROMPT_COLOR,
     TEXT_COLOR,
     WARN_COLOR,
+    draw_axis_labels,
     draw_cell_info,
+    draw_cell_labels,
     draw_grid,
     draw_grid_labels,
     draw_measure,
@@ -117,7 +136,7 @@ from vision.overlays import (
 CAPTURE_DIR = Path(__file__).resolve().parents[1] / "captures"
 INTERP_NAMES = list(INTERPOLATIONS)
 VIEWS = ("corrected", "raw", "both")
-GRID_MODES = ("off", "px", "cm")
+GRID_MODES = ("machine", "off", "px", "cm")
 
 # Physical span of the whole frame, measured by hand. Lives in config/rig.json
 # so this tool and measured_grid_viewer.py cannot drift apart.
@@ -138,6 +157,12 @@ class Viewer:
         self.interp = args.interp
         self.mip = not args.no_mip
         self.rows, self.cols = args.rows, args.cols
+        # The rig's grid, which is a different thing from self.rows/self.cols:
+        # those are the adjustable straightness ruler, this is the machine's
+        # own division of its envelope. Machine mode ignores the ruler entirely
+        # so a stray slider drag can never relabel the rig's cells.
+        self.machine = MachineGrid.from_config(
+            origin=args.origin, swap_axes=args.swap_axes)
         self.frame_w_cm, self.frame_h_cm = args.frame_width_cm, args.frame_height_cm
         self.view = "corrected"
         self.grid = args.grid
@@ -211,6 +236,15 @@ class Viewer:
         self.cols = max(1, min(int(n), 64))
         return f"grid cols {self.cols}"
 
+    def set_origin(self, corner):
+        self.machine.origin = corner
+        return f"machine cell [1,1] is at the {corner} of the image"
+
+    def set_swap_axes(self, on):
+        self.machine.swap_axes = bool(on)
+        return ("machine columns run DOWN the image (camera a quarter turn out)"
+                if on else "machine columns run ACROSS the image")
+
     def set_frame_cm(self, w_cm=None, h_cm=None):
         if w_cm is not None:
             self.frame_w_cm = max(0.1, w_cm)
@@ -248,6 +282,17 @@ class Viewer:
             x, y = x / self.args.display_scale, y / self.args.display_scale
         h, w = view_shape[:2]
         return min(max(int(x), -1), w - 1), min(max(int(y), -1), h - 1)
+
+    def grid_divisions(self):
+        """(across, down) for whichever grid is being drawn.
+
+        Machine mode is not adjustable on purpose: the rig divides its envelope
+        into exactly these cells, and a grid labelled with machine col/row that
+        did not have the machine's cell count would be a lie.
+        """
+        if self.grid == "machine":
+            return self.machine.nx, self.machine.ny
+        return self.cols, self.rows
 
     def cm_per_px(self, size):
         """Centimetres per pixel for a rendered image of `size` = (w, h).
@@ -304,9 +349,11 @@ class Viewer:
                  "<n|+n|-n>", "grid rows")
         cmds.add("cols", numeric(self.set_cols, lambda: self.cols, "cols <n|+n|-n>", int),
                  "<n|+n|-n>", "grid columns")
+        grid_usage = "<" + "|".join(GRID_MODES) + ">"
         cmds.add("grid", choice(lambda v: self._set_attr("grid", v, "grid"), GRID_MODES,
-                                "grid <off|px|cm>"),
-                 "<off|px|cm>", "grid overlay and what it is labelled in")
+                                f"grid {grid_usage}"),
+                 grid_usage,
+                 "grid overlay: machine = the rig's cells, px/cm = the ruler")
         cmds.add("view", choice(lambda v: self._set_attr("view", v, "view"), VIEWS,
                                 "view <corrected|raw|both>"),
                  "<corrected|raw|both>", "which image to show")
@@ -317,6 +364,13 @@ class Viewer:
         cmds.add("hcm", numeric(lambda v: self.set_frame_cm(h_cm=v),
                                 lambda: self.frame_h_cm, "hcm <cm|+cm|-cm>"),
                  "<cm|+cm|-cm>", "measured height of the whole frame, in cm")
+
+        cmds.add("origin", choice(self.set_origin, ORIGIN_CORNERS, "origin <corner>"),
+                 "<" + "|".join(ORIGIN_CORNERS) + ">",
+                 "which image corner holds machine cell [1,1]")
+        cmds.add("swapaxes", self._cmd_swap_axes, "[on|off]",
+                 "machine columns run down the image, not across")
+        cmds.add("map", self._cmd_map, "", "print the rig's grid map — compare with '9'")
 
         cmds.add("mip", self._cmd_mip, "[on|off]", "pyramid filtering of shrunk regions")
         cmds.add("hover", self._cmd_hover, "[on|off]", "the hovered-cell readout")
@@ -344,6 +398,20 @@ class Viewer:
         self.mip = self._flag(args, self.mip, "mip [on|off]")
         self.dirty = True
         return f"mip filtering {'on' if self.mip else 'off'}"
+
+    def _cmd_swap_axes(self, args):
+        return self.set_swap_axes(
+            self._flag(args, self.machine.swap_axes, "swapaxes [on|off]"))
+
+    def _cmd_map(self, args):
+        """Print the machine's own grid picture, for comparing against `9`.
+
+        Terminal only, and in the MACHINE's orientation rather than the
+        camera's — the point is to diff it against the serial output, so
+        rotating it to match the mounting would defeat it.
+        """
+        print(self.machine.ascii_map())
+        return f"grid map printed in the terminal ({self.machine.describe()})"
 
     def _cmd_hover(self, args):
         self.hover = self._flag(args, self.hover, "hover [on|off]")
@@ -393,8 +461,10 @@ class Viewer:
             f"output FOV {self.profile.output_fov_deg:.0f} deg  scale "
             f"{self.profile.output_scale:.2f}  interp {self.interp}"
             f"  mip {'on' if self.mip else 'off'}",
-            f"grid {self.grid} {self.rows}x{self.cols}  frame span "
-            f"{self.frame_w_cm:.1f} x {self.frame_h_cm:.1f} cm  view {self.view}",
+            f"grid {self.grid} {self.grid_divisions()[0]}x{self.grid_divisions()[1]}"
+            f"  frame span {self.frame_w_cm:.1f} x {self.frame_h_cm:.1f} cm"
+            f"  view {self.view}",
+            f"machine grid {self.machine.describe()}  (POSITION UNCALIBRATED)",
             f"sampling src px/out px: centre {stats.get('centre', 0):.2f}"
             f"  edge {stats.get('edge', 0):.2f}",
         ]
@@ -439,10 +509,19 @@ def parse_args():
                            "shrinks: faster, but those regions alias")
 
     grid = parser.add_argument_group("grid")
-    grid.add_argument("--rows", type=int, default=8)
-    grid.add_argument("--cols", type=int, default=8)
-    grid.add_argument("--grid", choices=list(GRID_MODES), default="cm",
-                      help="initial grid mode (default cm)")
+    grid.add_argument("--rows", type=int, default=8,
+                      help="rows for the px/cm ruler grid (machine mode uses "
+                           "the rig's own count from config/rig.json)")
+    grid.add_argument("--cols", type=int, default=8,
+                      help="columns for the px/cm ruler grid")
+    grid.add_argument("--grid", choices=list(GRID_MODES), default="machine",
+                      help="initial grid mode (default machine)")
+    grid.add_argument("--origin", choices=list(ORIGIN_CORNERS), default="bottom-left",
+                      help="which image corner holds machine cell [1,1]. The "
+                           "default matches the map the rig's '9' command draws")
+    grid.add_argument("--swap-axes", action="store_true",
+                      help="machine columns run down the image, not across — "
+                           "for a camera mounted a quarter turn out")
     grid.add_argument("--frame-width-cm", type=float, default=FRAME_CM["width_cm"],
                       help="measured horizontal span of the whole frame")
     grid.add_argument("--frame-height-cm", type=float, default=FRAME_CM["height_cm"],
@@ -687,31 +766,61 @@ def draw_overlays(view, viewer, fps, corrected_view):
     h, w = view.shape[:2]
     cm_x, cm_y = viewer.cm_per_px((w, h))
     metric = viewer.grid == "cm" and corrected_view
+    machine = viewer.grid == "machine"
+    mg = viewer.machine
     # The side-by-side view is two rescaled images glued together, so no single
     # coordinate system covers it: the grid still works as a straightness ruler,
     # but cell bounds and measurements would be nonsense.
     pointing = viewer.view != "both"
 
     if viewer.grid != "off":
-        cell_w, cell_h = draw_grid(view, viewer.rows, viewer.cols)
-        draw_grid_labels(view, viewer.rows, viewer.cols,
-                         cm_x if metric else None, cm_y if metric else None)
+        nx, ny = viewer.grid_divisions()
+        cell_w, cell_h = draw_grid(view, ny, nx)
+
+        if machine:
+            # Bottom-and-left cell names, like the rig's own map — not the
+            # top-and-left LINE offsets the px/cm ruler draws.
+            #
+            # Which machine axis runs across the picture depends on how the
+            # camera is mounted, so the labels carry a 'c'/'r' prefix rather
+            # than the bare numbers `9` prints. Bare numbers would be ambiguous
+            # the moment swapaxes is on, and silently wrong is worse than
+            # slightly different.
+            draw_cell_labels(view, nx, ny,
+                             lambda ix, iy: "%d,%d" % mg.cell_at(ix, iy))
+            # The edge labels are drawn LAST, at the bottom of this function —
+            # the HUD and the command console own the top-left and bottom-left
+            # corners, and the machine's coordinate system is not something
+            # that should end up hidden behind a panel.
+        else:
+            draw_grid_labels(view, ny, nx,
+                             cm_x if metric else None, cm_y if metric else None)
 
         if viewer.hover and pointing:
             mx, my = viewer.image_mouse(view.shape)
-            cell = hovered_cell(mx, my, w, h, cell_w, cell_h, viewer.rows, viewer.cols)
+            cell = hovered_cell(mx, my, w, h, cell_w, cell_h, ny, nx)
             if cell:
-                row, col, x1, y1, x2, y2 = cell
-                lines = [f"cell (row={row}, col={col})",
-                         f"px:  ({x1},{y1}) -> ({x2},{y2})  {x2 - x1}x{y2 - y1}"]
-                if metric:
-                    lines += [
-                        f"X: {x1 * cm_x:.2f} -> {x2 * cm_x:.2f} cm  "
-                        f"(w={(x2 - x1) * cm_x:.2f} cm)",
-                        f"Y: {y1 * cm_y:.2f} -> {y2 * cm_y:.2f} cm  "
-                        f"(h={(y2 - y1) * cm_y:.2f} cm)",
-                    ]
-                draw_cell_info(view, cell, lines, width=340 if metric else 240)
+                iy, ix, x1, y1, x2, y2 = cell
+                if machine:
+                    col, row = mg.cell_at(ix, iy)
+                    # [col,row] in brackets is how the firmware writes it, in
+                    # 'GOTO CELL [3,5]' and 'block placed at [3,5]'. Same order
+                    # as the arguments to G and B.
+                    lines = [f"machine cell [{col},{row}]",
+                             f"G {col} {row}      B {col} {row} 0",
+                             f"px:  ({x1},{y1}) -> ({x2},{y2})  {x2 - x1}x{y2 - y1}",
+                             "position UNCALIBRATED - see the banner"]
+                else:
+                    lines = [f"cell (row={iy}, col={ix})",
+                             f"px:  ({x1},{y1}) -> ({x2},{y2})  {x2 - x1}x{y2 - y1}"]
+                    if metric:
+                        lines += [
+                            f"X: {x1 * cm_x:.2f} -> {x2 * cm_x:.2f} cm  "
+                            f"(w={(x2 - x1) * cm_x:.2f} cm)",
+                            f"Y: {y1 * cm_y:.2f} -> {y2 * cm_y:.2f} cm  "
+                            f"(h={(y2 - y1) * cm_y:.2f} cm)",
+                        ]
+                draw_cell_info(view, cell, lines, width=340 if (metric or machine) else 240)
 
     if pointing:
         draw_measure(view, viewer.points,
@@ -725,8 +834,10 @@ def draw_overlays(view, viewer, fps, corrected_view):
         f"out FOV {viewer.profile.output_fov_deg:.0f}deg  "
         f"{viewer.maps.out_size[0]}x{viewer.maps.out_size[1]}  "
         f"scale {viewer.profile.output_scale:.2f}  {viewer.interp}",
-        f"grid {viewer.grid} {viewer.rows}x{viewer.cols}  "
-        f"span {viewer.frame_w_cm:.1f}x{viewer.frame_h_cm:.1f}cm  {fps:5.1f} fps",
+        f"grid {viewer.grid} {viewer.grid_divisions()[0]}x{viewer.grid_divisions()[1]}"
+        + (f" [1,1] {mg.origin}{' swapped' if mg.swap_axes else ''}" if machine else
+           f"  span {viewer.frame_w_cm:.1f}x{viewer.frame_h_cm:.1f}cm")
+        + f"  {fps:5.1f} fps",
         f"SAMPLE src px/out px: centre {stats['centre']:.2f}  edge {stats['edge']:.2f}",
     ]
     # Inset from the corner so the grid's own axis labels, which hug the top and
@@ -735,6 +846,14 @@ def draw_overlays(view, viewer, fps, corrected_view):
                   highlight_first=not viewer.profile.calibrated)
 
     warnings = []
+    if machine:
+        # The single most important thing on this screen. The cell COUNT and
+        # NUMBERING are the rig's; the POSITION is a guess spanning the whole
+        # frame, and the build area is almost certainly not the whole frame.
+        warnings.append(("MACHINE GRID: numbering real, POSITION NOT CALIBRATED",
+                         WARN_COLOR))
+        warnings.append(("it spans the frame, not the build area - step 4 fixes this",
+                         WARN_COLOR))
     if viewer.grid == "cm" and not corrected_view:
         warnings.append(("cm grid needs the CORRECTED view — press 'u'", WARN_COLOR))
     if not pointing:
@@ -755,6 +874,24 @@ def draw_overlays(view, viewer, fps, corrected_view):
             "press ':' to type a command here, or type it in the terminal — 'help' lists them",
             HINT_COLOR))
     draw_text_panel(view, console, anchor="bottom-left")
+
+    if machine and viewer.grid != "off":
+        # Column names along the bottom, row names down the left — the layout
+        # the rig's own `9` map uses. Drawn over the panels rather than under
+        # them, see the note above.
+        #
+        # Which machine axis runs across the picture depends on how the camera
+        # is mounted, so these carry a 'c'/'r' prefix rather than the bare
+        # numbers `9` prints. Bare numbers would be ambiguous the moment
+        # swapaxes is on, and silently wrong is worse than slightly different.
+        nx, ny = viewer.grid_divisions()
+        if mg.swap_axes:
+            across = lambda ix: f"r{mg.cell_at(ix, 0)[1]}"
+            down = lambda iy: f"c{mg.cell_at(0, iy)[0]}"
+        else:
+            across = lambda ix: f"c{mg.cell_at(ix, 0)[0]}"
+            down = lambda iy: f"r{mg.cell_at(0, iy)[1]}"
+        draw_axis_labels(view, nx, ny, col_text=across, row_text=down)
 
 
 def main():

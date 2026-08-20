@@ -23,8 +23,10 @@ python/
 │   └── lens_profile.json       lens parameters (currently estimated)
 ├── rig/                        importable library — the Arduino side
 │   ├── config.py               loads config/rig.json
+│   ├── grid.py                 the machine's cells, and which way round they sit
 │   └── link.py                 the serial link: send a command, wait for the answer
 ├── tests/
+│   ├── test_grid.py            the cell numbering, against the firmware's own map
 │   └── test_link.py            link.py against a fake board — no rig needed
 └── vision/                     importable library — no windows, no argv, no prints
     ├── camera_source.py        Picamera2 on the Pi, V4L2 elsewhere
@@ -54,8 +56,9 @@ built from transcripts:
 
     cd python
     ../.venv/bin/python tests/test_link.py
+    ../.venv/bin/python tests/test_grid.py
 
-It proves the parsing, not the machine. The other half of the testing is
+It proves the parsing and the cell numbering, not the machine. The other half of the testing is
 flashing the firmware and watching it.
 
 ## `python` or `python3`?

@@ -15,8 +15,10 @@ Both classes present the same tiny interface, so callers never branch on backend
     camera.release()
 
 Attributes `camera.size` (w, h) and `camera.name` (human description) are also
-part of that interface.
+part of that interface, as is `camera.apply(settings)` — see SENSOR_CONTROLS.
 """
+
+from dataclasses import dataclass
 
 import cv2
 
@@ -31,6 +33,168 @@ DEFAULT_SIZE = (1296, 972)
 # single biggest sharpness win available, because fisheye correction magnifies
 # the edges of the frame by ~3x and that detail has to come from somewhere.
 FULL_RES_SIZE = (2592, 1944)
+
+
+AUTO = "auto"          # "hand this back to the camera's own loop"
+
+# libcamera's white-balance presets. Spelled as libcamera spells them, because
+# the enum member is looked up by name.
+AWB_MODES = ("auto", "incandescent", "tungsten", "fluorescent", "indoor",
+             "daylight", "cloudy")
+DENOISE_MODES = ("off", "fast", "hq")
+
+
+@dataclass(frozen=True)
+class ControlSpec:
+    """One adjustable sensor setting, and how each backend spells it.
+
+    The point of this table is that the tools never name a libcamera control or
+    a cv2.CAP_PROP_ directly: they say "saturation" and the backend translates.
+    That is what lets one set of commands and one set of sliders drive both a Pi
+    CSI camera and a USB webcam.
+
+    `lo`/`hi` are the PICAMERA2 ranges, which are the meaningful ones — libcamera
+    normalises these controls to documented units. UVC webcams do not: a V4L2
+    driver reports whatever integer range it likes (0..255 and -64..64 are both
+    common) and the same number means something different on each. On the V4L2
+    backend, treat these as raw driver units and tune by eye.
+    """
+
+    name: str
+    kind: str              # "float" | "int" | "choice"
+    lo: float = 0.0
+    hi: float = 1.0
+    choices: tuple = ()
+    libcamera: str = ""    # libcamera control name, "" if unsupported there
+    v4l2: int = -1         # cv2.CAP_PROP_*, -1 if unsupported there
+    auto: bool = False     # may be set to "auto" as well as to a number
+    help: str = ""
+
+    @property
+    def range_text(self):
+        if self.kind == "choice":
+            return "|".join(self.choices)
+        auto = "|auto" if self.auto else ""
+        fmt = "{:g}"
+        return f"{fmt.format(self.lo)}..{fmt.format(self.hi)}{auto}"
+
+
+# Ordered because this is also the order they are printed and given sliders in.
+SENSOR_CONTROLS = {
+    c.name: c for c in (
+        ControlSpec("brightness", "float", -1.0, 1.0, libcamera="Brightness",
+                    v4l2=cv2.CAP_PROP_BRIGHTNESS,
+                    help="lift/lower the whole image; 0 is neutral"),
+        ControlSpec("contrast", "float", 0.0, 8.0, libcamera="Contrast",
+                    v4l2=cv2.CAP_PROP_CONTRAST,
+                    help="1.0 is neutral, 0 is flat grey"),
+        ControlSpec("saturation", "float", 0.0, 8.0, libcamera="Saturation",
+                    v4l2=cv2.CAP_PROP_SATURATION,
+                    help="1.0 is neutral, 0 is monochrome"),
+        ControlSpec("sharpness", "float", 0.0, 16.0, libcamera="Sharpness",
+                    v4l2=cv2.CAP_PROP_SHARPNESS,
+                    help="ISP sharpening; LOWER it, the correction magnifies halos"),
+        ControlSpec("ev", "float", -8.0, 8.0, libcamera="ExposureValue",
+                    help="exposure compensation in stops, while AE is on"),
+        ControlSpec("exposure", "int", 100, 200000, libcamera="ExposureTime",
+                    v4l2=cv2.CAP_PROP_EXPOSURE, auto=True,
+                    help="shutter time in microseconds; a number turns AE off"),
+        ControlSpec("gain", "float", 1.0, 16.0, libcamera="AnalogueGain",
+                    v4l2=cv2.CAP_PROP_GAIN, auto=True,
+                    help="analogue gain; a number turns AE off. Pin low, add light"),
+        ControlSpec("awb", "choice", choices=AWB_MODES + ("off",),
+                    libcamera="AwbMode", v4l2=cv2.CAP_PROP_AUTO_WB,
+                    help="white balance preset; 'off' hands over to red/bluegain"),
+        ControlSpec("redgain", "float", 0.1, 8.0, libcamera="ColourGains",
+                    help="manual red channel gain; needs 'awb off'"),
+        ControlSpec("bluegain", "float", 0.1, 8.0, libcamera="ColourGains",
+                    help="manual blue channel gain; needs 'awb off'"),
+        ControlSpec("denoise", "choice", choices=DENOISE_MODES,
+                    libcamera="NoiseReductionMode",
+                    help="'fast' blurs fine texture away; 'hq' keeps much more"),
+        ControlSpec("fps", "float", 1.0, 120.0, libcamera="FrameDurationLimits",
+                    v4l2=cv2.CAP_PROP_FPS, auto=True,
+                    help="cap the frame rate; a low cap lets AE use a longer shutter"),
+    )
+}
+
+
+def libcamera_controls(settings: dict) -> dict:
+    """Translate our setting names into a libcamera control dict.
+
+    Anything set to "auto" (or left out) is omitted, so the camera keeps running
+    its own loop for it — which is different from, and better than, pinning it to
+    whatever value the loop happened to have settled on.
+
+    The couplings that are easy to get wrong are all handled here, once:
+
+      * ExposureTime and AnalogueGain do nothing while the AE loop is running,
+        so setting either of them also sets AeEnable False. Setting neither
+        leaves AE on, and ExposureValue then works as compensation.
+      * ColourGains does nothing while AWB is running, so red/bluegain imply
+        AwbEnable False. They are one control taking a PAIR, hence the lookup
+        of both before emitting it.
+    """
+    out = {}
+
+    def num(name):
+        value = settings.get(name, AUTO)
+        return None if value in (None, AUTO) else value
+
+    for name in ("brightness", "contrast", "saturation", "sharpness", "ev"):
+        value = num(name)
+        if value is not None:
+            out[SENSOR_CONTROLS[name].libcamera] = float(value)
+
+    shutter, gain = num("exposure"), num("gain")
+    if shutter is not None or gain is not None:
+        out["AeEnable"] = False
+        if shutter is not None:
+            out["ExposureTime"] = int(shutter)
+        if gain is not None:
+            out["AnalogueGain"] = float(gain)
+    else:
+        out["AeEnable"] = True
+
+    awb = settings.get("awb", AUTO)
+    red, blue = num("redgain"), num("bluegain")
+    if awb == "off" or red is not None or blue is not None:
+        out["AwbEnable"] = False
+        # Both halves are needed: libcamera takes the pair or nothing.
+        out["ColourGains"] = (float(red or 1.0), float(blue or 1.0))
+    elif awb not in (None, AUTO):
+        mode = _libcamera_enum("AwbModeEnum", awb)
+        if mode is not None:
+            out["AwbEnable"] = True
+            out["AwbMode"] = mode
+
+    denoise = settings.get("denoise")
+    if denoise not in (None, AUTO):
+        mode = noise_reduction_mode(denoise)
+        if mode is not None:
+            out["NoiseReductionMode"] = mode
+
+    fps = num("fps")
+    if fps is not None:
+        # libcamera caps the rate through the frame DURATION, in microseconds,
+        # as a (min, max) pair. Both ends equal pins it to exactly that rate.
+        micros = int(round(1_000_000.0 / max(1.0, float(fps))))
+        out["FrameDurationLimits"] = (micros, micros)
+    return out
+
+
+def _libcamera_enum(enum_name, member):
+    """Look up e.g. AwbModeEnum.Daylight by our lower-case name, tolerantly.
+
+    Returns None rather than raising when libcamera is absent or has moved the
+    enum — an unavailable preset must never stop the camera from running.
+    """
+    try:
+        from libcamera import controls as libcontrols
+        enum = getattr(libcontrols, enum_name)
+    except Exception:
+        return None
+    return getattr(enum, member.capitalize(), None)
 
 
 def noise_reduction_mode(name):
@@ -91,6 +255,49 @@ class V4L2Source:
     def read(self):
         return self.cap.read()
 
+    def apply(self, settings):
+        """Push settings onto the driver. Returns (applied, skipped) name lists.
+
+        Every cap.set() is checked by reading the property back, because a UVC
+        driver's usual response to a control it does not implement is to return
+        success and change nothing. Reporting it as applied when it was not is
+        how you end up turning a knob for a minute wondering why the picture
+        never moves.
+        """
+        applied, skipped = [], []
+        for name, value in settings.items():
+            spec = SENSOR_CONTROLS.get(name)
+            if spec is None or spec.v4l2 < 0:
+                skipped.append(f"{name} (no V4L2 equivalent)")
+                continue
+            if value in (None, AUTO):
+                # Auto-exposure and auto-WB are the only autos V4L2 exposes, and
+                # only as their own separate properties.
+                if name == "exposure":
+                    self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 3)   # 3 = aperture priority
+                    applied.append("exposure auto")
+                elif name == "awb":
+                    self.cap.set(cv2.CAP_PROP_AUTO_WB, 1)
+                    applied.append("awb auto")
+                continue
+            if name == "awb":
+                self.cap.set(cv2.CAP_PROP_AUTO_WB, 0.0 if value == "off" else 1.0)
+                applied.append(name)
+                continue
+            if spec.kind == "choice":
+                skipped.append(f"{name} (no V4L2 equivalent)")
+                continue
+            if name == "exposure":
+                self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)       # 1 = manual
+            before = self.cap.get(spec.v4l2)
+            self.cap.set(spec.v4l2, float(value))
+            after = self.cap.get(spec.v4l2)
+            if abs(after - float(value)) < 1e-6 or after != before:
+                applied.append(name)
+            else:
+                skipped.append(f"{name} (driver refused; it reports {after:g})")
+        return applied, skipped
+
     def release(self):
         self.cap.release()
 
@@ -140,6 +347,32 @@ class Picamera2Source:
     def read(self):
         frame = self.picam2.capture_array("main")
         return frame is not None, frame
+
+    def apply(self, settings):
+        """Push settings onto the running camera. Returns (applied, skipped).
+
+        set_controls is asynchronous — it queues the values against a future
+        frame — so the picture changes a frame or three after the call, not
+        during it. That lag is normal and is not a failed control.
+        """
+        wanted = libcamera_controls(settings)
+        available = set(getattr(self.picam2, "camera_controls", {}) or {})
+        skipped = []
+        if available:
+            # Which controls exist depends on the sensor and the libcamera
+            # build. Dropping the unknown ones keeps one bad name from making
+            # set_controls reject the whole batch.
+            unknown = [k for k in wanted if k not in available]
+            for key in unknown:
+                wanted.pop(key)
+                skipped.append(f"{key} (not offered by this sensor)")
+        if not wanted:
+            return [], skipped
+        try:
+            self.picam2.set_controls(wanted)
+        except Exception as exc:
+            return [], skipped + [f"set_controls failed: {exc}"]
+        return sorted(wanted), skipped
 
     def release(self):
         self.picam2.stop()
@@ -229,29 +462,16 @@ def build_controls(sharpness=None, denoise=None, shutter_us=None, gain=None, awb
       awb         a named white-balance preset, for when auto AWB drifts into a
                   colour cast under artificial lighting.
     """
-    controls = {}
-    if sharpness is not None:
-        controls["Sharpness"] = float(sharpness)
-    if denoise is not None:
-        mode = noise_reduction_mode(denoise)
-        if mode is not None:
-            controls["NoiseReductionMode"] = mode
-    if shutter_us is not None or gain is not None:
-        # Any manual exposure setting only takes effect with the AE loop off.
-        controls["AeEnable"] = False
-        if shutter_us is not None:
-            controls["ExposureTime"] = int(shutter_us)
-        if gain is not None:
-            controls["AnalogueGain"] = float(gain)
-    if awb is not None:
-        try:
-            from libcamera import controls as libcontrols
-            mode = getattr(libcontrols.AwbModeEnum, awb.capitalize(), None)
-        except Exception:
-            mode = None
-        if mode is not None:
-            controls["AwbEnable"] = True
-            controls["AwbMode"] = mode
+    settings = {"sharpness": sharpness, "denoise": denoise,
+                "exposure": shutter_us, "gain": gain, "awb": awb}
+    controls = libcamera_controls({k: v for k, v in settings.items()
+                                   if v is not None})
+    # libcamera_controls always states AeEnable, because a live tool needs to be
+    # able to hand exposure back to the camera. At configure time, saying
+    # nothing is what "leave the default alone" means, so drop the redundant
+    # True and keep the historic behaviour of this function exactly.
+    if controls.get("AeEnable") is True:
+        controls.pop("AeEnable")
     return controls
 
 
