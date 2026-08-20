@@ -114,22 +114,35 @@ ack and is safe from rewording, but `S`, `G`, `0` and `0+` do not — for those,
 `link.py` waits on the prose. The strings it matches are all in one place,
 `_prose_outcome()` and the `done=` arguments in `python/rig/link.py`.
 
-### 7. The studio's shipped defaults — a third place the same view is written
+### 7. The studio's shipped defaults and the main camera feed
 
 | Where | What |
 | --- | --- |
 | `python/config/camera_settings.json` | the committed default settings |
 | `camera_studio.py` `Studio.__init__` | the built-in defaults `--fresh` and `reset` use |
-| `camera/undistorted_viewer.py` | the view both of those are required to reproduce |
+| `camera/camera_feed.py` | the canonical runtime feed that consumes the saved settings |
+| `camera/undistorted_viewer.py` | the standalone lens-tuning viewer |
 
 `camera_studio.py` is supposed to open showing **exactly what
-`undistorted_viewer.py` renders** — same remap table, same output size,
-correction on, no zoom or crop. That is three things agreeing, and nothing
-enforces it at runtime.
+`camera_feed.py` renders** from the committed settings — same remap table, same
+output size, correction on, no zoom or crop. That is three things agreeing, and
+nothing enforces it at runtime.
+
+`camera/camera_feed.py` is the main camera script. It must load
+`python/config/camera_settings.json` (or an explicitly supplied settings path),
+apply its capture and sensor values, then produce the configured camera frame.
+Future vision stages build from this feed instead of opening the camera a second
+time. `camera_studio.py` is the editor that writes the file; it is not the
+runtime pipeline entry point.
+
+The `lens` block in `camera_settings.json` is consumed by `camera_feed.py` so a
+saved studio setup is reproducible. `config/lens_profile.json` remains the
+separate generated profile used by the standalone lens/grid viewers, and the
+studio's `lens` command keeps those two lens artefacts in sync.
 
 If you change a `LensProfile` default, a `Studio.__init__` default, or the
-committed JSON, check the other two. The check is cheap and exact — build both
-tools' maps for the same input size and compare the tables:
+committed JSON, check the other consumers too. The check is cheap and exact —
+build the studio/feed maps for the same input size and compare the tables:
 
 ```python
 from vision.fisheye import LensProfile, build_maps

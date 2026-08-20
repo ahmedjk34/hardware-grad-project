@@ -17,12 +17,13 @@ python/
 │   ├── grid_viewer.py              grid overlay labelled in pixels
 │   └── measured_grid_viewer.py     grid overlay labelled in centimetres
 ├── camera/                     tools that are just a preview
+│   ├── camera_feed.py              config-driven runtime feed ← the main camera script
 │   ├── camera_studio.py            tune EVERY setting, save them to JSON
 │   ├── camera_viewer.py            raw preview — "is the camera alive?"
 │   └── undistorted_viewer.py       live fisheye-corrected preview
 ├── config/
 │   ├── lens_profile.json       lens parameters (currently estimated)
-│   └── camera_settings.json    camera_studio.py reads this at startup
+│   └── camera_settings.json    camera_studio.py writes; camera_feed.py reads
 ├── rig/                        importable library — the Arduino side
 │   ├── config.py               loads config/rig.json
 │   ├── grid.py                 the machine's cells, and which way round they sit
@@ -38,19 +39,24 @@ python/
     └── overlays.py             shared OpenCV drawing helpers
 ```
 
-`grid/` and `camera/` hold the things you run. `grid/undistorted_grid_viewer.py`
-is the combined one and is what you normally want; the four single-purpose
-viewers beside it are kept because each is small enough to read in one sitting
-when you want to know what one stage does on its own.
+`grid/` and `camera/` hold the things you run. `camera/camera_feed.py` is the
+main camera script and the foundation for the future vision pipeline. It loads
+`config/camera_settings.json`, opens the configured source, applies the saved
+sensor controls and orientation, and renders the saved correction and framing.
+Future detection and robot-coordinate code should consume its frame rather than
+opening the camera independently.
 
-`camera/camera_studio.py` sits apart from all of them: it is not for *using* the
-camera but for *deciding what its settings should be*. Every lens, sensor, zoom,
-crop and orientation setting is adjustable live — through real Tk entries,
-dropdowns and buttons below a separate camera viewport, or as a typed command —
-and `save` writes the lot to `config/camera_settings.json`, which it also reads
-back at startup. The
-committed default in that file reproduces `undistorted_viewer.py` exactly, so it
-opens on a known picture. See [GUIDE.md](GUIDE.md#camera_studiopy).
+`grid/undistorted_grid_viewer.py` is the combined measurement tool and is what
+you normally want when checking the machine grid. The smaller viewers beside it
+are kept because each is small enough to read in one sitting when you want to
+know what one stage does on its own.
+
+`camera/camera_studio.py` sits beside the runtime feed as its settings editor. It
+is not the pipeline entry point: every lens, sensor, zoom, crop and orientation
+setting is adjustable live — through real Tk entries, dropdowns and buttons
+below a separate camera viewport, or as a typed command — and `save` writes the
+lot to `config/camera_settings.json`, which `camera_feed.py` reads at startup.
+See [GUIDE.md](GUIDE.md#camera_studiopy).
 
 They can be launched from anywhere — each puts `python/` on the import path
 itself, so both `python grid/grid_viewer.py` (from `python/`) and
@@ -152,10 +158,10 @@ cd ~/hardware-grad-project
 python -m venv --system-site-packages .venv
 source .venv/bin/activate
 cd python
-python camera/undistorted_viewer.py
+python camera/camera_feed.py
 ```
 
-Every tool takes `--help`, and they share these flags:
+Every tool takes `--help`. The lower-level camera viewers share these flags:
 
 | Flag                              | Meaning                                                                  |
 | --------------------------------- | ------------------------------------------------------------------------ |
@@ -168,9 +174,19 @@ If you see `Picamera2 unavailable (...); falling back to V4L2` **on the Pi**,
 that message is the real error — the fallback will not produce a usable image
 from the CSI camera.
 
+To use a different saved setup, pass it explicitly:
+
+```bash
+python camera/camera_feed.py --settings ../config/my_camera.json
+```
+
 ## About the lens correction
 
-Parameters live in [config/lens_profile.json](config/lens_profile.json) and are
+The standalone lens viewers read parameters from
+[config/lens_profile.json](config/lens_profile.json). The main
+`camera_feed.py` reads the matching `lens` block from
+`config/camera_settings.json`; `camera_studio.py` keeps the two generated
+artefacts together when its `lens` command is used. The parameters are
 **estimated, not calibrated**. They come from the vendor's "160°" FOV number
 plus an assumed ideal projection curve; the principal point is assumed to be the
 exact image centre and tangential distortion is assumed to be zero.

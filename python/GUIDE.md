@@ -11,6 +11,7 @@ below assume you are in the `python/` directory with the venv active.
 
 | I want to… | Use |
 | --- | --- |
+| **Run the configured camera feed for the vision pipeline** | [`camera_feed.py`](#camera_feedpy) |
 | **Correct the fisheye AND measure on the result** | [`undistorted_grid_viewer.py`](#undistorted_grid_viewerpy) |
 | **Tune every camera setting and save them to JSON** | [`camera_studio.py`](#camera_studiopy) |
 | Check the camera is connected and working | [`camera_viewer.py`](#camera_viewerpy) |
@@ -26,10 +27,32 @@ the one to reach for by default. The single-purpose viewers are kept because
 each is short enough to read end to end when you want to see one stage in
 isolation.
 
-`camera_studio.py` is the odd one out: it is not for *using* the camera but for
-*deciding what its settings should be*. Tune there, `save`, and the JSON is the
-answer. The other tools read `config/lens_profile.json`, which the studio's
-`lens` command writes.
+`camera_feed.py` is the main camera script. It reads
+`config/camera_settings.json` and is the starting point for future vision
+stages. `camera_studio.py` is the settings editor: tune there, `save`, and the
+feed consumes the JSON.
+
+`camera_studio.py` is not the runtime pipeline entry point. The standalone
+viewers still read `config/lens_profile.json`, which the studio's `lens` command
+writes.
+
+---
+
+## `camera_feed.py`
+
+**Use it for:** the normal camera feed and the foundation of the vision
+pipeline. It opens the configured source, applies the saved sensor controls and
+orientation, then renders the saved correction and framing from
+`config/camera_settings.json`.
+
+```bash
+python camera/camera_feed.py
+python camera/camera_feed.py --settings ../config/table_cam.json
+```
+
+Future block detection, workspace mapping and robot-coordinate code should
+build from this feed rather than opening the camera independently. Run
+`camera_studio.py` first when the settings need tuning.
 
 ---
 
@@ -175,7 +198,8 @@ python camera/camera_studio.py --fresh               # ignore the settings file
 ```
 
 Reach for this when you are *deciding* what the camera settings should be.
-Reach for `undistorted_grid_viewer.py` when you are working with the result.
+Reach for `camera_feed.py` when you are using the saved result in the pipeline,
+or `undistorted_grid_viewer.py` when you are working with the machine grid.
 
 ### It starts where you left off
 
@@ -497,8 +521,9 @@ Y: 13.13cm -> 17.50cm  (h=4.37cm / 0.0437m)
 
 ## `undistorted_viewer.py`
 
-**Use it for:** the corrected live preview, and for tuning the lens model by eye.
-This is the main camera tool.
+**Use it for:** a standalone corrected live preview and for tuning the lens
+model by eye. The config-driven `camera_feed.py` is the main runtime camera
+tool.
 
 ```bash
 python camera/undistorted_viewer.py                                   # defaults
@@ -715,5 +740,5 @@ identically and the info-box layout exists in exactly one place.
 | Path | Contents |
 | --- | --- |
 | `config/lens_profile.json` | Lens parameters. Committed — it is tuning worth keeping. Written by `undistorted*_viewer.py`'s `save`/`w`, and by `camera_studio.py`'s `lens`. |
-| `config/camera_settings.json` | Everything `camera_studio.py` can adjust — lens, sensor, framing, orientation. **Read at startup, written by `save`.** Committed, holding the defaults that reproduce `undistorted_viewer.py`. Pass `--settings <path>` to keep several, one per camera position, and leave the committed one alone. |
+| `config/camera_settings.json` | Everything `camera_studio.py` can adjust — lens, sensor, framing, orientation. **Read by `camera_studio.py` and the main `camera_feed.py`, written by `save`.** Pass `--settings <path>` to keep several, one per camera position. |
 | `captures/` | Snapshots from `s`. Git-ignored. Corrected images are filename-tagged with the parameters that produced them, so several tuning attempts stay comparable. |

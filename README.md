@@ -8,7 +8,7 @@ The repository is split by platform:
 | Directory | What it holds |
 | --- | --- |
 | [arduino/](arduino/) | Firmware sketches for the motion rig — stepper positioning, Z axis, servo, step counting |
-| [python/](python/) | Everything on the Raspberry Pi: camera capture, lens correction, preview and measurement tools |
+| [python/](python/) | Everything on the Raspberry Pi: the config-driven camera feed, lens correction, preview and measurement tools |
 
 ## Hardware
 
@@ -25,6 +25,21 @@ The repository is split by platform:
 - Python tools, setup and usage → **[python/README.md](python/README.md)**
 - Per-tool walkthrough → **[python/GUIDE.md](python/GUIDE.md)**
 - Firmware → open the relevant sketch in `arduino/` with the Arduino IDE
+
+## Main camera feed
+
+[`python/camera/camera_feed.py`](python/camera/camera_feed.py) is the main
+camera script. It loads `python/config/camera_settings.json`, applies the saved
+capture and sensor settings, and shows the configured corrected/framed feed.
+Build future vision stages from this feed so the camera is opened and
+configured in one place. Use `camera_studio.py` to tune the settings and save
+them before running the feed:
+
+```bash
+cd python
+../.venv/bin/python camera/camera_studio.py
+../.venv/bin/python camera/camera_feed.py
+```
 
 ## Status
 
