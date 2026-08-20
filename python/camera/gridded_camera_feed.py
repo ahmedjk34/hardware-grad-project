@@ -116,7 +116,7 @@ def load_workspace(path, grid, projection):
         workspace = WorkspaceMap.load(path)
     except FileNotFoundError:
         return None, "no four-corner calibration saved"
-    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         return None, f"workspace map invalid: {exc}"
     if not workspace.matches_grid(grid):
         return None, "workspace map is for different grid JSON"
@@ -367,7 +367,10 @@ def main():
             detections = detect_blocks(view, color_threshold=args.color_threshold,
                                        min_area=args.min_area)
             display = view.copy() if args.no_enhance else enhance_for_display(view)
-            display = draw_block_overlay(display, detections, ui["hover"], fps)
+            display = draw_block_overlay(
+                display, detections, ui["hover"], fps,
+                "COORDS: corrected pixels + machine-grid mapping",
+            )
             if ui["show_grid"]:
                 draw_machine_grid(display, workspace, grid, ui["hover"], calibrated)
                 draw_grid_status(display, grid, calibrated, rejection, enabled)

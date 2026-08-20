@@ -12,6 +12,7 @@ below assume you are in the `python/` directory with the venv active.
 | I want to… | Use |
 | --- | --- |
 | **Run the configured camera feed for the vision pipeline** | [`camera_feed.py`](#camera_feedpy) |
+| **See/calibrate the Arduino block grid on the camera** | [`gridded_camera_feed.py`](#gridded_camera_feedpy) |
 | **Correct the fisheye AND measure on the result** | [`undistorted_grid_viewer.py`](#undistorted_grid_viewerpy) |
 | **Tune every camera setting and save them to JSON** | [`camera_studio.py`](#camera_studiopy) |
 | Check the camera is connected and working | [`camera_viewer.py`](#camera_viewerpy) |
@@ -66,6 +67,41 @@ frame and a JSON file containing the block geometry. `--color-threshold` and
 segmentation. Future workspace mapping and robot-coordinate code should build
 from this feed rather than opening the camera independently. Run
 `camera_studio.py` first when the camera settings need tuning.
+
+---
+
+## `gridded_camera_feed.py`
+
+**Use it for:** seeing the real fixed-pitch Arduino grid on the canonical camera
+feed and checking which `[col,row]` lies under the cursor. It reads camera
+appearance from `python/config/camera_settings.json`, physical geometry from
+the repository-level `config/rig.json`, and saves four-corner calibration to
+`config/workspace_map.json`.
+
+```bash
+python camera/gridded_camera_feed.py
+python camera/gridded_camera_feed.py --display-scale 1.5
+```
+
+It opens with an amber **APPROXIMATION ONLY** grid so you can see the configured
+22×5 layout immediately. That guess fills the image and is not evidence that
+camera and motor cells match. To calibrate:
+
+1. Press `c`.
+2. Click the complete 34×40 cm machine-envelope corners in the prompted order:
+   X/Y home, far-X/home-Y, far-X/far-Y, home-X/far-Y.
+3. Confirm the banner changes to green `MACHINE GRID: CALIBRATED`.
+4. Hover cells and verify several displayed `G col row` commands with the rig
+   before placing a block.
+
+`x` cancels calibration without destroying the previous saved map, `g` toggles
+the overlay, and `s` saves the annotated frame and detection JSON. Changing the
+lens geometry, orientation, crop, physical workspace, cell size or signed trim
+invalidates the old map and returns to the amber approximation.
+
+The JSON deliberately does not duplicate `5050×7500` motor safety limits. The
+Pi maps pixels through centimetres to a logical cell; the Arduino remains the
+only authority that converts the selected cell to step pulses.
 
 ---
 

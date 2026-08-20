@@ -225,7 +225,8 @@ def hovered_block(detections, point):
     return None
 
 
-def draw_block_overlay(frame, detections, hover_point=None, fps=None):
+def draw_block_overlay(frame, detections, hover_point=None, fps=None,
+                       coordinates_label="COORDS: corrected-image pixels (machine mapping pending)"):
     """Draw clean colour-coded edges, boxes, IDs, centres and hover details."""
     fill = frame.copy()
     for index, detection in enumerate(detections):
@@ -259,7 +260,7 @@ def draw_block_overlay(frame, detections, hover_point=None, fps=None):
     hud = [
         f"BLOCKS: {len(detections)}{rate}  |  hover for details",
         "COLOUR EDGES + ROTATED BOXES + CENTRES",
-        "COORDS: corrected-image pixels (machine mapping pending)",
+        coordinates_label,
     ]
     draw_info_box(frame, hud, width=min(360, frame.shape[1] - 8), scale=0.40)
 

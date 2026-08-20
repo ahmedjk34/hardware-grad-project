@@ -19,6 +19,7 @@ python/
 ├── camera/                     tools that are just a preview
 │   ├── camera_feed.py              config-driven runtime feed ← the main camera script
 │   ├── gridded_camera_feed.py      same feed + calibrated physical machine grid
+│   ├── rig_build_v1.py             select calibrated cell + confirm Arduino build
 │   ├── camera_studio.py            tune EVERY setting, save them to JSON
 │   ├── camera_viewer.py            raw preview — "is the camera alive?"
 │   └── undistorted_viewer.py       live fisheye-corrected preview
@@ -60,6 +61,12 @@ corners of the complete 34×40 cm motion envelope. It saves the generated map to
 `config/workspace_map.json`; until then the amber full-frame grid is explicitly
 an approximation. Hovering a calibrated cell shows its `[col,row]`, physical
 centre and matching `G` command.
+
+`camera/rig_build_v1.py` adds the serial link and is the first camera UI allowed
+to move hardware. It requires that calibrated map, lets a click select one
+cell, shows the exact `B` command, and sends it only after `b`/Enter. It blocks
+until the firmware reports placed/rejected/aborted; an unknown or aborted state
+locks the session for human inspection.
 
 `grid/undistorted_grid_viewer.py` is the combined measurement tool and is what
 you normally want when checking the machine grid. The smaller viewers beside it
@@ -176,6 +183,7 @@ source .venv/bin/activate
 cd python
 python camera/camera_feed.py
 python camera/gridded_camera_feed.py
+python camera/rig_build_v1.py
 ```
 
 Every tool takes `--help`. The lower-level camera viewers share these flags:

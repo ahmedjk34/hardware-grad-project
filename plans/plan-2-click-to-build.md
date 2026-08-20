@@ -109,18 +109,23 @@ instead of you reading the screen to find out.
 
 ## Step 3 — Put the machine's grid on the picture
 
+**Implemented in `camera/gridded_camera_feed.py`.**
+
 The viewer draws an 8×8 straightness ruler over the image. The rig thinks in a
 22×5 fixed-pitch block grid.
 These are unrelated, which is the core mismatch to fix.
 
-Make `grid/undistorted_grid_viewer.py` draw the grid from `config/rig.json`, and
-label the cells with machine col/row.
+The gridded canonical feed draws the grid from `config/rig.json` and labels the
+cells with the machine col/row.
 
 **Done when:** the labels on screen match what `9` prints on the rig.
 
 ---
 
 ## Step 4 — Turn a click into a cell
+
+**Calibration and hover mapping implemented; sending `G` remains a deliberate
+manual verification step.**
 
 Click the four corners of the complete 34×40 cm machine envelope once, in a
 prompted order. Save them to `config/workspace_map.json`. From those four

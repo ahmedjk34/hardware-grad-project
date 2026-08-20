@@ -103,10 +103,10 @@ written `[col,row]`, the same order as the arguments to `G` and `B`.
 either can be caught by diffing them rather than by noticing that the claw went
 to the wrong place. If you reword that map, run `python/tests/test_grid.py`.
 
-Where the grid sits **on the camera image** is NOT part of this. That is the
-camera's business, it is not calibrated yet, and `MachineGrid.origin` /
-`swap_axes` are the placeholder until Plan 2 step 4 derives it from four
-clicked corners.
+Where the grid sits **on the camera image** is NOT part of this numbering
+convention. `gridded_camera_feed.py` derives it from four clicked envelope
+corners and saves `workspace_map.json`; `MachineGrid.origin` / `swap_axes`
+remain useful only for count-only/legacy drawings without that homography.
 
 ### 4. Frame span in centimetres
 
@@ -155,6 +155,7 @@ ack and is safe from rewording, but `S`, `G`, `0` and `0+` do not — for those,
 | `camera_studio.py` `Studio.__init__` | the built-in defaults `--fresh` and `reset` use |
 | `camera/camera_feed.py` | the canonical runtime feed that consumes the saved settings |
 | `camera/gridded_camera_feed.py` | the same runtime feed plus machine-grid calibration/overlay |
+| `camera/rig_build_v1.py` | calibrated cell selection plus confirmed serial build |
 | `camera/undistorted_viewer.py` | the standalone lens-tuning viewer |
 
 `camera_studio.py` is supposed to open showing **exactly what
@@ -180,6 +181,23 @@ generated `config/workspace_map.json`. Before calibration it may show only an
 explicitly amber **APPROXIMATION ONLY** grid; never display a full-frame guess
 as calibrated. A change to lens geometry, orientation, framing, cell geometry
 or grid trims must invalidate the saved workspace map.
+
+`camera/rig_build_v1.py` is the first hardware-moving camera UI. Preserve all
+of these rules when editing it:
+
+- Only a **calibrated** `WorkspaceMap` may select a build target. The amber
+  full-frame approximation is display-only.
+- A click selects and shows the exact `B <col> <row> <level> [R|RR]` command;
+  it never moves hardware. `b`/Enter is the separate confirmation.
+- Send builds only through `rig.link.Rig.build()`, never a second raw serial
+  connection. The call stays synchronous so clicks cannot queue while the Mega
+  is deaf during motion.
+- A successful build clears selection so key repeat cannot place twice in one
+  cell. A safe rejection may retain it. `ABORTED`, reset, timeout or cable loss
+  locks the session: no retry, no automatic home, no further build. A human
+  inspects the claw/rig and restarts.
+- The UI's `level` is the firmware's block-stack level (the fourth `B` token),
+  not raw Z steps or centimetres. Firmware remains authoritative for its range.
 
 `vision/block_detector.py` must not assume one connected colour component is
 one block. Touching standard blocks produce L, U, cross, side-by-side and
