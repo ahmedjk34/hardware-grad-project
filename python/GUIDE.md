@@ -233,7 +233,12 @@ show you that a value is 158 rather than 157.
 
 ### The fields
 
-Click any field and it becomes editable, pre-filled with its current value:
+Two kinds, because a free-text box is a lie about a field that only accepts four
+words — it invites input that can only ever be rejected.
+
+**20 text fields**, for the continuous values (`lens fov`, `k1`, `scale`,
+`zoom`, `exposure`, `gain`…). Click one and it becomes editable, pre-filled with
+its current value:
 
 | Key | |
 | --- | --- |
@@ -242,14 +247,25 @@ Click any field and it becomes editable, pre-filled with its current value:
 | **Tab** | commit and move to the next field, so the whole panel can be walked from the keyboard |
 | **Esc**, or a click elsewhere | let go without committing |
 
-Numeric fields also accept `+2` and `-2` for a relative nudge, choice fields
-accept any unambiguous prefix (`equi` is enough for `equidistant`), and every
-sensor field accepts `auto`. Values out of range are **clamped with a note in
-the log**, not rejected — otherwise stepping a field down from its minimum would
-be an error rather than a no-op.
+They also accept `+2` and `-2` for a relative nudge, and every sensor field
+accepts `auto`. Values out of range are **clamped with a note in the log**, not
+rejected — otherwise stepping a field down from its minimum would be an error
+rather than a no-op.
+
+**12 dropdowns**, for the fields whose value is one of a fixed set — `ref`,
+`model`, `correction`, `interp`, `mip`, `show`, `grid`, `sizing`, `flip`,
+`rotate`, `awb`, `denoise`. A small caret marks them. Click to open the list
+(it opens *upward*, over the viewport, since the panel sits at the bottom of the
+window), then click an entry, use Up/Down, or press a letter to jump to the next
+entry starting with it.
+
+Dropdown entries **apply as they are highlighted**, not on Enter, so a
+projection model or a white-balance preset is chosen by watching the picture
+rather than by reading the word. Enter closes the list; Esc closes it too.
 
 A field *is* a command, exactly like a button is: the label is what you read,
-the field's command is what runs, and the box holds its argument. That is what
+the field's command is what runs, and the box (or the chosen entry) holds its
+argument. That is what
 keeps the panel, the typed commands, the keys and the buttons from drifting
 apart — one setter, four ways to reach it.
 

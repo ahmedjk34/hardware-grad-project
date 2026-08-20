@@ -78,8 +78,13 @@ input channels, and every one of them echoes what it did into the panel:
      appears the window does not have focus.
   3. CLICK AND TYPE. Click any field in the panel and it becomes editable —
      type, Enter commits, Esc cancels, Tab moves to the next field, and Up/Down
-     step the value in place without typing at all. Choice fields (model,
-     interp, awb...) accept any unambiguous prefix, so `equi` is enough.
+     step the value in place without typing at all.
+     Fields whose value is one of a fixed set (model, interp, awb, flip...) are
+     DROPDOWNS instead, marked with a small caret: click to open the list, click
+     an entry or use Up/Down to pick, and a letter jumps to the next entry
+     starting with it. Entries apply as they are highlighted, so a projection
+     model can be chosen by watching the picture rather than by reading the
+     word.
   4. CLICK AND DRAG. The buttons under the image, and a drag on the image to
      crop to a rectangle.
 
@@ -109,9 +114,10 @@ step the value, Tab moves to the next field, Esc lets go without committing.
 Commands
 --------
 `help` lists them all with their ranges. The numeric ones take an absolute value
-or a signed step, so `fov 158` and `fov +2` both work, and every sensor control
-also takes `auto` to hand it back to the camera's own loop. Every field and
-every button is one of these commands, so the four ways in cannot drift apart.
+or a signed step, so `fov 158` and `fov +2` both work; the choice ones take any
+unambiguous prefix, so `interp lan` is enough; and every sensor control also
+takes `auto` to hand it back to the camera's own loop. Every field, dropdown
+entry and button is one of these commands, so the ways in cannot drift apart.
 
 Fixing the fisheye, in order
 ---------------------------
@@ -242,6 +248,17 @@ BOX_EDGE = (105, 105, 105)
 GROUP_COLOR = (150, 190, 255)
 GROUP_WIDTH = 62          # left gutter the group labels live in
 
+# Fields whose value is one of a fixed set get a dropdown instead of a text box.
+# Typing "equidistant" correctly is not a thing anyone should have to do, and a
+# free-text box is a lie about the field: it invites input that can only ever be
+# rejected. The list opens UPWARD, over the viewport, because the panel sits at
+# the bottom of the window and there is never room below.
+DROP_BG = (38, 38, 38)
+DROP_BG_HOVER = (90, 78, 36)
+DROP_EDGE = (150, 150, 150)
+DROP_ROW_H = 21
+CARET = 9                 # width of the little triangle marking a dropdown
+
 # waitKeyEx arrow codes. GTK and Qt disagree and both turn up on a Pi desktop.
 # Deliberately NOT the short 81-84 forms: those are what the MASKED waitKey
 # returns, and they are also Shift+Q/R/S/T — which would turn "shift-Q to quit"
@@ -330,8 +347,9 @@ class Studio:
         self.pending_clicks = []       # (x, y) in window coords, awaiting layout
         self.layout = None             # where the image and buttons ended up
         self.pending = []              # command lines queued by the stdin thread
-        self.focus = None              # index into FIELDS of the field being typed in
-        self.field_text = ""           # what has been typed into it so far
+        self.focus = None              # index into FIELDS of the field being edited
+        self.field_text = ""           # what has been typed into a TEXT field
+        self.dropdown = None           # highlighted option, when the field is a list
 
         self.dirty = True              # rebuild the remap tables before next frame
         self.sensor_dirty = True       # push sensor controls before next frame
@@ -1298,22 +1316,45 @@ def field_value(studio, index):
 
 
 def focus_field(studio, index):
-    """Give a field the keyboard, pre-filled with its current value.
+    """Give a field the keyboard. Opens a dropdown, or a pre-filled text box.
 
-    Pre-filled rather than blank because most edits here are a nudge — 158 to
-    160 — and a box that empties itself when clicked has thrown away the one
-    number you were about to adjust. Everything numeric also accepts `+2` and
-    `-2`, so a relative tweak never needs the current value retyped either way.
+    Text boxes are pre-filled rather than blanked because most edits here are a
+    nudge — 158 to 160 — and a box that empties itself when clicked has thrown
+    away the one number you were about to adjust. Everything numeric also
+    accepts `+2` and `-2`, so a relative tweak never needs it retyped either way.
     """
+    field = FIELDS[index]
     studio.focus = index
+    if field.choices:
+        current = field_value(studio, index)
+        studio.dropdown = (field.choices.index(current)
+                           if current in field.choices else 0)
+        studio.field_text = ""
+        return f"{field.label}: pick one (Up/Down, Enter closes, Esc cancels)"
+    studio.dropdown = None
     studio.field_text = field_value(studio, index)
-    return (f"{FIELDS[index].label}: type a value and press Enter "
+    return (f"{field.label}: type a value and press Enter "
             "(Up/Down step it, Tab moves on, Esc cancels)")
 
 
 def blur_field(studio):
     studio.focus = None
     studio.field_text = ""
+    studio.dropdown = None
+
+
+def choose_option(studio, option_index):
+    """Apply one entry of an open dropdown, and leave the list open.
+
+    Applied immediately rather than on Enter so the effect is visible while the
+    list is still up — picking a projection model is a thing you do by looking
+    at the picture, not by reading the word.
+    """
+    field = FIELDS[studio.focus]
+    studio.dropdown = option_index % len(field.choices)
+    result = studio.commands.execute(
+        f"{field.command} {field.choices[studio.dropdown]}")
+    return result.ok, result.message
 
 
 def step_field(studio, direction):
@@ -1323,17 +1364,13 @@ def step_field(studio, direction):
     clamped, echoed and saved identically. Returns that command's own message.
     """
     field = FIELDS[studio.focus]
+    if field.choices:
+        # Moving the highlight in an open dropdown, which also applies it.
+        return choose_option(studio, (studio.dropdown or 0) + direction)
     if field.step is None:
         return False, f"{field.label} has no step — type a value instead"
 
-    if field.choices:
-        current = field_value(studio, studio.focus)
-        options = field.choices
-        # Tolerate a value that is not in the list — a sensor control the camera
-        # reported back oddly, say — by starting from the beginning.
-        index = options.index(current) if current in options else -1
-        argument = options[(index + direction) % len(options)]
-    elif field_value(studio, studio.focus) == AUTO and field.start is not None:
+    if field_value(studio, studio.focus) == AUTO and field.start is not None:
         # Nothing to add to. Jump to a sane starting point instead, so the first
         # press does something visible rather than failing the range check.
         argument = f"{field.start:g}"
@@ -1346,8 +1383,14 @@ def step_field(studio, direction):
 
 
 def commit_field(studio):
-    """Enter on the focused field: run its command with whatever was typed."""
+    """Enter on the focused field: run its command with whatever was typed.
+
+    A dropdown has nothing to commit — its entries apply as they are highlighted
+    — so Enter there just reports where it landed.
+    """
     field = FIELDS[studio.focus]
+    if field.choices:
+        return True, f"{field.label} {field_value(studio, studio.focus)}"
     text = studio.field_text.strip()
     if not text:
         return True, f"{field.label} left as it was"
@@ -1377,6 +1420,20 @@ def handle_field_key(key, studio):
         return step_field(studio, +1)
     if key in KEY_DOWN:
         return step_field(studio, -1)
+    field = FIELDS[studio.focus]
+    if field.choices:
+        # Type-ahead: a letter jumps to the next option starting with it, so a
+        # long list like awb is one keystroke rather than seven Downs.
+        if 32 <= key <= 126:
+            letter = chr(key).lower()
+            start = (studio.dropdown or 0) + 1
+            order = [(start + n) % len(field.choices) for n in range(len(field.choices))]
+            for n in order:
+                if field.choices[n].lower().startswith(letter):
+                    return choose_option(studio, n)
+            return False, f"no {field.label} option starts with '{letter}'"
+        return None
+
     if key in KEY_BACKSPACE:
         studio.field_text = studio.field_text[:-1]
         return None
@@ -1581,9 +1638,11 @@ def field_cell_width(field):
 
     The box is sized from the field's declared character count rather than from
     its current value, so a number growing from 9 to 10 does not shove every
-    field to its right along the row.
+    field to its right along the row. Dropdowns get a little more, for the caret.
     """
     box = 12 + text_width("0" * field.chars, VALUE_SCALE)
+    if field.choices:
+        box += CARET + 6
     return text_width(field.label, LABEL_SCALE) + 7 + box, box
 
 
@@ -1615,7 +1674,7 @@ def draw_fields(panel, studio, y):
     The whole cell — label included — is clickable, not just the box: a 40-pixel
     target that needs precision is a worse control than the slider it replaced.
     """
-    rects = []
+    rects, boxes = [], {}
     rows = layout_field_rows(panel.shape[1])
     group = ""
     for row in rows:
@@ -1638,14 +1697,66 @@ def draw_fields(panel, studio, y):
             cv2.rectangle(panel, (bx, y), (bx + box, y + FIELD_H),
                           PROMPT_COLOR if focused else BOX_EDGE, 1)
 
-            # While focused the box shows what is being TYPED, not the live
-            # value — otherwise a half-typed "1" would read as the real setting.
-            text = (studio.field_text + "_") if focused else field.get(studio)
+            # While a TEXT field is focused the box shows what is being typed,
+            # not the live value — otherwise a half-typed "1" would read as the
+            # real setting. A dropdown always shows the real value, because its
+            # entries apply as they are highlighted.
+            if focused and not field.choices:
+                text = studio.field_text + "_"
+            else:
+                text = field.get(studio)
             cv2.putText(panel, text, (bx + 5, y + FIELD_H - 6), FONT, VALUE_SCALE,
                         PROMPT_COLOR if focused else TEXT_COLOR, 1, cv2.LINE_AA)
+
+            if field.choices:
+                draw_caret(panel, bx + box - CARET - 5, y + FIELD_H // 2,
+                           PROMPT_COLOR if focused else BOX_EDGE)
             rects.append((x, y, bx + box, y + FIELD_H, index))
+            boxes[index] = (bx, y, bx + box, y + FIELD_H)
         y += FIELD_H + FIELD_ROW_GAP
-    return rects, y
+    return rects, boxes, y
+
+
+def draw_caret(panel, x, y, color):
+    """The small filled triangle that marks a field as a list, not a text box."""
+    cv2.fillPoly(panel, [np.array([[x, y - 2], [x + CARET, y - 2],
+                                   [x + CARET // 2, y + 3]], np.int32)], color)
+
+
+def draw_dropdown(canvas, studio, panel_y):
+    """The open option list, drawn over the viewport above its field.
+
+    Upward, because the panel is at the bottom of the window and there is never
+    room below it. Returns the hit rectangles in CANVAS coordinates — the popup
+    is the one thing that lives outside the panel, so it cannot share the
+    panel-relative hit test the fields and buttons use.
+    """
+    if studio.focus is None:
+        return []
+    field = FIELDS[studio.focus]
+    box = (studio.layout or {}).get("field_box", {}).get(studio.focus)
+    if not field.choices or box is None:
+        return []
+
+    bx, by, bx2, _ = box
+    width = max(bx2 - bx, 16 + max(text_width(c, VALUE_SCALE) for c in field.choices))
+    width = min(width, canvas.shape[1] - bx - 4)
+    height = DROP_ROW_H * len(field.choices) + 2
+    top = max(0, panel_y + by - height - 3)
+
+    cv2.rectangle(canvas, (bx, top), (bx + width, top + height), DROP_BG, -1)
+    cv2.rectangle(canvas, (bx, top), (bx + width, top + height), DROP_EDGE, 1)
+
+    rects = []
+    for n, option in enumerate(field.choices):
+        oy = top + 1 + n * DROP_ROW_H
+        if n == studio.dropdown:
+            cv2.rectangle(canvas, (bx + 1, oy), (bx + width - 1, oy + DROP_ROW_H),
+                          DROP_BG_HOVER, -1)
+        cv2.putText(canvas, option, (bx + 8, oy + DROP_ROW_H - 6), FONT, VALUE_SCALE,
+                    PROMPT_COLOR if n == studio.dropdown else TEXT_COLOR, 1, cv2.LINE_AA)
+        rects.append((bx, oy, bx + width, oy + DROP_ROW_H, n))
+    return rects
 
 
 def panel_height(width):
@@ -1705,7 +1816,7 @@ def draw_panel(studio, width, fps):
     y = PANEL_PAD
     buttons = draw_buttons(panel, studio, y)
     y += BUTTON_H + BUTTON_GAP
-    fields, y = draw_fields(panel, studio, y)
+    fields, boxes, y = draw_fields(panel, studio, y)
     y += FIELD_ROW_GAP
 
     def line(text, color=TEXT_COLOR, scale=0.42):
@@ -1722,6 +1833,9 @@ def draw_panel(studio, width, fps):
 
     if studio.edit.active:
         line(studio.edit.render(), PROMPT_COLOR, scale=0.5)
+    elif studio.focus is not None and FIELDS[studio.focus].choices:
+        line(f"choosing {FIELDS[studio.focus].label} — Up/Down or click to pick "
+             "(it applies at once), Enter closes, Esc cancels", PROMPT_COLOR)
     elif studio.focus is not None:
         line(f"editing {FIELDS[studio.focus].label} — Enter commits, Up/Down step, "
              f"Tab next, Esc cancels", PROMPT_COLOR)
@@ -1729,7 +1843,7 @@ def draw_panel(studio, width, fps):
         line("click a field to edit it, drag on the image to crop, ':' for a "
              f"command, '?' for keys   |   {fps:5.1f} fps   |   {studio.settings_path}",
              HINT_COLOR)
-    return panel, buttons, fields
+    return panel, buttons, fields, boxes
 
 
 def display_note(studio):
@@ -1811,7 +1925,7 @@ def compose(image, studio, fps):
     different size from the window.
     """
     width, viewport_h, _ = window_size(studio)
-    panel, buttons, fields = draw_panel(studio, width, fps)
+    panel, buttons, fields, boxes = draw_panel(studio, width, fps)
 
     render_h, render_w = image.shape[:2]
     ih, iw = render_h, render_w
@@ -1836,7 +1950,11 @@ def compose(image, studio, fps):
         "panel_y": viewport_h,
         "buttons": buttons,
         "fields": fields,
+        "field_box": boxes,
     }
+    # Last, and onto the finished canvas: the list has to sit over the viewport,
+    # which the panel it belongs to cannot reach.
+    studio.layout["dropdown"] = draw_dropdown(canvas, studio, viewport_h)
     return canvas
 
 
@@ -1862,6 +1980,23 @@ def window_to_image(studio, x, y):
         return None
     scale = lay.get("image_scale", 1.0) or 1.0
     return int(dx / scale), int(dy / scale)
+
+
+def hit_dropdown(studio, x, y):
+    """Which option of the open list is under a click, if any.
+
+    Separate from hit_panel because the popup is drawn onto the whole canvas
+    rather than into the panel, so its rectangles are already absolute.
+    """
+    lay = studio.layout
+    if not lay or not lay.get("dropdown"):
+        return None
+    if studio.args.display_scale != 1.0:
+        x, y = x / studio.args.display_scale, y / studio.args.display_scale
+    for x0, y0, x1, y1, option in lay["dropdown"]:
+        if x0 <= int(x) <= x1 and y0 <= int(y) <= y1:
+            return option
+    return None
 
 
 def hit_panel(studio, x, y, key):
@@ -1892,6 +2027,15 @@ def process_mouse(studio):
     events, studio.pending_clicks = studio.pending_clicks, []
     for kind, x, y in events:
         if kind == "down":
+            # The open list is drawn on top of everything, so it is tested
+            # first — otherwise a click landing on it would fall through to
+            # whatever the viewport has underneath.
+            option = hit_dropdown(studio, x, y)
+            if option is not None:
+                studio.log.add(*choose_option(studio, option))
+                blur_field(studio)
+                continue
+
             index = hit_panel(studio, x, y, "fields")
             if index is not None:
                 studio.log.add(True, focus_field(studio, index))
