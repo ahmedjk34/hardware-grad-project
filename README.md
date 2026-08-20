@@ -30,10 +30,12 @@ The repository is split by platform:
 
 [`python/camera/camera_feed.py`](python/camera/camera_feed.py) is the main
 camera script. It loads `python/config/camera_settings.json`, applies the saved
-capture and sensor settings, and shows the configured corrected/framed feed.
-Build future vision stages from this feed so the camera is opened and
-configured in one place. Use `camera_studio.py` to tune the settings and save
-them before running the feed:
+capture and sensor settings, detects the visible blocks, and shows the
+configured corrected/framed feed with colour-coded edges, centres and hover
+coordinates. Press `s` to save an annotated image and detection JSON. Build
+future vision stages from this feed so the camera is opened and configured in
+one place. Use `camera_studio.py` to tune the settings and save them before
+running the feed:
 
 ```bash
 cd python
@@ -43,9 +45,9 @@ cd python
 
 ## Status
 
-The camera pipeline currently ends at a corrected live preview. Block detection,
-homography, workspace mapping and robot-coordinate output are not implemented
-yet. Lens correction runs on **estimated** parameters — no checkerboard
-calibration has been performed, so the image is visually straightened but not
-measurement-grade. See [python/README.md](python/README.md) for what that means
-in practice.
+The camera pipeline now includes live block detection with colour-coded edges,
+rotated boxes, centres and hover coordinates. Homography, workspace mapping and
+robot-coordinate output are not implemented yet. Lens correction runs on
+**estimated** parameters — no checkerboard calibration has been performed, so
+the image is visually straightened but not measurement-grade. See
+[python/README.md](python/README.md) for what that means in practice.

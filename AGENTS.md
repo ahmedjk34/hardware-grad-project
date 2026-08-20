@@ -132,8 +132,10 @@ nothing enforces it at runtime.
 `python/config/camera_settings.json` (or an explicitly supplied settings path),
 apply its capture and sensor values, then produce the configured camera frame.
 Future vision stages build from this feed instead of opening the camera a second
-time. `camera_studio.py` is the editor that writes the file; it is not the
-runtime pipeline entry point.
+time. The feed owns the first block-detection pass: clean contours, colour-coded
+rotated boxes, centres, hover coordinates and saved detection metadata. Later
+mapping code should consume those detections. `camera_studio.py` is the editor
+that writes the file; it is not the runtime pipeline entry point.
 
 The `lens` block in `camera_settings.json` is consumed by `camera_feed.py` so a
 saved studio setup is reproducible. `config/lens_profile.json` remains the

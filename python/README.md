@@ -29,10 +29,12 @@ python/
 │   ├── grid.py                 the machine's cells, and which way round they sit
 │   └── link.py                 the serial link: send a command, wait for the answer
 ├── tests/
+│   ├── test_block_detector.py  block detection against the committed captures
 │   ├── test_grid.py            the cell numbering, against the firmware's own map
 │   └── test_link.py            link.py against a fake board — no rig needed
 └── vision/                     importable library — no windows, no argv, no prints
     ├── camera_source.py        Picamera2 on the Pi, V4L2 elsewhere
+    ├── block_detector.py       colour + contour block detection and geometry
     ├── commands.py             the typed-command engine the viewers share
     ├── devices.py              /dev/video* enumeration and picker
     ├── fisheye.py              the fisheye → rectilinear correction
@@ -42,8 +44,10 @@ python/
 `grid/` and `camera/` hold the things you run. `camera/camera_feed.py` is the
 main camera script and the foundation for the future vision pipeline. It loads
 `config/camera_settings.json`, opens the configured source, applies the saved
-sensor controls and orientation, and renders the saved correction and framing.
-Future detection and robot-coordinate code should consume its frame rather than
+sensor controls and orientation, renders the saved correction and framing, and
+detects the current blocks with colour-coded edges, rotated boxes, centres and
+hover coordinates. Press `s` to save an annotated frame and JSON geometry.
+Future robot-coordinate code should consume these detections rather than
 opening the camera independently.
 
 `grid/undistorted_grid_viewer.py` is the combined measurement tool and is what
@@ -74,6 +78,7 @@ built from transcripts:
     cd python
     ../.venv/bin/python tests/test_link.py
     ../.venv/bin/python tests/test_grid.py
+    ../.venv/bin/python tests/test_block_detector.py
 
 It proves the parsing and the cell numbering, not the machine. The other half of the testing is
 flashing the firmware and watching it.

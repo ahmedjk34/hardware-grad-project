@@ -42,17 +42,25 @@ writes.
 
 **Use it for:** the normal camera feed and the foundation of the vision
 pipeline. It opens the configured source, applies the saved sensor controls and
-orientation, then renders the saved correction and framing from
-`config/camera_settings.json`.
+orientation, renders the saved correction and framing from
+`config/camera_settings.json`, and detects the warm rectangular blocks in the
+current captures. Each block gets a clean contour, a rotated box, a centre,
+an ID and a colour-coded overlay.
 
 ```bash
 python camera/camera_feed.py
 python camera/camera_feed.py --settings ../config/table_cam.json
+python camera/camera_feed.py --display-scale 1.5
 ```
 
-Future block detection, workspace mapping and robot-coordinate code should
-build from this feed rather than opening the camera independently. Run
-`camera_studio.py` first when the settings need tuning.
+Move the mouse over a block for its corrected-image pixel coordinates, size,
+angle and edge confidence. These are image coordinates for now; machine/grid
+mapping still waits for camera calibration. Press `s` to save the annotated
+frame and a JSON file containing the block geometry. `--color-threshold` and
+`--min-area` are the two tuning knobs if a new lighting setup changes the
+segmentation. Future workspace mapping and robot-coordinate code should build
+from this feed rather than opening the camera independently. Run
+`camera_studio.py` first when the camera settings need tuning.
 
 ---
 

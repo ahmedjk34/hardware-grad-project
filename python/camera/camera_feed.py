@@ -11,7 +11,9 @@ the frame produced here rather than opening the camera a second time.
     python camera_feed.py --settings ../config/my_camera.json
 
 Press ``q`` or Esc in the window to quit. ``camera_studio.py`` is the editor for
-the settings; this script is their consumer.
+the settings; this script is their consumer. Move the mouse over a block for
+pixel coordinates, and press ``s`` to save the annotated frame plus detection
+metadata in ``captures/``.
 """
 
 import argparse
@@ -33,6 +35,7 @@ from vision.camera_source import (  # noqa: E402
     SENSOR_CONTROLS,
     open_camera,
 )
+from vision.block_detector import BlockDetection, detect_blocks  # noqa: E402
 from vision.fisheye import (  # noqa: E402
     INTERPOLATIONS,
     LensProfile,
@@ -43,6 +46,7 @@ from vision.overlays import draw_info_box  # noqa: E402
 
 
 SETTINGS_PATH = Path(__file__).resolve().parents[1] / "config" / "camera_settings.json"
+CAPTURE_DIR = Path(__file__).resolve().parents[1] / "captures"
 VALID_BACKENDS = ("auto", "picamera2", "v4l2")
 VALID_FLIPS = ("none", "h", "v", "both")
 VALID_ROTATIONS = (0, 90, 180, 270)
@@ -170,17 +174,165 @@ def crop_resize(frame, roi, out_size, interpolation):
     return cv2.resize(sub, tuple(out_size), interpolation=kernel)
 
 
+# Distinct BGR colours make adjacent blocks easy to tell apart. The palette is
+# intentionally high-contrast against the pale work surface and repeats only
+# after six detections.
+BLOCK_COLORS = (
+    (255, 80, 40),    # blue-orange
+    (40, 210, 255),   # yellow
+    (90, 255, 90),    # green
+    (255, 80, 220),   # pink
+    (255, 180, 40),   # cyan
+    (180, 80, 255),   # purple
+)
+
+
+def enhance_for_display(frame):
+    """Increase local contrast and edge crispness without changing detection data."""
+    lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+    lightness, a_channel, b_channel = cv2.split(lab)
+    lightness = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8, 8)).apply(lightness)
+    enhanced = cv2.cvtColor(cv2.merge((lightness, a_channel, b_channel)),
+                            cv2.COLOR_LAB2BGR)
+    soft = cv2.GaussianBlur(enhanced, (0, 0), 1.0)
+    return cv2.addWeighted(enhanced, 1.22, soft, -0.22, 0)
+
+
+def _block_color_name(detection: BlockDetection) -> str:
+    """Give the current warm block material a human-readable colour name."""
+    hue = detection.hue
+    if hue >= 165 or hue < 8:
+        return "pink/red"
+    if hue < 24:
+        return "orange/tan"
+    if hue < 42:
+        return "yellow"
+    if hue < 90:
+        return "green/cyan"
+    if hue < 140:
+        return "blue"
+    return "violet"
+
+
+def hovered_block(detections, point):
+    """Return the detection index under a corrected-feed pixel, if any."""
+    if point is None:
+        return None
+    x, y = point
+    for index, detection in enumerate(detections):
+        if cv2.pointPolygonTest(detection.contour, (float(x), float(y)), False) >= 0:
+            return index
+    return None
+
+
+def draw_block_overlay(frame, detections, hover_point=None):
+    """Draw clean colour-coded edges, boxes, IDs, centres and hover details."""
+    fill = frame.copy()
+    for index, detection in enumerate(detections):
+        color = BLOCK_COLORS[index % len(BLOCK_COLORS)]
+        cv2.fillPoly(fill, [detection.box], color)
+    cv2.addWeighted(fill, 0.12, frame, 0.88, 0, frame)
+
+    hovered = hovered_block(detections, hover_point)
+    for index, detection in enumerate(detections):
+        color = BLOCK_COLORS[index % len(BLOCK_COLORS)]
+        thickness = 4 if index == hovered else 3
+        # Dark under-stroke makes the coloured edge readable on both white
+        # surfaces and dark hardware, while the anti-aliased colour stroke says
+        # which block the edge belongs to.
+        cv2.polylines(frame, [detection.contour], True, (20, 20, 20), thickness + 3,
+                      cv2.LINE_AA)
+        cv2.polylines(frame, [detection.contour], True, color, thickness, cv2.LINE_AA)
+        cv2.polylines(frame, [detection.box], True, (255, 255, 255), 1, cv2.LINE_AA)
+        cx, cy = (round(v) for v in detection.center)
+        cv2.drawMarker(frame, (cx, cy), color, cv2.MARKER_CROSS, 16, 2, cv2.LINE_AA)
+
+        label = f"#{index + 1} ({cx},{cy})"
+        x = max(3, int(detection.box[:, 0].min()))
+        y = max(16, int(detection.box[:, 1].min()) - 5)
+        cv2.putText(frame, label, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.42,
+                    (0, 0, 0), 3, cv2.LINE_AA)
+        cv2.putText(frame, label, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.42,
+                    color, 1, cv2.LINE_AA)
+
+    hud = [
+        f"BLOCKS: {len(detections)}  |  move mouse over a block",
+        "COLOUR EDGES + ROTATED BOXES + CENTRES",
+        "COORDS: corrected-image pixels (machine mapping pending)",
+    ]
+    draw_info_box(frame, hud, width=min(360, frame.shape[1] - 8), scale=0.40)
+
+    if hovered is not None:
+        detection = detections[hovered]
+        cx, cy = (round(v) for v in detection.center)
+        long_side, short_side = detection.size
+        lines = [
+            f"BLOCK #{hovered + 1}  {_block_color_name(detection)}",
+            f"centre  x {cx}px  y {cy}px",
+            f"size    {long_side:.0f} x {short_side:.0f}px",
+            f"angle   {detection.angle:.1f} deg",
+            f"edge confidence {detection.confidence * 100:.0f}%",
+        ]
+        draw_info_box(frame, lines, origin=(6, frame.shape[0] - 104),
+                      width=min(280, frame.shape[1] - 12), scale=0.40,
+                      highlight_first=True)
+        cv2.drawMarker(frame, (round(hover_point[0]), round(hover_point[1])),
+                       (255, 255, 255), cv2.MARKER_CROSS, 20, 2, cv2.LINE_AA)
+    elif hover_point is not None:
+        x, y = (round(v) for v in hover_point)
+        if 0 <= x < frame.shape[1] and 0 <= y < frame.shape[0]:
+            cv2.drawMarker(frame, (x, y), (210, 210, 210), cv2.MARKER_CROSS,
+                           12, 1, cv2.LINE_AA)
+            draw_info_box(frame, [f"cursor  x {x}px  y {y}px"],
+                          origin=(6, frame.shape[0] - 32), width=180, scale=0.40)
+    return frame
+
+
+def save_detection_snapshot(frame, detections):
+    """Save the visible annotated frame and machine-readable block geometry."""
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    CAPTURE_DIR.mkdir(parents=True, exist_ok=True)
+    image_path = CAPTURE_DIR / f"{stamp}_blocks.png"
+    data_path = CAPTURE_DIR / f"{stamp}_blocks.json"
+    cv2.imwrite(str(image_path), frame)
+    data_path.write_text(json.dumps([
+        {
+            "id": index + 1,
+            "center_px": [round(d.center[0], 2), round(d.center[1], 2)],
+            "box_px": d.box.tolist(),
+            "size_px": [round(v, 2) for v in d.size],
+            "angle_deg": round(d.angle, 2),
+            "area_px": round(d.area, 2),
+            "confidence": round(d.confidence, 4),
+            "hue": round(d.hue, 2),
+        }
+        for index, d in enumerate(detections)
+    ], indent=2) + "\n")
+    return image_path, data_path
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument("--settings", type=Path, default=SETTINGS_PATH,
                         help=f"camera settings JSON (default: {SETTINGS_PATH})")
+    parser.add_argument("--display-scale", type=float, default=1.0,
+                        help="scale only the display window; detection stays at source size")
+    parser.add_argument("--color-threshold", type=int, default=8,
+                        help="minimum red-minus-blue value for a block (default: 8)")
+    parser.add_argument("--min-area", type=int, default=500,
+                        help="minimum detected block area in feed pixels (default: 500)")
+    parser.add_argument("--no-enhance", action="store_true",
+                        help="disable display contrast/sharpness enhancement")
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
+    if args.display_scale <= 0 or args.min_area <= 0:
+        print("--display-scale and --min-area must be positive", file=sys.stderr)
+        return 1
     try:
         data = load_settings(args.settings)
         backend, device, size = capture_settings(data)
@@ -216,6 +368,14 @@ def main():
     print(f"Sensor settings: {len(applied)} applied")
 
     window = f"Camera Feed - {camera.name}"
+    ui = {"hover": None}
+
+    def on_mouse(event, x, y, _flags, state):
+        if event == cv2.EVENT_MOUSEMOVE:
+            state["hover"] = (x / args.display_scale, y / args.display_scale)
+
+    cv2.namedWindow(window, cv2.WINDOW_AUTOSIZE)
+    cv2.setMouseCallback(window, on_mouse, ui)
     maps = None
     input_size = None
     fps = 0.0
@@ -235,22 +395,34 @@ def main():
 
             view = undistort(frame, maps) if enabled else \
                 crop_resize(frame, roi, maps.out_size, interpolation)
+            detections = detect_blocks(view, color_threshold=args.color_threshold,
+                                       min_area=args.min_area)
+            display = view if args.no_enhance else enhance_for_display(view)
+            display = draw_block_overlay(display, detections, ui["hover"])
             now = time.perf_counter()
             dt, last = now - last, now
             if dt > 0:
                 instant = 1.0 / dt
                 fps = 0.9 * fps + 0.1 * instant if fps else instant
-            draw_info_box(view, [
-                "CONFIG-DRIVEN CAMERA FEED",
+            draw_info_box(display, [
                 f"{camera.name}  {fps:5.1f} fps",
-                f"{'CORRECTED' if enabled else 'RAW'}  output {view.shape[1]}x{view.shape[0]}",
+                f"{'CORRECTED' if enabled else 'RAW'}  {view.shape[1]}x{view.shape[0]}",
                 f"settings {args.settings.name}",
-            ], highlight_first=False)
+            ], origin=(display.shape[1] - min(330, display.shape[1] - 8) - 4, 4),
+                           width=min(330, display.shape[1] - 8), scale=0.38)
+            if args.display_scale != 1.0:
+                shown = cv2.resize(display, None, fx=args.display_scale,
+                                   fy=args.display_scale, interpolation=cv2.INTER_AREA)
+            else:
+                shown = display
 
-            cv2.imshow(window, view)
+            cv2.imshow(window, shown)
             key = cv2.waitKey(1) & 0xFF
             if key in (ord("q"), 27):
                 return 0
+            if key == ord("s"):
+                image_path, data_path = save_detection_snapshot(display, detections)
+                print(f"Saved {image_path} and {data_path}")
             if cv2.getWindowProperty(window, cv2.WND_PROP_VISIBLE) < 1:
                 return 0
     finally:
