@@ -23,7 +23,7 @@ What the firmware understands (build_test_v1)
     Z             the Z / block-level calibration table
     U / D         jog Z up / down
     O / C         gripper open / close
-    R / RR        aux stepper +/-180 degrees
+    R / RR        aux stepper +/-90 degrees
 
 Type `quit` (or Ctrl-D, or Ctrl-C) to leave.
 

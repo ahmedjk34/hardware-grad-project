@@ -7,7 +7,7 @@
   Plus a THIRD, independent motor driving a Z axis (single motor,
   not coupled to the X/Y pair), a GRIPPER SERVO on pin 6 with just
   two positions (OPEN and CLOSE), and a FOURTH, independentB 
-  28BYJ-48 + ULN2003 stepper that only jogs +/-180 degrees on command.
+  28BYJ-48 + ULN2003 stepper that only jogs +/-90 degrees on command.
 
   NEW IN build_tesT_v1:  the  B  (BUILD) command - one full
   pick-and-place cycle expressed in BLOCK LEVELS instead of steps.
@@ -33,8 +33,8 @@
     O = Servo OPEN   (pin 6)
     C = Servo CLOSE  (pin 6)
 
-    R  = Aux stepper rotate ~180 deg CW   (28BYJ-48, pins 36-39)
-    RR = Aux stepper rotate ~180 deg CCW  (28BYJ-48, pins 36-39)
+    R  = Aux stepper rotate ~90 deg CW   (28BYJ-48, pins 36-39)
+    RR = Aux stepper rotate ~90 deg CCW  (28BYJ-48, pins 36-39)
 
     G <col> <row>   = go to grid cell (1-based). e.g.  G 3 5   or  G3,5
     S <cols> <rows> = change fixed-pitch grid count live. e.g.  S 20 4
@@ -217,13 +217,13 @@ bool servoIsOpen = false;
 // ============================================================
 //
 // A fourth, independent motor - not part of the X/Y/Z rig. It only
-// jogs +/-180 degrees on command (R / RR), no homing, no limits.
+// jogs +/-90 degrees on command (R / RR), no homing, no limits.
 //
 // ULN2003 connections:
-//   IN1 -> pin 36   BLACK
-//   IN2 -> pin 37   GREEN
-//   IN3 -> pin 38   BLUE
-//   IN4 -> pin 39   RED
+//   IN1 -> pin 36   GREEN
+//   IN2 -> pin 37   RED
+//   IN3 -> pin 38   YELLOW
+//   IN4 -> pin 39   BLUE
 // Power the ULN2003 from a 5V external supply with a shared GND.
 
 const int AUX_STEPPER_IN1 = 36;
@@ -234,8 +234,8 @@ const int AUX_STEPPER_IN4 = 39;
 // Approximate number of steps for one output-shaft revolution.
 const int AUX_STEPPER_STEPS_PER_REV = 2048;
 
-// A half turn - what R / RR actually move.
-const int AUX_STEPPER_HALF_TURN = AUX_STEPPER_STEPS_PER_REV / 2;
+// A quarter turn - what R / RR actually move.
+const int AUX_STEPPER_QUARTER_TURN = AUX_STEPPER_STEPS_PER_REV / 4;
 
 const int AUX_STEPPER_SPEED_RPM = 10;
 
@@ -691,7 +691,7 @@ const bool BUILD_VERBOSE = true;
 // The claw is assumed to START in the neutral / correct orientation -
 // it is set by hand (or by R / RR) before the program is driven.
 //
-// A build may ask for R (180 CW) or RR (180 CCW) so the block lands
+// A build may ask for R (90 CW) or RR (90 CCW) so the block lands
 // turned. That leaves the claw turned too, which would be wrong for
 // the NEXT pick-up. So the build sequence always UN-ROTATES back to
 // neutral while it is over the feeder at 0,0 - before it descends -
@@ -1182,7 +1182,7 @@ void handleLine(char *line)
     {
       statBadCommands++;
       Serial.println();
-      Serial.println(F("  ERROR - use:  R (CW ~180 deg) or RR (CCW ~180 deg)"));
+      Serial.println(F("  ERROR - use:  R (CW ~90 deg) or RR (CCW ~90 deg)"));
     }
     break;
 
@@ -1619,9 +1619,9 @@ void closeServoAndWait()
 void rotateAuxStepperCW()
 {
   Serial.println();
-  Serial.println(F("AUX STEPPER: rotating ~180 deg CW..."));
-  auxStepper.step(AUX_STEPPER_HALF_TURN);
-  auxStepperPos += AUX_STEPPER_HALF_TURN;
+  Serial.println(F("AUX STEPPER: rotating ~90 deg CW..."));
+  auxStepper.step(AUX_STEPPER_QUARTER_TURN);
+  auxStepperPos += AUX_STEPPER_QUARTER_TURN;
   statRotCW++;
   Serial.println(F("AUX STEPPER: done."));
 }
@@ -1629,9 +1629,9 @@ void rotateAuxStepperCW()
 void rotateAuxStepperCCW()
 {
   Serial.println();
-  Serial.println(F("AUX STEPPER: rotating ~180 deg CCW..."));
-  auxStepper.step(-AUX_STEPPER_HALF_TURN);
-  auxStepperPos -= AUX_STEPPER_HALF_TURN;
+  Serial.println(F("AUX STEPPER: rotating ~90 deg CCW..."));
+  auxStepper.step(-AUX_STEPPER_QUARTER_TURN);
+  auxStepperPos -= AUX_STEPPER_QUARTER_TURN;
   statRotCCW++;
   Serial.println(F("AUX STEPPER: done."));
 }
@@ -1646,11 +1646,11 @@ const char *rotationName(int8_t rot)
 {
   if (rot == ROT_CW)
   {
-    return "R (180 CW)";
+    return "R (90 CW)";
   }
   if (rot == ROT_CCW)
   {
-    return "RR (180 CCW)";
+    return "RR (90 CCW)";
   }
   return "NR (neutral)";
 }
@@ -2372,7 +2372,7 @@ void printBuildUsage()
   Serial.print(F("   (0 = ground, 1 = "));
   Serial.print(BLOCK_HEIGHT_CM, 2);
   Serial.println(F(" cm, ...)"));
-  Serial.println(F("    R = 180 CW, RR = 180 CCW, NR / omitted = no rotation"));
+  Serial.println(F("    R = 90 CW, RR = 90 CCW, NR / omitted = no rotation"));
   Serial.println(F("    e.g.  B 3 5 2 R      or   B 3 5 0"));
 }
 
@@ -4284,8 +4284,8 @@ void printInstructions()
   Serial.println(F("O = Servo OPEN              [pin 6]"));
   Serial.println(F("C = Servo CLOSE             [pin 6]"));
   Serial.println(F("--------------------------------------"));
-  Serial.println(F("R  = Aux stepper ~180 deg CW   [28BYJ-48, pins 36-39]"));
-  Serial.println(F("RR = Aux stepper ~180 deg CCW  [28BYJ-48, pins 36-39]"));
+  Serial.println(F("R  = Aux stepper ~90 deg CW   [28BYJ-48, pins 36-39]"));
+  Serial.println(F("RR = Aux stepper ~90 deg CCW  [28BYJ-48, pins 36-39]"));
   Serial.println(F("--------------------------------------"));
   Serial.println(F("G <col> <row>   goto cell, e.g.  G 3 5"));
   Serial.println(F("S <cols> <rows> fixed-pitch count, e.g. S 20 4"));
