@@ -12,10 +12,12 @@ below assume you are in the `python/` directory with the venv active.
 | I want to… | Use |
 | --- | --- |
 | **Correct the fisheye AND measure on the result** | [`undistorted_grid_viewer.py`](#undistorted_grid_viewerpy) |
+| **Tune every camera setting and save them to JSON** | [`camera_studio.py`](#camera_studiopy) |
 | Check the camera is connected and working | [`camera_viewer.py`](#camera_viewerpy) |
 | Read pixel coordinates off the image | [`grid_viewer.py`](#grid_viewerpy) |
 | Estimate real-world sizes in centimetres | [`measured_grid_viewer.py`](#measured_grid_viewerpy) |
 | Remove the fisheye distortion / tune the lens model | [`undistorted_viewer.py`](#undistorted_viewerpy) |
+| Zoom or crop the preview, or hand-correct residual bowing | [`camera_studio.py`](#camera_studiopy) |
 
 All of them exit on `q` or `Esc`, or when you close the window.
 
@@ -23,6 +25,11 @@ The first is the other two grid tools and the undistortion tool merged, and is
 the one to reach for by default. The single-purpose viewers are kept because
 each is short enough to read end to end when you want to see one stage in
 isolation.
+
+`camera_studio.py` is the odd one out: it is not for *using* the camera but for
+*deciding what its settings should be*. Tune there, `save`, and the JSON is the
+answer. The other tools read `config/lens_profile.json`, which the studio's
+`lens` command writes.
 
 ---
 
@@ -150,6 +157,182 @@ scaled linearly, which assumes a flat plane viewed square-on — so:
 
 Treat it as a working approximation, not a measurement, until the checkerboard
 calibration lands.
+
+---
+
+## `camera_studio.py`
+
+**The tuning bench.** Everything that decides what the picture looks like — the
+fisheye correction, the sensor's own controls, zoom, crop, flip — adjustable
+live, with a control panel under the image and one `save` that writes the whole
+state to JSON.
+
+```bash
+python camera/camera_studio.py
+python camera/camera_studio.py --hq                  # sharpest: full sensor in
+python camera/camera_studio.py --settings ../config/table_cam.json --autosave
+python camera/camera_studio.py --load ../config/table_cam.json
+```
+
+Reach for this when you are *deciding* what the camera settings should be.
+Reach for `undistorted_grid_viewer.py` when you are working with the result.
+
+### The window
+
+The image on top, unobscured — you cannot judge whether an edge is straight
+through a translucent HUD — and a control strip underneath holding a row of
+clickable buttons, the current value of every parameter, and the last few
+messages. Trackbars for the correction knobs run along the top.
+
+| Button | Same as typing |
+| --- | --- |
+| SAVE JSON | `save` |
+| SNAP PNG | `snap` |
+| ZOOM + / ZOOM − | `zoom +0.25` / `zoom -0.25` |
+| CROP | `crop` |
+| UNDO CROP | `uncrop` |
+| NO CROP | `nocrop` |
+| REFIT | `refit` |
+| RAW/CORR | `view` (cycles corrected → raw → both) |
+| GRID | `grid` |
+| RESET | `reset` |
+| HELP | `help` |
+
+Every button *is* a command line, so there is no third code path to keep in step
+with the keys and the typed commands — and a button press lands in the log the
+same way a typed one does.
+
+### Driving it — four input channels
+
+OpenCV delivers keystrokes only while the **image window** has focus, which over
+VNC or `ssh -X` often means "not until you have clicked it". So:
+
+1. **Type in the terminal.** Commands typed into the launching shell are read
+   from stdin. Needs no window focus at all; this is the one that always works.
+2. **Type in the window.** `:` opens a prompt in the panel. Each character
+   appears as it arrives — if nothing appears, the window does not have focus.
+3. **Click and drag.** The buttons, and a drag on the image to crop to a
+   rectangle. The area outside the drag dims, so you judge the crop on what will
+   remain rather than on an outline.
+4. **Sliders and keys.**
+
+### Fixing the fisheye
+
+Point the camera at a long straight edge, put it near the frame **edge** (the
+centre is nearly straight whatever you do), and press `g` for a ruler to judge
+against. Then, in this order:
+
+| Step | Knob | What it does that the others cannot |
+| --- | --- | --- |
+| 1 | `fov` (`[` `]`) | Scales every radius at once. By far the biggest effect — nothing else is worth touching until this is close. Bowing **outward** → `]`. Bowing **inward**, over-corrected → `[`. |
+| 2 | `model` (`m`) | Four ideal projection curves. Cheap to try, so try all four. |
+| 3 | `k1` / `k2` (`1`–`4`) | The residual. Straight in the middle of the frame but still bending in the last fifth is exactly what these fix: they are zero on the optical axis and grow toward the edge, which is the shape `fov` cannot make. |
+| 4 | `cx` / `cy` (`5`–`8`) | Only for **asymmetric** bowing — straight along the left edge, curved along the right. That is the sensor sitting off-centre behind the lens, and no amount of `k1` will fix it. |
+
+`straight` prints this list into the window.
+
+`k1`, `k2`, `centre_dx` and `centre_dy` are new fields on `LensProfile`; they
+default to zero, which is an exact no-op, so a profile that has never been near
+this tool behaves precisely as it did.
+
+### Zoom and crop are not what they usually are
+
+They are folded into the correction's lookup table rather than applied to the
+finished image, so a 2× zoom **re-renders that part of the field straight from
+the sensor frame** instead of enlarging pixels that were already interpolated
+once. The `SAMPLE` line reports the real cost: at zoom 2 you should see `centre`
+roughly halve, and if it drops well below 1.00 the answer is `--hq`, not a
+sharper interpolation kernel.
+
+Crops **compose** and are kept as a stack, so `uncrop` (or Backspace, or the
+UNDO CROP button) restores the previous framing rather than resetting to the
+whole frame. `nocrop` drops all of them.
+
+Zoom is deliberately *not* part of that stack. A crop is a decision you are
+recording in the JSON; zoom is how you are looking at it right now, and you want
+to be able to zoom back out without losing the crop. `c` promotes the current
+zoom rectangle into a real crop once you decide you meant it.
+
+Two ways of sizing the result, toggled with `v`:
+
+- **`fit`** (default) — the ROI is scaled to fill the view box, so the window
+  keeps its size however far you zoom. `scale` then becomes a pure quality knob:
+  it changes how much source detail feeds the correction, not how big the
+  window is.
+- **`native`** — the ROI renders at its natural size, so zoom and crop never
+  interpolate anything, at the cost of the window resizing under you.
+
+`refit` gets the best of both: it resizes the view box to the crop's own size,
+so the crop renders exactly 1:1 and *stays* there as you keep working.
+
+### Sensor controls
+
+Twelve of them, one command each, all live: `brightness`, `contrast`,
+`saturation`, `sharpness`, `ev`, `exposure`, `gain`, `awb`, `redgain`,
+`bluegain`, `denoise`, `fps`. Every one also takes `auto` to hand it back to the
+camera's own loop, which is different from — and better than — pinning it to
+whatever value that loop had settled on. `autoall` does the lot; `sensor` prints
+every value and what the camera did with it.
+
+The couplings live in `vision/camera_source.py` and are handled once:
+`exposure` or `gain` implies `AeEnable False`, `redgain`/`bluegain` implies
+`AwbEnable False`.
+
+**Ranges are the Picamera2 ones.** libcamera normalises these controls to
+documented units; a UVC webcam does not — a V4L2 driver reports whatever integer
+range it likes (0–255 and −64–64 are both common) and the same number means
+something different on each. On the V4L2 backend, treat them as raw driver units
+and tune by eye. Controls a driver does not implement are reported as
+unavailable rather than silently swallowed, because a UVC driver's usual answer
+to a control it lacks is to return success and change nothing.
+
+### Keys
+
+```
+:  command prompt      ?  key list        q / Esc  quit
+u  view: corrected / raw / both           n  correction on / off
+[ ]  lens FOV -/+ 2 deg                   m  cycle projection model
+- =  output FOV -/+ 5 deg                 i  cycle interpolation kernel
+, .  output scale -/+ 0.1                 g  grid overlay
+1 2  k1 -/+ 0.01                          3 4  k2 -/+ 0.01
+5 6  optical centre X -/+ 2 px            7 8  optical centre Y -/+ 2 px
+z x  zoom out / in                        arrows  pan
+0  reset zoom and pan                     c  crop to the current zoom rect
+Backspace  undo the last crop             f  refit (render the crop 1:1)
+v  fit / native sizing                    r  reset everything
+s  save the JSON                          p  snapshot PNGs
+```
+
+Every keypress is reported in the panel, **including unrecognised ones** — which
+is what distinguishes "that key isn't bound" from "the window never received it".
+
+### The JSON
+
+`save` writes `config/camera_settings.json` (or `--settings <path>`), and
+`--autosave` rewrites it after every change. `load`, or `--load <path>`, reads
+one back.
+
+```
+capture     backend, device, resolution, swap_rb, flip, rotate
+lens        the full LensProfile — fov, model, k1, k2, centre offsets, output
+correction  enabled, interpolation kernel, mip filtering
+framing     the crop stack, zoom, pan, fit mode, view box
+sensor      all twelve controls, each a number or "auto"
+derived     roi, output size, focal length, output camera matrix, sampling stats
+```
+
+`derived` is **output, not input** — it exists so that whatever reads the file
+next does not have to redo the geometry to find where the crop landed or how
+much detail survived. `load` ignores it.
+
+Loading is deliberately tolerant: every section is optional and unknown keys are
+ignored, so a file trimmed down to just the `lens` block still loads. The one
+thing it will not do is change the capture resolution, since that means
+reconfiguring the sensor — it tells you to relaunch with `--width`/`--height`
+instead.
+
+`lens` (the command) writes the lens half to `config/lens_profile.json` as well,
+which is what the *other* tools read.
 
 ---
 
@@ -450,5 +633,6 @@ identically and the info-box layout exists in exactly one place.
 
 | Path | Contents |
 | --- | --- |
-| `config/lens_profile.json` | Lens parameters. Committed — it is tuning worth keeping. |
+| `config/lens_profile.json` | Lens parameters. Committed — it is tuning worth keeping. Written by `undistorted*_viewer.py`'s `save`/`w`, and by `camera_studio.py`'s `lens`. |
+| `config/camera_settings.json` | Everything `camera_studio.py` can adjust — lens, sensor, framing, orientation. Written by its `save`. Not committed by default; pass `--settings <path>` to keep several, one per camera position. |
 | `captures/` | Snapshots from `s`. Git-ignored. Corrected images are filename-tagged with the parameters that produced them, so several tuning attempts stay comparable. |

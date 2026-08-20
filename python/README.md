@@ -17,10 +17,12 @@ python/
 │   ├── grid_viewer.py              grid overlay labelled in pixels
 │   └── measured_grid_viewer.py     grid overlay labelled in centimetres
 ├── camera/                     tools that are just a preview
+│   ├── camera_studio.py            tune EVERY setting, save them to JSON
 │   ├── camera_viewer.py            raw preview — "is the camera alive?"
 │   └── undistorted_viewer.py       live fisheye-corrected preview
 ├── config/
-│   └── lens_profile.json       lens parameters (currently estimated)
+│   ├── lens_profile.json       lens parameters (currently estimated)
+│   └── camera_settings.json    written by camera_studio.py's `save`
 ├── rig/                        importable library — the Arduino side
 │   ├── config.py               loads config/rig.json
 │   ├── grid.py                 the machine's cells, and which way round they sit
@@ -40,6 +42,12 @@ python/
 is the combined one and is what you normally want; the four single-purpose
 viewers beside it are kept because each is small enough to read in one sitting
 when you want to know what one stage does on its own.
+
+`camera/camera_studio.py` sits apart from all of them: it is not for *using* the
+camera but for *deciding what its settings should be*. Every lens, sensor,
+zoom, crop and orientation setting is adjustable live, from the terminal or from
+a control panel under the image, and `save` writes the lot to one JSON file. See
+[GUIDE.md](GUIDE.md#camera_studiopy).
 
 They can be launched from anywhere — each puts `python/` on the import path
 itself, so both `python grid/grid_viewer.py` (from `python/`) and
@@ -149,7 +157,7 @@ Every tool takes `--help`, and they share these flags:
 | `--backend {auto,picamera2,v4l2}` | `auto` tries Picamera2 then falls back                                   |
 | `--device /dev/video0`            | V4L2 path; skips the interactive picker                                  |
 | `--width` / `--height`            | capture resolution (default 1296×972)                                    |
-| `--hq`                            | capture the full 2592×1944 sensor readout (`undistorted_viewer.py` only) |
+| `--hq`                            | capture the full 2592×1944 sensor readout (the undistorting tools and `camera_studio.py`) |
 
 If you see `Picamera2 unavailable (...); falling back to V4L2` **on the Pi**,
 that message is the real error — the fallback will not produce a usable image
@@ -165,6 +173,14 @@ exact image centre and tangential distortion is assumed to be zero.
 That is enough to make straight edges look substantially straight, and nowhere
 near enough to measure with. `undistorted_viewer.py` shows `ESTIMATED` in amber
 on the HUD until real calibration data replaces it.
+
+When the quoted FOV alone will not straighten an edge — typically it goes
+straight in the middle of the frame but still bends in the last fifth —
+`camera_studio.py` adds four hand-tunable trims on top of the ideal model:
+`k1`/`k2` reshape the radial curve (zero on the optical axis, growing toward the
+edge, which is the shape the FOV number cannot make), and `centre_dx`/`centre_dy`
+move the assumed optical axis for a sensor that is not quite centred behind the
+lens. All four default to zero, which is an exact no-op.
 
 The default capture mode is 1296×972 — the OV5647's binned readout, which is the
 widest 4:3 mode and so preserves the full 160° field. The 1920×1080 mode is a

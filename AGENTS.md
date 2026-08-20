@@ -134,10 +134,23 @@ firmware owns what cannot.
 
 ## `config/lens_profile.json` is not config
 
-It is a *generated artefact*. The viewer writes it with its `save` command, and
-one day a checkerboard calibration will. Never merge it into `rig.json` — a
-calibration run would then be able to silently rewrite your serial port. It is
-referenced by path, not by value.
+It is a *generated artefact*. The viewers write it with their `save` command
+(`camera_studio.py` calls the same thing `lens`), and one day a checkerboard
+calibration will. Never merge it into `rig.json` — a calibration run would then
+be able to silently rewrite your serial port. It is referenced by path, not by
+value.
+
+`python/config/camera_settings.json` is the same kind of thing, one layer out:
+`camera_studio.py` writes it, and it holds the lens block **plus** the sensor
+controls, the crop stack and the frame orientation. Same rules — generated, not
+hand-authored, referenced by path. It is not the source of the lens parameters
+the other tools read; `lens_profile.json` still is, and the studio's `lens`
+command is what copies one into the other.
+
+**The lens trims `k1`, `k2`, `centre_dx`, `centre_dy` default to zero and that
+zero is load-bearing.** They are an exact no-op at zero, which is what lets
+`fisheye.py` grow them without changing what every existing tool renders. If you
+ever give one a non-zero default, the grid viewers' geometry moves with it.
 
 ---
 

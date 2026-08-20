@@ -357,6 +357,12 @@ class Studio:
         x0, y0, x1, y1 = self.roi()
         pw, ph = max(1e-6, (x1 - x0) * ow), max(1e-6, (y1 - y0) * oh)
         s = min(self.view_size[0] / pw, self.view_size[1] / ph)
+        # A view box within a pixel of the ROI's own size is someone asking for
+        # 1:1 — that is exactly what 'refit' sets up. Snapping to it stops a
+        # rounding remainder from turning a straight copy into a 0.999x
+        # resample, which costs real sharpness for no reason at all.
+        if abs(s - 1.0) * max(pw, ph) < 1.0:
+            s = 1.0
         return (max(2, int(round(pw * s))), max(2, int(round(ph * s))))
 
     def set_zoom(self, value):
@@ -740,14 +746,17 @@ class Studio:
         return f"view box {self.view_size[0]}x{self.view_size[1]} (fit mode)"
 
     def _cmd_refit(self, args):
+        if self.capture_size is None:
+            raise CommandError("no frame captured yet")
         ow, oh = full_output_size(self.profile, self.capture_size)
         x0, y0, x1, y1 = self.roi()
         self.view_size = (max(64, int(round((x1 - x0) * ow))),
                           max(64, int(round((y1 - y0) * oh))))
         self.fit_mode = "fit"
         self.dirty = True
-        return (f"view box {self.view_size[0]}x{self.view_size[1]} — "
-                "the crop now renders 1:1, with nothing interpolated")
+        what = "crop" if self.crops or self.zoom > 1.0 else "view"
+        return (f"view box {self.view_size[0]}x{self.view_size[1]} — the {what} "
+                "now renders 1:1, with nothing scaled after the correction")
 
     def _cmd_straight(self, args):
         body = __doc__.split("Fixing the fisheye, in order\n")[1] \
@@ -955,7 +964,9 @@ class Studio:
         """One line per sensor control, three to a row to fit the panel."""
         cells = [f"{n} {self.sensor[n]}" for n in SENSOR_CONTROLS]
         rows = [cells[i:i + 4] for i in range(0, len(cells), 4)]
-        return ["SENSOR " + "  ".join(f"{c:<20}" for c in row) for row in rows] + \
+        lines = ["  ".join(f"{c:<20}" for c in row).rstrip() for row in rows]
+        return [("SENSOR " if i == 0 else "       ") + text
+                for i, text in enumerate(lines)] + \
                [f"       camera: {self.sensor_status}"]
 
     # --- the button row ----------------------------------------------------
