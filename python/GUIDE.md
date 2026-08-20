@@ -47,6 +47,11 @@ orientation, renders the saved correction and framing from
 current captures. Each block gets a clean contour, a rotated box, a centre,
 an ID and a colour-coded overlay.
 
+Colour finds candidate material; it does not decide the block count. If several
+blocks touch, the detector fits the known standard rectangle to long straight
+edges and internal seams, allowing L, U, side-by-side and end-to-end unions to
+be separated into their individual four-sided blocks.
+
 ```bash
 python camera/camera_feed.py
 python camera/camera_feed.py --settings ../config/table_cam.json

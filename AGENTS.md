@@ -137,6 +137,12 @@ rotated boxes, centres, hover coordinates and saved detection metadata. Later
 mapping code should consume those detections. `camera_studio.py` is the editor
 that writes the file; it is not the runtime pipeline entry point.
 
+`vision/block_detector.py` must not assume one connected colour component is
+one block. Touching standard blocks produce L, U, cross, side-by-side and
+end-to-end unions. Colour proposes the component; straight edges, internal
+seams and the standard four-sided block dimensions decompose it into individual
+rectangles. Keep `tests/test_block_detector.py` covering those combinations.
+
 The `lens` block in `camera_settings.json` is consumed by `camera_feed.py` so a
 saved studio setup is reproducible. `config/lens_profile.json` remains the
 separate generated profile used by the standalone lens/grid viewers, and the

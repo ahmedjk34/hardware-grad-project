@@ -225,7 +225,7 @@ def hovered_block(detections, point):
     return None
 
 
-def draw_block_overlay(frame, detections, hover_point=None):
+def draw_block_overlay(frame, detections, hover_point=None, fps=None):
     """Draw clean colour-coded edges, boxes, IDs, centres and hover details."""
     fill = frame.copy()
     for index, detection in enumerate(detections):
@@ -255,8 +255,9 @@ def draw_block_overlay(frame, detections, hover_point=None):
         cv2.putText(frame, label, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.42,
                     color, 1, cv2.LINE_AA)
 
+    rate = f"  |  {fps:4.1f} fps" if fps is not None else ""
     hud = [
-        f"BLOCKS: {len(detections)}  |  move mouse over a block",
+        f"BLOCKS: {len(detections)}{rate}  |  hover for details",
         "COLOUR EDGES + ROTATED BOXES + CENTRES",
         "COORDS: corrected-image pixels (machine mapping pending)",
     ]
@@ -395,21 +396,15 @@ def main():
 
             view = undistort(frame, maps) if enabled else \
                 crop_resize(frame, roi, maps.out_size, interpolation)
-            detections = detect_blocks(view, color_threshold=args.color_threshold,
-                                       min_area=args.min_area)
-            display = view if args.no_enhance else enhance_for_display(view)
-            display = draw_block_overlay(display, detections, ui["hover"])
             now = time.perf_counter()
             dt, last = now - last, now
             if dt > 0:
                 instant = 1.0 / dt
                 fps = 0.9 * fps + 0.1 * instant if fps else instant
-            draw_info_box(display, [
-                f"{camera.name}  {fps:5.1f} fps",
-                f"{'CORRECTED' if enabled else 'RAW'}  {view.shape[1]}x{view.shape[0]}",
-                f"settings {args.settings.name}",
-            ], origin=(display.shape[1] - min(330, display.shape[1] - 8) - 4, 4),
-                           width=min(330, display.shape[1] - 8), scale=0.38)
+            detections = detect_blocks(view, color_threshold=args.color_threshold,
+                                       min_area=args.min_area)
+            display = view if args.no_enhance else enhance_for_display(view)
+            display = draw_block_overlay(display, detections, ui["hover"], fps)
             if args.display_scale != 1.0:
                 shown = cv2.resize(display, None, fx=args.display_scale,
                                    fy=args.display_scale, interpolation=cv2.INTER_AREA)

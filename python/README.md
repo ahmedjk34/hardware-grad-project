@@ -47,6 +47,9 @@ main camera script and the foundation for the future vision pipeline. It loads
 sensor controls and orientation, renders the saved correction and framing, and
 detects the current blocks with colour-coded edges, rotated boxes, centres and
 hover coordinates. Press `s` to save an annotated frame and JSON geometry.
+Touching blocks are decomposed as known-size four-sided rectangles, including
+L, U, side-by-side and end-to-end arrangements, instead of being treated as one
+colour blob.
 Future robot-coordinate code should consume these detections rather than
 opening the camera independently.
 

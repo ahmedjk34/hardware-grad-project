@@ -16,6 +16,7 @@ second camera stream.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 
 import cv2
 import numpy as np
@@ -40,6 +41,17 @@ class BlockDetection:
     @property
     def size(self) -> tuple[float, float]:
         return max(self.width, self.height), min(self.width, self.height)
+
+
+@dataclass
+class _RectangleCandidate:
+    """One standard-block hypothesis inside a compound colour component."""
+
+    box: np.ndarray
+    center: tuple[float, float]
+    angle: float
+    score: float
+    mask: np.ndarray
 
 
 def _warm_mask(frame: np.ndarray, color_threshold: int,
@@ -133,6 +145,222 @@ def _split_touching(contour: np.ndarray, min_area: float) -> list[np.ndarray]:
     return [contour]
 
 
+def _normal_angle(angle: float) -> float:
+    """Normalise an unoriented line angle to [-90, 90)."""
+    while angle >= 90.0:
+        angle -= 180.0
+    while angle < -90.0:
+        angle += 180.0
+    return angle
+
+
+def _angle_distance(a: float, b: float) -> float:
+    return abs(_normal_angle(a - b))
+
+
+def _rotated_kernel(length: float, width: float, angle: float) -> np.ndarray:
+    """Binary morphology kernel shaped like a rotated short block segment."""
+    side = int(math.ceil(math.hypot(length, width))) | 1
+    kernel = np.zeros((side, side), dtype=np.uint8)
+    box = cv2.boxPoints(((side // 2, side // 2), (length, width), angle))
+    cv2.fillConvexPoly(kernel, box.round().astype(np.int32), 1)
+    return kernel
+
+
+def _line_orientations(component: np.ndarray, block_length: float,
+                       block_width: float) -> list[float]:
+    """Find distinct long-edge directions on a compound component."""
+    edges = cv2.Canny(component, 50, 150)
+    lines = cv2.HoughLinesP(
+        edges, 1, np.pi / 180.0,
+        threshold=max(8, int(round(block_length * 0.17))),
+        minLineLength=max(10, int(round(block_length * 0.30))),
+        maxLineGap=max(4, int(round(block_width * 0.30))),
+    )
+    if lines is None:
+        return []
+
+    weighted = []
+    for x0, y0, x1, y1 in lines.reshape(-1, 4):
+        dx, dy = float(x1 - x0), float(y1 - y0)
+        weighted.append((math.hypot(dx, dy),
+                         _normal_angle(math.degrees(math.atan2(dy, dx)))))
+    weighted.sort(reverse=True)
+
+    # Long edges dominate the sorted list. Keep genuinely different block
+    # directions; repeated lines from the two sides of one block collapse.
+    result = []
+    for _length, angle in weighted:
+        if all(_angle_distance(angle, existing) > 12.0 for existing in result):
+            result.append(angle)
+        if len(result) == 4:
+            break
+    return result
+
+
+def _rectangle_mask(shape, center, length, width, angle, *, outline=False):
+    mask = np.zeros(shape, dtype=np.uint8)
+    box = cv2.boxPoints((center, (length, width), angle)).round().astype(np.int32)
+    if outline:
+        cv2.polylines(mask, [box], True, 255, 1, cv2.LINE_AA)
+    else:
+        cv2.fillConvexPoly(mask, box, 255)
+    return mask, box
+
+
+def _seed_centers(eroded: np.ndarray, block_length: float, block_width: float,
+                  angle: float) -> list[tuple[tuple[float, float], bool]]:
+    """Turn oriented erosion islands into one or more standard-block centres.
+
+    A two-block end-to-end union leaves one long erosion island; side-by-side
+    blocks leave one wide island. Reconstructing the island's pre-erosion span
+    tells us how many standard lengths/widths fit, so both cases yield multiple
+    seeds even when the colour mask has no concavity at all.
+    """
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(eroded)
+    radians = math.radians(angle)
+    along = np.array((math.cos(radians), math.sin(radians)), dtype=np.float32)
+    across = np.array((-along[1], along[0]), dtype=np.float32)
+    kernel_length = block_length * 0.58
+    kernel_width = block_width * 0.58
+    seeds = []
+
+    for label in range(1, count):
+        if stats[label, cv2.CC_STAT_AREA] < 4:
+            continue
+        ys, xs = np.nonzero(labels == label)
+        points = np.column_stack((xs, ys)).astype(np.float32)
+        p_along = points @ along
+        p_across = points @ across
+        centre_along = float((p_along.min() + p_along.max()) * 0.5)
+        centre_across = float((p_across.min() + p_across.max()) * 0.5)
+        total_length = float(p_along.max() - p_along.min() + kernel_length)
+        total_width = float(p_across.max() - p_across.min() + kernel_width)
+        n_along = max(1, min(6, int(round(total_length / block_length))))
+        n_across = max(1, min(4, int(round(total_width / block_width))))
+        multiple = n_along * n_across > 1
+
+        for row in range(n_across):
+            across_pos = centre_across + (row - (n_across - 1) / 2) * block_width
+            for col in range(n_along):
+                along_pos = centre_along + (col - (n_along - 1) / 2) * block_length
+                center = along * along_pos + across * across_pos
+                seeds.append(((float(center[0]), float(center[1])), multiple))
+    return seeds
+
+
+def _best_rectangle(component: np.ndarray, edge_support: np.ndarray,
+                    seed: tuple[float, float], multiple: bool,
+                    block_length: float, block_width: float,
+                    angle: float) -> _RectangleCandidate:
+    """Slide one standard rectangle near a seed and maximise fill + edge support."""
+    radians = math.radians(angle)
+    ux, uy = math.cos(radians), math.sin(radians)
+    nx, ny = -uy, ux
+    # A single erosion island can be biased by a perpendicular arm, as in an L;
+    # let it search farther. Multi-block seeds are already deliberately spaced,
+    # so a narrow search prevents them collapsing onto one optimum.
+    along_radius = block_length * (0.16 if multiple else 0.35)
+    across_radius = block_width * (0.12 if multiple else 0.18)
+    best = None
+
+    for along_shift in np.arange(-along_radius, along_radius + 0.1, 3.0):
+        for across_shift in np.arange(-across_radius, across_radius + 0.1, 2.0):
+            center = (
+                float(seed[0] + along_shift * ux + across_shift * nx),
+                float(seed[1] + along_shift * uy + across_shift * ny),
+            )
+            filled, box = _rectangle_mask(
+                component.shape, center, block_length, block_width, angle)
+            pixels = max(cv2.countNonZero(filled), 1)
+            inside = cv2.countNonZero(cv2.bitwise_and(filled, component)) / pixels
+            outline, _ = _rectangle_mask(
+                component.shape, center, block_length, block_width, angle,
+                outline=True)
+            edge_pixels = max(cv2.countNonZero(outline), 1)
+            edge = cv2.countNonZero(cv2.bitwise_and(outline, edge_support)) / edge_pixels
+            score = 0.62 * inside + 0.38 * edge
+            if best is None or score > best.score:
+                best = _RectangleCandidate(box, center, angle, float(score), filled)
+    return best
+
+
+def _box_iou(a: _RectangleCandidate, b: _RectangleCandidate) -> float:
+    area_a = abs(cv2.contourArea(a.box))
+    area_b = abs(cv2.contourArea(b.box))
+    intersection, _ = cv2.intersectConvexConvex(
+        a.box.astype(np.float32), b.box.astype(np.float32))
+    union = area_a + area_b - intersection
+    return float(intersection / union) if union > 0 else 0.0
+
+
+def _decompose_compound(frame: np.ndarray, contour: np.ndarray,
+                        block_length: float, block_width: float,
+                        min_area: float) -> list[BlockDetection]:
+    """Explain one irregular colour blob as standard four-sided blocks."""
+    component = np.zeros(frame.shape[:2], dtype=np.uint8)
+    cv2.drawContours(component, [contour], -1, 255, -1)
+    orientations = _line_orientations(component, block_length, block_width)
+    if not orientations:
+        return []
+
+    # Outer colour boundaries and internal grayscale seams both matter. The
+    # latter are what separate aligned blocks whose union has no concavity.
+    boundary = cv2.morphologyEx(component, cv2.MORPH_GRADIENT,
+                                np.ones((3, 3), np.uint8))
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    image_edges = cv2.Canny(cv2.GaussianBlur(gray, (3, 3), 0), 20, 60)
+    near = cv2.dilate(component, np.ones((5, 5), np.uint8))
+    edge_support = cv2.bitwise_or(boundary, cv2.bitwise_and(image_edges, near))
+    edge_support = cv2.dilate(edge_support, np.ones((3, 3), np.uint8))
+
+    candidates = []
+    for angle in orientations:
+        kernel = _rotated_kernel(block_length * 0.58, block_width * 0.58, angle)
+        eroded = cv2.erode(component, kernel)
+        for seed, multiple in _seed_centers(
+                eroded, block_length, block_width, angle):
+            candidate = _best_rectangle(
+                component, edge_support, seed, multiple,
+                block_length, block_width, angle)
+            if candidate.score >= 0.80:
+                candidates.append(candidate)
+
+    candidates.sort(key=lambda candidate: candidate.score, reverse=True)
+    selected = []
+    covered = np.zeros_like(component)
+    standard_area = block_length * block_width
+    # Overlapping blocks share colour pixels, so raw union area underestimates
+    # their count. Use a generous ceiling and let edge score/new coverage decide
+    # whether the extra hypotheses actually exist.
+    estimated_count = max(2, min(12, int(math.ceil(
+        cv2.contourArea(contour) / max(standard_area * 0.80, 1.0)))))
+    for candidate in candidates:
+        if any(_box_iou(candidate, existing) > 0.45 for existing in selected):
+            continue
+        new_pixels = cv2.countNonZero(cv2.bitwise_and(
+            candidate.mask, cv2.bitwise_and(component, cv2.bitwise_not(covered))))
+        if new_pixels < standard_area * 0.30:
+            continue
+        selected.append(candidate)
+        covered = cv2.bitwise_or(covered, candidate.mask)
+        if len(selected) >= estimated_count:
+            break
+
+    explained = cv2.countNonZero(cv2.bitwise_and(covered, component))
+    component_pixels = max(cv2.countNonZero(component), 1)
+    if len(selected) < 2 or explained / component_pixels < 0.68:
+        return []
+
+    detections = []
+    for candidate in selected:
+        ideal_contour = candidate.box.reshape(-1, 1, 2).astype(np.int32)
+        detection = _geometry(frame, ideal_contour)
+        detection.confidence = candidate.score
+        detections.append(detection)
+    return detections
+
+
 def _geometry(frame: np.ndarray, contour: np.ndarray) -> BlockDetection:
     area = float(cv2.contourArea(contour))
     rect = cv2.minAreaRect(contour)
@@ -187,22 +415,64 @@ def detect_blocks(frame: np.ndarray, *, color_threshold: int = 8,
         raise ValueError("detect_blocks expects a BGR colour image")
 
     mask = _warm_mask(frame, int(color_threshold), int(red_green_threshold))
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    detections = []
-    for contour in contours:
-        if cv2.contourArea(contour) < min_area:
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL,
+                                   cv2.CHAIN_APPROX_SIMPLE)
+    contours = [contour for contour in contours
+                if cv2.contourArea(contour) >= min_area]
+
+    # The blocks have one physical size. Derive its image size from isolated
+    # rectangles when possible, with a resolution-scaled fallback that matches
+    # the supplied captures. Merged end-to-end/side-by-side rectangles are kept
+    # out of this estimate by the size window.
+    default_length = frame.shape[1] * 0.18
+    default_width = frame.shape[1] * 0.052
+    records = [(contour, _geometry(frame, contour)) for contour in contours]
+    size_sources = []
+    for _contour, detection in records:
+        long_side, short_side = detection.size
+        if detection.rectangularity < 0.80 or detection.solidity < 0.82:
             continue
+        if not (default_length * 0.70 <= long_side <= default_length * 1.30):
+            continue
+        if not (default_width * 0.65 <= short_side <= default_width * 1.30):
+            continue
+        size_sources.append((long_side, short_side))
+    if size_sources:
+        block_length = float(np.median([size[0] for size in size_sources]))
+        block_width = float(np.median([size[1] for size in size_sources]))
+    else:
+        block_length, block_width = default_length, default_width
+
+    def standard_sized(detection):
+        long_side, short_side = detection.size
+        return (block_length * 0.67 <= long_side <= block_length * 1.35 and
+                block_width * 0.58 <= short_side <= block_width * 1.50)
+
+    detections = []
+    for contour, original in records:
         pieces = _split_touching(contour, min_area)
-        for piece in pieces:
-            area = cv2.contourArea(piece)
-            if area < min_area or (max_area is not None and area > max_area):
+        split_detections = [_geometry(frame, piece) for piece in pieces]
+        split_is_valid = len(split_detections) > 1 and all(
+            standard_sized(detection) and
+            detection.rectangularity >= 0.72 and detection.solidity >= 0.75
+            for detection in split_detections)
+
+        if split_is_valid:
+            candidates = split_detections
+        elif (standard_sized(original) and original.rectangularity >= 0.72 and
+              original.solidity >= 0.75):
+            candidates = [original]
+        else:
+            # This is the smarter edge path: fit several known-size four-sided
+            # blocks to the straight boundary segments and internal seams of an
+            # L/U/cross/row-shaped colour union.
+            candidates = _decompose_compound(
+                frame, contour, block_length, block_width, min_area)
+
+        for detection in candidates:
+            if detection.area < min_area:
                 continue
-            detection = _geometry(frame, piece)
-            # Warm hardware and cables can pass the colour test, especially at
-            # the bottom edge of a wide-angle frame. Blocks are substantially
-            # more rectangular than those fragments, so reject poor geometry
-            # before they reach the overlay or hover picker.
-            if detection.rectangularity < 0.72 or detection.solidity < 0.75:
+            if max_area is not None and detection.area > max_area:
                 continue
             detections.append(detection)
 
