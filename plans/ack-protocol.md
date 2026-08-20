@@ -2,7 +2,8 @@
 
 **Status:** the safety subset is **built in `build_test_v1`**. Compile-checked
 and its output verified byte-for-byte on a host build — **but never flashed to
-the board.** Nothing on the Pi reads it yet. The watchdog is deliberately not
+the board.** The Pi reads it in `python/rig/link.py`, which falls back to prose
+matching (loudly) for exactly that reason. The watchdog is deliberately not
 built; see below.
 
 ## The problem
@@ -255,14 +256,20 @@ Three lines, and the Pi knows to stop and put a red banner on the screen.
 
 ## Rollout
 
-**Done:** the firmware side, listed above. **Not done and next:**
+**Done:** the firmware side, listed above, and the Pi side in
+`python/rig/link.py` — `parse_ack()` turns an `@` line into an `Ack`, and
+`Rig.build()` waits for a terminal kind. Prose matching is kept as a fallback
+and counted in `Rig.prose_fallbacks`; every time it fires it says so on stderr.
+
+**Not done and next:**
 
 1. **Flash it and watch.** `./scripts/flash.sh`, then open `rig_console.py` and
    look for `@0 BOOT` / `@0 READY`. Send a deliberately bad `B 1` and expect an
-   `@n ERR`. Nothing on the Pi depends on these yet, so this step cannot break
-   anything — which is exactly why it goes first.
-2. **Then Plan 2 Step 2**, reading `@` lines. Keep prose matching as a fallback
-   and log when it fires; delete the fallback once it has not fired in a while.
+   `@n ERR`. `link.py` falls back to the prose if they are missing, so this
+   step confirms the fast path rather than enabling it.
+2. **Delete the fallback** once `prose_fallbacks` has stayed at 0 for a while.
+   `_prose_outcome()` and the `done=` strings in `link.py` are the code that
+   goes.
 
 Everything else in this note — `RECV`, `BUSY`, `RUN`, the code table — is
 optional and waits for a reason to exist. Prose is never removed.

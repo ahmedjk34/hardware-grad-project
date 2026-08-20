@@ -3,11 +3,13 @@
 
     cd python
     python rig_console.py
+    python rig_console.py --home      # run 0+ on connect as well
 
 This is deliberately dumb. It sends what you type and prints what comes back —
-no parsing, no waiting for completion, no idea what any command means. That
-belongs in a later layer; this one exists to prove the cable works and to drive
-the rig by hand while it does not.
+no parsing, no waiting for completion, no idea what any command means. The
+layer that DOES know is `rig/link.py`, and this file is now a thin wrapper
+around it: `Rig` owns the port, the reader thread and the reboot handling, and
+this owns the keyboard.
 
 What the firmware understands (build_test_v1)
 ---------------------------------------------
@@ -29,68 +31,55 @@ Two things that look like bugs and are not
 ------------------------------------------
 1. Opening the port RESETS the Arduino. That is how USB serial works on a Mega:
    the DTR line toggles and the board reboots. So every launch replays the
-   sketch's whole startup banner — several screens of it. Wait for it to stop.
+   sketch's whole startup banner — several screens of it. `connect()` waits for
+   the `@0 READY` at the end of it, then pushes the grid size from
+   config/rig.json, because the reset wiped the board's copy.
 
 2. A build takes a long time and the firmware does not read serial while it
    runs. `buildBlock()` is synchronous: homing, Z travel and the servo all
    happen inside one call. So after `B` the rig goes quiet, then prints
-   everything at once. Do not send a second command into that silence.
+   everything at once. Do not send a second command into that silence — this
+   console will let you, because it does not track what is in flight. Use
+   `Rig.build()` from `rig/link.py` if you want that refused for you.
+
+The `@` lines
+-------------
+Anything starting with `@` is for the Pi, not for you — `@3 OK col=3 row=5`
+beside the prose that says the same thing. They are printed here unchanged so
+you can eyeball them. See plans/ack-protocol.md.
 """
 
+import argparse
 import sys
-import threading
 
-import serial
-
-from rig.config import load
-
-
-def reader(port, stopping):
-    """Print everything the rig says, on its own thread, until told to stop.
-
-    Decoding is lenient because a reset mid-line can hand us a partial UTF-8
-    sequence, and a garbled character is not worth a traceback.
-
-    `stopping` is what separates "the user typed quit" from "the cable fell
-    out". Closing the port under a blocked readline() raises, and without the
-    flag every clean exit would end with a false alarm about the hardware.
-    """
-    while not stopping.is_set():
-        try:
-            line = port.readline()
-        # TypeError is in there because pyserial sets its file descriptor to
-        # None on close, and a readline() already blocked on that fd then fails
-        # inside os.read rather than raising anything serial-shaped.
-        except (serial.SerialException, OSError, TypeError):
-            if not stopping.is_set():
-                print("\n!! serial port went away — cable unplugged?")
-            return
-        if line:
-            print(line.decode("utf-8", errors="replace").rstrip())
+from rig.link import Rig, RigError
 
 
 def main():
-    cfg = load()["serial"]
-    port_name, baud = cfg["port"], cfg["baud"]
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--home",
+        action="store_true",
+        help="send 0+ after connecting. Off by default: opening a console "
+             "should not make the machine move on its own.",
+    )
+    args = parser.parse_args()
 
+    # print() straight from the reader thread, exactly as before. The rig is
+    # the only writer, so there is nothing to interleave with.
+    def complain(message):
+        print(f"\n!! {message}")
+
+    rig = Rig(on_line=print, on_error=complain)
+
+    print(f">> {rig.port_name} @ {rig.baud} — the board is rebooting, banner follows")
     try:
-        port = serial.Serial(port_name, baud, timeout=0.2)
-    except serial.SerialException as exc:
-        # The two failures worth naming: no board, and no permission.
-        raise SystemExit(
-            f"Cannot open {port_name} at {baud}: {exc}\n"
-            "  - board plugged in?    ./scripts/flash.sh boards\n"
-            "  - permission denied?   sudo usermod -aG dialout $USER, then log out\n"
-            "  - wrong port?          a CH340 clone is /dev/ttyUSB0, set it in "
-            "config/rig.json"
-        )
+        rig.connect(home=args.home)
+    except RigError as exc:
+        raise SystemExit(str(exc))
 
-    print(f">> {port_name} @ {baud} — the board is rebooting, banner follows")
+    print(f"\n>> connected. grid pushed: {rig.cols} cols x {rig.rows} rows")
     print(">> type a command and press Enter. 'quit' to leave.\n")
-
-    stopping = threading.Event()
-    listener = threading.Thread(target=reader, args=(port, stopping), daemon=True)
-    listener.start()
 
     try:
         for line in sys.stdin:
@@ -99,17 +88,11 @@ def main():
                 continue
             if line.lower() in ("quit", "exit"):
                 break
-            # Every multi-character command in the sketch needs a newline, and
-            # the single-character ones tolerate one, so always send it.
-            port.write((line + "\n").encode())
+            rig.send(line)
     except KeyboardInterrupt:
         pass
     finally:
-        # Order matters: flag first, then close, then let the listener notice.
-        # Closing while it is still printing can kill the interpreter mid-write.
-        stopping.set()
-        port.close()
-        listener.join(timeout=1.0)
+        rig.close()
         print("\n>> closed")
 
 

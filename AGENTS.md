@@ -69,7 +69,7 @@ constant.** Both viewers used to carry their own copy and drifted.
 | Where | What |
 | --- | --- |
 | `build_test_v1.ino` SECTION 7C | emits `@<seq> <KIND> ...` |
-| the Pi's parser (not written yet) | reads them |
+| `python/rig/link.py` | parses them — `parse_ack()`, and `_KIND_TO_OUTCOME` |
 | `plans/ack-protocol.md` | the kind list, and the reasoning |
 
 `OK`, `ERR`, `SAFE`, `HELD`, `BOOT`, `READY`. **`SAFE` and `HELD` are not
@@ -86,8 +86,10 @@ The sketch's commands (`B`, `G`, `S`, `0`, `0+`, `5`, `9`, `Z`, `U`, `D`, `O`,
 `C`, `R`, `RR`) are the contract between the two machines.
 
 If you rename a command, change its arguments, or change the text it prints on
-success or failure, **grep `python/` for the old form first.** The Pi detects
-completion by matching the firmware's own output — there are no status codes.
+success or failure, **grep `python/` for the old form first.** `B` has an `@`
+ack and is safe from rewording, but `S`, `G`, `0` and `0+` do not — for those,
+`link.py` waits on the prose. The strings it matches are all in one place,
+`_prose_outcome()` and the `done=` arguments in `python/rig/link.py`.
 
 ---
 
@@ -97,7 +99,7 @@ These are physical facts about the machine. Nothing can push them over serial,
 so a copy in the JSON would be a lie that nobody notices until the rig crashes
 into something.
 
-- envelope: `5050 × 8500` steps, and the soft limits that define it
+- envelope: `5050 × 7500` steps, and the soft limits that define it
 - `Z_TRAVEL_CM`, `Z_TRAVEL_STEPS`, `BLOCK_HEIGHT_CM`, build ceiling
 - pin assignments, servo angles, motor direction polarity
 

@@ -22,7 +22,10 @@ python/
 ├── config/
 │   └── lens_profile.json       lens parameters (currently estimated)
 ├── rig/                        importable library — the Arduino side
-│   └── config.py               loads config/rig.json
+│   ├── config.py               loads config/rig.json
+│   └── link.py                 the serial link: send a command, wait for the answer
+├── tests/
+│   └── test_link.py            link.py against a fake board — no rig needed
 └── vision/                     importable library — no windows, no argv, no prints
     ├── camera_source.py        Picamera2 on the Pi, V4L2 elsewhere
     ├── commands.py             the typed-command engine the viewers share
@@ -43,6 +46,17 @@ itself, so both `python grid/grid_viewer.py` (from `python/`) and
 `vision/` is the library they share — it deliberately contains no UI, so the
 later block-detection and robot-coordinate stages can import it without dragging
 a preview along.
+
+`tests/` is one file with plain asserts and no pytest. It exists because
+`rig/link.py` decides whether a build succeeded, and none of that logic can be
+exercised on the desktop where there is no rig — so it runs against a fake board
+built from transcripts:
+
+    cd python
+    ../.venv/bin/python tests/test_link.py
+
+It proves the parsing, not the machine. The other half of the testing is
+flashing the firmware and watching it.
 
 ## `python` or `python3`?
 
