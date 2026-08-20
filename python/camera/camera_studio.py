@@ -10,10 +10,34 @@ window, and `save` writes the whole state to one JSON file.
     python camera_studio.py --hq                    # sharpest: full sensor in
     python camera_studio.py --backend v4l2 --device /dev/video0
     python camera_studio.py --settings ../config/my_camera.json --autosave
+    python camera_studio.py --fresh                 # ignore the settings file
 
-The window is the image with a control panel under it: a row of clickable
-buttons, the current value of every parameter, and the last few messages. Drag a
-rectangle on the image to crop to it.
+Where the settings come from
+----------------------------
+It reads config/camera_settings.json at startup and `save` writes it back, so
+the tool picks up where it left off. The committed default in that file is
+exactly what undistorted_viewer.py renders, so a first run — or a run after
+`--fresh`, or after `reset` — shows the same picture that tool does: the same
+lens profile, the same 120-degree rectilinear output at the same size,
+correction on, no zoom, no crop, no grid.
+
+Four layers, each overriding the one before:
+
+  1. the built-in defaults (undistorted_viewer.py's);
+  2. config/lens_profile.json, the lens parameters the OTHER tools read;
+  3. config/camera_settings.json, or whatever --settings names;
+  4. the command-line flags.
+
+The window is the image — as big as the capture allows — with a control panel
+under it: a row of clickable buttons, then a labelled TEXT FIELD for every
+parameter. Click a field, type a value, press Enter, and the picture changes as
+you watch. Up/Down step it without typing. Drag a rectangle on the image to crop
+to it.
+
+It opens showing EXACTLY what undistorted_viewer.py shows: the same lens
+profile, the same 120-degree rectilinear output at the same size, correction on,
+no zoom, no crop, no grid. Everything below is a departure from that, and
+`reset` gets back to it.
 
 Zoom and crop are not what they usually are
 -------------------------------------------
@@ -37,10 +61,14 @@ input channels, and every one of them echoes what it did into the panel:
   2. TYPE IN THE WINDOW. Press ':' to open a prompt in the panel, type a
      command, press Enter. Each character appears as it arrives, so if nothing
      appears the window does not have focus.
-  3. CLICK AND DRAG. The buttons under the image, and a drag on the image to
-     crop.
-  4. SLIDERS AND KEYS. Trackbars along the top for the correction knobs, plus
-     the single-key shortcuts below.
+  3. CLICK AND TYPE. Click any field in the panel and it becomes editable —
+     type, Enter commits, Esc cancels, Tab moves to the next field, and Up/Down
+     step the value in place without typing at all. Choice fields (model,
+     interp, awb...) accept any unambiguous prefix, so `equi` is enough.
+  4. CLICK AND DRAG. The buttons under the image, and a drag on the image to
+     crop to a rectangle.
+
+Plus the single-key shortcuts below, which work whenever no field has focus.
 
 Keys
 ----
@@ -57,11 +85,15 @@ Keys
   v  fit / native sizing                    r  reset everything
   s  save the JSON                          p  snapshot PNGs
 
+While a field has focus it takes the keyboard instead: Enter commits, Up/Down
+step the value, Tab moves to the next field, Esc lets go without committing.
+
 Commands
 --------
 `help` lists them all with their ranges. The numeric ones take an absolute value
 or a signed step, so `fov 158` and `fov +2` both work, and every sensor control
-also takes `auto` to hand it back to the camera's own loop.
+also takes `auto` to hand it back to the camera's own loop. Every field and
+every button is one of these commands, so the four ways in cannot drift apart.
 
 Fixing the fisheye, in order
 ---------------------------
@@ -94,7 +126,7 @@ import json
 import sys
 import threading
 import time
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import cv2
@@ -157,14 +189,28 @@ ROTATIONS = (0, 90, 180, 270)
 
 # Panel geometry. The panel is a solid strip drawn UNDER the image, not an
 # overlay on it — the whole point of this tool is to see the picture unobscured
-# while the numbers that produced it sit somewhere fixed.
+# while the numbers that produced it sit somewhere fixed. There are deliberately
+# no cv2 trackbars: eight of them stacked above the image cost ~350 px of screen
+# that the picture wants, and a slider cannot show you that a value is 158.
 PANEL_BG = (26, 26, 26)
 PANEL_MIN_WIDTH = 900
 BUTTON_H = 26
 BUTTON_GAP = 6
 PANEL_LINE = 17
 PANEL_PAD = 8
-LOG_LINES = 4
+LOG_LINES = 3
+
+# One editable field: label, box, and the gap between them.
+FIELD_H = 21
+FIELD_GAP = 14
+FIELD_ROW_GAP = 7
+LABEL_SCALE = 0.38
+VALUE_SCALE = 0.44
+BOX_BG = (44, 44, 44)
+BOX_BG_FOCUS = (70, 62, 30)
+BOX_EDGE = (105, 105, 105)
+GROUP_COLOR = (150, 190, 255)
+GROUP_WIDTH = 62          # left gutter the group labels live in
 
 # waitKeyEx arrow codes. GTK and Qt disagree and both turn up on a Pi desktop.
 # Deliberately NOT the short 81-84 forms: those are what the MASKED waitKey
@@ -175,6 +221,9 @@ KEY_RIGHT = (65363, 2555904)
 KEY_UP = (65362, 2490368)
 KEY_DOWN = (65364, 2621440)
 KEY_BACKSPACE = (8, 127, 65288)
+KEY_ENTER = (13, 10)
+KEY_ESC = (27,)
+KEY_TAB = (9, 65289)
 
 # Smallest drag that counts as a crop rather than a click, in image pixels. A
 # click is how you dismiss a half-started drag, so it must not crop to a speck.
@@ -196,17 +245,23 @@ def full_output_size(profile, capture_size):
 class Studio:
     """Every mutable setting, in one place.
 
-    Commands, keys, buttons and trackbars all funnel through the same setters,
-    so each parameter has exactly one definition and one place that decides the
-    remap tables have gone stale.
+    Commands, keys, buttons and panel fields all funnel through the same
+    setters, so each parameter has exactly one definition and one place that
+    decides the remap tables have gone stale.
     """
 
     def __init__(self, args, profile):
         self.args = args
         self.profile = profile
-        self.interp = args.interp
-        self.mip = not args.no_mip
-        self.correct = not args.no_correct
+        # These are the BUILT-IN defaults, chosen to match undistorted_viewer.py
+        # exactly. The settings file is loaded over the top of them at startup,
+        # and the CLI flags over the top of that — see apply_overrides() for the
+        # whole chain. Reading argparse defaults straight into here is what would
+        # break that ordering, because argparse cannot tell a flag that was not
+        # given from one that was given its default value.
+        self.interp = DEFAULT_INTERPOLATION
+        self.mip = True
+        self.correct = True
 
         # Sensor controls start at "auto" across the board: the camera's own
         # loops are a better starting point than any number written here, and
@@ -220,17 +275,17 @@ class Studio:
         self.crops = []
         self.zoom = 1.0
         self.pan = (0.5, 0.5)          # zoom centre, normalised to the full output
-        self.fit_mode = args.fit
+        self.fit_mode = "fit"
         self.view_size = None          # resolved once the camera size is known
 
-        self.flip = args.flip
-        self.rotate = args.rotate
-        self.swap_rb = args.swap_rb
+        self.flip = "none"
+        self.rotate = 0
+        self.swap_rb = False
 
         self.view = "corrected"
         self.show_grid = False
         self.show_keys = False
-        self.autosave = args.autosave
+        self.autosave = bool(args.autosave)
         self.settings_path = args.settings
 
         self.capture_size = None       # filled in by main() once the camera opens
@@ -244,7 +299,8 @@ class Studio:
         self.pending_clicks = []       # (x, y) in window coords, awaiting layout
         self.layout = None             # where the image and buttons ended up
         self.pending = []              # command lines queued by the stdin thread
-        self.syncing_trackbars = False
+        self.focus = None              # index into FIELDS of the field being typed in
+        self.field_text = ""           # what has been typed into it so far
 
         self.dirty = True              # rebuild the remap tables before next frame
         self.sensor_dirty = True       # push sensor controls before next frame
@@ -257,7 +313,7 @@ class Studio:
     # --- lens parameters ---------------------------------------------------
     # Each setter reports what changed, in the words the log and the panel show.
     # Returning the message rather than printing it is what lets one function
-    # serve a keypress, a typed command, a button and a slider.
+    # serve a keypress, a typed command, a button and a panel field.
 
     def _lens(self, attr, value, label, fmt="{:.0f}", unit=""):
         old = getattr(self.profile, attr)
@@ -390,20 +446,31 @@ class Studio:
     def push_crop(self, rect):
         """Add a crop, expressed in the coordinates of the CURRENT view.
 
-        The rectangle arrives relative to what is on screen, which already
-        includes the zoom, so it is composed onto the visible ROI rather than
-        onto the crop — otherwise dragging a box while zoomed in would crop to
-        the wrong part of the frame.
+        This is what a mouse drag produces: the rectangle arrives relative to
+        what is on screen, which already includes the zoom, so it has to be
+        composed onto the visible ROI. Dragging a box while zoomed in would
+        otherwise crop to the wrong part of the frame.
         """
         a, b, c, d = rect
         vx0, vy0, vx1, vy1 = self.roi()
-        cx0, cy0, cx1, cy1 = self.crop_rect()
         vw, vh = vx1 - vx0, vy1 - vy0
+        return self.push_absolute_crop((vx0 + a * vw, vy0 + b * vh,
+                                        vx0 + c * vw, vy0 + d * vh))
 
-        # Absolute in full-output coordinates...
-        ax0, ay0 = vx0 + a * vw, vy0 + b * vh
-        ax1, ay1 = vx0 + c * vw, vy0 + d * vh
-        # ...then expressed relative to the crop it is being stacked onto.
+    def push_absolute_crop(self, rect):
+        """Add a crop given in FULL-OUTPUT coordinates, whatever is on screen.
+
+        This is the form the crop field displays and the `crop x0 y0 x1 y1`
+        command takes, and it is the reason those two agree: typing back the
+        numbers the field is showing is a no-op rather than a second crop.
+
+        The rectangle is still stored relative to the crop below it — that is
+        what makes the stack an undo — but the arithmetic here inverts the
+        composition, so any absolute rectangle can be expressed, including one
+        that reaches back outside the current crop.
+        """
+        ax0, ay0, ax1, ay1 = rect
+        cx0, cy0, cx1, cy1 = self.crop_rect()
         cw, ch = max(1e-9, cx1 - cx0), max(1e-9, cy1 - cy0)
         self.crops.append(((ax0 - cx0) / cw, (ay0 - cy0) / ch,
                            (ax1 - cx0) / cw, (ay1 - cy0) / ch))
@@ -733,7 +800,14 @@ class Studio:
         y0, y1 = sorted((min(max(y0, 0.0), 1.0), min(max(y1, 0.0), 1.0)))
         if x1 - x0 < 0.01 or y1 - y0 < 0.01:
             raise CommandError("that rectangle is empty — it must be at least 1% wide")
-        return self.push_crop((x0, y0, x1, y1))
+        # Absolute, matching what the crop field shows. Re-entering the numbers
+        # already on display therefore changes nothing, which is the behaviour
+        # anyone editing a text field expects.
+        if abs(x0 - self.crop_rect()[0]) < 1e-9 and abs(y0 - self.crop_rect()[1]) < 1e-9 \
+                and abs(x1 - self.crop_rect()[2]) < 1e-9 \
+                and abs(y1 - self.crop_rect()[3]) < 1e-9:
+            return "crop unchanged"
+        return self.push_absolute_crop((x0, y0, x1, y1))
 
     def _cmd_viewbox(self, args):
         need_args(args, 2, "viewbox <w> <h>")
@@ -795,19 +869,25 @@ class Studio:
         return "current settings above"
 
     def _cmd_reset(self, args):
+        """Back to the built-in defaults, then the CLI flags — i.e. --fresh.
+
+        Deliberately NOT a re-read of the settings file: `reset` is what you
+        press when the tuning has gone somewhere strange and you want the known
+        starting point back. `load` is the one that re-reads the file, and the
+        file is not touched by either.
+        """
         self.profile = LensProfile()
-        if self.args.hq and self.args.output_scale is None:
-            self.profile.output_scale = 0.5
-        self.interp = self.args.interp
-        self.mip = not self.args.no_mip
+        self.interp = DEFAULT_INTERPOLATION
+        self.mip = True
         self.correct = True
         self.crops, self.zoom, self.pan = [], 1.0, (0.5, 0.5)
         self.view_size = None
-        self.fit_mode = self.args.fit
-        self.flip, self.rotate = "none", 0
+        self.fit_mode = "fit"
+        self.flip, self.rotate, self.swap_rb = "none", 0, False
         self.all_auto()
-        self.dirty = True
-        return "everything back to defaults (the saved JSON is untouched)"
+        apply_overrides(self, self.args)
+        return ("back to the undistorted_viewer.py defaults"
+                " (the settings file is untouched — 'load' re-reads it)")
 
     def _cmd_help(self, args):
         for line in self.commands.help_lines():
@@ -939,6 +1019,23 @@ class Studio:
 
     # --- reporting ---------------------------------------------------------
 
+    def derived_line(self, fps=0.0):
+        """The one line in the panel that is NOT a field: what the settings cost.
+
+        Everything else down there can be typed into. These numbers are results
+        — the size actually being rendered and how much real detail survived the
+        correction — so they get read, not edited.
+        """
+        stats = sampling_stats(self.maps) if self.maps else {}
+        out = self.maps.out_size if self.maps else (0, 0)
+        return (f"{'CALIBRATED' if self.profile.calibrated else 'ESTIMATED (uncalibrated)'}"
+                f"   rendering {out[0]}x{out[1]}"
+                f"   SAMPLE src px/out px: centre {stats.get('centre', 0):.2f}"
+                f"  edge {stats.get('edge', 0):.2f}"
+                f"  ({stats.get('upscaled_fraction', 0) * 100:.0f}% magnified)"
+                f"  mip x{stats.get('mip_levels', 1)}"
+                f"   {fps:5.1f} fps")
+
     def status_lines(self):
         """The parameter dump, for `params`, the panel and the startup banner."""
         p = self.profile
@@ -1028,66 +1125,202 @@ def start_stdin_reader(studio):
     return thread
 
 
-# --- input channel 4: trackbars ---------------------------------------------
+# --- input channel 3: the fields --------------------------------------------
 
-# (label, getter, setter name, min, max, units per slider step). Only the knobs
-# you drag while watching an edge bow are here; the sensor controls are
-# set-and-forget and would just make the slider stack taller than the image.
-TRACKBARS = [
-    ("lens FOV", lambda s: s.profile.lens_fov_deg, "set_lens_fov", 20, 220, 1.0),
-    ("out FOV", lambda s: s.profile.output_fov_deg, "set_output_fov", 10, 170, 1.0),
-    ("scale x100", lambda s: s.profile.output_scale, "set_output_scale", 10, 400, 0.01),
-    ("k1 x1000", lambda s: s.profile.k1, "set_k1", -500, 500, 0.001),
-    ("k2 x1000", lambda s: s.profile.k2, "set_k2", -500, 500, 0.001),
-    ("centre X px", lambda s: s.profile.centre_dx, "set_centre_dx", -200, 200, 1.0),
-    ("centre Y px", lambda s: s.profile.centre_dy, "set_centre_dy", -200, 200, 1.0),
-    ("zoom x100", lambda s: s.zoom, "set_zoom", 100, 4000, 0.01),
-]
+@dataclass(frozen=True)
+class Field:
+    """One labelled, editable box in the control panel.
 
+    A field IS a command, exactly like a button is: `label` is what the user
+    reads, `command` is what gets run, and the text in the box is its argument.
+    That is what keeps the panel, the typed commands, the keys and the buttons
+    from ever disagreeing about what a parameter means — there is one setter and
+    four ways to reach it.
 
-def create_trackbars(window, studio):
-    """Attach the sliders, tolerating OpenCV builds with no GUI for them.
-
-    Each callback compares against the current value first: cv2 fires the
-    callback on setTrackbarPos too, so without that guard syncing a slider back
-    from a typed command bounces straight back as a slider event.
+    `step` drives Up/Down, which is the part that replaced the sliders: a float
+    steps the number, a tuple of strings cycles through the choices. `start` is
+    where a numeric step begins when the current value is "auto", since there is
+    no number there to add to.
     """
-    def make(getter, setter_name, step):
-        def on_change(pos):
-            if studio.syncing_trackbars:
-                return
-            value = pos * step
-            if abs(getter(studio) - value) < step / 2:
-                return
-            studio.log.add(True, getattr(studio, setter_name)(value))
-        return on_change
 
-    try:
-        for label, getter, setter_name, lo, hi, step in TRACKBARS:
-            pos = int(round(getter(studio) / step))
-            # createTrackbar demands 0 <= initial <= count, so the real minimum
-            # is applied afterwards and the position re-set on top of it.
-            cv2.createTrackbar(label, window, max(0, pos), int(round(hi / step)),
-                               make(getter, setter_name, step))
-            cv2.setTrackbarMin(label, window, int(round(lo / step)))
-            cv2.setTrackbarPos(label, window, pos)
-    except cv2.error as exc:
-        studio.log.add(False, f"trackbars unavailable ({str(exc)[:40]}) — "
-                              "use ':' or the terminal")
-        return False
-    return True
+    label: str
+    command: str
+    get: object              # (studio) -> the string shown in the box
+    step: object = None      # float to step by, or a tuple of choices to cycle
+    chars: int = 6           # box width, in characters
+    group: str = ""          # non-empty starts a new labelled row
+    start: object = None     # value to jump to when stepping away from "auto"
+
+    @property
+    def choices(self):
+        return self.step if isinstance(self.step, tuple) else None
 
 
-def sync_trackbars(window, studio):
-    """Push the current values back onto the sliders after a command or key."""
-    studio.syncing_trackbars = True
-    try:
-        for label, getter, _, _, _, step in TRACKBARS:
-            cv2.setTrackbarPos(label, window, int(round(getter(studio) / step)))
-    except cv2.error:
-        pass
-    finally:
-        studio.syncing_trackbars = False
+def _onoff(flag):
+    return "on" if flag else "off"
+
+
+def _crop_text(studio):
+    return " ".join(f"{v:.3f}" for v in studio.crop_rect())
+
+
+def _viewbox_text(studio):
+    return f"{studio.view_size[0]} {studio.view_size[1]}" if studio.view_size else "-"
+
+
+# Steps and starting points for the sensor fields, which are otherwise generated
+# wholesale from SENSOR_CONTROLS. Split out because a sensible step is a fact
+# about the control's units, not something the table can guess: 0.1 is a real
+# change in contrast and an invisible one in exposure time.
+SENSOR_STEPS = {
+    "brightness": (0.1, 0.0), "contrast": (0.1, 1.0), "saturation": (0.1, 1.0),
+    "sharpness": (0.5, 1.0), "ev": (0.5, 0.0), "exposure": (1000.0, 10000.0),
+    "gain": (0.5, 1.0), "redgain": (0.1, 1.5), "bluegain": (0.1, 1.5),
+    "fps": (5.0, 30.0),
+}
+
+
+def build_fields():
+    """The panel's fields, in the order they are laid out.
+
+    Grouped the way the work actually goes: the lens first, because that is what
+    you came here to fix; then how it is rendered; then the framing; then the
+    sensor, which is set once and left alone.
+    """
+    fields = [
+        Field("lens fov", "fov", lambda s: f"{s.profile.lens_fov_deg:.0f}",
+              2.0, 5, "LENS"),
+        Field("ref", "ref", lambda s: s.profile.fov_reference,
+              ("diagonal", "horizontal"), 10),
+        Field("model", "model", lambda s: s.profile.model, tuple(MODEL_NAMES), 13),
+        Field("k1", "k1", lambda s: f"{s.profile.k1:+.3f}", 0.01, 6),
+        Field("k2", "k2", lambda s: f"{s.profile.k2:+.3f}", 0.01, 6),
+        Field("centre x", "cx", lambda s: f"{s.profile.centre_dx:+.0f}", 2.0, 5),
+        Field("centre y", "cy", lambda s: f"{s.profile.centre_dy:+.0f}", 2.0, 5),
+        Field("correction", "undistort", lambda s: _onoff(s.correct),
+              ("on", "off"), 4),
+
+        Field("out fov", "out", lambda s: f"{s.profile.output_fov_deg:.0f}",
+              5.0, 5, "OUTPUT"),
+        Field("scale", "scale", lambda s: f"{s.profile.output_scale:.2f}", 0.1, 5),
+        Field("interp", "interp", lambda s: s.interp, tuple(INTERP_NAMES), 9),
+        Field("mip", "mip", lambda s: _onoff(s.mip), ("on", "off"), 4),
+        Field("show", "view", lambda s: s.view, VIEWS, 10),
+        Field("grid", "grid", lambda s: _onoff(s.show_grid), ("on", "off"), 4),
+
+        Field("zoom", "zoom", lambda s: f"{s.zoom:.2f}", 0.25, 5, "FRAME"),
+        Field("crop x0 y0 x1 y1", "crop", _crop_text, None, 23),
+        Field("sizing", "fitmode", lambda s: s.fit_mode, FIT_MODES, 7),
+        Field("view box", "viewbox", _viewbox_text, None, 10),
+        Field("flip", "flip", lambda s: s.flip, FLIPS, 5),
+        Field("rotate", "rotate", lambda s: str(s.rotate),
+              tuple(str(r) for r in ROTATIONS), 4),
+    ]
+
+    for i, (name, spec) in enumerate(SENSOR_CONTROLS.items()):
+        step, start = SENSOR_STEPS.get(name, (None, None))
+        if spec.kind == "choice":
+            step, start = tuple(spec.choices), None
+        fields.append(Field(name, name, lambda s, n=name: str(s.sensor[n]),
+                            step, max(6, len(spec.range_text.split("|")[0]) + 2),
+                            "SENSOR" if i == 0 else "", start))
+    return fields
+
+
+FIELDS = build_fields()
+
+
+def field_value(studio, index):
+    return FIELDS[index].get(studio)
+
+
+def focus_field(studio, index):
+    """Give a field the keyboard, pre-filled with its current value.
+
+    Pre-filled rather than blank because most edits here are a nudge — 158 to
+    160 — and a box that empties itself when clicked has thrown away the one
+    number you were about to adjust. Everything numeric also accepts `+2` and
+    `-2`, so a relative tweak never needs the current value retyped either way.
+    """
+    studio.focus = index
+    studio.field_text = field_value(studio, index)
+    return (f"{FIELDS[index].label}: type a value and press Enter "
+            "(Up/Down step it, Tab moves on, Esc cancels)")
+
+
+def blur_field(studio):
+    studio.focus = None
+    studio.field_text = ""
+
+
+def step_field(studio, direction):
+    """Up/Down on the focused field — the part that replaced the sliders.
+
+    Runs the same command a typed value would, so a stepped change is logged,
+    clamped, echoed and saved identically. Returns that command's own message.
+    """
+    field = FIELDS[studio.focus]
+    if field.step is None:
+        return False, f"{field.label} has no step — type a value instead"
+
+    if field.choices:
+        current = field_value(studio, studio.focus)
+        options = field.choices
+        # Tolerate a value that is not in the list — a sensor control the camera
+        # reported back oddly, say — by starting from the beginning.
+        index = options.index(current) if current in options else -1
+        argument = options[(index + direction) % len(options)]
+    elif field_value(studio, studio.focus) == AUTO and field.start is not None:
+        # Nothing to add to. Jump to a sane starting point instead, so the first
+        # press does something visible rather than failing the range check.
+        argument = f"{field.start:g}"
+    else:
+        argument = f"{'+' if direction > 0 else '-'}{abs(field.step):g}"
+
+    result = studio.commands.execute(f"{field.command} {argument}")
+    studio.field_text = field_value(studio, studio.focus)
+    return result.ok, result.message
+
+
+def commit_field(studio):
+    """Enter on the focused field: run its command with whatever was typed."""
+    field = FIELDS[studio.focus]
+    text = studio.field_text.strip()
+    if not text:
+        return True, f"{field.label} left as it was"
+    result = studio.commands.execute(f"{field.command} {text}")
+    studio.field_text = field_value(studio, studio.focus)
+    return result.ok, result.message
+
+
+def handle_field_key(key, studio):
+    """Keys while a field has focus. Returns (ok, message), or None to just redraw.
+
+    Enter commits and lets go; Tab commits and moves on, which is how the whole
+    panel can be walked from the keyboard without touching the mouse.
+    """
+    if key in KEY_ESC:
+        blur_field(studio)
+        return True, "field closed, nothing changed"
+    if key in KEY_ENTER:
+        ok, message = commit_field(studio)
+        blur_field(studio)
+        return ok, message
+    if key in KEY_TAB:
+        ok, message = commit_field(studio)
+        focus_field(studio, (studio.focus + 1) % len(FIELDS))
+        return ok, f"{message}  ->  {FIELDS[studio.focus].label}"
+    if key in KEY_UP:
+        return step_field(studio, +1)
+    if key in KEY_DOWN:
+        return step_field(studio, -1)
+    if key in KEY_BACKSPACE:
+        studio.field_text = studio.field_text[:-1]
+        return None
+    if 32 <= key <= 126:
+        studio.field_text += chr(key)
+        return None
+    return None
 
 
 # --- input channel 3: the mouse ----------------------------------------------
@@ -1276,12 +1509,91 @@ def side_by_side(raw, corrected):
     return pair
 
 
-def panel_height(studio):
-    """How tall the control strip needs to be for the text it holds."""
-    lines = len(studio.status_lines()) + len(studio.sensor_lines()) + LOG_LINES + 1
+def text_width(text, scale):
+    return cv2.getTextSize(text, FONT, scale, 1)[0][0]
+
+
+def field_cell_width(field):
+    """Total width of one `label [ value ]` cell.
+
+    The box is sized from the field's declared character count rather than from
+    its current value, so a number growing from 9 to 10 does not shove every
+    field to its right along the row.
+    """
+    box = 12 + text_width("0" * field.chars, VALUE_SCALE)
+    return text_width(field.label, LABEL_SCALE) + 7 + box, box
+
+
+def layout_field_rows(width):
+    """Flow the fields into rows that fit `width`. Pure geometry, no drawing.
+
+    Returns a list of rows, each a list of (field index, x, cell width, box
+    width). A field with a `group` starts a new row, so the four groups always
+    read as four blocks however wide the window is; long groups wrap within
+    themselves.
+    """
+    rows, row = [], []
+    x = PANEL_PAD + GROUP_WIDTH
+    for i, field in enumerate(FIELDS):
+        cell, box = field_cell_width(field)
+        if (field.group and row) or (x + cell > width - PANEL_PAD and row):
+            rows.append(row)
+            row, x = [], PANEL_PAD + GROUP_WIDTH
+        row.append((i, x, cell, box))
+        x += cell + FIELD_GAP
+    if row:
+        rows.append(row)
+    return rows
+
+
+def draw_fields(panel, studio, y):
+    """Draw every field and return its hit rectangle.
+
+    The whole cell — label included — is clickable, not just the box: a 40-pixel
+    target that needs precision is a worse control than the slider it replaced.
+    """
+    rects = []
+    rows = layout_field_rows(panel.shape[1])
+    group = ""
+    for row in rows:
+        first = FIELDS[row[0][0]]
+        if first.group:
+            group = first.group
+            cv2.putText(panel, group, (PANEL_PAD, y + FIELD_H - 6), FONT,
+                        LABEL_SCALE, GROUP_COLOR, 1, cv2.LINE_AA)
+
+        for index, x, cell, box in row:
+            field = FIELDS[index]
+            focused = studio.focus == index
+            label_w = text_width(field.label, LABEL_SCALE)
+            cv2.putText(panel, field.label, (x, y + FIELD_H - 6), FONT,
+                        LABEL_SCALE, HINT_COLOR, 1, cv2.LINE_AA)
+
+            bx = x + label_w + 7
+            cv2.rectangle(panel, (bx, y), (bx + box, y + FIELD_H),
+                          BOX_BG_FOCUS if focused else BOX_BG, -1)
+            cv2.rectangle(panel, (bx, y), (bx + box, y + FIELD_H),
+                          PROMPT_COLOR if focused else BOX_EDGE, 1)
+
+            # While focused the box shows what is being TYPED, not the live
+            # value — otherwise a half-typed "1" would read as the real setting.
+            text = (studio.field_text + "_") if focused else field.get(studio)
+            cv2.putText(panel, text, (bx + 5, y + FIELD_H - 6), FONT, VALUE_SCALE,
+                        PROMPT_COLOR if focused else TEXT_COLOR, 1, cv2.LINE_AA)
+            rects.append((x, y, bx + box, y + FIELD_H, index))
+        y += FIELD_H + FIELD_ROW_GAP
+    return rects, y
+
+
+def panel_height(studio, width):
+    """How tall the control strip needs to be for what it holds."""
+    rows = len(layout_field_rows(width))
+    lines = 2 + LOG_LINES + 1          # status, sensor status, log, prompt
     if studio.show_keys:
         lines += len(key_list_lines())
-    return PANEL_PAD * 2 + BUTTON_H + BUTTON_GAP + PANEL_LINE * lines
+    return (PANEL_PAD * 2 + BUTTON_H + BUTTON_GAP
+            + rows * (FIELD_H + FIELD_ROW_GAP) + FIELD_ROW_GAP
+            + PANEL_LINE * lines)
 
 
 def key_list_lines():
@@ -1293,7 +1605,7 @@ def draw_buttons(panel, studio, y):
     """Lay the button row out left to right, and record where each one landed.
 
     Returns the hit rectangles, which is the only thing the click handler needs
-    — the drawing and the hit-testing therefore cannot disagree about position.
+    — so the drawing and the hit-testing cannot disagree about position.
     """
     rects = []
     x = PANEL_PAD
@@ -1311,28 +1623,31 @@ def draw_buttons(panel, studio, y):
 
 
 def draw_panel(studio, width, fps):
-    """The control strip: buttons, every current value, and the message log.
+    """The control strip: buttons, an editable field per parameter, the log.
 
     Deliberately BELOW the image rather than over it. The tool exists to judge
     whether an edge is straight, and a translucent panel sitting on the picture
     is exactly what stops you being able to.
+
+    Note what is a FIELD and what is a LINE: anything you can set is a field, and
+    the two lines under them are the things you cannot — what the correction is
+    costing in sharpness, and what the camera did with the settings it was sent.
     """
-    panel = np.full((panel_height(studio), width, 3), PANEL_BG, np.uint8)
+    panel = np.full((panel_height(studio, width), width, 3), PANEL_BG, np.uint8)
     y = PANEL_PAD
-    rects = draw_buttons(panel, studio, y)
+    buttons = draw_buttons(panel, studio, y)
     y += BUTTON_H + BUTTON_GAP
+    fields, y = draw_fields(panel, studio, y)
+    y += FIELD_ROW_GAP
 
     def line(text, color=TEXT_COLOR, scale=0.42):
         nonlocal y
         y += PANEL_LINE
         cv2.putText(panel, text, (PANEL_PAD, y - 4), FONT, scale, color, 1, cv2.LINE_AA)
 
-    status = studio.status_lines()
-    line(status[0], WARN_COLOR if not studio.profile.calibrated else OK_COLOR)
-    for text in status[1:]:
-        line(text)
-    for text in studio.sensor_lines():
-        line(text, HINT_COLOR)
+    line(studio.derived_line(fps),
+         WARN_COLOR if not studio.profile.calibrated else OK_COLOR)
+    line(f"camera: {studio.sensor_status}", HINT_COLOR)
 
     if studio.show_keys:
         for text in key_list_lines():
@@ -1343,11 +1658,14 @@ def draw_panel(studio, width, fps):
 
     if studio.edit.active:
         line(studio.edit.render(), PROMPT_COLOR, scale=0.5)
+    elif studio.focus is not None:
+        line(f"editing {FIELDS[studio.focus].label} — Enter commits, Up/Down step, "
+             f"Tab next, Esc cancels", PROMPT_COLOR)
     else:
-        line(f"press ':' to type a command here, or type it in the terminal — "
-             f"'help' lists them   |   {fps:5.1f} fps   |   {studio.settings_path}",
+        line("click a field to edit it, drag on the image to crop, ':' for a "
+             f"command, '?' for keys   |   {fps:5.1f} fps   |   {studio.settings_path}",
              HINT_COLOR)
-    return panel, rects
+    return panel, buttons, fields
 
 
 def draw_drag(image, studio):
@@ -1376,7 +1694,7 @@ def compose(image, studio, fps):
     whatever is left over.
     """
     width = max(image.shape[1], PANEL_MIN_WIDTH)
-    panel, rects = draw_panel(studio, width, fps)
+    panel, buttons, fields = draw_panel(studio, width, fps)
 
     x_off = (width - image.shape[1]) // 2
     top = np.full((image.shape[0], width, 3), PANEL_BG, np.uint8)
@@ -1389,7 +1707,8 @@ def compose(image, studio, fps):
         "image_w": image.shape[1],
         "image_h": image.shape[0],
         "panel_y": image.shape[0],
-        "buttons": rects,
+        "buttons": buttons,
+        "fields": fields,
     }
     return canvas
 
@@ -1412,21 +1731,26 @@ def window_to_image(studio, x, y):
     return None
 
 
-def hit_button(studio, x, y):
-    """Which button, if any, is under a window-coordinate click."""
+def hit_panel(studio, x, y, key):
+    """What is under a window-coordinate click, in the panel row named by `key`.
+
+    Returns the payload of the rectangle hit — a command line for "buttons", a
+    field index for "fields" — or None. Both rows store the same 5-tuple shape
+    for exactly this reason.
+    """
     lay = studio.layout
     if lay is None:
         return None
     if studio.args.display_scale != 1.0:
         x, y = x / studio.args.display_scale, y / studio.args.display_scale
     py = int(y) - lay["panel_y"]
-    for bx0, by0, bx1, by1, command in lay["buttons"]:
-        if bx0 <= int(x) <= bx1 and by0 <= py <= by1:
-            return command
+    for x0, y0, x1, y1, payload in lay.get(key, ()):
+        if x0 <= int(x) <= x1 and y0 <= py <= y1:
+            return payload
     return None
 
 
-def process_mouse(studio, window):
+def process_mouse(studio):
     """Turn the queued mouse events into crops, button presses and drag state.
 
     Run from the render loop rather than the callback because it needs the
@@ -1435,15 +1759,25 @@ def process_mouse(studio, window):
     events, studio.pending_clicks = studio.pending_clicks, []
     for kind, x, y in events:
         if kind == "down":
-            command = hit_button(studio, x, y)
+            index = hit_panel(studio, x, y, "fields")
+            if index is not None:
+                studio.log.add(True, focus_field(studio, index))
+                continue
+
+            command = hit_panel(studio, x, y, "buttons")
             if command is not None:
                 # RAW/CORR is the one button that cycles rather than sets.
                 if command == "view":
                     command = f"view {next_view(studio)}"
-                result = studio.commands.execute(command)
-                studio.log.push(result)
-                sync_trackbars(window, studio)
+                studio.log.push(studio.commands.execute(command))
                 continue
+
+            # A click anywhere else lets go of the field being edited, the way
+            # clicking off a text box does everywhere else. Deliberately without
+            # committing: an abandoned edit should not take effect.
+            if studio.focus is not None:
+                blur_field(studio)
+
             point = window_to_image(studio, x, y)
             if point is not None:
                 if studio.view == "both":
@@ -1468,7 +1802,6 @@ def process_mouse(studio, window):
             rect = (x0 / lay["image_w"], y0 / lay["image_h"],
                     x1 / lay["image_w"], y1 / lay["image_h"])
             studio.log.add(True, studio.push_crop(rect))
-            sync_trackbars(window, studio)
 
 
 # --- setup -------------------------------------------------------------------
@@ -1495,9 +1828,11 @@ def parse_args():
 
     files = parser.add_argument_group("files")
     files.add_argument("--settings", type=Path, default=SETTINGS_PATH,
-                       help=f"the JSON 'save' writes (default {SETTINGS_PATH})")
-    files.add_argument("--load", type=Path,
-                       help="load a settings JSON at startup")
+                       help="the settings JSON — READ at startup if it exists, "
+                            f"and what 'save' writes (default {SETTINGS_PATH})")
+    files.add_argument("--fresh", action="store_true",
+                       help="ignore the settings file and start from the "
+                            "built-in defaults (which are undistorted_viewer.py's)")
     files.add_argument("--autosave", action="store_true",
                        help="rewrite the settings JSON after every change")
     files.add_argument("--profile", type=Path, default=PROFILE_PATH,
@@ -1518,7 +1853,7 @@ def parse_args():
                       help="diagonal FOV of the rectilinear output (default 120)")
     lens.add_argument("--output-scale", type=float,
                       help="render resolution of the correction, relative to capture")
-    lens.add_argument("--interp", choices=INTERP_NAMES, default=DEFAULT_INTERPOLATION,
+    lens.add_argument("--interp", choices=INTERP_NAMES,
                       help=f"resampling kernel (default {DEFAULT_INTERPOLATION})")
     lens.add_argument("--no-mip", action="store_true",
                       help="skip pyramid filtering of the regions the correction "
@@ -1527,12 +1862,13 @@ def parse_args():
                       help="start with the correction off (raw geometry)")
 
     frame = parser.add_argument_group("framing")
-    frame.add_argument("--fit", choices=list(FIT_MODES), default="fit",
-                       help="fit: the window stays the same size as you zoom. "
-                            "native: the crop renders 1:1 and the window resizes")
-    frame.add_argument("--flip", choices=list(FLIPS), default="none",
+    frame.add_argument("--fit", choices=list(FIT_MODES),
+                       help="fit (the default): the window stays the same size "
+                            "as you zoom. native: the crop renders 1:1 and the "
+                            "window resizes")
+    frame.add_argument("--flip", choices=list(FLIPS),
                        help="mirror the captured frame")
-    frame.add_argument("--rotate", type=int, choices=list(ROTATIONS), default=0,
+    frame.add_argument("--rotate", type=int, choices=list(ROTATIONS),
                        help="rotate the captured frame")
     frame.add_argument("--swap-rb", action="store_true",
                        help="fix inverted red/blue channels")
@@ -1554,13 +1890,26 @@ def capture_size(args):
     return (args.width or default[0], args.height or default[1])
 
 
-def profile_from_args(args):
-    """Load the saved profile, then let any explicit CLI flag override it."""
-    profile = LensProfile.load(args.profile)
-    if args.hq and args.output_scale is None:
-        # Render half the capture resolution, so --hq keeps the familiar
-        # 1296x972 output but feeds it from four times as many sensor pixels.
-        profile.output_scale = 0.5
+def apply_overrides(studio, args):
+    """Lay the CLI flags over whatever the settings file supplied.
+
+    The precedence chain, lowest first:
+
+      1. the built-in defaults in Studio.__init__ and LensProfile — which are
+         chosen to be exactly what undistorted_viewer.py renders;
+      2. config/lens_profile.json, the lens parameters the OTHER tools read;
+      3. the settings file (--settings), read at startup when it exists;
+      4. these flags.
+
+    A flag left off is None and overrides nothing, which is why the framing and
+    interpolation flags have no argparse default — a default would be
+    indistinguishable from an explicit value and would silently outrank the file.
+    The store_true flags are the exception: they can only turn a thing on, never
+    leave it alone, but "off" is also the do-nothing case for all of them.
+
+    Returns the names of everything it overrode, for the startup banner.
+    """
+    changed = []
     for attr, value in (
         ("lens_fov_deg", args.lens_fov),
         ("fov_reference", args.fov_reference),
@@ -1571,30 +1920,49 @@ def profile_from_args(args):
         ("output_scale", args.output_scale),
     ):
         if value is not None:
-            setattr(profile, attr, value)
-    profile.clamp()
-    return profile
+            setattr(studio.profile, attr, value)
+            changed.append(f"{attr}={value}")
+    if args.hq and args.output_scale is None:
+        # Render half the capture resolution, so --hq keeps the familiar
+        # 1296x972 output but feeds it from four times as many sensor pixels.
+        studio.profile.output_scale = 0.5
+        changed.append("output_scale=0.5 (--hq)")
+    studio.profile.clamp()
 
+    for attr, value, label in (("interp", args.interp, "interp"),
+                               ("fit_mode", args.fit, "fit"),
+                               ("flip", args.flip, "flip"),
+                               ("rotate", args.rotate, "rotate")):
+        if value is not None:
+            setattr(studio, attr, value)
+            changed.append(f"{label}={value}")
+    for flag, attr, value, label in ((args.no_mip, "mip", False, "mip=off"),
+                                     (args.no_correct, "correct", False, "correction=off"),
+                                     (args.swap_rb, "swap_rb", True, "swap_rb=on")):
+        if flag:
+            setattr(studio, attr, value)
+            changed.append(label)
 
-def seed_sensor_from_args(studio, args):
-    """Carry the --sharpness/--denoise/... flags into the live settings.
-
-    They are applied at configure time as well (build_controls), but the studio
-    has to know about them or the first `save` would record them as "auto" and
-    the JSON would disagree with the picture.
-    """
+    # The sensor flags are applied at configure time too (build_controls), but
+    # the studio has to know about them or the first `save` would record them as
+    # "auto" and the JSON would disagree with the picture on screen.
     for name, value in (("sharpness", args.sharpness), ("denoise", args.denoise),
                         ("exposure", args.shutter), ("gain", args.gain),
                         ("awb", args.awb)):
         if value is not None:
             studio.sensor[name] = value
+            changed.append(f"{name}={value}")
+
+    studio.dirty = studio.sensor_dirty = True
+    return changed
 
 
 def main():
     args = parse_args()
-    profile = profile_from_args(args)
-    studio = Studio(args, profile)
-    seed_sensor_from_args(studio, args)
+    # Step 2 of the precedence chain in apply_overrides: the lens profile the
+    # other tools read. The settings file, if there is one, lands on top of this
+    # once the camera is open and the capture size is known.
+    studio = Studio(args, LensProfile.load(args.profile))
 
     controls = build_controls(args.sharpness, args.denoise, args.shutter,
                               args.gain, args.awb)
@@ -1610,13 +1978,25 @@ def main():
         return
 
     studio.camera_name = camera.name
-    studio.rebuild(camera.size)
-    if args.load:
-        # After rebuild(), so a loaded view_size is not overwritten by the default.
+    # Set before the load rather than by rebuild(), because read_settings needs
+    # the capture size to tell you when a file was saved at a different one.
+    studio.capture_size = camera.size
+
+    if args.fresh:
+        print("--fresh: ignoring the settings file, using the built-in defaults")
+    elif args.settings.exists():
         try:
-            print(studio.read_settings(args.load))
+            print(studio.read_settings(args.settings))
         except CommandError as exc:
-            print(f"--load: {exc}")
+            print(f"{args.settings}: {exc}\n  carrying on with the defaults.")
+    else:
+        print(f"No settings file at {args.settings} yet — starting from the "
+              "defaults. 'save' creates it.")
+
+    overridden = apply_overrides(studio, args)
+    if overridden:
+        print("Command line overrode: " + ", ".join(overridden))
+    studio.rebuild(camera.size)
 
     print(f"Camera: {camera.name}")
     for line in studio.status_lines():
@@ -1629,7 +2009,6 @@ def main():
     window = "Camera Studio"
     cv2.namedWindow(window, cv2.WINDOW_AUTOSIZE)
     cv2.setMouseCallback(window, on_mouse, studio)
-    create_trackbars(window, studio)
     start_stdin_reader(studio)
 
     fps, last = 0.0, time.perf_counter()
@@ -1654,7 +2033,6 @@ def main():
                 studio.dirty = True
             if studio.dirty:
                 studio.rebuild(frame.shape[1::-1])
-                sync_trackbars(window, studio)
 
             if studio.correct:
                 corrected = undistort(frame, studio.maps)
@@ -1699,29 +2077,29 @@ def main():
                                     fy=args.display_scale, interpolation=cv2.INTER_AREA)
             cv2.imshow(window, canvas)
 
-            process_mouse(studio, window)
+            process_mouse(studio)
 
             for line in studio.drain_pending():
                 result = studio.commands.execute(line)
                 if result is not None:
                     studio.log.push(result)
                     print(("OK: " if result.ok else "ERR: ") + result.message)
-                    sync_trackbars(window, studio)
 
             key = cv2.waitKeyEx(1)
             if key != -1:
-                if studio.edit.active:
+                if studio.focus is not None:
+                    feedback = handle_field_key(key, studio)
+                    if feedback is not None:
+                        studio.log.add(*feedback)
+                elif studio.edit.active:
                     line = studio.edit.key(key)
                     if line:
                         studio.log.push(studio.commands.execute(line))
-                        sync_trackbars(window, studio)
                     elif line == "":
                         studio.log.add(True, "prompt closed")
                 else:
                     ok_key, message = handle_key(key, studio)
                     studio.log.add(ok_key, message)
-                    if ok_key:
-                        sync_trackbars(window, studio)
 
             if studio.autosave:
                 # Compare the settings themselves, not a dirty flag: the flags

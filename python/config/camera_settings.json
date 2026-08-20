@@ -1,0 +1,56 @@
+{
+  "_about": "Default camera_studio.py settings: exactly what undistorted_viewer.py renders. camera_studio.py reads this at startup and 'save' overwrites it. Delete it (or pass --fresh) to go back to these values.",
+  "capture": {
+    "backend": "auto",
+    "device": null,
+    "width": null,
+    "height": null,
+    "swap_rb": false,
+    "flip": "none",
+    "rotate": 0
+  },
+  "lens": {
+    "lens_fov_deg": 160.0,
+    "fov_reference": "diagonal",
+    "model": "equidistant",
+    "k1": 0.0,
+    "k2": 0.0,
+    "centre_dx": 0.0,
+    "centre_dy": 0.0,
+    "output_fov_deg": 120.0,
+    "output_scale": 1.0,
+    "source": "estimated",
+    "camera_matrix": null,
+    "dist_coeffs": null,
+    "calibration_size": null
+  },
+  "correction": {
+    "enabled": true,
+    "interp": "cubic",
+    "mip": true
+  },
+  "framing": {
+    "crops": [],
+    "zoom": 1.0,
+    "pan": [
+      0.5,
+      0.5
+    ],
+    "fit_mode": "fit",
+    "view_size": null
+  },
+  "sensor": {
+    "brightness": "auto",
+    "contrast": "auto",
+    "saturation": "auto",
+    "sharpness": "auto",
+    "ev": "auto",
+    "exposure": "auto",
+    "gain": "auto",
+    "awb": "auto",
+    "redgain": "auto",
+    "bluegain": "auto",
+    "denoise": "auto",
+    "fps": "auto"
+  }
+}
