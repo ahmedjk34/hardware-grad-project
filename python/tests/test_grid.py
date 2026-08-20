@@ -11,6 +11,8 @@ check, and holding `map` next to a real `9` is the other half.
 """
 
 import os
+from pathlib import Path
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -114,6 +116,38 @@ check("packed grid is centred in 34x40 cm",
 check("first physical cell centre", from_cfg.cell_center_cm(1, 1) == (1.25, 5.0))
 check("last physical cell centre", from_cfg.cell_center_cm(22, 5) == (32.75, 35.0))
 
+# The Mega cannot read rig.json, so its safe manual-monitor defaults are baked
+# into the sketch. Keep this executable check beside the AGENTS.md pairing rule
+# so an agent changing JSON alone gets a loud failure before flashing.
+sketch_path = Path(__file__).resolve().parents[2] / \
+    "arduino" / "build_test_v1" / "build_test_v1.ino"
+sketch = sketch_path.read_text()
+
+
+def firmware_number(name):
+    match = re.search(
+        rf"^\s*(?:float|long)\s+{re.escape(name)}\s*=\s*([-+]?\d+(?:\.\d+)?)\s*;",
+        sketch,
+        re.MULTILINE,
+    )
+    return float(match.group(1)) if match else None
+
+
+paired_values = {
+    "GRID_COLS": from_cfg.cols,
+    "GRID_ROWS": from_cfg.rows,
+    "X_TRAVEL_CM": from_cfg.workspace_width_cm,
+    "Y_TRAVEL_CM": from_cfg.workspace_height_cm,
+    "GRID_CELL_X_CM": from_cfg.cell_width_cm,
+    "GRID_CELL_Y_CM": from_cfg.cell_height_cm,
+    "GRID_TRIM_X_CM": from_cfg.trim_x_cm,
+    "GRID_TRIM_Y_CM": from_cfg.trim_y_cm,
+}
+for name, expected in paired_values.items():
+    actual = firmware_number(name)
+    check(f"firmware/config pair {name}", actual == expected,
+          f"firmware {actual}, JSON {expected}")
+
 try:
     MachineGrid(cols=22, rows=5, origin="middle")
     check("bad origin is refused", False)
@@ -143,6 +177,7 @@ check("workspace rejects outside click",
 # packed 33x37.5 cm block grid retains its centred margins instead of being
 # stretched over that whole quadrilateral.
 physical_workspace = WorkspaceMap.from_grid(from_cfg, corners, (640, 480))
+check("physical workspace matches grid JSON", physical_workspace.matches_grid(from_cfg))
 first_centre = physical_workspace.pixel_at(1.25 / 34.0, 5.0 / 40.0, (640, 480))
 last_centre = physical_workspace.pixel_at(32.75 / 34.0, 35.0 / 40.0, (640, 480))
 check("physical camera map finds first cell",

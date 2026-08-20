@@ -55,6 +55,11 @@ The firmware default should still be kept equal to the config, so that a manual
 Arduino Serial Monitor session behaves the same as a Pi-driven one. Editing only
 the sketch is the trap: the Pi will silently overwrite it on the next connect.
 
+This applies to AI agents as well as humans: **an agent changing a paired grid
+value must edit both the Raspberry Pi JSON/Python side and the live Arduino
+sketch in the same change.** Run `python/tests/test_grid.py`; it parses the live
+sketch constants and fails if any listed pair differs from `rig.json`.
+
 Current default: **22 columns × 5 rows = 110 cells**.
 
 ### 3a. X/Y physical grid geometry — fixed-pitch block cells
@@ -72,11 +77,14 @@ The 22×5 packed grid is 33×37.5 cm and is centred, leaving 0.5 cm at each X
 edge and 1.25 cm at each Y edge before trims.
 
 The firmware owns the step counts and derives both steps/cm ratios at runtime;
-never hard-code either ratio. The Pi needs the centimetre geometry to interpret
-camera scale, while the firmware needs it to turn cell centres into steps, so
-these values genuinely have partners on both machines. Change both partners in
-the same commit. Positive trim moves the entire packed grid away from that
-axis's home switch; negative trim moves it toward the switch.
+never hard-code either ratio and do not copy the `5050 × 7500` safety envelope
+into JSON. The Pi does not need motor steps to draw or select a cell: it maps
+camera pixel → physical cm → `[col,row]`, and the Arduino alone maps that cell
+to safe step targets. The Pi needs the centimetre geometry to interpret camera
+scale, while the firmware needs it to turn cell centres into steps, so those
+centimetre values genuinely have partners on both machines. Change both
+partners in the same commit. Positive trim moves the entire packed grid away
+from that axis's home switch; negative trim moves it toward the switch.
 
 ### 3b. Grid NUMBERING — the convention, not the count
 
@@ -146,6 +154,7 @@ ack and is safe from rewording, but `S`, `G`, `0` and `0+` do not — for those,
 | `python/config/camera_settings.json` | the committed default settings |
 | `camera_studio.py` `Studio.__init__` | the built-in defaults `--fresh` and `reset` use |
 | `camera/camera_feed.py` | the canonical runtime feed that consumes the saved settings |
+| `camera/gridded_camera_feed.py` | the same runtime feed plus machine-grid calibration/overlay |
 | `camera/undistorted_viewer.py` | the standalone lens-tuning viewer |
 
 `camera_studio.py` is supposed to open showing **exactly what
@@ -161,6 +170,16 @@ time. The feed owns the first block-detection pass: clean contours, colour-coded
 rotated boxes, centres, hover coordinates and saved detection metadata. Later
 mapping code should consume those detections. `camera_studio.py` is the editor
 that writes the file; it is not the runtime pipeline entry point.
+
+`camera/gridded_camera_feed.py` is an alternate presentation of that canonical
+pipeline, not a second interpretation of camera settings. It imports the feed's
+settings, correction, enhancement, detection and snapshot helpers. Keep those
+shared rather than letting the gridded version drift. Its grid comes only from
+`config/rig.json`, and its four clicked envelope corners are saved as the
+generated `config/workspace_map.json`. Before calibration it may show only an
+explicitly amber **APPROXIMATION ONLY** grid; never display a full-frame guess
+as calibrated. A change to lens geometry, orientation, framing, cell geometry
+or grid trims must invalidate the saved workspace map.
 
 `vision/block_detector.py` must not assume one connected colour component is
 one block. Touching standard blocks produce L, U, cross, side-by-side and
@@ -227,6 +246,12 @@ orientation. Same rules — generated, not hand-authored, referenced by path. It
 is not the source of the lens parameters the other tools read;
 `lens_profile.json` still is, and the studio's `lens` command copies one into
 the other.
+
+`config/workspace_map.json` is also generated. The gridded feed writes it after
+four prompted clicks around the complete machine envelope. It contains the
+camera projection identity and the physical grid geometry it was made against;
+do not hand-edit it or treat normalized corner pixels as portable across lens,
+orientation, crop or grid changes.
 
 ---
 

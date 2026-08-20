@@ -161,6 +161,21 @@ class WorkspaceMap:
         path.write_text(json.dumps(payload, indent=2) + "\n")
         return path
 
+    def matches_grid(self, grid: MachineGrid) -> bool:
+        """Whether this calibration was made for the complete current geometry."""
+        if self.physical_grid is None or not grid.has_physical_scale:
+            return False
+        geometry = self.physical_grid
+        return (
+            (self.cols, self.rows) == (grid.cols, grid.rows)
+            and float(geometry["workspace_width_cm"]) == grid.workspace_width_cm
+            and float(geometry["workspace_height_cm"]) == grid.workspace_height_cm
+            and float(geometry["cell_width_cm"]) == grid.cell_width_cm
+            and float(geometry["cell_height_cm"]) == grid.cell_height_cm
+            and float(geometry.get("trim_x_cm", 0.0)) == grid.trim_x_cm
+            and float(geometry.get("trim_y_cm", 0.0)) == grid.trim_y_cm
+        )
+
     def normalized_at(self, point, image_size):
         w, h = image_size
         return _project(self._to_machine, (point[0] / w, point[1] / h))

@@ -44,11 +44,17 @@ cd python
 ../.venv/bin/python camera/camera_feed.py
 ```
 
+To see the physical 22×5 machine grid on that same feed, run
+`camera/gridded_camera_feed.py`. It shows an amber approximation initially;
+press `c` and click the four prompted 34×40 cm machine-envelope corners to save
+the calibrated overlay.
+
 ## Status
 
-The camera pipeline now includes live block detection with colour-coded edges,
-rotated boxes, centres and hover coordinates. Homography, workspace mapping and
-robot-coordinate output are not implemented yet. Lens correction runs on
+The camera pipeline now includes live block detection plus a separate gridded
+feed with four-corner homography, physical workspace mapping and cell hover
+coordinates. Sending the hovered cell to the rig and robot-coordinate output
+are not wired into the camera UI yet. Lens correction runs on
 **estimated** parameters — no checkerboard calibration has been performed, so
 the image is visually straightened but not measurement-grade. See
 [python/README.md](python/README.md) for what that means in practice.

@@ -18,6 +18,7 @@ python/
 │   └── measured_grid_viewer.py     grid overlay labelled in centimetres
 ├── camera/                     tools that are just a preview
 │   ├── camera_feed.py              config-driven runtime feed ← the main camera script
+│   ├── gridded_camera_feed.py      same feed + calibrated physical machine grid
 │   ├── camera_studio.py            tune EVERY setting, save them to JSON
 │   ├── camera_viewer.py            raw preview — "is the camera alive?"
 │   └── undistorted_viewer.py       live fisheye-corrected preview
@@ -52,6 +53,13 @@ L, U, side-by-side and end-to-end arrangements, instead of being treated as one
 colour blob.
 Future robot-coordinate code should consume these detections rather than
 opening the camera independently.
+
+`camera/gridded_camera_feed.py` reuses that feed and adds the machine grid from
+the repository-level `config/rig.json`. Press `c`, then click the four prompted
+corners of the complete 34×40 cm motion envelope. It saves the generated map to
+`config/workspace_map.json`; until then the amber full-frame grid is explicitly
+an approximation. Hovering a calibrated cell shows its `[col,row]`, physical
+centre and matching `G` command.
 
 `grid/undistorted_grid_viewer.py` is the combined measurement tool and is what
 you normally want when checking the machine grid. The smaller viewers beside it
@@ -167,6 +175,7 @@ python -m venv --system-site-packages .venv
 source .venv/bin/activate
 cd python
 python camera/camera_feed.py
+python camera/gridded_camera_feed.py
 ```
 
 Every tool takes `--help`. The lower-level camera viewers share these flags:
