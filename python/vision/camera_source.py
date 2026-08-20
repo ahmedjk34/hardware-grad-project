@@ -67,16 +67,35 @@ class ControlSpec:
     choices: tuple = ()
     libcamera: str = ""    # libcamera control name, "" if unsupported there
     v4l2: int = -1         # cv2.CAP_PROP_*, -1 if unsupported there
-    auto: bool = False     # may be set to "auto" as well as to a number
+    auto: bool = False     # the camera runs a real feedback LOOP for this one
     help: str = ""
+
+    # EVERY control accepts "auto", not just the ones with `auto` set — see
+    # libcamera_controls, which simply omits anything set to AUTO. The flag
+    # distinguishes the two things that then happen: with it, a hardware loop
+    # (AE, AWB) takes the wheel; without it, the ISP keeps its own default.
+    # Either way the control is not sent, and either way "auto" is accepted.
 
     @property
     def range_text(self):
         if self.kind == "choice":
-            return "|".join(self.choices)
-        auto = "|auto" if self.auto else ""
-        fmt = "{:g}"
-        return f"{fmt.format(self.lo)}..{fmt.format(self.hi)}{auto}"
+            choices = self.choices
+            if AUTO not in choices:
+                choices = (AUTO,) + tuple(choices)
+            return "|".join(choices)
+        return f"{self.lo:g}..{self.hi:g}|auto"
+
+    @property
+    def display_chars(self):
+        """Widest value this control can display, for sizing a text box.
+
+        Computed from the control rather than from whatever it holds right now,
+        so a value growing from 4 characters to 12 does not shove the rest of
+        the panel row sideways.
+        """
+        if self.kind == "choice":
+            return max(len(c) for c in self.range_text.split("|")) + 1
+        return max(8, len(f"{self.hi:g}") + 2)
 
 
 # Ordered because this is also the order they are printed and given sliders in.

@@ -510,26 +510,31 @@ class Studio:
         """
         spec = SENSOR_CONTROLS[name]
         text = raw.strip().lower()
+        note = ""
 
-        if spec.kind == "choice":
-            value = parse_choice(text, spec.choices)
-        elif text in ("auto", "a"):
-            if not spec.auto:
-                raise CommandError(
-                    f"{name} has no auto mode — give a number in {spec.range_text}")
+        # Checked before the choice branch so that "auto" works for every
+        # control, including the choice ones — it means "do not send this at
+        # all", which is a valid state for all of them and the state they all
+        # start in. A field showing "auto" must be committable unchanged.
+        if text in (AUTO, "a"):
             value = AUTO
+        elif spec.kind == "choice":
+            value = parse_choice(text, spec.choices)
         else:
             current = self.sensor[name]
             base = float(current) if current not in (AUTO, None) else 0.0
             value = parse_number(text, base, float)
-            if not (spec.lo <= value <= spec.hi):
-                raise CommandError(f"{value:g} is outside {spec.range_text}")
-            if spec.kind == "int":
-                value = int(round(value))
+            # Clamped, not rejected — otherwise stepping a field down from its
+            # minimum is an error rather than a no-op, which is a miserable way
+            # for a Down arrow to behave. The note keeps it from being silent.
+            clamped = min(max(value, spec.lo), spec.hi)
+            if abs(clamped - value) > 1e-9:
+                note = f"  (clamped from {value:g}; range is {spec.range_text})"
+            value = int(round(clamped)) if spec.kind == "int" else clamped
 
         self.sensor[name] = value
         self.sensor_dirty = True
-        return f"{name} {value}"
+        return f"{name} {value}{note}"
 
     def all_auto(self):
         for name in SENSOR_CONTROLS:
@@ -1220,9 +1225,11 @@ def build_fields():
     for i, (name, spec) in enumerate(SENSOR_CONTROLS.items()):
         step, start = SENSOR_STEPS.get(name, (None, None))
         if spec.kind == "choice":
-            step, start = tuple(spec.choices), None
+            # range_text, not spec.choices: it is the one that includes "auto",
+            # so cycling with Up/Down can reach it like every other value.
+            step, start = tuple(spec.range_text.split("|")), None
         fields.append(Field(name, name, lambda s, n=name: str(s.sensor[n]),
-                            step, max(6, len(spec.range_text.split("|")[0]) + 2),
+                            step, spec.display_chars,
                             "SENSOR" if i == 0 else "", start))
     return fields
 
