@@ -108,8 +108,8 @@ only authority that converts the selected cell to step pulses.
 
 ## `rig_build_v1.py`
 
-**Use it for:** manually selecting one calibrated camera cell and commanding
-one complete Arduino build there.
+**Use it for:** manually selecting one camera-grid cell and commanding one
+complete Arduino build there.
 
 ```bash
 python camera/rig_build_v1.py
@@ -119,13 +119,15 @@ python camera/rig_build_v1.py --level 2 --rotation R
 
 Startup opens the configured serial port, waits for the Mega reboot banner and
 pushes the JSON grid count. It then opens the same corrected/detected camera
-pipeline as `camera_feed.py`. A saved, matching `workspace_map.json` is required
-for target selection; an amber approximate grid cannot issue a build.
+pipeline as `camera_feed.py`. The amber approximate grid is selectable and can
+issue a build immediately. A matching `workspace_map.json` refines the mapping
+when present, but it is not required.
 
 Workflow:
 
-1. If necessary, press `c` and complete the same four-corner calibration.
-2. Left-click a cell. The magenta outline and build panel show the selection.
+1. Left-click a cell on the approximate or calibrated grid.
+2. The magenta outline and build panel show the selection. Press `c` only if
+   you want to refine the mapping with four envelope corners.
 3. Set the stack level with `[` / `]`; `o` cycles `NR`, `R`, `RR`.
 4. Read the displayed command, such as `B 3 4 0`.
 5. Press `b` or Enter to confirm and send it.

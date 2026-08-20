@@ -17,13 +17,13 @@ class BuildStateError(RuntimeError):
 
 @dataclass
 class BuildController:
-    """Turn a calibrated cell selection into one explicitly confirmed build.
+    """Turn a camera-grid cell selection into one explicitly confirmed build.
 
     The controller deliberately knows nothing about OpenCV. It enforces the
-    pieces that must remain true whichever UI calls it: approximate camera maps
-    cannot select, levels cannot be negative, successful builds clear selection
-    to prevent accidental repeats, and an aborted/unknown serial outcome locks
-    the session until a human has inspected the rig and restarts the program.
+    pieces that must remain true whichever UI calls it: levels cannot be
+    negative, successful builds clear selection to prevent accidental repeats,
+    and an aborted/unknown serial outcome locks the session until a human has
+    inspected the rig and restarts the program.
     """
 
     rig: object
@@ -49,13 +49,9 @@ class BuildController:
         command = f"B {col} {row} {self.level}"
         return command if self.rotation == "NR" else f"{command} {self.rotation}"
 
-    def select(self, cell: tuple[int, int], *, calibrated: bool) -> None:
+    def select(self, cell: tuple[int, int]) -> None:
         if self.locked:
             raise BuildStateError(self.locked_reason)
-        if not calibrated:
-            raise BuildStateError(
-                "camera grid is only an approximation; press c and calibrate first"
-            )
         col, row = (int(value) for value in cell)
         if not self.rig.grid.contains(col, row):
             raise BuildStateError(
@@ -90,7 +86,7 @@ class BuildController:
         if self.locked:
             raise BuildStateError(self.locked_reason)
         if self.selected is None:
-            raise BuildStateError("select a calibrated grid cell first")
+            raise BuildStateError("select a camera grid cell first")
 
         col, row = self.selected
         try:

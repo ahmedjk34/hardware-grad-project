@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Rig Build V1: calibrated camera cell selection -> confirmed Arduino B command.
+"""Rig Build V1: camera grid cell selection -> confirmed Arduino B command.
 
 This combines ``gridded_camera_feed.py`` with ``rig.link.Rig``. A left click on
-a CALIBRATED grid selects one cell; it does not move the machine. Press Enter or
+a grid selects one cell; it does not move the machine. Press Enter or
 ``b`` to send the exact command shown in the build panel, normally
 ``B <col> <row> <level>``. The firmware performs the pick-and-place sequence.
 
 Safety rules
 ------------
-* An amber approximate grid cannot select a build target. Calibrate with ``c``.
+* The built-in approximate grid is immediately selectable; ``c`` is optional.
 * Click selects; Enter/``b`` is the separate confirmation that moves hardware.
 * The build call is synchronous, so clicks and commands cannot queue mid-build.
 * ABORTED, cable/reset, or timeout locks the session. Inspect the rig and restart;
@@ -225,7 +225,7 @@ def main():
     saved_workspace, rejection = load_workspace(args.workspace_map, grid, projection)
     if rejection:
         print(f"Grid calibration unavailable: {rejection}")
-        print("Press c and click the four prompted corners before selecting a build.")
+        print("Using the selectable approximate grid; press c only to refine it.")
     else:
         print(f"Loaded workspace calibration: {args.workspace_map}")
 
@@ -237,7 +237,7 @@ def main():
         "calibration_points": [],
         "pending_points": None,
         "show_grid": True,
-        "message": "connected; select a calibrated cell",
+        "message": "connected; click a grid cell",
     }
 
     def on_mouse(event, x, y, _flags, state):
@@ -309,7 +309,7 @@ def main():
                     cell = workspace.cell_at(point, image_size)
                     if cell is None:
                         raise BuildStateError("click is outside the packed block grid")
-                    controller.select(cell, calibrated=calibrated)
+                    controller.select(cell)
                     ui["message"] = f"selected [{cell[0]},{cell[1]}]; confirm shown command"
                 except BuildStateError as exc:
                     ui["message"] = str(exc)
@@ -379,7 +379,7 @@ def main():
                 try:
                     command = controller.command
                     if command is None:
-                        raise BuildStateError("select a calibrated grid cell first")
+                        raise BuildStateError("select a camera grid cell first")
                     ui["message"] = f"BUILDING: {command}"
                     busy_display = view.copy() if args.no_enhance else \
                         enhance_for_display(view)

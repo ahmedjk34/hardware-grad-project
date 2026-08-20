@@ -49,9 +49,10 @@ To see the physical 22×5 machine grid on that same feed, run
 press `c` and click the four prompted 34×40 cm machine-envelope corners to save
 the calibrated overlay.
 
-After calibration, `camera/rig_build_v1.py` connects that view to the Mega.
-Click a cell to select it, choose the block-stack level, then press `b` or Enter
-to confirm the displayed Arduino `B` command.
+`camera/rig_build_v1.py` connects that view to the Mega and can build from the
+initial approximate grid without calibration. Click a cell, choose the
+block-stack level, then press `b` or Enter to confirm the displayed Arduino
+`B` command. Press `c` only when you want to refine the camera mapping.
 
 ## Status
 

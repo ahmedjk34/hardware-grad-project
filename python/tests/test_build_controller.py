@@ -35,13 +35,8 @@ class FakeRig:
 
 rig = FakeRig([BuildResult(PLACED)])
 controller = BuildController(rig)
-try:
-    controller.select((1, 1), calibrated=False)
-    check("approximate grid cannot select", False)
-except BuildStateError:
-    check("approximate grid cannot select", True)
-
-controller.select((3, 4), calibrated=True)
+controller.select((3, 4))
+check("approximate grid can select", controller.selected == (3, 4))
 check("default command is exact B col row level", controller.command == "B 3 4 0")
 result = controller.build(timeout=12)
 check("placed result returned", result == PLACED)
@@ -51,7 +46,7 @@ check("placed build requires fresh selection", controller.selected is None)
 rig = FakeRig([BuildResult(REJECTED, "bad level"),
                BuildResult(ABORTED, "Z switch not reached")])
 controller = BuildController(rig, level=2, rotation="R")
-controller.select((22, 5), calibrated=True)
+controller.select((22, 5))
 check("rotation appears only when requested", controller.command == "B 22 5 2 R")
 result = controller.build()
 check("safe rejection keeps selection", result == REJECTED and controller.selected == (22, 5))
@@ -65,7 +60,7 @@ except BuildStateError:
 
 rig = FakeRig([RigError("cable lost")])
 controller = BuildController(rig)
-controller.select((1, 1), calibrated=True)
+controller.select((1, 1))
 try:
     controller.build()
     check("serial error propagates", False)

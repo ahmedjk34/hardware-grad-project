@@ -155,7 +155,7 @@ ack and is safe from rewording, but `S`, `G`, `0` and `0+` do not — for those,
 | `camera_studio.py` `Studio.__init__` | the built-in defaults `--fresh` and `reset` use |
 | `camera/camera_feed.py` | the canonical runtime feed that consumes the saved settings |
 | `camera/gridded_camera_feed.py` | the same runtime feed plus machine-grid calibration/overlay |
-| `camera/rig_build_v1.py` | calibrated cell selection plus confirmed serial build |
+| `camera/rig_build_v1.py` | camera-grid cell selection plus confirmed serial build |
 | `camera/undistorted_viewer.py` | the standalone lens-tuning viewer |
 
 `camera_studio.py` is supposed to open showing **exactly what
@@ -185,8 +185,8 @@ or grid trims must invalidate the saved workspace map.
 `camera/rig_build_v1.py` is the first hardware-moving camera UI. Preserve all
 of these rules when editing it:
 
-- Only a **calibrated** `WorkspaceMap` may select a build target. The amber
-  full-frame approximation is display-only.
+- Both the amber approximate map and a saved calibrated `WorkspaceMap` may
+  select a build target. Calibration refines the camera mapping but is optional.
 - A click selects and shows the exact `B <col> <row> <level> [R|RR]` command;
   it never moves hardware. `b`/Enter is the separate confirmation.
 - Send builds only through `rig.link.Rig.build()`, never a second raw serial
