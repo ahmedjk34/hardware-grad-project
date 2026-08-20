@@ -109,7 +109,8 @@ instead of you reading the screen to find out.
 
 ## Step 3 — Put the machine's grid on the picture
 
-The viewer draws an 8×8 grid over the image. The rig thinks in a 10×20 grid.
+The viewer draws an 8×8 straightness ruler over the image. The rig thinks in a
+22×5 fixed-pitch block grid.
 These are unrelated, which is the core mismatch to fix.
 
 Make `grid/undistorted_grid_viewer.py` draw the grid from `config/rig.json`, and
@@ -121,13 +122,17 @@ label the cells with machine col/row.
 
 ## Step 4 — Turn a click into a cell
 
-Click the four corners of the work area once, in a prompted order. Save them to
-`config/workspace_map.json`. From those four points, compute the mapping from
-any image pixel to a machine cell.
+Click the four corners of the complete 34×40 cm machine envelope once, in a
+prompted order. Save them to `config/workspace_map.json`. From those four
+points, compute the mapping from any image pixel through physical centimetres
+to a machine cell. The mapping must preserve the centred 0.5 cm X and 1.25 cm Y
+unused edge strips rather than stretching the packed block cells over them.
 
 **Why four clicks instead of arithmetic.** The camera's rotation and mirroring
 relative to the rig is arbitrary, and the machine's axes run in opposite
-directions (`X` from 0 to −5050, `Y` from 0 to +7500). Four clicked corners
+directions (`X` from 0 to −5050, `Y` from 0 to +7500). Those spans are
+calibrated as 34 cm × 40 cm; the packed 1.5 cm × 7.5 cm cells occupy 33 cm ×
+37.5 cm and are centred inside them. Four clicked corners
 absorb all of that with no sign-juggling. It also means cell accuracy does not
 depend on the lens numbers being correct — and they are still estimates, not a
 calibration.

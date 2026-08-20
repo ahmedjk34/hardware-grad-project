@@ -20,6 +20,21 @@ commands need a newline; single digits do not.
 The command list lives in the comment block at the top of the sketch, and the
 rig prints it on boot and on `?`.
 
+## X/Y physical grid
+
+The live sketch maps the tape-measured `34 cm × 40 cm` X/Y envelope to its
+`5050 × 7500` step limits at runtime:
+
+- X: `5050 / 34 = 148.5294 steps/cm`
+- Y: `7500 / 40 = 187.5 steps/cm`
+
+The supported block orientation is `1.5 cm` along X and `7.5 cm` along Y. A
+`22 × 5` grid fits: its `33 × 37.5 cm` footprint is centred, leaving `0.5 cm`
+at each X edge and `1.25 cm` at each Y edge. `GRID_TRIM_X_CM` and
+`GRID_TRIM_Y_CM` are signed calibration corrections for shifting that complete
+footprint; positive is away from the relevant home switch. After changing a
+trim, flash and verify corner cells with `G` before using `B`.
+
 ## `archive/`
 
 Earlier sketches, kept for reference. **Do not flash these.** They are older

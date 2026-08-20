@@ -37,7 +37,7 @@
     RR = Aux stepper rotate ~180 deg CCW  (28BYJ-48, pins 36-39)
 
     G <col> <row>   = go to grid cell (1-based). e.g.  G 3 5   or  G3,5
-    S <cols> <rows> = change the grid division live. e.g.  S 20 39
+    S <cols> <rows> = change fixed-pitch grid count live. e.g.  S 20 4
 
     B <col> <row> <level> [R|RR|NR]   = BUILD one block   <<< NEW
     Z               = print the Z / build calibration table  <<< NEW
@@ -63,8 +63,9 @@
       Y switch at the Y- end  ->  Y runs   0  ...  +7500   (soft limit)
       Z switch at the Z- end  ->  Z runs   0  ...  +1350   (TOP SWITCH)
 
-  So the work envelope is 5050 x 7500 steps, living in the rectangle
-  X in [-5050, 0], Y in [0, +7500]. Grid indices hide this sign mess:
+  So the work envelope is 5050 x 7500 steps = about 34 x 40 cm,
+  living in the rectangle X in [-5050, 0], Y in [0, +7500]. Grid
+  indices hide this sign mess:
 
       col 1  = nearest the X switch (X = 0 side, the X+ end)
       col N  = far end of X travel  (X = -5050 side)
@@ -74,7 +75,7 @@
   Generalised in code as: each axis extends from 0 in the direction
   travelEndOf(axis), for axisTravelOf(axis) steps - whether that far
   end is held by a software cap (X/Y) or by a switch (Z). Change the
-  limits and the grid rescales itself automatically.
+  step limits and the cm calibration set each axis's steps/cm scale.
 
   Z works the same way, except that BOTH of its ends are now real
   switches: Z = 0 is the bottom switch on pin 28 (the GROUND / table
@@ -462,6 +463,12 @@ long SOFT_LIMIT_X_TRAVEL = 5050;                  // X- travel cap, in steps
 long SOFT_LIMIT_Y_TRAVEL = 7500;                  // Y+ travel cap, in steps
 const long SOFT_LIMIT_Z_TRAVEL = SOFT_LIMIT_INFINITE; // Z: switch, not a cap
 
+// Tape-measured travel from each home switch to its software limit. These
+// pair with the step caps above; their ratio is the X/Y scale used everywhere
+// below. Re-measuring an axis is therefore a one-line calibration change.
+float X_TRAVEL_CM = 34.0;
+float Y_TRAVEL_CM = 40.0;
+
 const int8_t SOFT_LIMIT_X_AT_END = DIR_NEG; // guards the X- end
 const int8_t SOFT_LIMIT_Y_AT_END = DIR_POS; // guards the Y+ end
 const int8_t SOFT_LIMIT_Z_AT_END = DIR_POS; // (unused - Z has no cap)
@@ -482,46 +489,36 @@ const bool SOFT_LIMIT_VERBOSE = true;
 // SECTION 6C - GRID CONFIGURATION
 // ============================================================
 //
-// The envelope (5050 x 7500 steps) is divided into COLS x ROWS
-// equal rectangles. The machine parks at the CENTRE of a cell.
+// One cell is one block footprint in the only supported orientation:
+// 1.5 cm along X and 7.5 cm along Y. The largest whole-block grid that
+// fits in 34 x 40 cm is therefore 22 cols x 5 rows.
 //
-// Cell size does NOT have to divide evenly into the travel. Targets
-// are computed from the absolute position each time, so rounding
-// error is always under one step and never accumulates.
+// The packed 33 x 37.5 cm grid is centred in the motion envelope. That
+// leaves 0.5 cm at both X edges and 1.25 cm at both Y edges. The signed
+// trims move the entire packed grid away from (+) or toward (-) its home
+// switch. They are deliberately in centimetres: the conversion to steps
+// follows X/Y calibration automatically, like the Z build margins do.
+//
+// Targets are computed as absolute physical cell centres and rounded only
+// once, so sub-step rounding error never accumulates between cells.
 //
 // ------------------------------------------------------------
-//   HOW FINE CAN THIS GO?
+//   HOW MANY CELLS FIT?
 // ------------------------------------------------------------
-//   Arithmetically the floor is 1 step per cell (5050 x 7500
-//   = 37.9 million cells), which is meaningless - it is far below
-//   what the machine can repeat mechanically.
-//
-//   The envelope is 5050:7500, which reduces to 101:150 (gcd 50).
-//   SQUARE cells in whole steps therefore need cols:rows = 101:150,
-//   and the only whole-step cell sizes are the divisors of 50:
-//        COLS   ROWS   CELL (X x Y)      CELLS
-//         101 x  150      50 x  50       15150   <- coarsest square
-//         202 x  300      25 x  25       60600
-//         505 x  750      10 x  10      378750
-//        1010 x 1500       5 x   5     1515000
-//        5050 x 7500       1 x   1    37875000   <- 1 step per cell
-//
-//   NOTE: the 10 x 20 default below is NOT square - it gives
-//   505 x 375 step cells. Square cells are impractically fine on
-//   this envelope, so the default trades squareness for usable size.
-//
-//   Change these here, or live with:  S <cols> <rows>
+//   Counts are limited by physical pitch, not merely by whether one
+//   arithmetic step remains. With zero trim the maxima are 22 x 5.
+//   A non-zero trim consumes equal safety room at the opposite edge,
+//   so the maximum count may fall. Command S can choose a smaller
+//   centred grid but cannot squeeze cells or change their footprint.
 
-long GRID_COLS = 10;
-long GRID_ROWS = 20;
+float GRID_CELL_X_CM = 1.5;
+float GRID_CELL_Y_CM = 7.5;
 
-// The ceiling is one step per cell, so it is NOT a fixed number -
-// it follows the software limits. Re-tune a travel cap and the
-// allowed grid range follows it automatically.
-long gridCountMaxOf(uint8_t axis)
-{
-  return axisTravelOf(axis);
-}
+float GRID_TRIM_X_CM = 0.0; // signed whole-grid correction along X
+float GRID_TRIM_Y_CM = 0.0; // signed whole-grid correction along Y
+
+long GRID_COLS = 22;
+long GRID_ROWS = 5;
 
 // The ASCII map is only drawn when the grid is small enough to be
 // readable. Bigger grids print a numeric summary instead.
@@ -1168,7 +1165,7 @@ void handleLine(char *line)
     {
       statBadCommands++;
       Serial.println();
-      Serial.println(F("  ERROR - use:  S <cols> <rows>   e.g.  S 20 39"));
+      Serial.println(F("  ERROR - use:  S <cols> <rows>   e.g.  S 20 4"));
     }
     break;
 
@@ -1938,18 +1935,77 @@ long gridCountOf(uint8_t axis)
   return (axis == AXIS_X) ? GRID_COLS : GRID_ROWS;
 }
 
-// Centre of cell `index` (1-based) as a MAGNITUDE from the origin,
-// rounded to the nearest whole step.
-//     magnitude = (index - 0.5) * travel / count
+float xyTravelCmOf(uint8_t axis)
+{
+  return (axis == AXIS_X) ? X_TRAVEL_CM : Y_TRAVEL_CM;
+}
+
+float gridCellCmOf(uint8_t axis)
+{
+  return (axis == AXIS_X) ? GRID_CELL_X_CM : GRID_CELL_Y_CM;
+}
+
+float gridTrimCmOf(uint8_t axis)
+{
+  return (axis == AXIS_X) ? GRID_TRIM_X_CM : GRID_TRIM_Y_CM;
+}
+
+float xyStepsPerCmOf(uint8_t axis)
+{
+  float travelCm = xyTravelCmOf(axis);
+  return (travelCm > 0.0) ? (float)gridTravelOf(axis) / travelCm : 0.0;
+}
+
+float gridPackedCmOf(uint8_t axis, long count)
+{
+  return (float)count * gridCellCmOf(axis);
+}
+
+// The unused space is split equally, then the signed calibration trim shifts
+// the complete packed grid. Positive means away from the axis home switch.
+float gridStartCmOf(uint8_t axis, long count)
+{
+  return (xyTravelCmOf(axis) - gridPackedCmOf(axis, count)) * 0.5
+         + gridTrimCmOf(axis);
+}
+
+float gridEndCmOf(uint8_t axis, long count)
+{
+  return gridStartCmOf(axis, count) + gridPackedCmOf(axis, count);
+}
+
+bool gridGeometryFits(uint8_t axis, long count)
+{
+  if (count < 1 || xyStepsPerCmOf(axis) <= 0.0 || gridCellCmOf(axis) <= 0.0)
+  {
+    return false;
+  }
+  const float slack = 0.0001;
+  return gridStartCmOf(axis, count) >= -slack
+         && gridEndCmOf(axis, count) <= xyTravelCmOf(axis) + slack;
+}
+
+long gridCountMaxOf(uint8_t axis)
+{
+  float available = xyTravelCmOf(axis) - 2.0 * fabs(gridTrimCmOf(axis));
+  float pitch = gridCellCmOf(axis);
+  if (available <= 0.0 || pitch <= 0.0)
+  {
+    return 0;
+  }
+  return (long)floor((available + 0.0001) / pitch);
+}
+
+// Centre of fixed-pitch cell `index` (1-based), as a MAGNITUDE from
+// the origin and rounded once to the nearest whole step.
+//   centre_cm = centred_grid_start + (index - 0.5) * cell_pitch_cm
 long cellCentreMagnitude(uint8_t axis, long index)
 {
-  long travel = gridTravelOf(axis);
   long count = gridCountOf(axis);
-
-  long numerator = (2L * index - 1L) * travel;
-  long denominator = 2L * count;
-
-  long mag = (numerator + denominator / 2) / denominator;
+  long travel = gridTravelOf(axis);
+  float centreCm = gridStartCmOf(axis, count)
+                   + ((float)index - 0.5) * gridCellCmOf(axis);
+  long mag = lround(centreCm * xyStepsPerCmOf(axis));
 
   if (mag > travel)
   {
@@ -1968,25 +2024,39 @@ long cellTargetPosition(uint8_t axis, long index)
   return cellCentreMagnitude(axis, index) * (long)gridDirOf(axis);
 }
 
-// Cell size in steps, printed as a rounded value.
-long cellSizeOf(uint8_t axis)
+// Physical pitch converted through the per-axis calibration.
+float gridCellStepsOf(uint8_t axis)
 {
-  return gridTravelOf(axis) / gridCountOf(axis);
+  return gridCellCmOf(axis) * xyStepsPerCmOf(axis);
 }
 
-// Which cell index a raw position falls in. 0 = outside the grid.
+// Which fixed-pitch cell a raw position falls in. The centred leftover strips
+// outside the packed block grid deliberately return 0.
 long positionToIndex(uint8_t axis, long pos)
 {
-  long travel = gridTravelOf(axis);
   long count = gridCountOf(axis);
   long mag = pos * (long)gridDirOf(axis); // distance from origin
+  float scale = xyStepsPerCmOf(axis);
 
-  if (mag < 0 || mag > travel || travel <= 0)
+  if (mag < 0 || mag > gridTravelOf(axis) || scale <= 0.0)
   {
     return 0;
   }
 
-  long idx = (mag * count) / travel + 1;
+  float cm = (float)mag / scale;
+  float start = gridStartCmOf(axis, count);
+  float end = gridEndCmOf(axis, count);
+  float halfStepCm = 0.5 / scale;
+  if (cm < start - halfStepCm || cm > end + halfStepCm)
+  {
+    return 0;
+  }
+
+  long idx = (long)floor((cm - start) / gridCellCmOf(axis)) + 1;
+  if (idx < 1)
+  {
+    idx = 1;
+  }
   if (idx > count)
   {
     idx = count;
@@ -2000,6 +2070,12 @@ bool gridReady()
   {
     Serial.println(F("  ERROR - grid needs BOTH software limits enabled"));
     Serial.println(F("  and non-zero. Check SECTION 6B."));
+    return false;
+  }
+  if (!gridGeometryFits(AXIS_X, GRID_COLS) || !gridGeometryFits(AXIS_Y, GRID_ROWS))
+  {
+    Serial.println(F("  ERROR - physical grid/pitch/trim does not fit the X/Y envelope."));
+    Serial.println(F("  Check SECTION 6B/6C and send 5 for the calculated geometry."));
     return false;
   }
   return true;
@@ -2023,7 +2099,8 @@ void setGridSize(long cols, long rows)
   Serial.println();
 
   if (cols < 1 || rows < 1 ||
-      cols > gridCountMaxOf(AXIS_X) || rows > gridCountMaxOf(AXIS_Y))
+      cols > gridCountMaxOf(AXIS_X) || rows > gridCountMaxOf(AXIS_Y) ||
+      !gridGeometryFits(AXIS_X, cols) || !gridGeometryFits(AXIS_Y, rows))
   {
     Serial.print(F("  ERROR - grid must be 1.."));
     Serial.print(gridCountMaxOf(AXIS_X));
@@ -3293,7 +3370,23 @@ void printGridConfig()
   Serial.print(gridTravelOf(AXIS_X));
   Serial.print(F(" x "));
   Serial.print(gridTravelOf(AXIS_Y));
-  Serial.println(F(" steps"));
+  Serial.print(F(" steps  =  "));
+  Serial.print(X_TRAVEL_CM, 2);
+  Serial.print(F(" x "));
+  Serial.print(Y_TRAVEL_CM, 2);
+  Serial.println(F(" cm"));
+
+  Serial.print(F("Scale    : X "));
+  Serial.print(xyStepsPerCmOf(AXIS_X), 4);
+  Serial.print(F(" / Y "));
+  Serial.print(xyStepsPerCmOf(AXIS_Y), 4);
+  Serial.println(F(" steps/cm"));
+
+  Serial.print(F("Block cell: "));
+  Serial.print(GRID_CELL_X_CM, 2);
+  Serial.print(F(" x "));
+  Serial.print(GRID_CELL_Y_CM, 2);
+  Serial.println(F(" cm  (X x Y, one orientation)"));
 
   Serial.print(F("Division : "));
   Serial.print(GRID_COLS);
@@ -3303,11 +3396,29 @@ void printGridConfig()
   Serial.print(GRID_COLS * GRID_ROWS);
   Serial.println(F(" cells"));
 
-  Serial.print(F("Cell size: ~"));
-  Serial.print((float)gridTravelOf(AXIS_X) / (float)GRID_COLS, 2);
+  Serial.print(F("Packed grid: "));
+  Serial.print(gridPackedCmOf(AXIS_X, GRID_COLS), 2);
   Serial.print(F(" x "));
-  Serial.print((float)gridTravelOf(AXIS_Y) / (float)GRID_ROWS, 2);
-  Serial.println(F(" steps"));
+  Serial.print(gridPackedCmOf(AXIS_Y, GRID_ROWS), 2);
+  Serial.println(F(" cm, centred before trim"));
+
+  Serial.print(F("Origin edge: X "));
+  Serial.print(gridStartCmOf(AXIS_X, GRID_COLS), 3);
+  Serial.print(F(" cm / Y "));
+  Serial.print(gridStartCmOf(AXIS_Y, GRID_ROWS), 3);
+  Serial.println(F(" cm from home switches"));
+
+  Serial.print(F("Grid trims : X "));
+  Serial.print(GRID_TRIM_X_CM, 3);
+  Serial.print(F(" cm / Y "));
+  Serial.print(GRID_TRIM_Y_CM, 3);
+  Serial.println(F(" cm  (+ away from home)"));
+
+  Serial.print(F("Cell steps : ~"));
+  Serial.print(gridCellStepsOf(AXIS_X), 2);
+  Serial.print(F(" x "));
+  Serial.print(gridCellStepsOf(AXIS_Y), 2);
+  Serial.println(F(" steps (X x Y)"));
 
   Serial.println(F("col 1 = X switch side, row 1 = Y switch side"));
 }
@@ -4177,7 +4288,7 @@ void printInstructions()
   Serial.println(F("RR = Aux stepper ~180 deg CCW  [28BYJ-48, pins 36-39]"));
   Serial.println(F("--------------------------------------"));
   Serial.println(F("G <col> <row>   goto cell, e.g.  G 3 5"));
-  Serial.println(F("S <cols> <rows> resize grid, e.g. S 20 39"));
+  Serial.println(F("S <cols> <rows> fixed-pitch count, e.g. S 20 4"));
   Serial.println(F("--------------------------------------"));
   Serial.println(F("B <col> <row> <level> [R|RR|NR]   BUILD one block"));
   Serial.println(F("    level 0 = ground, 1 = one block up, 2 = two ..."));

@@ -61,6 +61,7 @@ from dataclasses import dataclass, field
 import serial
 
 from rig.config import load
+from rig.grid import MachineGrid
 
 # ------------------------------------------------------------------
 # Ack lines
@@ -248,8 +249,11 @@ class Rig:
         cfg = cfg if cfg is not None else load()
         self.port_name: str = cfg["serial"]["port"]
         self.baud: int = cfg["serial"]["baud"]
-        self.cols: int = cfg["grid"]["cols"]
-        self.rows: int = cfg["grid"]["rows"]
+        # One object validates both the logical counts and their physical
+        # 1.5 x 7.5 cm footprint before anything is sent to the machine.
+        self.grid = MachineGrid.from_config(cfg)
+        self.cols: int = self.grid.cols
+        self.rows: int = self.grid.rows
 
         self._on_line = on_line
         self._on_error = on_error

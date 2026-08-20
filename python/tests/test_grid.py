@@ -60,32 +60,32 @@ check("column numbers are c % 10", wide[-2].strip() == "1 2 3 4 5 6 7 8 9 0 1 2"
 # The image mapping
 # ------------------------------------------------------------------
 
-g = MachineGrid(cols=10, rows=20)  # the real one
-check("divisions across/down", (g.nx, g.ny) == (10, 20), f"{g.nx}x{g.ny}")
+g = MachineGrid(cols=22, rows=5)  # the real one
+check("divisions across/down", (g.nx, g.ny) == (22, 5), f"{g.nx}x{g.ny}")
 
 # Default orientation is the rig's own picture: [1,1] bottom-left.
-check("[1,1] is bottom-left", g.cell_at(0, 19) == (1, 1), str(g.cell_at(0, 19)))
-check("[10,20] is top-right", g.cell_at(9, 0) == (10, 20), str(g.cell_at(9, 0)))
-check("col 1 is the left column", g.cell_at(0, 5)[0] == 1)
-check("row 1 is the bottom row", g.cell_at(5, 19)[1] == 1)
+check("[1,1] is bottom-left", g.cell_at(0, 4) == (1, 1), str(g.cell_at(0, 4)))
+check("[22,5] is top-right", g.cell_at(21, 0) == (22, 5), str(g.cell_at(21, 0)))
+check("col 1 is the left column", g.cell_at(0, 2)[0] == 1)
+check("row 1 is the bottom row", g.cell_at(10, 4)[1] == 1)
 
 # Every corner and both axis assignments must round-trip, and must put [1,1]
 # in the corner they are named after. This is the whole reason the setting
 # exists: eight mountings, no sign-juggling anywhere else in the project.
 for origin in ORIGIN_CORNERS:
     for swap in (False, True):
-        m = MachineGrid(cols=10, rows=20, origin=origin, swap_axes=swap)
+        m = MachineGrid(cols=22, rows=5, origin=origin, swap_axes=swap)
 
         trips = all(
             m.cell_at(*m.image_cell(c, r)) == (c, r)
-            for c in range(1, 11)
-            for r in range(1, 21)
+            for c in range(1, 23)
+            for r in range(1, 6)
         )
         check(f"round-trip {origin}{' swapped' if swap else ''}", trips)
 
         seen = {m.cell_at(ix, iy) for ix in range(m.nx) for iy in range(m.ny)}
         check(f"covers every cell {origin}{' swapped' if swap else ''}",
-              len(seen) == 200)
+              len(seen) == 110)
 
         ix, iy = m.image_cell(1, 1)
         want = (0 if m.at_left else m.nx - 1, m.ny - 1 if m.at_bottom else 0)
@@ -93,8 +93,8 @@ for origin in ORIGIN_CORNERS:
               (ix, iy) == want, f"{(ix, iy)} want {want}")
 
 # A quarter-turned camera swaps which way the image is divided.
-turned = MachineGrid(cols=10, rows=20, swap_axes=True)
-check("swapaxes flips the divisions", (turned.nx, turned.ny) == (20, 10),
+turned = MachineGrid(cols=22, rows=5, swap_axes=True)
+check("swapaxes flips the divisions", (turned.nx, turned.ny) == (5, 22),
       f"{turned.nx}x{turned.ny}")
 
 
@@ -106,10 +106,16 @@ from_cfg = MachineGrid.from_config()
 check("from_config matches rig.json", from_cfg.matches(), from_cfg.describe())
 check("bounds are 1-based, like cellInRange()",
       from_cfg.contains(1, 1) and not from_cfg.contains(0, 1)
-      and from_cfg.contains(10, 20) and not from_cfg.contains(11, 20))
+      and from_cfg.contains(22, 5) and not from_cfg.contains(23, 5))
+check("physical grid is 33x37.5 cm",
+      (from_cfg.packed_width_cm, from_cfg.packed_height_cm) == (33.0, 37.5))
+check("packed grid is centred in 34x40 cm",
+      (from_cfg.x_start_cm, from_cfg.y_start_cm) == (0.5, 1.25))
+check("first physical cell centre", from_cfg.cell_center_cm(1, 1) == (1.25, 5.0))
+check("last physical cell centre", from_cfg.cell_center_cm(22, 5) == (32.75, 35.0))
 
 try:
-    MachineGrid(cols=10, rows=20, origin="middle")
+    MachineGrid(cols=22, rows=5, origin="middle")
     check("bad origin is refused", False)
 except ValueError:
     check("bad origin is refused", True)
@@ -132,6 +138,19 @@ check("workspace projective round-trip",
       workspace.cell_at(centre, (640, 480)) == (5, 5), str(centre))
 check("workspace rejects outside click",
       workspace.cell_at((0, 0), (640, 480)) is None)
+
+# Physical mapping uses the four corners of the full 34x40 cm envelope. The
+# packed 33x37.5 cm block grid retains its centred margins instead of being
+# stretched over that whole quadrilateral.
+physical_workspace = WorkspaceMap.from_grid(from_cfg, corners, (640, 480))
+first_centre = physical_workspace.pixel_at(1.25 / 34.0, 5.0 / 40.0, (640, 480))
+last_centre = physical_workspace.pixel_at(32.75 / 34.0, 35.0 / 40.0, (640, 480))
+check("physical camera map finds first cell",
+      physical_workspace.cell_at(first_centre, (640, 480)) == (1, 1))
+check("physical camera map finds last cell",
+      physical_workspace.cell_at(last_centre, (640, 480)) == (22, 5))
+check("physical camera map preserves unused margins",
+      physical_workspace.cell_at(corners[0], (640, 480)) is None)
 
 # Normalized storage makes a simple resolution change harmless.
 double_corners = [(x * 2, y * 2) for x, y in corners]

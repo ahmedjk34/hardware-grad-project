@@ -55,6 +55,29 @@ The firmware default should still be kept equal to the config, so that a manual
 Arduino Serial Monitor session behaves the same as a Pi-driven one. Editing only
 the sketch is the trap: the Pi will silently overwrite it on the next connect.
 
+Current default: **22 columns × 5 rows = 110 cells**.
+
+### 3a. X/Y physical grid geometry — fixed-pitch block cells
+
+| Meaning | Pi / camera side | Firmware side |
+| --- | --- | --- |
+| physical envelope | `rig.json` → `workspace.width_cm` / `height_cm` | `X_TRAVEL_CM` / `Y_TRAVEL_CM` |
+| one block footprint | `rig.json` → `grid.cell_width_cm` / `cell_height_cm` | `GRID_CELL_X_CM` / `GRID_CELL_Y_CM` |
+| signed placement correction | `rig.json` → `grid.trim_x_cm` / `trim_y_cm` | `GRID_TRIM_X_CM` / `GRID_TRIM_Y_CM` |
+
+Current calibration is **34 cm X = 5050 steps** and **40 cm Y = 7500
+steps**, giving approximately **148.5294 X steps/cm** and **187.5 Y
+steps/cm**. Cells are **1.5 cm X × 7.5 cm Y**, in that one orientation only.
+The 22×5 packed grid is 33×37.5 cm and is centred, leaving 0.5 cm at each X
+edge and 1.25 cm at each Y edge before trims.
+
+The firmware owns the step counts and derives both steps/cm ratios at runtime;
+never hard-code either ratio. The Pi needs the centimetre geometry to interpret
+camera scale, while the firmware needs it to turn cell centres into steps, so
+these values genuinely have partners on both machines. Change both partners in
+the same commit. Positive trim moves the entire packed grid away from that
+axis's home switch; negative trim moves it toward the switch.
+
 ### 3b. Grid NUMBERING — the convention, not the count
 
 | Where | What |
@@ -85,7 +108,9 @@ clicked corners.
 | `grid/undistorted_grid_viewer.py`, `grid/measured_grid_viewer.py` | read it via `rig.config.load()` |
 
 Already centralised. The rule here is: **do not reintroduce a module-level
-constant.** Both viewers used to carry their own copy and drifted.
+constant.** Both viewers used to carry their own copy and drifted. This is the
+physical span of the complete camera image and is deliberately separate from
+the machine envelope in `workspace`.
 
 ### 5. The `@` acknowledgement lines
 
@@ -177,7 +202,7 @@ These are physical facts about the machine. Nothing can push them over serial,
 so a copy in the JSON would be a lie that nobody notices until the rig crashes
 into something.
 
-- envelope: `5050 × 7500` steps, and the soft limits that define it
+- envelope step counts: `5050 × 7500` steps, and the soft limits that define it
 - `Z_TRAVEL_CM`, `Z_TRAVEL_STEPS`, `BLOCK_HEIGHT_CM`, build ceiling
 - pin assignments, servo angles, motor direction polarity
 

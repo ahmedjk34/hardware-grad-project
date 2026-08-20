@@ -156,9 +156,10 @@ them; right-click clears them.
 
 ### The machine grid
 
-`grid machine` (the default) draws the **rig's** grid: 10 × 20 cells read from
-`config/rig.json`, each labelled with the `col,row` you would type into `G` or
-`B`. Hover a cell and it prints the commands for it. `map` prints the same
+`grid machine` (the default) draws the **rig's** grid: 22 × 5 cells read from
+`config/rig.json`, each representing one 1.5 cm X × 7.5 cm Y block footprint
+and labelled with the `col,row` you would type into `G` or `B`. Hover a cell
+and it prints the commands for it. `map` prints the same
 picture the rig's own `9` prints, so the two can be held side by side.
 
 **Only the numbering is real. The position is not.** The grid is spread over the
@@ -173,9 +174,10 @@ the rig — `origin <bottom-left|bottom-right|top-left|top-right>` moves `[1,1]`
 and `swapaxes` handles a camera a quarter turn out. Eight combinations, and the
 edge labels carry a `c`/`r` prefix so none of them can be read ambiguously.
 
-`rows` / `cols` do not apply here — the rig divides its envelope into exactly
-these cells, so a machine grid with a different cell count would be a lie. Those
-two still drive the px/cm ruler.
+`rows` / `cols` do not apply here. The physical 33 × 37.5 cm packed grid is
+centred inside the 34 × 40 cm motion envelope, with signed X/Y trims available
+for measured placement correction. Those two options still drive the px/cm
+ruler.
 
 ### The centimetre readings
 
@@ -512,8 +514,9 @@ python grid/measured_grid_viewer.py --frame-width-cm 60 --frame-height-cm 30
 ```
 
 You tell it the physical span of the **whole frame** — measure it by hand with a
-tape measure across what the camera actually sees. Defaults are 20 cm (X) ×
-35 cm (Y), editable at the top of the file or via the flags above.
+tape measure across what the camera actually sees. That `frame` scale remains
+separate from the 34 cm × 40 cm machine `workspace`; explicit flags can override
+the frame measurement for a different camera view.
 
 **Hover readout:**
 

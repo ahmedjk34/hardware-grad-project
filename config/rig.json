@@ -8,8 +8,16 @@
     "baud": 9600
   },
   "grid": {
-    "cols": 10,
-    "rows": 20
+    "cols": 22,
+    "rows": 5,
+    "cell_width_cm": 1.5,
+    "cell_height_cm": 7.5,
+    "trim_x_cm": 0.0,
+    "trim_y_cm": 0.0
+  },
+  "workspace": {
+    "width_cm": 34.0,
+    "height_cm": 40.0
   },
   "frame": {
     "width_cm": 20.0,

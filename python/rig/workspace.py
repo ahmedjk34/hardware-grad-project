@@ -4,6 +4,10 @@
 The saved points are normalized corrected-image coordinates.  The homography
 therefore survives display scaling and output resolution changes; it does not
 pretend to survive changing the lens projection/FOV after calibration.
+
+New maps use the four corners of the complete 34 x 40 cm machine envelope and
+retain the centred margins around the 33 x 37.5 cm block grid. Count-only maps
+remain readable for compatibility, but stretch their cells across the quad.
 """
 
 from __future__ import annotations
@@ -15,13 +19,15 @@ from pathlib import Path
 
 import numpy as np
 
+from rig.grid import MachineGrid
+
 
 WORKSPACE_MAP_PATH = Path(__file__).resolve().parents[2] / "config" / "workspace_map.json"
 CORNER_NAMES = (
-    "machine [1,1] corner",
-    "machine [cols,1] corner",
-    "machine [cols,rows] corner",
-    "machine [1,rows] corner",
+    "machine envelope X/Y home corner",
+    "machine envelope far-X/home-Y corner",
+    "machine envelope far-X/far-Y corner",
+    "machine envelope home-X/far-Y corner",
 )
 
 
@@ -56,6 +62,7 @@ class WorkspaceMap:
     # Normalized image points in CORNER_NAMES order.
     corners: list[tuple[float, float]]
     projection: dict | None = None
+    physical_grid: dict | None = None
 
     def __post_init__(self):
         if self.cols < 1 or self.rows < 1:
@@ -80,6 +87,19 @@ class WorkspaceMap:
         machine_square = ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0))
         self._to_machine = _homography(self.corners, machine_square)
         self._to_image = _homography(machine_square, self.corners)
+        self._grid = None
+        if self.physical_grid is not None:
+            geometry = self.physical_grid
+            self._grid = MachineGrid(
+                cols=self.cols,
+                rows=self.rows,
+                cell_width_cm=float(geometry["cell_width_cm"]),
+                cell_height_cm=float(geometry["cell_height_cm"]),
+                workspace_width_cm=float(geometry["workspace_width_cm"]),
+                workspace_height_cm=float(geometry["workspace_height_cm"]),
+                trim_x_cm=float(geometry.get("trim_x_cm", 0.0)),
+                trim_y_cm=float(geometry.get("trim_y_cm", 0.0)),
+            )
 
     @classmethod
     def from_pixels(cls, cols, rows, corners, image_size, projection=None):
@@ -89,12 +109,36 @@ class WorkspaceMap:
         return cls(cols, rows, [(x / w, y / h) for x, y in corners], projection)
 
     @classmethod
+    def from_grid(cls, grid: MachineGrid, corners, image_size, projection=None):
+        """Map four camera points around the full physical X/Y envelope.
+
+        Unlike the legacy count-only constructor, this preserves the centred
+        leftover strips and the signed X/Y trims instead of stretching the
+        packed block grid to fill the complete camera quadrilateral.
+        """
+        if not grid.has_physical_scale:
+            raise ValueError("workspace mapping needs a physically scaled grid")
+        w, h = image_size
+        if w <= 0 or h <= 0:
+            raise ValueError("image size must be positive")
+        geometry = {
+            "workspace_width_cm": grid.workspace_width_cm,
+            "workspace_height_cm": grid.workspace_height_cm,
+            "cell_width_cm": grid.cell_width_cm,
+            "cell_height_cm": grid.cell_height_cm,
+            "trim_x_cm": grid.trim_x_cm,
+            "trim_y_cm": grid.trim_y_cm,
+        }
+        return cls(grid.cols, grid.rows, [(x / w, y / h) for x, y in corners],
+                   projection, geometry)
+
+    @classmethod
     def load(cls, path=WORKSPACE_MAP_PATH, cols=None, rows=None):
         path = Path(path)
         data = json.loads(path.read_text())
         result = cls(int(data["grid"]["cols"]), int(data["grid"]["rows"]),
                      [tuple(p) for p in data["corners_normalized"]],
-                     data.get("projection"))
+                     data.get("projection"), data.get("physical_grid"))
         if cols is not None and rows is not None and (result.cols, result.rows) != (cols, rows):
             raise ValueError(
                 f"workspace map is for {result.cols}x{result.rows}, config is {cols}x{rows}"
@@ -112,6 +156,8 @@ class WorkspaceMap:
             "corners_normalized": [[x, y] for x, y in self.corners],
             "projection": self.projection,
         }
+        if self.physical_grid is not None:
+            payload["physical_grid"] = self.physical_grid
         path.write_text(json.dumps(payload, indent=2) + "\n")
         return path
 
@@ -126,8 +172,23 @@ class WorkspaceMap:
         if u < -epsilon or v < -epsilon or u > 1 + epsilon or v > 1 + epsilon:
             return None
         u, v = min(max(u, 0.0), 1.0), min(max(v, 0.0), 1.0)
-        return min(int(u * self.cols), self.cols - 1) + 1, \
-               min(int(v * self.rows), self.rows - 1) + 1
+        if self._grid is None:
+            return min(int(u * self.cols), self.cols - 1) + 1, \
+                   min(int(v * self.rows), self.rows - 1) + 1
+
+        x_cm = u * self._grid.workspace_width_cm
+        y_cm = v * self._grid.workspace_height_cm
+        epsilon = 1e-9
+        if x_cm < self._grid.x_start_cm - epsilon \
+                or x_cm > self._grid.x_end_cm + epsilon \
+                or y_cm < self._grid.y_start_cm - epsilon \
+                or y_cm > self._grid.y_end_cm + epsilon:
+            return None
+        col = min(int((x_cm - self._grid.x_start_cm) / self._grid.cell_width_cm),
+                  self.cols - 1) + 1
+        row = min(int((y_cm - self._grid.y_start_cm) / self._grid.cell_height_cm),
+                  self.rows - 1) + 1
+        return col, row
 
     def pixel_at(self, u, v, image_size):
         """Project normalized machine-envelope coordinates into image pixels."""
@@ -135,7 +196,19 @@ class WorkspaceMap:
         return x * image_size[0], y * image_size[1]
 
     def cell_polygon(self, col, row, image_size):
-        u0, u1 = (col - 1) / self.cols, col / self.cols
-        v0, v1 = (row - 1) / self.rows, row / self.rows
+        if self._grid is None:
+            u0, u1 = (col - 1) / self.cols, col / self.cols
+            v0, v1 = (row - 1) / self.rows, row / self.rows
+        else:
+            u0 = (self._grid.x_start_cm
+                  + (col - 1) * self._grid.cell_width_cm) \
+                 / self._grid.workspace_width_cm
+            u1 = (self._grid.x_start_cm + col * self._grid.cell_width_cm) \
+                 / self._grid.workspace_width_cm
+            v0 = (self._grid.y_start_cm
+                  + (row - 1) * self._grid.cell_height_cm) \
+                 / self._grid.workspace_height_cm
+            v1 = (self._grid.y_start_cm + row * self._grid.cell_height_cm) \
+                 / self._grid.workspace_height_cm
         return [self.pixel_at(u0, v0, image_size), self.pixel_at(u1, v0, image_size),
                 self.pixel_at(u1, v1, image_size), self.pixel_at(u0, v1, image_size)]

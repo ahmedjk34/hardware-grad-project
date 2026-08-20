@@ -16,7 +16,8 @@ The repository is split by platform:
 - **Motion:** Arduino-driven gantry (X / Y / Z, plus servo)
 - **Camera:** DORHEA Raspberry Pi Camera Module — OV5647 sensor, 5 MP, 160° fisheye lens
 - **Mounting:** camera ~50 cm above the surface, pointing straight down, roughly centred
-- **Workspace:** ~60 cm × 30 cm planar area
+- **Calibrated X/Y envelope:** approximately 34 cm × 40 cm
+- **Current block grid:** 22 × 5 cells, each 1.5 cm X × 7.5 cm Y
 
 ## Getting started
 
