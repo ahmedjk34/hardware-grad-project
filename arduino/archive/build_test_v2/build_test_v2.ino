@@ -65,16 +65,16 @@
   sit at OPPOSITE ends now, so the two axes no longer share a sign:
 
       X switch at the X+ end  ->  X runs   0  ...  -5050   (soft limit)
-      Y switch at the Y- end  ->  Y runs   0  ...  +8500   (soft limit)
+      Y switch at the Y- end  ->  Y runs   0  ...  +7500   (soft limit)
       Z switch at the Z- end  ->  Z runs   0  ...  +1350   (TOP SWITCH)
 
-  So the work envelope is 5050 x 8500 steps, living in the rectangle
-  X in [-5050, 0], Y in [0, +8500]. Grid indices hide this sign mess:
+  So the work envelope is 5050 x 7500 steps, living in the rectangle
+  X in [-5050, 0], Y in [0, +7500]. Grid indices hide this sign mess:
 
       col 1  = nearest the X switch (X = 0 side, the X+ end)
       col N  = far end of X travel  (X = -5050 side)
       row 1  = nearest the Y switch (Y = 0 side)
-      row M  = far end of Y travel  (Y = +8500 side)
+      row M  = far end of Y travel  (Y = +7500 side)
 
   Generalised in code as: each axis extends from 0 in the direction
   travelEndOf(axis), for axisTravelOf(axis) steps - whether that far
@@ -467,7 +467,7 @@ const uint8_t LIMIT_CHECK_EVERY_N_STEPS = 1;
 const long SOFT_LIMIT_INFINITE = 0; // sentinel: no cap at all
 
 long SOFT_LIMIT_X_TRAVEL = 5050;                  // X- travel cap, in steps
-long SOFT_LIMIT_Y_TRAVEL = 8500;                  // Y+ travel cap, in steps
+long SOFT_LIMIT_Y_TRAVEL = 7500;                  // Y+ travel cap, in steps
 const long SOFT_LIMIT_Z_TRAVEL = SOFT_LIMIT_INFINITE; // Z: switch, not a cap
 
 const int8_t SOFT_LIMIT_X_AT_END = DIR_NEG; // guards the X- end
@@ -490,7 +490,7 @@ const bool SOFT_LIMIT_VERBOSE = true;
 // SECTION 6C - GRID CONFIGURATION
 // ============================================================
 //
-// The envelope (5050 x 8500 steps) is divided into COLS x ROWS
+// The envelope (5050 x 7500 steps) is divided into COLS x ROWS
 // equal rectangles. The machine parks at the CENTRE of a cell.
 //
 // Cell size does NOT have to divide evenly into the travel. Targets
@@ -500,22 +500,22 @@ const bool SOFT_LIMIT_VERBOSE = true;
 // ------------------------------------------------------------
 //   HOW FINE CAN THIS GO?
 // ------------------------------------------------------------
-//   Arithmetically the floor is 1 step per cell (5050 x 8500
-//   = 42.9 million cells), which is meaningless - it is far below
+//   Arithmetically the floor is 1 step per cell (5050 x 7500
+//   = 37.9 million cells), which is meaningless - it is far below
 //   what the machine can repeat mechanically.
 //
-//   The envelope is 5050:8500, which reduces to 101:170 (gcd 50).
-//   SQUARE cells in whole steps therefore need cols:rows = 101:170,
+//   The envelope is 5050:7500, which reduces to 101:150 (gcd 50).
+//   SQUARE cells in whole steps therefore need cols:rows = 101:150,
 //   and the only whole-step cell sizes are the divisors of 50:
 //        COLS   ROWS   CELL (X x Y)      CELLS
-//         101 x  170      50 x  50       17170   <- coarsest square
-//         202 x  340      25 x  25       68680
-//         505 x  850      10 x  10      429250
-//        1010 x 1700       5 x   5     1717000
-//        5050 x 8500       1 x   1    42925000   <- 1 step per cell
+//         101 x  150      50 x  50       15150   <- coarsest square
+//         202 x  300      25 x  25       60600
+//         505 x  750      10 x  10      378750
+//        1010 x 1500       5 x   5     1515000
+//        5050 x 7500       1 x   1    37875000   <- 1 step per cell
 //
 //   NOTE: the 10 x 20 default below is NOT square - it gives
-//   505 x 425 step cells. Square cells are impractically fine on
+//   505 x 375 step cells. Square cells are impractically fine on
 //   this envelope, so the default trades squareness for usable size.
 //
 //   Change these here, or live with:  S <cols> <rows>

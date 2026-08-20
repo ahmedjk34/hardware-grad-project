@@ -58,8 +58,8 @@ Relevant commands:
 
 Machine geometry as frozen in v1:
 
-- Envelope `5050 × 8500` steps; `X ∈ [-5050, 0]`, `Y ∈ [0, +8500]`
-- `GRID_COLS = 10`, `GRID_ROWS = 20` (SECTION 6C) → `505 × 425` step cells
+- Envelope `5050 × 7500` steps; `X ∈ [-5050, 0]`, `Y ∈ [0, +7500]`
+- `GRID_COLS = 10`, `GRID_ROWS = 20` (SECTION 6C) → `505 × 375` step cells
 - col 1 = nearest the X switch, row 1 = nearest the Y switch
 - `Z_TRAVEL_CM = 26.5`, `BLOCK_HEIGHT_CM = 1.5`, `Z_TRAVEL_STEPS = 1350`
 - `BUILD_PARK_AFTER_PLACE = true` — the rig returns to origin after every build
@@ -287,7 +287,7 @@ holding a block.
 
 **Why a homography and not arithmetic.** The camera's orientation and mirroring
 relative to the rig is arbitrary, and the firmware's axes have opposite signs
-(`X ∈ [-5050, 0]`, `Y ∈ [0, +8500]`). Four clicked corners absorb rotation,
+(`X ∈ [-5050, 0]`, `Y ∈ [0, +7500]`). Four clicked corners absorb rotation,
 mirroring, sign, and mild perspective in one step, with no sign reasoning by
 hand. The lens profile is still *estimated*, so the corrected image is not
 metrically exact — but the homography is fitted to the corrected image as it

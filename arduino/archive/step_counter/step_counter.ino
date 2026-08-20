@@ -35,7 +35,7 @@
 
   SOFTWARE LIMITS  (the ends with NO switch fitted)
     X- end : 5100 steps of travel allowed from origin
-    Y+ end : 8500 steps of travel allowed from origin
+    Y+ end : 7500 steps of travel allowed from origin
 
     A software limit works exactly like a switch: it blocks ONLY the
     direction that drives into it. Moving back the other way is always
@@ -212,7 +212,7 @@ const uint8_t LIMIT_CHECK_EVERY_N_STEPS = 1;
 const long SOFT_LIMIT_INFINITE = 0; // sentinel: no cap at all
 
 long SOFT_LIMIT_X_TRAVEL = 5100;              // X- travel cap, in steps
-long SOFT_LIMIT_Y_TRAVEL = 8500; // Y+ travel cap, in steps
+long SOFT_LIMIT_Y_TRAVEL = 7500; // Y+ travel cap, in steps
 
 // ------------------------------------------------------------
 //   WHICH END EACH SOFTWARE LIMIT GUARDS
