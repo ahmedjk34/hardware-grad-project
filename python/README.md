@@ -22,7 +22,7 @@ python/
 │   └── undistorted_viewer.py       live fisheye-corrected preview
 ├── config/
 │   ├── lens_profile.json       lens parameters (currently estimated)
-│   └── camera_settings.json    written by camera_studio.py's `save`
+│   └── camera_settings.json    camera_studio.py reads this at startup
 ├── rig/                        importable library — the Arduino side
 │   ├── config.py               loads config/rig.json
 │   ├── grid.py                 the machine's cells, and which way round they sit
@@ -44,10 +44,12 @@ viewers beside it are kept because each is small enough to read in one sitting
 when you want to know what one stage does on its own.
 
 `camera/camera_studio.py` sits apart from all of them: it is not for *using* the
-camera but for *deciding what its settings should be*. Every lens, sensor,
-zoom, crop and orientation setting is adjustable live, from the terminal or from
-a control panel under the image, and `save` writes the lot to one JSON file. See
-[GUIDE.md](GUIDE.md#camera_studiopy).
+camera but for *deciding what its settings should be*. Every lens, sensor, zoom,
+crop and orientation setting is adjustable live — as a labelled text field in a
+panel under the image, or as a typed command — and `save` writes the lot to
+`config/camera_settings.json`, which it also reads back at startup. The
+committed default in that file reproduces `undistorted_viewer.py` exactly, so it
+opens on a known picture. See [GUIDE.md](GUIDE.md#camera_studiopy).
 
 They can be launched from anywhere — each puts `python/` on the import path
 itself, so both `python grid/grid_viewer.py` (from `python/`) and

@@ -171,18 +171,91 @@ state to JSON.
 python camera/camera_studio.py
 python camera/camera_studio.py --hq                  # sharpest: full sensor in
 python camera/camera_studio.py --settings ../config/table_cam.json --autosave
-python camera/camera_studio.py --load ../config/table_cam.json
+python camera/camera_studio.py --fresh               # ignore the settings file
 ```
 
 Reach for this when you are *deciding* what the camera settings should be.
 Reach for `undistorted_grid_viewer.py` when you are working with the result.
 
+### It starts where you left off
+
+The tool **reads `config/camera_settings.json` at startup** and `save` writes it
+back, so a session resumes rather than restarting. The committed default in that
+file is exactly what `undistorted_viewer.py` renders — same lens profile, same
+120° rectilinear output at the same size, correction on, no zoom, no crop, no
+grid — so a first run, a `--fresh` run and a `reset` all show that same picture.
+
+Four layers, each overriding the one before:
+
+| | Source |
+| --- | --- |
+| 1 | the built-in defaults in `Studio.__init__` and `LensProfile` |
+| 2 | `config/lens_profile.json` — the lens parameters the *other* tools read |
+| 3 | `config/camera_settings.json`, or whatever `--settings` names |
+| 4 | the command-line flags |
+
+`--fresh` skips layer 3. This is why the framing and interpolation flags have no
+argparse default: a default is indistinguishable from an explicit value, so it
+would silently outrank the settings file.
+
 ### The window
 
-The image on top, unobscured — you cannot judge whether an edge is straight
-through a translucent HUD — and a control strip underneath holding a row of
-clickable buttons, the current value of every parameter, and the last few
-messages. Trackbars for the correction knobs run along the top.
+**One fixed-size application window, in two halves.** The top ~77% is a camera
+viewport with the feed embedded in it, unobscured — you cannot judge whether an
+edge is straight through a translucent HUD. The bottom is the control panel: a
+row of clickable buttons, then a labelled **text field** for every parameter,
+then the log.
+
+The window is a fixed rectangle that the image is fitted **into**, not a window
+sized around the image. That distinction is the whole layout. Zoom, crop,
+`scale`, `rotate` and the raw/corrected toggle all change how big the rendered
+picture is; if the window followed it, every control in the panel would jump
+somewhere else each time you used one. Here the viewport and the panel are both
+fixed, the image is letterboxed inside the viewport, and the fields stay exactly
+where you left them — verified across 26 operations that used to resize it.
+
+`--window WxH` sets the viewport size. The default is the corrected output size,
+which is what `undistorted_viewer.py` shows. Nothing after startup changes it,
+including `?` — the key list draws over the image rather than into the panel for
+exactly that reason. If the panel would ever take more than 30% of the window,
+the viewport grows rather than the picture being squeezed.
+
+In `fit` mode the correction renders **directly at the viewport size**, so what
+you see is never resampled twice. `native` mode and `refit` deliberately render
+at a different size; when that overflows the viewport it is scaled down for
+display and the panel says so, because judging sharpness off a downscaled
+preview is how you conclude the correction is fine when it is not. `fill` puts
+it back.
+
+There are deliberately **no cv2 trackbars**. Eight of them stacked above the
+image cost about 350 px of screen that the picture wants, and a slider cannot
+show you that a value is 158 rather than 157.
+
+### The fields
+
+Click any field and it becomes editable, pre-filled with its current value:
+
+| Key | |
+| --- | --- |
+| type, then **Enter** | commits — the picture changes as you press it |
+| **Up / Down** | step the value in place, without typing; this is what replaced the sliders |
+| **Tab** | commit and move to the next field, so the whole panel can be walked from the keyboard |
+| **Esc**, or a click elsewhere | let go without committing |
+
+Numeric fields also accept `+2` and `-2` for a relative nudge, choice fields
+accept any unambiguous prefix (`equi` is enough for `equidistant`), and every
+sensor field accepts `auto`. Values out of range are **clamped with a note in
+the log**, not rejected — otherwise stepping a field down from its minimum would
+be an error rather than a no-op.
+
+A field *is* a command, exactly like a button is: the label is what you read,
+the field's command is what runs, and the box holds its argument. That is what
+keeps the panel, the typed commands, the keys and the buttons from drifting
+apart — one setter, four ways to reach it.
+
+The one line under the fields that is **not** a field is the derived one:
+whether the profile is calibrated, the size actually being rendered, and the
+`SAMPLE` sharpness figures. Those are results, so they get read, not edited.
 
 | Button | Same as typing |
 | --- | --- |
@@ -211,10 +284,12 @@ VNC or `ssh -X` often means "not until you have clicked it". So:
    from stdin. Needs no window focus at all; this is the one that always works.
 2. **Type in the window.** `:` opens a prompt in the panel. Each character
    appears as it arrives — if nothing appears, the window does not have focus.
-3. **Click and drag.** The buttons, and a drag on the image to crop to a
+3. **Click and type.** The fields above.
+4. **Click and drag.** The buttons, and a drag on the image to crop to a
    rectangle. The area outside the drag dims, so you judge the crop on what will
    remain rather than on an outline.
-4. **Sliders and keys.**
+
+Plus the single-key shortcuts, which work whenever no field has focus.
 
 ### Fixing the fisheye
 
@@ -263,7 +338,8 @@ Two ways of sizing the result, toggled with `v`:
   interpolate anything, at the cost of the window resizing under you.
 
 `refit` gets the best of both: it resizes the view box to the crop's own size,
-so the crop renders exactly 1:1 and *stays* there as you keep working.
+so the crop renders exactly 1:1 and *stays* there as you keep working. `fill`
+undoes it, putting the view box back to the viewport.
 
 ### Sensor controls
 
@@ -306,11 +382,18 @@ s  save the JSON                          p  snapshot PNGs
 Every keypress is reported in the panel, **including unrecognised ones** — which
 is what distinguishes "that key isn't bound" from "the window never received it".
 
+The arrow keys do two things depending on focus: they pan the zoom window when
+no field is being edited, and step the focused field when one is. `reset` (`r`)
+goes back to the built-in defaults plus your command-line flags — it does *not*
+re-read the settings file, because `reset` is what you press when the tuning has
+gone somewhere strange and you want the known starting point back. `load` is the
+one that re-reads.
+
 ### The JSON
 
 `save` writes `config/camera_settings.json` (or `--settings <path>`), and
-`--autosave` rewrites it after every change. `load`, or `--load <path>`, reads
-one back.
+`--autosave` rewrites it after every change. It is also read back automatically
+at startup; `load` re-reads it mid-session.
 
 ```
 capture     backend, device, resolution, swap_rb, flip, rotate
@@ -634,5 +717,5 @@ identically and the info-box layout exists in exactly one place.
 | Path | Contents |
 | --- | --- |
 | `config/lens_profile.json` | Lens parameters. Committed — it is tuning worth keeping. Written by `undistorted*_viewer.py`'s `save`/`w`, and by `camera_studio.py`'s `lens`. |
-| `config/camera_settings.json` | Everything `camera_studio.py` can adjust — lens, sensor, framing, orientation. Written by its `save`. Not committed by default; pass `--settings <path>` to keep several, one per camera position. |
+| `config/camera_settings.json` | Everything `camera_studio.py` can adjust — lens, sensor, framing, orientation. **Read at startup, written by `save`.** Committed, holding the defaults that reproduce `undistorted_viewer.py`. Pass `--settings <path>` to keep several, one per camera position, and leave the committed one alone. |
 | `captures/` | Snapshots from `s`. Git-ignored. Corrected images are filename-tagged with the parameters that produced them, so several tuning attempts stay comparable. |

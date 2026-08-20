@@ -39,10 +39,12 @@ Keys
   , / .     output scale -/+ 0.1           i  cycle interpolation kernel
   c         clear the measurement points   s  save a raw+corrected snapshot
   w         write params to the profile    r  reset to defaults
+  k         calibrate four corners          j  confirm safe G move to selection
+  b         confirm build at selection      x  connect serial (no movement)
   q / Esc   quit
 
-Mouse: hover a grid cell to read its bounds; click two points to measure the
-distance between them.
+Mouse: in machine mode a click selects a cell and never moves the rig. Use `j`
+to test it with G or `b` to build. In px/cm mode, clicks measure.
 
 Commands
 --------
@@ -56,10 +58,8 @@ the 8x8 straightness ruler — and labels every cell with the machine col/row yo
 would type into `B` or `G`. `map` prints the same picture the rig's `9` command
 prints, so the two can be held side by side.
 
-**Its POSITION is not calibrated.** The cell COUNT and the NUMBERING are right;
-where the grid sits on the image is a guess that spans the whole frame, and the
-build area is almost certainly not the whole frame. The amber banner says so.
-Plan 2 step 4 replaces the guess with four clicked corners.
+Run `calibrate`, then click the four prompted machine-envelope corners. The
+projective map is saved to config/workspace_map.json and used on later runs.
 
 If the numbering runs the wrong way on screen — the camera is mounted turned or
 mirrored relative to the rig — `origin <corner>` and `swapaxes` fix it. Eight
@@ -74,6 +74,7 @@ GUIDE.md before trusting any of it to a millimetre.
 """
 
 import argparse
+import queue
 import sys
 import threading
 import time
@@ -89,6 +90,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from rig import config as rig_config
 from rig.grid import ORIGIN_CORNERS, MachineGrid
+from rig.link import ABORTED, PLACED, Rig
+from rig.workspace import CORNER_NAMES, WORKSPACE_MAP_PATH, WorkspaceMap
 
 from vision.camera_source import (
     DEFAULT_SIZE,
@@ -118,6 +121,8 @@ from vision.fisheye import (
 from vision.overlays import (
     ERR_COLOR,
     HINT_COLOR,
+    HOVER_COLOR,
+    LABEL_COLOR,
     OK_COLOR,
     PROMPT_COLOR,
     TEXT_COLOR,
@@ -172,6 +177,17 @@ class Viewer:
         self.points = []
         self.pending = []          # command lines queued by the stdin thread
         self.pending_click = None  # a click waiting to be mapped to image coords
+        self.workspace = None
+        self.calibration_points = []
+        self.calibrating = False
+        self.selected_cell = None
+        self.level = 0
+        self.rig = Rig()
+        self.rig_state = "disconnected"
+        self.last_rig_result = "none"
+        self.rig_busy = False
+        self.rig_stopped = False
+        self.rig_events = queue.Queue()
         self.syncing_trackbars = False
         self.maps = None
         self.last_raw = None       # kept so `snap` can write the clean images,
@@ -181,6 +197,18 @@ class Viewer:
         self.log = MessageLog()
         self.edit = EditBuffer()
         self.commands = self._build_commands()
+        try:
+            self.workspace = WorkspaceMap.load(
+                args.workspace_map, self.machine.cols, self.machine.rows)
+            if self.workspace.projection != self.projection_signature():
+                self.workspace = None
+                self.log.add(False, "workspace map uses different lens geometry — recalibrate")
+            else:
+                self.log.add(True, f"workspace map loaded from {args.workspace_map}")
+        except FileNotFoundError:
+            self.log.add(False, "workspace not calibrated — run 'calibrate'")
+        except (ValueError, KeyError, TypeError, OSError) as exc:
+            self.log.add(False, f"workspace map ignored: {exc}")
 
     # --- parameters -------------------------------------------------------
     # Each setter reports what changed, in the form the log and the HUD show.
@@ -192,6 +220,7 @@ class Viewer:
         self.profile.lens_fov_deg = value
         self.profile.clamp()
         self.dirty = True
+        self._invalidate_workspace()
         return f"lens FOV {old:.0f} -> {self.profile.lens_fov_deg:.0f} deg"
 
     def set_output_fov(self, value):
@@ -199,6 +228,7 @@ class Viewer:
         self.profile.output_fov_deg = value
         self.profile.clamp()
         self.dirty = True
+        self._invalidate_workspace()
         clipped = ""
         if abs(self.profile.output_fov_deg - value) > 0.01:
             # Silently clamping here is how you end up believing you rendered a
@@ -216,11 +246,13 @@ class Viewer:
     def set_model(self, name):
         self.profile.model = name
         self.dirty = True
+        self._invalidate_workspace()
         return f"projection model {name}"
 
     def set_fov_reference(self, name):
         self.profile.fov_reference = name
         self.dirty = True
+        self._invalidate_workspace()
         return f"lens FOV is now read as the {name} FOV"
 
     def set_interp(self, name):
@@ -309,6 +341,123 @@ class Viewer:
         self.dirty = False
         return self.maps
 
+    def _invalidate_workspace(self):
+        if self.workspace is not None:
+            self.workspace = None
+            self.selected_cell = None
+            self.log.add(False, "lens geometry changed — workspace must be recalibrated")
+
+    def projection_signature(self):
+        """Lens geometry that moves a normalized point in the corrected view.
+
+        Output scale is deliberately absent: it changes resolution, and saved
+        workspace points are normalized precisely so that remains harmless.
+        """
+        p = self.profile
+        return {
+            "model": p.model,
+            "fov_reference": p.fov_reference,
+            "lens_fov_deg": p.lens_fov_deg,
+            "output_fov_deg": p.output_fov_deg,
+            "k1": p.k1,
+            "k2": p.k2,
+            "centre_dx": p.centre_dx,
+            "centre_dy": p.centre_dy,
+            "camera_matrix": p.camera_matrix,
+            "dist_coeffs": p.dist_coeffs,
+            "calibration_size": p.calibration_size,
+        }
+
+    def _start_rig_action(self, name, function):
+        if self.rig_busy:
+            raise CommandError(f"{self.rig_state} already in progress — command refused")
+        self.rig_busy = True
+        self.rig_state = name
+
+        def run():
+            try:
+                result = function()
+                self.rig_events.put((name, True, result))
+            except Exception as exc:
+                self.rig_events.put((name, False, exc))
+
+        threading.Thread(target=run, name=f"rig-{name}", daemon=True).start()
+        return f"{name} started"
+
+    def drain_rig_events(self):
+        while True:
+            try:
+                action, ok, payload = self.rig_events.get_nowait()
+            except queue.Empty:
+                return
+            self.rig_busy = False
+            if not ok:
+                if action == "connecting":
+                    self.rig.close()
+                self.rig_state = "error"
+                self.last_rig_result = f"{action} failed: {payload}"
+                self.log.add(False, f"{action} failed: {payload}")
+                continue
+            if action == "connecting":
+                self.rig_state = "ready"
+                self.rig_stopped = False
+                self.last_rig_result = "connected and grid configured"
+                self.log.add(True, "rig connected; grid configured; no motion performed")
+            elif action == "moving":
+                self.rig_state = "ready" if payload else "move failed"
+                self.last_rig_result = (f"G arrived at {self.selected_cell}" if payload
+                                        else f"G failed for {self.selected_cell}")
+                self.log.add(bool(payload),
+                             f"G {'arrived at' if payload else 'failed for'} {self.selected_cell}")
+            elif action == "building":
+                if payload == ABORTED:
+                    self.rig_state = "STOPPED - HUMAN CHECK REQUIRED"
+                    self.rig_stopped = True
+                    self.last_rig_result = f"ABORTED: {payload.reason or 'claw state unknown'}"
+                    self.log.add(False, f"ABORTED: {payload.reason or 'claw state unknown'}")
+                else:
+                    self.rig_state = "ready"
+                    self.last_rig_result = f"build {payload}: {payload.reason or self.selected_cell}"
+                    self.log.add(payload == PLACED,
+                                 f"build {payload}: {payload.reason or self.selected_cell}")
+
+    def select_pixel(self, point, image_size):
+        if self.rig_busy:
+            return False, f"click refused while {self.rig_state}"
+        if self.calibrating:
+            self.calibration_points.append(point)
+            number = len(self.calibration_points)
+            if number < 4:
+                return True, f"corner {number}/4 saved; click {self.corner_prompt(number)}"
+            try:
+                workspace = WorkspaceMap.from_pixels(
+                    self.machine.cols, self.machine.rows,
+                    self.calibration_points, image_size, self.projection_signature())
+                workspace.save(self.args.workspace_map)
+            except (ValueError, OSError) as exc:
+                self.calibration_points.clear()
+                return False, f"calibration failed: {exc} — start again at {CORNER_NAMES[0]}"
+            self.workspace = workspace
+            self.calibrating = False
+            self.selected_cell = None
+            return True, f"workspace calibrated and saved to {self.args.workspace_map}"
+        if self.grid != "machine":
+            self.points.append(point)
+            self.points[:] = self.points[-2:]
+            return True, f"measurement point {len(self.points)} placed"
+        if self.workspace is None:
+            return False, "workspace not calibrated — run 'calibrate' first"
+        cell = self.workspace.cell_at(point, image_size)
+        if cell is None:
+            return False, "click is outside the calibrated workspace"
+        self.selected_cell = cell
+        return True, f"selected machine cell [{cell[0]},{cell[1]}] — click alone moved nothing"
+
+    def corner_prompt(self, index):
+        return (CORNER_NAMES[index]
+                .replace("cols", str(self.machine.cols))
+                .replace("rows", str(self.machine.rows)))
+
     # --- commands ---------------------------------------------------------
 
     def _build_commands(self):
@@ -371,6 +520,12 @@ class Viewer:
         cmds.add("swapaxes", self._cmd_swap_axes, "[on|off]",
                  "machine columns run down the image, not across")
         cmds.add("map", self._cmd_map, "", "print the rig's grid map — compare with '9'")
+        cmds.add("calibrate", self._cmd_calibrate, "", "click four prompted workspace corners")
+        cmds.add("connect", self._cmd_connect, "", "open serial and configure grid; does not move")
+        cmds.add("disconnect", self._cmd_disconnect, "", "close the serial connection")
+        cmds.add("go", self._cmd_go, "", "confirm G move to the selected cell")
+        cmds.add("build", self._cmd_build, "[level]", "confirm B at selected cell")
+        cmds.add("level", self._cmd_level, "<n>", "default build level")
 
         cmds.add("mip", self._cmd_mip, "[on|off]", "pyramid filtering of shrunk regions")
         cmds.add("hover", self._cmd_hover, "[on|off]", "the hovered-cell readout")
@@ -413,13 +568,70 @@ class Viewer:
         print(self.machine.ascii_map())
         return f"grid map printed in the terminal ({self.machine.describe()})"
 
+    def _cmd_calibrate(self, args):
+        if self.rig_busy:
+            raise CommandError(f"cannot calibrate while {self.rig_state}")
+        if self.view != "corrected":
+            raise CommandError("workspace calibration requires the corrected view")
+        self.grid = "machine"
+        self.calibrating = True
+        self.calibration_points.clear()
+        self.selected_cell = None
+        return f"calibration started — click {self.corner_prompt(0)}"
+
+    def _cmd_connect(self, args):
+        if self.rig.connected:
+            raise CommandError("rig is already connected")
+        return self._start_rig_action("connecting", lambda: self.rig.connect(home=False))
+
+    def _cmd_disconnect(self, args):
+        if self.rig_busy:
+            raise CommandError(f"cannot disconnect while {self.rig_state}")
+        self.rig.close()
+        self.rig_state = "disconnected"
+        return "rig disconnected"
+
+    def _selected_for_motion(self):
+        if self.rig_stopped:
+            raise CommandError("STOPPED after ABORTED — inspect the rig, then disconnect/connect")
+        if not self.rig.connected:
+            raise CommandError("rig not connected — run 'connect'")
+        if self.selected_cell is None:
+            raise CommandError("no cell selected — click inside the calibrated workspace")
+        return self.selected_cell
+
+    def _cmd_go(self, args):
+        col, row = self._selected_for_motion()
+        return self._start_rig_action("moving", lambda: self.rig.goto(col, row))
+
+    def _cmd_build(self, args):
+        if len(args) > 1:
+            raise CommandError("usage: build [level]")
+        level = self.level if not args else int(parse_number(args[0], self.level, int))
+        if level < 0:
+            raise CommandError("level must be zero or greater")
+        col, row = self._selected_for_motion()
+        return self._start_rig_action(
+            "building", lambda: self.rig.build(col, row, level))
+
+    def _cmd_level(self, args):
+        need_args(args, 1, "level <n>")
+        level = int(parse_number(args[0], self.level, int))
+        if level < 0:
+            raise CommandError("level must be zero or greater")
+        self.level = level
+        return f"build level {level}"
+
     def _cmd_hover(self, args):
         self.hover = self._flag(args, self.hover, "hover [on|off]")
         return f"hover readout {'on' if self.hover else 'off'}"
 
     def _cmd_clear(self, args):
         self.points.clear()
-        return "measurement points cleared"
+        self.selected_cell = None
+        self.calibrating = False
+        self.calibration_points.clear()
+        return "selection, calibration, and measurement points cleared"
 
     def _cmd_show(self, args):
         for line in self.status_lines():
@@ -439,6 +651,7 @@ class Viewer:
         if self.args.hq and self.args.output_scale is None:
             self.profile.output_scale = 0.5
         self.dirty = True
+        self._invalidate_workspace()
         return "lens profile reset to defaults"
 
     def _cmd_help(self, args):
@@ -464,7 +677,12 @@ class Viewer:
             f"grid {self.grid} {self.grid_divisions()[0]}x{self.grid_divisions()[1]}"
             f"  frame span {self.frame_w_cm:.1f} x {self.frame_h_cm:.1f} cm"
             f"  view {self.view}",
-            f"machine grid {self.machine.describe()}  (POSITION UNCALIBRATED)",
+            f"machine grid {self.machine.describe()}  "
+            f"({'workspace calibrated' if self.workspace else 'POSITION UNCALIBRATED'})",
+            f"workspace {'calibrated' if self.workspace else 'NOT CALIBRATED'}"
+            f"  selected {self.selected_cell or 'none'}",
+            f"rig {self.rig_state}  build level {self.level}",
+            f"last rig result: {self.last_rig_result}",
             f"sampling src px/out px: centre {stats.get('centre', 0):.2f}"
             f"  edge {stats.get('edge', 0):.2f}",
         ]
@@ -526,6 +744,8 @@ def parse_args():
                       help="measured horizontal span of the whole frame")
     grid.add_argument("--frame-height-cm", type=float, default=FRAME_CM["height_cm"],
                       help="measured vertical span of the whole frame")
+    grid.add_argument("--workspace-map", type=Path, default=WORKSPACE_MAP_PATH,
+                      help="four-corner workspace map (written by 'calibrate')")
 
     sensor = parser.add_argument_group("image quality (Picamera2 only)")
     sensor.add_argument("--sharpness", type=float, help="ISP sharpening, 0 = off")
@@ -660,6 +880,8 @@ def handle_key(key, viewer):
     """
     p = viewer.profile
     if key in (ord("q"), 27):
+        if viewer.rig_busy:
+            return False, f"cannot quit while {viewer.rig_state}; keep watching the rig"
         viewer.running = False
         return True, "quitting"
     if key == ord(":"):
@@ -705,6 +927,18 @@ def handle_key(key, viewer):
     if key == ord("r"):
         result = viewer.commands.execute("reset")
         return result.ok, result.message
+    if key == ord("k"):
+        result = viewer.commands.execute("calibrate")
+        return result.ok, result.message
+    if key == ord("j"):
+        result = viewer.commands.execute("go")
+        return result.ok, result.message
+    if key == ord("b"):
+        result = viewer.commands.execute("build")
+        return result.ok, result.message
+    if key == ord("x"):
+        result = viewer.commands.execute("connect")
+        return result.ok, result.message
 
     label = chr(key) if 32 <= key <= 126 else "?"
     return False, f"key '{label}' ({key}) is not bound — press '?' for the list"
@@ -723,7 +957,10 @@ def on_mouse(event, x, y, flags, viewer):
     elif event == cv2.EVENT_RBUTTONDOWN:
         viewer.pending_click = None
         viewer.points.clear()
-        viewer.log.add(True, "measurement points cleared")
+        viewer.selected_cell = None
+        viewer.calibrating = False
+        viewer.calibration_points.clear()
+        viewer.log.add(True, "selection, calibration, and measurement points cleared")
 
 
 # --- rendering ---------------------------------------------------------------
@@ -755,6 +992,56 @@ def side_by_side(raw, corrected):
     return pair
 
 
+def draw_workspace_grid(frame, workspace, selected=None):
+    """Draw the projective machine grid and return the cell under no cursor.
+
+    Grid intersections are projected independently, so this follows the full
+    four-point homography rather than drawing an axis-aligned approximation.
+    """
+    size = frame.shape[1], frame.shape[0]
+
+    def ip(point):
+        return tuple(np.rint(point).astype(int))
+
+    if selected is not None:
+        polygon = np.asarray([ip(p) for p in workspace.cell_polygon(*selected, size)],
+                             dtype=np.int32)
+        overlay = frame.copy()
+        cv2.fillConvexPoly(overlay, polygon, (0, 120, 255))
+        cv2.addWeighted(overlay, 0.28, frame, 0.72, 0, frame)
+        cv2.polylines(frame, [polygon], True, HOVER_COLOR, 3, cv2.LINE_AA)
+
+    for col_line in range(workspace.cols + 1):
+        u = col_line / workspace.cols
+        points = np.asarray([ip(workspace.pixel_at(u, row / workspace.rows, size))
+                             for row in range(workspace.rows + 1)], dtype=np.int32)
+        cv2.polylines(frame, [points], False, (0, 255, 0), 1, cv2.LINE_AA)
+    for row_line in range(workspace.rows + 1):
+        v = row_line / workspace.rows
+        points = np.asarray([ip(workspace.pixel_at(col / workspace.cols, v, size))
+                             for col in range(workspace.cols + 1)], dtype=np.int32)
+        cv2.polylines(frame, [points], False, (0, 255, 0), 1, cv2.LINE_AA)
+
+    # Label cell centres when there is enough room. A sparse label set is more
+    # useful than turning a small VNC preview into a wall of text.
+    envelope = [workspace.pixel_at(u, v, size)
+                for u, v in ((0, 0), (1, 0), (1, 1), (0, 1))]
+    approx_w = max(np.linalg.norm(np.subtract(envelope[1], envelope[0])),
+                   np.linalg.norm(np.subtract(envelope[2], envelope[3]))) / workspace.cols
+    approx_h = max(np.linalg.norm(np.subtract(envelope[3], envelope[0])),
+                   np.linalg.norm(np.subtract(envelope[2], envelope[1]))) / workspace.rows
+    if approx_w >= 45 and approx_h >= 24:
+        for col in range(1, workspace.cols + 1):
+            for row in range(1, workspace.rows + 1):
+                x, y = ip(workspace.pixel_at((col - .5) / workspace.cols,
+                                             (row - .5) / workspace.rows, size))
+                label = f"{col},{row}"
+                cv2.putText(frame, label, (x - 10, y + 4), cv2.FONT_HERSHEY_SIMPLEX,
+                            .32, (0, 0, 0), 3, cv2.LINE_AA)
+                cv2.putText(frame, label, (x - 10, y + 4), cv2.FONT_HERSHEY_SIMPLEX,
+                            .32, LABEL_COLOR, 1, cv2.LINE_AA)
+
+
 def draw_overlays(view, viewer, fps, corrected_view):
     """Grid, hover readout, measurements, HUD and console — in that order.
 
@@ -773,7 +1060,24 @@ def draw_overlays(view, viewer, fps, corrected_view):
     # but cell bounds and measurements would be nonsense.
     pointing = viewer.view != "both"
 
-    if viewer.grid != "off":
+    calibrated_machine = machine and viewer.workspace is not None and corrected_view and pointing
+    if calibrated_machine:
+        draw_workspace_grid(view, viewer.workspace, viewer.selected_cell)
+        if viewer.hover:
+            mx, my = viewer.image_mouse(view.shape)
+            hover_cell = viewer.workspace.cell_at((mx, my), (w, h))
+            if hover_cell is not None:
+                polygon = np.asarray(
+                    viewer.workspace.cell_polygon(*hover_cell, (w, h)), dtype=np.int32)
+                cv2.polylines(view, [polygon], True, HOVER_COLOR, 2, cv2.LINE_AA)
+                x, y = polygon[0]
+                draw_info_box(
+                    view,
+                    [f"machine cell [{hover_cell[0]},{hover_cell[1]}]",
+                     "click selects only; 'j' = G test; 'b' = build",
+                     f"selected: {viewer.selected_cell or 'none'}"],
+                    origin=(int(x), max(0, int(y) - 72)), width=340)
+    elif viewer.grid != "off":
         nx, ny = viewer.grid_divisions()
         cell_w, cell_h = draw_grid(view, ny, nx)
 
@@ -822,9 +1126,15 @@ def draw_overlays(view, viewer, fps, corrected_view):
                         ]
                 draw_cell_info(view, cell, lines, width=340 if (metric or machine) else 240)
 
-    if pointing:
+    if pointing and not machine:
         draw_measure(view, viewer.points,
                      cm_x if metric else None, cm_y if metric else None)
+
+    for index, point in enumerate(viewer.calibration_points):
+        cv2.drawMarker(view, tuple(map(int, point)), HOVER_COLOR,
+                       cv2.MARKER_CROSS, 18, 2)
+        cv2.putText(view, str(index + 1), (int(point[0]) + 8, int(point[1]) - 8),
+                    cv2.FONT_HERSHEY_SIMPLEX, .5, HOVER_COLOR, 1, cv2.LINE_AA)
 
     stats = sampling_stats(viewer.maps)
     hud = [
@@ -835,9 +1145,12 @@ def draw_overlays(view, viewer, fps, corrected_view):
         f"{viewer.maps.out_size[0]}x{viewer.maps.out_size[1]}  "
         f"scale {viewer.profile.output_scale:.2f}  {viewer.interp}",
         f"grid {viewer.grid} {viewer.grid_divisions()[0]}x{viewer.grid_divisions()[1]}"
-        + (f" [1,1] {mg.origin}{' swapped' if mg.swap_axes else ''}" if machine else
+        + ((" WORKSPACE CALIBRATED" if viewer.workspace else " WORKSPACE NOT CALIBRATED") if machine else
            f"  span {viewer.frame_w_cm:.1f}x{viewer.frame_h_cm:.1f}cm")
         + f"  {fps:5.1f} fps",
+        f"RIG: {viewer.rig_state}  selected {viewer.selected_cell or 'none'}"
+        f"  level {viewer.level}",
+        f"LAST: {viewer.last_rig_result}",
         f"SAMPLE src px/out px: centre {stats['centre']:.2f}  edge {stats['edge']:.2f}",
     ]
     # Inset from the corner so the grid's own axis labels, which hug the top and
@@ -846,14 +1159,21 @@ def draw_overlays(view, viewer, fps, corrected_view):
                   highlight_first=not viewer.profile.calibrated)
 
     warnings = []
-    if machine:
+    if machine and viewer.workspace is None:
         # The single most important thing on this screen. The cell COUNT and
         # NUMBERING are the rig's; the POSITION is a guess spanning the whole
         # frame, and the build area is almost certainly not the whole frame.
         warnings.append(("MACHINE GRID: numbering real, POSITION NOT CALIBRATED",
                          WARN_COLOR))
-        warnings.append(("it spans the frame, not the build area - step 4 fixes this",
+        warnings.append(("run 'calibrate', then click the four prompted corners",
                          WARN_COLOR))
+    if viewer.calibrating:
+        warnings.append((f"CALIBRATING {len(viewer.calibration_points) + 1}/4: "
+                         f"click {viewer.corner_prompt(len(viewer.calibration_points))}",
+                         PROMPT_COLOR))
+    if viewer.rig_stopped:
+        warnings.append(("STOPPED AFTER ABORTED - CHECK CLAW; NO RETRY OR AUTO-HOME",
+                         ERR_COLOR))
     if viewer.grid == "cm" and not corrected_view:
         warnings.append(("cm grid needs the CORRECTED view — press 'u'", WARN_COLOR))
     if not pointing:
@@ -875,7 +1195,7 @@ def draw_overlays(view, viewer, fps, corrected_view):
             HINT_COLOR))
     draw_text_panel(view, console, anchor="bottom-left")
 
-    if machine and viewer.grid != "off":
+    if machine and viewer.grid != "off" and viewer.workspace is None:
         # Column names along the bottom, row names down the left — the layout
         # the rig's own `9` map uses. Drawn over the panels rather than under
         # them, see the note above.
@@ -953,14 +1273,17 @@ def main():
             # because only then is the displayed size known.
             if viewer.pending_click is not None and viewer.view == "both":
                 viewer.pending_click = None
-                viewer.log.add(False, "measuring needs a single view — press 'u'")
+                viewer.log.add(False, "click mapping needs the corrected view — press 'u'")
             if viewer.pending_click is not None:
-                viewer.points.append(viewer.image_mouse(view.shape,
-                                                        viewer.pending_click))
-                viewer.points[:] = viewer.points[-2:]
+                point = viewer.image_mouse(view.shape, viewer.pending_click)
                 viewer.pending_click = None
-                viewer.log.add(True, f"point {len(viewer.points)} placed "
-                                     f"({'A' if len(viewer.points) == 1 else 'AB'})")
+                if (viewer.grid == "machine" or viewer.calibrating) and viewer.view != "corrected":
+                    viewer.log.add(False, "machine clicks require the corrected view")
+                else:
+                    ok_click, message = viewer.select_pixel(point, view.shape[1::-1])
+                    viewer.log.add(ok_click, message)
+
+            viewer.drain_rig_events()
 
             now = time.perf_counter()
             dt, last = now - last, now
@@ -1002,6 +1325,13 @@ def main():
                 break
     finally:
         viewer.running = False
+        # A window-manager close can bypass the q-key guard. Keep the process
+        # and serial reader alive until the already-running command reports its
+        # terminal result; never make closing the camera window an abort button.
+        while viewer.rig_busy:
+            viewer.drain_rig_events()
+            time.sleep(0.05)
+        viewer.rig.close()
         camera.release()
         cv2.destroyAllWindows()
 

@@ -114,6 +114,40 @@ ack and is safe from rewording, but `S`, `G`, `0` and `0+` do not — for those,
 `link.py` waits on the prose. The strings it matches are all in one place,
 `_prose_outcome()` and the `done=` arguments in `python/rig/link.py`.
 
+### 7. The studio's shipped defaults — a third place the same view is written
+
+| Where | What |
+| --- | --- |
+| `python/config/camera_settings.json` | the committed default settings |
+| `camera_studio.py` `Studio.__init__` | the built-in defaults `--fresh` and `reset` use |
+| `camera/undistorted_viewer.py` | the view both of those are required to reproduce |
+
+`camera_studio.py` is supposed to open showing **exactly what
+`undistorted_viewer.py` renders** — same remap table, same output size,
+correction on, no zoom or crop. That is three things agreeing, and nothing
+enforces it at runtime.
+
+If you change a `LensProfile` default, a `Studio.__init__` default, or the
+committed JSON, check the other two. The check is cheap and exact — build both
+tools' maps for the same input size and compare the tables:
+
+```python
+from vision.fisheye import LensProfile, build_maps
+import numpy as np
+a = build_maps(LensProfile.load(), (1296, 972), "cubic", mip=True)   # the viewer
+# ... studio's maps after read_settings + apply_overrides ...
+np.array_equal(a.levels[0][0], b.levels[0][0])      # must be True
+```
+
+The JSON is not hand-written: regenerate it from `Studio(args, LensProfile())`
+and strip `saved_at`, `camera` and `derived`, so it cannot drift from the code
+it is meant to mirror.
+
+**The lens trims `k1`, `k2`, `centre_dx`, `centre_dy` default to zero and that
+zero is load-bearing.** They are an exact no-op at zero, which is what lets
+`fisheye.py` grow them without changing what every existing tool renders. If you
+ever give one a non-zero default, the grid viewers' geometry moves with it.
+
 ---
 
 ## What must NOT be copied into `config/rig.json`
@@ -141,16 +175,12 @@ be able to silently rewrite your serial port. It is referenced by path, not by
 value.
 
 `python/config/camera_settings.json` is the same kind of thing, one layer out:
-`camera_studio.py` writes it, and it holds the lens block **plus** the sensor
-controls, the crop stack and the frame orientation. Same rules — generated, not
-hand-authored, referenced by path. It is not the source of the lens parameters
-the other tools read; `lens_profile.json` still is, and the studio's `lens`
-command is what copies one into the other.
-
-**The lens trims `k1`, `k2`, `centre_dx`, `centre_dy` default to zero and that
-zero is load-bearing.** They are an exact no-op at zero, which is what lets
-`fisheye.py` grow them without changing what every existing tool renders. If you
-ever give one a non-zero default, the grid viewers' geometry moves with it.
+`camera_studio.py` reads it at startup and its `save` writes it, and it holds
+the lens block **plus** the sensor controls, the crop stack and the frame
+orientation. Same rules — generated, not hand-authored, referenced by path. It
+is not the source of the lens parameters the other tools read;
+`lens_profile.json` still is, and the studio's `lens` command copies one into
+the other.
 
 ---
 

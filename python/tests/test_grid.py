@@ -16,6 +16,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from rig.grid import ORIGIN_CORNERS, MachineGrid
+from rig.workspace import WorkspaceMap
 
 PASSED, FAILED = [], []
 
@@ -112,6 +113,43 @@ try:
     check("bad origin is refused", False)
 except ValueError:
     check("bad origin is refused", True)
+
+
+# ------------------------------------------------------------------
+# Four-corner workspace mapping (Plan 2 step 4)
+# ------------------------------------------------------------------
+
+# Deliberately skewed and rotated: this catches implementations that merely
+# use an axis-aligned bounding box instead of a projective mapping.
+corners = [(80, 420), (570, 360), (520, 40), (120, 70)]
+workspace = WorkspaceMap.from_pixels(10, 20, corners, (640, 480))
+for point, expected in zip(corners, ((1, 1), (10, 1), (10, 20), (1, 20))):
+    check(f"workspace corner maps to {expected}",
+          workspace.cell_at(point, (640, 480)) == expected)
+
+centre = workspace.pixel_at(0.45, 0.225, (640, 480))
+check("workspace projective round-trip",
+      workspace.cell_at(centre, (640, 480)) == (5, 5), str(centre))
+check("workspace rejects outside click",
+      workspace.cell_at((0, 0), (640, 480)) is None)
+
+# Normalized storage makes a simple resolution change harmless.
+double_corners = [(x * 2, y * 2) for x, y in corners]
+for point, expected in zip(double_corners, ((1, 1), (10, 1), (10, 20), (1, 20))):
+    check(f"workspace survives resize {expected}",
+          workspace.cell_at(point, (1280, 960)) == expected)
+
+try:
+    WorkspaceMap(10, 20, [(0, 0)] * 4)
+    check("degenerate workspace refused", False)
+except ValueError:
+    check("degenerate workspace refused", True)
+
+try:
+    WorkspaceMap(10, 20, [(0.1, 0.9), (0.9, 0.1), (0.9, 0.9), (0.1, 0.1)])
+    check("crossed workspace refused", False)
+except ValueError:
+    check("crossed workspace refused", True)
 
 print(f"\n{len(PASSED)} passed, {len(FAILED)} failed")
 if FAILED:

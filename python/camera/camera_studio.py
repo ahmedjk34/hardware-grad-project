@@ -28,11 +28,26 @@ Four layers, each overriding the one before:
   3. config/camera_settings.json, or whatever --settings names;
   4. the command-line flags.
 
-The window is the image — as big as the capture allows — with a control panel
-under it: a row of clickable buttons, then a labelled TEXT FIELD for every
-parameter. Click a field, type a value, press Enter, and the picture changes as
-you watch. Up/Down step it without typing. Drag a rectangle on the image to crop
-to it.
+One fixed-size application window, in two halves
+------------------------------------------------
+The top ~77% is a camera VIEWPORT with the feed embedded in it. The bottom is
+the control panel: a row of clickable buttons, then a labelled TEXT FIELD for
+every parameter. Click a field, type a value, press Enter, and the picture
+changes as you watch. Up/Down step it without typing. Drag a rectangle on the
+image to crop to it.
+
+The window is a fixed rectangle that the image is fitted INTO — not a window
+sized around the image. That distinction is the whole layout: zoom, crop,
+`scale`, `rotate` and the raw/corrected toggle all change the size of the
+rendered picture, and if the window followed it, every control in the panel
+would jump somewhere else each time you used one. Here the viewport and the
+panel are both fixed, so the fields stay where you left them and the image is
+letterboxed inside the viewport instead.
+
+`--window WxH` sets the viewport; the default is the corrected output size,
+which is what undistorted_viewer.py shows. Nothing after startup changes it. In
+`fit` mode the correction renders directly at the viewport size, so what you see
+is never resampled twice.
 
 It opens showing EXACTLY what undistorted_viewer.py shows: the same lens
 profile, the same 120-degree rectilinear output at the same size, correction on,
@@ -84,6 +99,9 @@ Keys
   Backspace  undo the last crop             f  refit (render the crop 1:1)
   v  fit / native sizing                    r  reset everything
   s  save the JSON                          p  snapshot PNGs
+
+'?' draws the key list over the image rather than into the panel, so that
+showing it cannot resize the window either.
 
 While a field has focus it takes the keyboard instead: Enter commits, Up/Down
 step the value, Tab moves to the next field, Esc lets go without committing.
@@ -193,7 +211,19 @@ ROTATIONS = (0, 90, 180, 270)
 # no cv2 trackbars: eight of them stacked above the image cost ~350 px of screen
 # that the picture wants, and a slider cannot show you that a value is 158.
 PANEL_BG = (26, 26, 26)
+VIEWPORT_BG = (12, 12, 12)
 PANEL_MIN_WIDTH = 900
+
+# The window is ONE fixed-size application window: a camera viewport on top and
+# the control panel under it, neither of which moves when the picture does.
+#
+# It used to be the other way round — the canvas was sized from the image, so
+# zooming, cropping or changing `scale` resized the window and reflowed every
+# field in the panel. Controls that move when you use them are unusable, so the
+# viewport is now a fixed rectangle that the image is fitted INTO, and the panel
+# is laid out against a width that never changes.
+MIN_IMAGE_FRACTION = 0.70   # the picture never gets less than this much height
+PANEL_RULE = (70, 70, 70)   # the line between the two halves
 BUTTON_H = 26
 BUTTON_GAP = 6
 PANEL_LINE = 17
@@ -277,6 +307,7 @@ class Studio:
         self.pan = (0.5, 0.5)          # zoom centre, normalised to the full output
         self.fit_mode = "fit"
         self.view_size = None          # resolved once the camera size is known
+        self.viewport = None           # fixed (w, h) the image is drawn into
 
         self.flip = "none"
         self.rotate = 0
@@ -590,10 +621,15 @@ class Studio:
 
     def rebuild(self, input_size):
         self.capture_size = input_size
+        if self.viewport is None:
+            self.viewport = full_output_size(self.profile, input_size)
         if self.view_size is None:
-            # Default the view box to the untouched output size, so launching
-            # the tool gives the same window undistorted_viewer.py would.
-            self.view_size = full_output_size(self.profile, input_size)
+            # Render straight into the viewport. Anything else would mean
+            # rendering at one size and resampling to another for display — a
+            # second interpolation on top of the correction, for nothing. At the
+            # default viewport this IS the untouched output size, which is what
+            # keeps the launch view identical to undistorted_viewer.py.
+            self.view_size = tuple(self.viewport)
         self.maps = build_maps(self.profile, input_size, self.interp, mip=self.mip,
                                roi=self.roi(), view_size=self.render_size())
         self.dirty = False
@@ -675,11 +711,13 @@ class Studio:
         cmds.add("fitmode", choice(lambda v: self._set_attr("fit_mode", v, "sizing",
                                                             dirty=True),
                                    FIT_MODES, "fitmode <fit|native>"),
-                 "<fit|native>", "fit: window stays put. native: crop renders 1:1")
+                 "<fit|native>", "fit: fill the viewport. native: render the crop 1:1")
         cmds.add("viewbox", self._cmd_viewbox, "<w> <h>",
-                 "size of the image area in fit mode")
+                 "size the correction renders at; 'fill' resets it to the viewport")
         cmds.add("refit", self._cmd_refit, "",
                  "resize the view box so the crop renders 1:1 (no interpolation)")
+        cmds.add("fill", self._cmd_fill, "",
+                 "view box back to the viewport — undoes 'refit'")
 
         # --- frame ---
         cmds.add("view", choice(lambda v: self._set_attr("view", v, "view"), VIEWS,
@@ -822,7 +860,19 @@ class Studio:
             raise CommandError("viewbox takes two whole numbers of pixels")
         self.view_size = (max(64, w), max(64, h))
         self.dirty = True
-        return f"view box {self.view_size[0]}x{self.view_size[1]} (fit mode)"
+        note = ""
+        if self.viewport and (w > self.viewport[0] or h > self.viewport[1]):
+            # Bigger than the window: it will be scaled back down to be shown,
+            # so say so rather than let it look like free extra resolution.
+            note = " — larger than the viewport, so it is scaled down to display"
+        return f"view box {self.view_size[0]}x{self.view_size[1]}{note}"
+
+    def _cmd_fill(self, args):
+        self.view_size = tuple(self.viewport)
+        self.fit_mode = "fit"
+        self.dirty = True
+        return (f"view box back to the viewport, {self.viewport[0]}x"
+                f"{self.viewport[1]} — the image fills the window again")
 
     def _cmd_refit(self, args):
         if self.capture_size is None:
@@ -886,7 +936,7 @@ class Studio:
         self.mip = True
         self.correct = True
         self.crops, self.zoom, self.pan = [], 1.0, (0.5, 0.5)
-        self.view_size = None
+        self.view_size = None          # rebuild() puts it back to the viewport
         self.fit_mode = "fit"
         self.flip, self.rotate, self.swap_rb = "none", 0, False
         self.all_auto()
@@ -940,6 +990,9 @@ class Studio:
                 "zoom": round(self.zoom, 4),
                 "pan": [round(self.pan[0], 5), round(self.pan[1], 5)],
                 "fit_mode": self.fit_mode,
+                # Recorded for reference only — read_settings does not restore
+                # it, because it belongs to the window this ran in, not to the
+                # camera setup the rest of the file describes.
                 "view_size": list(self.view_size) if self.view_size else None,
             },
             "sensor": dict(self.sensor),
@@ -996,8 +1049,11 @@ class Studio:
         self.pan = tuple(fr.get("pan", (0.5, 0.5)))
         if fr.get("fit_mode") in FIT_MODES:
             self.fit_mode = fr["fit_mode"]
-        if fr.get("view_size"):
-            self.view_size = tuple(fr["view_size"])
+        # Deliberately NOT restored: view_size is the size the correction
+        # renders at, which rebuild() derives from this session's viewport. A
+        # file saved on a 1600-wide window must not force that window here.
+        # `refit` is how you ask for a specific render size, and it is a
+        # decision about sharpness rather than about the layout.
 
         cap = data.get("capture") or {}
         self.swap_rb = bool(cap.get("swap_rb", self.swap_rb))
@@ -1592,12 +1648,16 @@ def draw_fields(panel, studio, y):
     return rects, y
 
 
-def panel_height(studio, width):
-    """How tall the control strip needs to be for what it holds."""
+def panel_height(width):
+    """How tall the control strip needs to be for what it holds.
+
+    A function of the window WIDTH alone — the number of fields is fixed, so at
+    a fixed width the row count is fixed and the panel never changes height.
+    That is the whole point: the '?' key list is drawn over the image rather
+    than added here, precisely so that pressing it cannot resize the window.
+    """
     rows = len(layout_field_rows(width))
-    lines = 2 + LOG_LINES + 1          # status, sensor status, log, prompt
-    if studio.show_keys:
-        lines += len(key_list_lines())
+    lines = 2 + LOG_LINES + 1          # derived, camera status, log, prompt
     return (PANEL_PAD * 2 + BUTTON_H + BUTTON_GAP
             + rows * (FIELD_H + FIELD_ROW_GAP) + FIELD_ROW_GAP
             + PANEL_LINE * lines)
@@ -1640,7 +1700,8 @@ def draw_panel(studio, width, fps):
     the two lines under them are the things you cannot — what the correction is
     costing in sharpness, and what the camera did with the settings it was sent.
     """
-    panel = np.full((panel_height(studio, width), width, 3), PANEL_BG, np.uint8)
+    panel = np.full((panel_height(width), width, 3), PANEL_BG, np.uint8)
+    cv2.line(panel, (0, 0), (width, 0), PANEL_RULE, 1)
     y = PANEL_PAD
     buttons = draw_buttons(panel, studio, y)
     y += BUTTON_H + BUTTON_GAP
@@ -1656,10 +1717,6 @@ def draw_panel(studio, width, fps):
          WARN_COLOR if not studio.profile.calibrated else OK_COLOR)
     line(f"camera: {studio.sensor_status}", HINT_COLOR)
 
-    if studio.show_keys:
-        for text in key_list_lines():
-            line(text, HINT_COLOR, scale=0.40)
-
     for ok, text in studio.log.recent(count=LOG_LINES, max_age=12.0):
         line(text, OK_COLOR if ok else ERR_COLOR)
 
@@ -1673,6 +1730,37 @@ def draw_panel(studio, width, fps):
              f"command, '?' for keys   |   {fps:5.1f} fps   |   {studio.settings_path}",
              HINT_COLOR)
     return panel, buttons, fields
+
+
+def display_note(studio):
+    """Warn when the viewport is showing something other than 1:1.
+
+    Only possible in `native` mode or after `refit`, where the render is
+    deliberately not the window's size. Worth saying out loud, because judging
+    sharpness off a downscaled preview is how you conclude the correction is
+    fine when it is not.
+    """
+    lay = studio.layout
+    if lay is None:
+        return None
+    scale = lay.get("image_scale", 1.0)
+    if scale >= 0.999:
+        return None
+    return (f"display only: the {lay['render_w']}x{lay['render_h']} render is "
+            f"shown at {scale * 100:.0f}% to fit the viewport — 'fill' undoes it")
+
+
+def draw_key_list(image, studio):
+    """The '?' key list, drawn OVER the image rather than added to the panel.
+
+    It is transient help, not a control, and putting it in the panel would make
+    a keypress resize the window — the exact thing the fixed layout exists to
+    stop.
+    """
+    if not studio.show_keys:
+        return
+    lines = ["KEYS  (press '?' to hide)"] + key_list_lines()
+    draw_info_box(image, lines, origin=(14, 14), scale=0.44)
 
 
 def draw_drag(image, studio):
@@ -1693,27 +1781,59 @@ def draw_drag(image, studio):
                 (0, 255, 0), 1, cv2.LINE_AA)
 
 
-def compose(image, studio, fps):
-    """Image on top, control panel underneath, on one canvas.
+def window_size(studio):
+    """The fixed (width, viewport height, panel height) of the whole window.
 
-    The canvas is at least PANEL_MIN_WIDTH wide so the button row and the status
-    lines are never truncated by a small preview, and the image is centred in
-    whatever is left over.
+    Computed from the viewport, which is set once at startup and never moves
+    again, so every one of these is constant for the life of the session — no
+    matter what zoom, crop, scale or rotation do to the image itself.
+
+    The one adjustment: if the panel would take more than 1 - MIN_IMAGE_FRACTION
+    of the window, the VIEWPORT grows rather than the picture being squeezed.
+    The camera is what this tool is for.
     """
-    width = max(image.shape[1], PANEL_MIN_WIDTH)
+    width = max(studio.viewport[0], PANEL_MIN_WIDTH)
+    panel_h = panel_height(width)
+    viewport_h = max(studio.viewport[1],
+                     int(round(panel_h * MIN_IMAGE_FRACTION
+                               / (1.0 - MIN_IMAGE_FRACTION))))
+    return width, viewport_h, panel_h
+
+
+def compose(image, studio, fps):
+    """The application window: camera viewport on top, control panel under it.
+
+    The image is fitted INTO the viewport rather than the window being fitted
+    around the image. It is centred, letterboxed, and only ever scaled DOWN —
+    in `fit` mode the correction already renders at the viewport size, so the
+    scale here is exactly 1.0 and nothing is resampled twice. It drops below 1
+    only in `native` mode or after `refit`, when the render is deliberately a
+    different size from the window.
+    """
+    width, viewport_h, _ = window_size(studio)
     panel, buttons, fields = draw_panel(studio, width, fps)
 
-    x_off = (width - image.shape[1]) // 2
-    top = np.full((image.shape[0], width, 3), PANEL_BG, np.uint8)
-    top[:, x_off:x_off + image.shape[1]] = image
+    render_h, render_w = image.shape[:2]
+    ih, iw = render_h, render_w
+    scale = min(width / iw, viewport_h / ih, 1.0)
+    if scale < 1.0:
+        iw, ih = max(1, int(iw * scale)), max(1, int(ih * scale))
+        image = cv2.resize(image, (iw, ih), interpolation=cv2.INTER_AREA)
 
-    canvas = np.vstack([top, panel])
+    viewport = np.full((viewport_h, width, 3), VIEWPORT_BG, np.uint8)
+    x_off, y_off = (width - iw) // 2, (viewport_h - ih) // 2
+    viewport[y_off:y_off + ih, x_off:x_off + iw] = image
+
+    canvas = np.vstack([viewport, panel])
     studio.layout = {
         "image_x": x_off,
-        "image_y": 0,
-        "image_w": image.shape[1],
-        "image_h": image.shape[0],
-        "panel_y": image.shape[0],
+        "image_y": y_off,
+        "image_w": iw,
+        "image_h": ih,
+        "image_scale": scale,      # displayed pixels per rendered pixel
+        "render_w": render_w,      # the image BEFORE the viewport fit; a crop
+        "render_h": render_h,      # drag is normalised against these
+        "panel_y": viewport_h,
         "buttons": buttons,
         "fields": fields,
     }
@@ -1721,21 +1841,27 @@ def compose(image, studio, fps):
 
 
 def window_to_image(studio, x, y):
-    """Window coordinates -> pixel coordinates inside the displayed image.
+    """Window coordinates -> pixel coordinates in the RENDERED image.
 
-    Returns None when the point is not on the image (the panel, or the letterbox
-    beside a narrow preview). --display-scale is undone first, since it resizes
-    the finished canvas without touching anything the coordinates mean.
+    Two transforms to undo, in this order: --display-scale, which resizes the
+    finished canvas, and the viewport fit, which may have scaled the image down
+    to get it into the window. Returning coordinates in the rendered image
+    rather than the displayed one is what lets a crop drag mean the same thing
+    whether or not the window happened to be too small.
+
+    Returns None when the point is not on the image — the panel, or the
+    letterbox around it.
     """
     lay = studio.layout
     if lay is None:
         return None
     if studio.args.display_scale != 1.0:
         x, y = x / studio.args.display_scale, y / studio.args.display_scale
-    ix, iy = int(x) - lay["image_x"], int(y) - lay["image_y"]
-    if 0 <= ix < lay["image_w"] and 0 <= iy < lay["image_h"]:
-        return ix, iy
-    return None
+    dx, dy = int(x) - lay["image_x"], int(y) - lay["image_y"]
+    if not (0 <= dx < lay["image_w"] and 0 <= dy < lay["image_h"]):
+        return None
+    scale = lay.get("image_scale", 1.0) or 1.0
+    return int(dx / scale), int(dy / scale)
 
 
 def hit_panel(studio, x, y, key):
@@ -1802,12 +1928,14 @@ def process_mouse(studio):
             lay = studio.layout
             x0, x1 = sorted((sx, ex))
             y0, y1 = sorted((sy, ey))
+            # In rendered pixels, so a window scaled down for display still
+            # needs the same real drag rather than a suspiciously easy one.
             if x1 - x0 < MIN_CROP_PX or y1 - y0 < MIN_CROP_PX:
                 studio.log.add(False, "that drag was too small to be a crop — "
                                       f"drag a box at least {MIN_CROP_PX} px across")
                 continue
-            rect = (x0 / lay["image_w"], y0 / lay["image_h"],
-                    x1 / lay["image_w"], y1 / lay["image_h"])
+            rect = (x0 / lay["render_w"], y0 / lay["render_h"],
+                    x1 / lay["render_w"], y1 / lay["render_h"])
             studio.log.add(True, studio.push_crop(rect))
 
 
@@ -1828,8 +1956,15 @@ def parse_args():
                              "sensor readout and render a half-size output: same "
                              "field of view, ~2x the real detail at the frame edges, "
                              "and the only thing that makes zooming worthwhile")
+    parser.add_argument("--window", metavar="WxH", type=parse_size,
+                        help="size of the camera VIEWPORT, e.g. 1600x900. The "
+                             "window is that plus the control panel, and it "
+                             "never changes size afterwards. Default: the "
+                             "corrected output size, which is what "
+                             "undistorted_viewer.py shows")
     parser.add_argument("--display-scale", type=float, default=1.0,
-                        help="scale the whole window; does not affect processing")
+                        help="scale the finished window; useful when the panel "
+                             "runs off a small screen. Does not affect processing")
     parser.add_argument("--list-modes", action="store_true",
                         help="print the sensor's modes and exit")
 
@@ -1891,6 +2026,16 @@ def parse_args():
     return parser.parse_args()
 
 
+def parse_size(text):
+    """WxH -> (w, h), for --window. Raises argparse's own error on anything else."""
+    try:
+        w, h = text.lower().replace(" ", "").split("x")
+        return (max(320, int(w)), max(240, int(h)))
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"'{text}' is not a size — write it as WIDTHxHEIGHT, e.g. 1600x900")
+
+
 def capture_size(args):
     """Resolve the capture resolution from --hq and any explicit --width/--height."""
     default = FULL_RES_SIZE if args.hq else DEFAULT_SIZE
@@ -1943,6 +2088,10 @@ def apply_overrides(studio, args):
         if value is not None:
             setattr(studio, attr, value)
             changed.append(f"{label}={value}")
+    if args.window is not None:
+        studio.viewport = tuple(args.window)
+        studio.view_size = None        # rebuild() refits it to the new viewport
+        changed.append(f"window={args.window[0]}x{args.window[1]}")
     for flag, attr, value, label in ((args.no_mip, "mip", False, "mip=off"),
                                      (args.no_correct, "correct", False, "correction=off"),
                                      (args.swap_rb, "swap_rb", True, "swap_rb=on")):
@@ -2020,6 +2169,7 @@ def main():
 
     fps, last = 0.0, time.perf_counter()
     autosave_state = None
+    last_note = None
     try:
         while studio.running:
             ok, frame = camera.read()
@@ -2066,6 +2216,7 @@ def main():
 
             if studio.show_grid:
                 draw_grid(image, 8, 8)
+            draw_key_list(image, studio)
             if not studio.correct:
                 draw_info_box(image, ["CORRECTION OFF — press 'n'"],
                               origin=(8, 8), highlight_first=True)
@@ -2079,6 +2230,11 @@ def main():
                 fps = 0.9 * fps + 0.1 * (1.0 / dt) if fps else 1.0 / dt
 
             canvas = compose(image, studio, fps)
+            note = display_note(studio)
+            if note != last_note:
+                last_note = note
+                if note:
+                    studio.log.add(False, note)
             if args.display_scale != 1.0:
                 canvas = cv2.resize(canvas, None, fx=args.display_scale,
                                     fy=args.display_scale, interpolation=cv2.INTER_AREA)
