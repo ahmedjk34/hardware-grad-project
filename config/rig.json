@@ -19,6 +19,11 @@
     "width_cm": 34.0,
     "height_cm": 40.0
   },
+  "tool_offsets": {
+    "neutral": {"x_cm": 0.0, "y_cm": 0.0},
+    "cw": {"x_cm": 0.0, "y_cm": 0.0},
+    "ccw": {"x_cm": 0.0, "y_cm": 0.0}
+  },
   "frame": {
     "width_cm": 20.0,
     "height_cm": 35.0

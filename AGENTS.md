@@ -108,6 +108,28 @@ convention. `gridded_camera_feed.py` derives it from four clicked envelope
 corners and saves `workspace_map.json`; `MachineGrid.origin` / `swap_axes`
 remain useful only for count-only/legacy drawings without that homography.
 
+### 3c. Tool-centre offsets — holder position is not block position
+
+| Where | What |
+| --- | --- |
+| `config/rig.json` → `tool_offsets.neutral/cw/ccw` | editable calibration record, in cm |
+| `build_test_v1.ino` `TOOL_OFFSET_*_CM` | compiled values used to move the holder |
+| `python/tests/test_grid.py` | verifies every JSON/firmware pair |
+
+The X/Y counters describe the gantry holder. Each offset is the signed vector
+**from holder reference to actual block-placement centre**, where positive is
+away from that axis's home switch. The Arduino subtracts that vector from the
+selected grid-cell centre before moving, so the tool — not its holder — reaches
+the requested cell. `neutral` is for an unrotated claw; `cw` and `ccw` are for
+the eventual `R` and `RR` placement orientations. A `G` command uses the claw's
+current orientation; a `B` command uses the requested placement orientation.
+
+All shipped offsets are **zero**, which is an intentional no-op. Enter measured
+values in both places in the same commit. Do not compensate this by moving the
+camera grid or changing `grid.trim_*`: those define the block grid itself, not
+the holder-to-tool geometry. Targets that would put the holder outside its safe
+X/Y envelope are refused, never silently clipped.
+
 ### 4. Frame span in centimetres
 
 | Where | What |

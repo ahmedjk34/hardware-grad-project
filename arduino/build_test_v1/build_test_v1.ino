@@ -520,6 +520,26 @@ float GRID_TRIM_Y_CM = 0.0; // signed whole-grid correction along Y
 long GRID_COLS = 17;
 long GRID_ROWS = 5;
 
+// The X/Y counters describe the GANTRY HOLDER, not necessarily the point where
+// the claw places a block.  These vectors describe HOLDER -> block centre in
+// physical centimetres.  Positive means farther from that axis' home switch.
+//
+// A cell names the desired block centre.  The firmware subtracts the selected
+// vector before moving the holder, so the claw lands on the cell centre:
+//
+//     holder target = desired block centre - tool offset
+//
+// Keep these paired with config/rig.json -> tool_offsets.  All are zero by
+// default, deliberately preserving the historic holder-centred behaviour
+// until the real measurements are entered.  CW/CCW apply after the requested
+// 90-degree claw rotation, which can move an asymmetric tool centre.
+float TOOL_OFFSET_NEUTRAL_X_CM = 0.0;
+float TOOL_OFFSET_NEUTRAL_Y_CM = 0.0;
+float TOOL_OFFSET_CW_X_CM = 0.0;
+float TOOL_OFFSET_CW_Y_CM = 0.0;
+float TOOL_OFFSET_CCW_X_CM = 0.0;
+float TOOL_OFFSET_CCW_Y_CM = 0.0;
+
 // The ASCII map is only drawn when the grid is small enough to be
 // readable. Bigger grids print a numeric summary instead.
 const long GRID_MAP_MAX_COLS = 48;
@@ -1999,29 +2019,52 @@ long gridCountMaxOf(uint8_t axis)
 // Centre of fixed-pitch cell `index` (1-based), as a MAGNITUDE from
 // the origin and rounded once to the nearest whole step.
 //   centre_cm = centred_grid_start + (index - 0.5) * cell_pitch_cm
-long cellCentreMagnitude(uint8_t axis, long index)
+float cellCentreCmOf(uint8_t axis, long index)
 {
   long count = gridCountOf(axis);
-  long travel = gridTravelOf(axis);
-  float centreCm = gridStartCmOf(axis, count)
-                   + ((float)index - 0.5) * gridCellCmOf(axis);
-  long mag = lround(centreCm * xyStepsPerCmOf(axis));
-
-  if (mag > travel)
-  {
-    mag = travel;
-  }
-  if (mag < 0)
-  {
-    mag = 0;
-  }
-  return mag;
+  return gridStartCmOf(axis, count)
+         + ((float)index - 0.5) * gridCellCmOf(axis);
 }
 
-// Same thing as a signed machine position.
-long cellTargetPosition(uint8_t axis, long index)
+float toolOffsetCmOf(uint8_t axis, int8_t rotation)
 {
-  return cellCentreMagnitude(axis, index) * (long)gridDirOf(axis);
+  if (rotation == ROT_CW)
+  {
+    return (axis == AXIS_X) ? TOOL_OFFSET_CW_X_CM : TOOL_OFFSET_CW_Y_CM;
+  }
+  if (rotation == ROT_CCW)
+  {
+    return (axis == AXIS_X) ? TOOL_OFFSET_CCW_X_CM : TOOL_OFFSET_CCW_Y_CM;
+  }
+  return (axis == AXIS_X) ? TOOL_OFFSET_NEUTRAL_X_CM
+                           : TOOL_OFFSET_NEUTRAL_Y_CM;
+}
+
+// Convert a desired block centre to a holder position.  The target is refused
+// rather than clipped if the calibrated tool offset would put the holder out
+// of travel: clipping would silently place a block in the wrong cell.
+bool cellTargetPosition(uint8_t axis, long index, int8_t rotation,
+                        long *targetPosition)
+{
+  float holderCm = cellCentreCmOf(axis, index) - toolOffsetCmOf(axis, rotation);
+  float travelCm = xyTravelCmOf(axis);
+  float scale = xyStepsPerCmOf(axis);
+  const float slack = 0.0001;
+
+  if (holderCm < -slack || holderCm > travelCm + slack || scale <= 0.0)
+  {
+    return false;
+  }
+
+  long mag = lround(holderCm * scale);
+  long travel = gridTravelOf(axis);
+  if (mag < 0 || mag > travel)
+  {
+    return false;
+  }
+
+  *targetPosition = mag * (long)gridDirOf(axis);
+  return true;
 }
 
 // Physical pitch converted through the per-axis calibration.
@@ -2125,9 +2168,10 @@ void setGridSize(long cols, long rows)
 // GO TO CELL
 // ============================================================
 
-// Homes, then drives Y and X to the centre of the cell.
+// Homes, then drives Y and X so the selected tool centre lands at the cell.
+// `rotation` is the orientation that will exist when the block is placed.
 // Returns true only if BOTH axes actually arrived.
-bool gotoCell(long col, long row)
+bool gotoCellForRotation(long col, long row, int8_t rotation)
 {
   Serial.println();
   Serial.print(F("=== GOTO CELL ["));
@@ -2146,8 +2190,15 @@ bool gotoCell(long col, long row)
     return false;
   }
 
-  long targetX = cellTargetPosition(AXIS_X, col);
-  long targetY = cellTargetPosition(AXIS_Y, row);
+  long targetX;
+  long targetY;
+  if (!cellTargetPosition(AXIS_X, col, rotation, &targetX) ||
+      !cellTargetPosition(AXIS_Y, row, rotation, &targetY))
+  {
+    Serial.println(F("  ERROR - tool offset puts the holder outside the X/Y travel."));
+    Serial.println(F("  Refusing to clip the target; check tool offset calibration."));
+    return false;
+  }
 
   Serial.print(F("  Target position: X "));
   Serial.print(targetX);
@@ -2192,6 +2243,13 @@ bool gotoCell(long col, long row)
   curRow = positionToIndex(AXIS_Y, axisPos[AXIS_Y]);
   Serial.println(F("  MOVE INCOMPLETE - a limit stopped it short."));
   return false;
+}
+
+// A manual G command uses the orientation the claw has right now. A build
+// supplies its requested final orientation explicitly before it rotates.
+bool gotoCell(long col, long row)
+{
+  return gotoCellForRotation(col, row, clawRotation);
 }
 
 // ============================================================
@@ -2608,6 +2666,17 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
     return buildReject("cell out of range");
   }
 
+  // Reject an impossible compensated holder target before the claw picks up a
+  // block.  The same check is repeated in gotoCellForRotation() for direct G.
+  long holderTargetX;
+  long holderTargetY;
+  if (!cellTargetPosition(AXIS_X, col, wantRot, &holderTargetX) ||
+      !cellTargetPosition(AXIS_Y, row, wantRot, &holderTargetY))
+  {
+    Serial.println(F("  ERROR - tool offset puts the holder outside the X/Y travel."));
+    return buildReject("tool offset target outside X/Y travel");
+  }
+
   // A build needs BOTH Z switches: the bottom one to find GROUND and
   // pick the block up, the top one to fly it over the stack.
   if (!limitEnabledAt(AXIS_Z, homeEndOf(AXIS_Z)))
@@ -2725,7 +2794,7 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
   // ---- 8. fly to the target cell ----
 
   buildStep(8, "Move X/Y to the target cell");
-  if (!gotoCell(col, row))
+  if (!gotoCellForRotation(col, row, wantRot))
   {
     buildAbort("could not reach the target cell");
     return false;
@@ -3421,6 +3490,23 @@ void printGridConfig()
   Serial.println(F(" steps (X x Y)"));
 
   Serial.println(F("col 1 = X switch side, row 1 = Y switch side"));
+
+  Serial.println(F("Tool offsets (holder -> block centre, + away from home):"));
+  Serial.print(F("  neutral: X "));
+  Serial.print(TOOL_OFFSET_NEUTRAL_X_CM, 3);
+  Serial.print(F(" cm / Y "));
+  Serial.print(TOOL_OFFSET_NEUTRAL_Y_CM, 3);
+  Serial.println(F(" cm"));
+  Serial.print(F("  R (CW) : X "));
+  Serial.print(TOOL_OFFSET_CW_X_CM, 3);
+  Serial.print(F(" cm / Y "));
+  Serial.print(TOOL_OFFSET_CW_Y_CM, 3);
+  Serial.println(F(" cm"));
+  Serial.print(F("  RR(CCW): X "));
+  Serial.print(TOOL_OFFSET_CCW_X_CM, 3);
+  Serial.print(F(" cm / Y "));
+  Serial.print(TOOL_OFFSET_CCW_Y_CM, 3);
+  Serial.println(F(" cm"));
 }
 
 // Where the machine is in GRID terms - shared by the map and the

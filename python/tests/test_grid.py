@@ -18,6 +18,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from rig.grid import ORIGIN_CORNERS, MachineGrid
+from rig.config import load
 from rig.workspace import WorkspaceMap
 
 PASSED, FAILED = [], []
@@ -104,7 +105,8 @@ check("swapaxes flips the divisions", (turned.nx, turned.ny) == (5, 22),
 # Config and bounds
 # ------------------------------------------------------------------
 
-from_cfg = MachineGrid.from_config()
+config = load()
+from_cfg = MachineGrid.from_config(config)
 check("from_config matches rig.json", from_cfg.matches(), from_cfg.describe())
 check("bounds are 1-based, like cellInRange()",
       from_cfg.contains(1, 1) and not from_cfg.contains(0, 1)
@@ -143,6 +145,15 @@ paired_values = {
     "GRID_TRIM_X_CM": from_cfg.trim_x_cm,
     "GRID_TRIM_Y_CM": from_cfg.trim_y_cm,
 }
+tool_offsets = config["tool_offsets"]
+paired_values.update({
+    "TOOL_OFFSET_NEUTRAL_X_CM": float(tool_offsets["neutral"]["x_cm"]),
+    "TOOL_OFFSET_NEUTRAL_Y_CM": float(tool_offsets["neutral"]["y_cm"]),
+    "TOOL_OFFSET_CW_X_CM": float(tool_offsets["cw"]["x_cm"]),
+    "TOOL_OFFSET_CW_Y_CM": float(tool_offsets["cw"]["y_cm"]),
+    "TOOL_OFFSET_CCW_X_CM": float(tool_offsets["ccw"]["x_cm"]),
+    "TOOL_OFFSET_CCW_Y_CM": float(tool_offsets["ccw"]["y_cm"]),
+})
 for name, expected in paired_values.items():
     actual = firmware_number(name)
     check(f"firmware/config pair {name}", actual == expected,
