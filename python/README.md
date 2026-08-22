@@ -36,6 +36,7 @@ python/
 │   ├── test_block_detector.py  block detection against the committed captures
 │   ├── test_build_controller.py camera-build confirmation and lockout rules
 │   ├── test_build_job.py       the build worker thread and its one-at-a-time rule
+│   ├── test_camera_frame_pump.py stale-camera UI isolation without a camera
 │   ├── test_grid.py            the cell numbering, against the firmware's own map
 │   └── test_link.py            link.py against a fake board — no rig needed
 └── vision/                     importable library — no windows, no argv, no prints
@@ -70,8 +71,9 @@ centre and matching `G` command.
 to move hardware. Its approximate grid works immediately; a saved calibration
 refines the mapping but is optional. A click selects one cell, shows the exact
 `B` command, and sends it only after `b`/Enter. The firmware wait happens on a
-worker thread (`rig/build_job.py`), so the camera keeps streaming while the rig
-moves, but every key and click that would change the build state is refused
+worker thread (`rig/build_job.py`) and capture happens on a separate frame
+worker, so a blocked CSI read leaves the UI responsive and visibly marks the
+image stale rather than silently freezing it. Every key and click that would change the build state is refused
 until the firmware reports placed/rejected/aborted. An unknown or aborted state
 locks the session for human inspection.
 

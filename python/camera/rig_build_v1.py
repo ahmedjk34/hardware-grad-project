@@ -73,12 +73,13 @@ from rig.grid import MachineGrid  # noqa: E402
 from rig.link import ABORTED, PLACED, REJECTED, Rig, RigError  # noqa: E402
 from rig.workspace import WORKSPACE_MAP_PATH, WorkspaceMap  # noqa: E402
 from vision.block_detector import detect_blocks  # noqa: E402
-from vision.camera_source import open_camera  # noqa: E402
+from vision.camera_source import LatestFramePump, open_camera  # noqa: E402
 from vision.fisheye import INTERPOLATIONS, build_maps, undistort  # noqa: E402
 from vision.overlays import draw_info_box  # noqa: E402
 
 
 SELECTED_COLOR = (255, 80, 255)
+CAMERA_STALE_AFTER_S = 0.75
 
 
 def parse_args():
@@ -120,7 +121,8 @@ def draw_selected_cell(frame, workspace, selected):
     cv2.polylines(frame, [polygon], True, SELECTED_COLOR, 4, cv2.LINE_AA)
 
 
-def draw_build_panel(frame, controller, port_name, message, building=False):
+def draw_build_panel(frame, controller, port_name, message, camera_state,
+                     building=False):
     if controller.locked:
         state = "LOCKED — HUMAN INSPECTION REQUIRED"
     elif building:
@@ -141,6 +143,7 @@ def draw_build_panel(frame, controller, port_name, message, building=False):
         f"serial {port_name} | level {controller.level} | rotation {controller.rotation}",
         f"next command: {command}",
         f"status: {message}",
+        f"camera: {camera_state}",
         f"last result: {last}",
         "[ / ] level | o rotation | d deselect | b/Enter BUILD",
     ]
@@ -148,11 +151,42 @@ def draw_build_panel(frame, controller, port_name, message, building=False):
     draw_info_box(
         frame,
         lines,
-        origin=(4, max(4, frame.shape[0] - 116)),
+        origin=(4, max(4, frame.shape[0] - 134)),
         width=width,
         scale=0.39,
         highlight_first=controller.locked or building,
     )
+
+
+def camera_state(snapshot, now):
+    """Short, operator-facing truth about camera freshness."""
+    age = snapshot.age_s(now)
+    if age is None:
+        return "WAITING FOR FIRST FRAME"
+    if age >= CAMERA_STALE_AFTER_S:
+        return f"STALE — last frame {age:.1f}s ago (#{snapshot.sequence})"
+    return f"LIVE #{snapshot.sequence} ({age * 1000:.0f} ms old)"
+
+
+def camera_is_live(snapshot, now):
+    """Whether this image is recent enough to safely choose a machine cell."""
+    age = snapshot.age_s(now)
+    return age is not None and age < CAMERA_STALE_AFTER_S
+
+
+def draw_camera_warning(frame, snapshot, now):
+    """Make a stuck CSI capture visible while the rest of the UI stays alive."""
+    age = snapshot.age_s(now)
+    if age is None:
+        detail = snapshot.error or "capture worker has not delivered a frame"
+        lines = ["CAMERA WAITING", detail]
+    elif age >= CAMERA_STALE_AFTER_S:
+        detail = snapshot.error or "capture worker has not delivered a newer frame"
+        lines = [f"CAMERA STALLED — {age:.1f}s since frame #{snapshot.sequence}", detail]
+    else:
+        return
+    draw_info_box(frame, lines, origin=(4, 4), width=min(700, frame.shape[1] - 8),
+                  scale=0.42, highlight_first=True)
 
 
 def result_message(result):
@@ -233,6 +267,12 @@ def main():
     print(f"Grid: {grid.describe()}")
     print(f"Sensor settings: {len(applied)} applied")
 
+    # Keep the potentially blocking Picamera2/V4L2 read out of this UI thread.
+    # A motor-induced CSI stall must leave the operator with a responsive window
+    # and an explicit stale-frame warning, not a silent frozen image.
+    frame_pump = LatestFramePump(camera)
+    frame_pump.start()
+
     saved_workspace, rejection = load_workspace(args.workspace_map, grid, projection)
     if rejection:
         print(f"Grid calibration unavailable: {rejection}")
@@ -273,11 +313,29 @@ def main():
     status = 0
     try:
         while True:
-            ok, frame = camera.read()
-            if not ok or frame is None:
-                print("Failed to read frame from camera.", file=sys.stderr)
-                status = 1
-                break
+            snapshot = frame_pump.snapshot()
+            now = time.monotonic()
+            frame = snapshot.frame
+            if frame is None:
+                # The capture thread may be blocked in its first camera read.
+                # Keep this window alive so the condition is visible and it can
+                # still be closed safely rather than appearing to have hung.
+                w, h = camera.size
+                waiting = np.zeros((h, w, 3), dtype=np.uint8)
+                draw_camera_warning(waiting, snapshot, now)
+                shown = cv2.resize(
+                    waiting, None, fx=args.display_scale, fy=args.display_scale,
+                    interpolation=cv2.INTER_AREA,
+                ) if args.display_scale != 1.0 else waiting
+                cv2.imshow(window, shown)
+                key = cv2.waitKey(20) & 0xFF
+                if key in (ord("q"), 27) or \
+                        cv2.getWindowProperty(window, cv2.WND_PROP_VISIBLE) < 1:
+                    if job.running:
+                        ui["message"] = "build in progress; cannot quit until it reports"
+                    else:
+                        break
+                continue
 
             finished = job.poll()
             if finished is not None:
@@ -298,6 +356,8 @@ def main():
 
             if ui["pending_points"] is not None:
                 try:
+                    if not camera_is_live(snapshot, now):
+                        raise ValueError("calibration paused: camera feed is stale")
                     candidate = WorkspaceMap.from_grid(
                         grid, ui["pending_points"], image_size, projection
                     )
@@ -326,6 +386,10 @@ def main():
                 try:
                     if building:
                         raise BuildStateError(BUSY_MESSAGE)
+                    if not camera_is_live(snapshot, now):
+                        raise BuildStateError(
+                            "camera feed is stale; wait for live frames before selecting"
+                        )
                     if not ui["show_grid"]:
                         raise BuildStateError("grid is hidden; press g before selecting")
                     cell = workspace.cell_at(point, image_size)
@@ -356,7 +420,9 @@ def main():
                 draw_calibration(display, ui["calibration_points"])
             else:
                 draw_build_panel(display, controller, rig.port_name, ui["message"],
+                                 camera_state(snapshot, now),
                                  building=building)
+            draw_camera_warning(display, snapshot, now)
 
             shown = cv2.resize(
                 display, None, fx=args.display_scale, fy=args.display_scale,
@@ -373,6 +439,8 @@ def main():
             elif key == ord("c"):
                 if building:
                     ui["message"] = BUSY_MESSAGE
+                elif not camera_is_live(snapshot, now):
+                    ui["message"] = "camera feed is stale; cannot calibrate"
                 elif controller.locked:
                     ui["message"] = controller.locked_reason
                 else:
@@ -419,6 +487,10 @@ def main():
                 try:
                     if building:
                         raise BuildStateError(BUSY_MESSAGE)
+                    if not camera_is_live(snapshot, now):
+                        raise BuildStateError(
+                            "camera feed is stale; restore live frames before building"
+                        )
                     if ui["calibrating"]:
                         raise BuildStateError("finish or cancel (x) calibration first")
                     command = controller.command
@@ -437,7 +509,14 @@ def main():
             finished = job.poll()
             if finished is not None:
                 print(f"[build] {outcome_message(finished, controller)}")
-        camera.release()
+        if frame_pump.stop():
+            camera.release()
+        else:
+            # Releasing Picamera2 while its capture thread is stuck can itself
+            # hang or crash.  It is a daemon thread, so process shutdown is the
+            # safer owner of this exceptional cleanup path.
+            print("Camera capture is still blocked; leaving it for process shutdown.",
+                  file=sys.stderr)
         cv2.destroyAllWindows()
         rig.close()
     return status

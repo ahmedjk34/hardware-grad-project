@@ -132,13 +132,15 @@ Workflow:
 4. Read the displayed command, such as `B 3 4 0`.
 5. Press `b` or Enter to confirm and send it.
 
-The camera keeps streaming while the firmware build runs — it happens on a
-worker thread — and serial output continues in the terminal. The panel reads
-**BUILDING — SERIAL INPUT LOCKED** for the duration: clicks, `[`/`]`, `o`, `d`,
-`c`, a second `b` and even `q` are all refused, so nothing can queue while the
-Mega is deaf. `g` (toggle grid) and `s` (snapshot) still work, since neither
-touches the rig. Closing the window mid-build waits for the build to report
-before the serial port is closed. `placed`
+The firmware build runs on a worker thread and camera capture runs on a second
+worker thread, so a serial wait or stalled CSI capture cannot freeze the UI.
+The panel reads **BUILDING — SERIAL INPUT LOCKED** for the duration: clicks,
+`[`/`]`, `o`, `d`, `c`, a second `b` and even `q` are all refused, so nothing
+can queue while the Mega is deaf. `g` (toggle grid) and `s` (snapshot) still
+work, since neither touches the rig. If no new camera frame arrives for 0.75 s,
+the image is labelled **CAMERA STALLED** with its age; inspect camera power/CSI
+wiring after the build rather than trusting the frozen image. Closing the
+window mid-build waits for the build to report before the serial port is closed. `placed`
 clears the selection and requires a fresh click. A safe `rejected` result keeps
 the selection for correction. `aborted`, reset, timeout or cable loss locks the
 session—inspect the rig and restart; do not retry or auto-home.

@@ -19,6 +19,8 @@ part of that interface, as is `camera.apply(settings)` — see SENSOR_CONTROLS.
 """
 
 from dataclasses import dataclass
+import threading
+import time
 
 import cv2
 
@@ -42,6 +44,103 @@ AUTO = "auto"          # "hand this back to the camera's own loop"
 AWB_MODES = ("auto", "incandescent", "tungsten", "fluorescent", "indoor",
              "daylight", "cloudy")
 DENOISE_MODES = ("off", "fast", "hq")
+
+
+@dataclass(frozen=True)
+class FrameSnapshot:
+    """The newest frame a :class:`LatestFramePump` has received.
+
+    ``age_s`` is deliberately measured by the caller rather than at capture
+    time.  That lets a UI show a truthful "last frame was N seconds ago"
+    warning even when a camera backend has stopped returning from ``read()``.
+    """
+
+    frame: object | None
+    captured_at: float | None
+    sequence: int
+    error: str | None
+
+    def age_s(self, now: float | None = None) -> float | None:
+        if self.captured_at is None:
+            return None
+        return max(0.0, (time.monotonic() if now is None else now) - self.captured_at)
+
+
+class LatestFramePump:
+    """Read a camera on one daemon thread and expose its latest frame safely.
+
+    Picamera2's ``capture_array()`` is a synchronous call.  If its CSI/libcamera
+    pipeline gets stuck, a UI that calls it directly cannot redraw a warning,
+    handle its close key, or keep reporting build state.  This pump contains
+    that one blocking call in a producer thread.  Consumers always get the
+    latest completed frame immediately; a stale timestamp says when the camera
+    stopped advancing.
+
+    The pump intentionally does not call ``source.release()``.  A backend may
+    be stuck inside ``read()`` and releasing it concurrently is unsafe.  Call
+    :meth:`stop` first and release the source only after it returns ``True``.
+    """
+
+    def __init__(self, source):
+        self._source = source
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._frame = None
+        self._captured_at: float | None = None
+        self._sequence = 0
+        self._error: str | None = None
+
+    @property
+    def running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def start(self) -> None:
+        if self.running:
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(
+            target=self._run, name="camera-frame-pump", daemon=True
+        )
+        self._thread.start()
+
+    def snapshot(self) -> FrameSnapshot:
+        """Return immediately, including while the backend is stuck in read()."""
+        with self._lock:
+            return FrameSnapshot(self._frame, self._captured_at, self._sequence,
+                                 self._error)
+
+    def stop(self, timeout: float = 2.0) -> bool:
+        """Ask the reader to stop; ``False`` means it remains blocked in read()."""
+        self._stop.set()
+        thread = self._thread
+        if thread is not None:
+            thread.join(timeout)
+        return not self.running
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            try:
+                ok, frame = self._source.read()
+            except Exception as exc:  # backend errors must not take down the UI
+                with self._lock:
+                    self._error = f"camera read failed: {exc}"
+                # Avoid a hot loop if a disconnected backend raises instantly;
+                # keep trying because a transient libcamera fault may recover.
+                self._stop.wait(0.1)
+                continue
+
+            if not ok or frame is None:
+                with self._lock:
+                    self._error = "camera returned no frame"
+                self._stop.wait(0.02)
+                continue
+
+            with self._lock:
+                self._frame = frame
+                self._captured_at = time.monotonic()
+                self._sequence += 1
+                self._error = None
 
 
 @dataclass(frozen=True)
