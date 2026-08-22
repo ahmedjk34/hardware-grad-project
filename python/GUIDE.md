@@ -139,7 +139,9 @@ The panel reads **BUILDING — SERIAL INPUT LOCKED** for the duration: clicks,
 can queue while the Mega is deaf. `g` (toggle grid) and `s` (snapshot) still
 work, since neither touches the rig. If no new camera frame arrives for 0.75 s,
 the image is labelled **CAMERA STALLED** with its age; inspect camera power/CSI
-wiring after the build rather than trusting the frozen image. Closing the
+wiring after the build rather than trusting the frozen image. Selection,
+calibration and build confirmation are refused until live frames resume.
+Closing the
 window mid-build waits for the build to report before the serial port is closed. `placed`
 clears the selection and requires a fresh click. A safe `rejected` result keeps
 the selection for correction. `aborted`, reset, timeout or cable loss locks the

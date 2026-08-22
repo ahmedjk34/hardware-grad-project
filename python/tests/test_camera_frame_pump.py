@@ -14,7 +14,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from vision.camera_source import LatestFramePump  # noqa: E402
+from camera.rig_build_v1 import camera_is_live  # noqa: E402
+from vision.camera_source import FrameSnapshot, LatestFramePump  # noqa: E402
 
 
 PASSED, FAILED = [], []
@@ -66,6 +67,12 @@ check("completed capture becomes visible to UI", snapshot.frame is not None)
 check("completed capture increments sequence", snapshot.sequence == 1,
       str(snapshot.sequence))
 check("frame timestamp supports a stale-age warning", snapshot.age_s() is not None)
+
+now = time.monotonic()
+check("fresh camera snapshot permits camera-based controls",
+      camera_is_live(FrameSnapshot(None, now, 1, None), now))
+check("stale camera snapshot blocks camera-based controls",
+      not camera_is_live(FrameSnapshot(None, now - 1.0, 1, None), now))
 
 # The worker is now blocked in its next read.  Releasing it lets stop() join
 # cleanly rather than relying on daemon-process shutdown.
