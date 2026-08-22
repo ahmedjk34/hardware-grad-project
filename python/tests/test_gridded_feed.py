@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from camera.gridded_camera_feed import (  # noqa: E402
     approximate_workspace,
+    draw_calibration,
     draw_machine_grid,
     load_workspace,
 )
@@ -38,6 +39,18 @@ frame = np.zeros((image_size[1], image_size[0], 3), dtype=np.uint8)
 hovered = draw_machine_grid(frame, workspace, grid, first_pixel, calibrated=False)
 check("overlay maps first physical centre", hovered == (1, 1), str(hovered))
 check("overlay actually draws pixels", bool(np.any(frame)))
+
+calibration = np.zeros((180, 280, 3), dtype=np.uint8)
+draw_calibration(calibration, [(30, 150), (250, 150)], (250, 30))
+check("calibration joins accepted clicks with a straight line",
+      bool(np.any(calibration[150, 80:200])), "edge 1 -> 2")
+check("calibration previews the next straight edge",
+      bool(np.any(calibration[70:130, 250])), "cursor preview")
+
+review = np.zeros((180, 280, 3), dtype=np.uint8)
+draw_calibration(review, [(30, 150), (250, 150), (250, 130), (30, 130)])
+check("four-corner calibration closes the review outline",
+      bool(np.any(review[135:145, 30])), "edge 4 -> 1")
 
 with tempfile.TemporaryDirectory() as directory:
     path = Path(directory) / "workspace_map.json"

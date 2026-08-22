@@ -62,7 +62,12 @@ opening the camera independently.
 
 `camera/gridded_camera_feed.py` reuses that feed and adds the machine grid from
 the repository-level `config/rig.json`. Press `c`, then click the four prompted
-corners of the complete 34×40 cm motion envelope. It saves the generated map to
+corners of the complete 34×40 cm motion envelope in this physical order:
+home/home, far-X/home-Y, far-X/far-Y, home-X/far-Y. During calibration the UI
+shows the next named corner, numbered saved clicks, solid straight edges between
+them, and a live line from the last click to the cursor. After the fourth click,
+inspect the closed outline and press Enter to save; press `u` to undo a
+misplaced corner or `x` to cancel without replacing the old map. It saves the generated map to
 `config/workspace_map.json`; until then the amber full-frame grid is explicitly
 an approximation. Hovering a calibrated cell shows its `[col,row]`, physical
 centre and matching `G` command.

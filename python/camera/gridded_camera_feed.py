@@ -14,6 +14,8 @@ instead of silently drawing an old calibration.
 Keys
 ----
   c       calibrate/recalibrate: click four prompted envelope corners
+  Enter   save the reviewed four-corner calibration
+  u       undo the most recent calibration corner
   x       cancel an in-progress calibration
   g       toggle grid overlay
   s       save annotated frame and block detection JSON
@@ -226,25 +228,55 @@ def draw_grid_status(frame, grid, calibrated, rejection, correction_enabled):
                   width=width, scale=0.38, highlight_first=highlight)
 
 
-def draw_calibration(frame, points):
-    """Show clicked points and the next required machine-envelope corner."""
+def draw_calibration(frame, points, cursor=None):
+    """Draw an explicit, ordered four-corner calibration route.
+
+    Accepted clicks are joined with straight line segments.  A line from the
+    last accepted point to the cursor previews the next segment before it is
+    committed, so an operator can verify the intended edge while aiming.
+    """
+    rounded = [(round(x), round(y)) for x, y in points]
+    for start, end in zip(rounded, rounded[1:]):
+        cv2.line(frame, start, end, CALIBRATION_COLOR, 2, cv2.LINE_AA)
+    if len(rounded) == 4:
+        # Completing the outline makes an accidental crossed/crooked route
+        # obvious during the review step before it is written to disk.
+        cv2.line(frame, rounded[-1], rounded[0], CALIBRATION_COLOR, 2,
+                 cv2.LINE_AA)
+    elif rounded and cursor is not None:
+        preview = (round(cursor[0]), round(cursor[1]))
+        cv2.line(frame, rounded[-1], preview, CALIBRATION_COLOR, 1,
+                 cv2.LINE_AA)
+        cv2.drawMarker(frame, preview, CALIBRATION_COLOR,
+                       cv2.MARKER_TILTED_CROSS, 15, 1, cv2.LINE_AA)
+
     for index, (x, y) in enumerate(points):
         point = (round(x), round(y))
         cv2.drawMarker(frame, point, CALIBRATION_COLOR, cv2.MARKER_CROSS,
                        22, 3, cv2.LINE_AA)
-        cv2.putText(frame, str(index + 1), (point[0] + 9, point[1] - 9),
+        cv2.putText(frame, f"{index + 1}: {CORNER_NAMES[index]}",
+                    (point[0] + 9, point[1] - 9),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, CALIBRATION_COLOR, 2,
                     cv2.LINE_AA)
     index = len(points)
     if index < 4:
         lines = [
-            f"CALIBRATION CLICK {index + 1}/4",
-            CORNER_NAMES[index],
-            "Click the physical 34x40 cm envelope corner; x cancels.",
+            f"CALIBRATION ACTIVE — NEXT CLICK {index + 1}/4",
+            f"NEXT: {CORNER_NAMES[index]}",
+            "Order: 1 home/home -> 2 far-X/home-Y",
+            "       3 far-X/far-Y -> 4 home-X/far-Y",
+            "Solid lines = saved clicks; cursor line = next edge preview.",
+            "Click the physical envelope corner | u undo | x cancel",
         ]
-        draw_info_box(frame, lines, origin=(4, max(4, frame.shape[0] - 70)),
-                      width=min(430, frame.shape[1] - 8), scale=0.40,
-                      highlight_first=True)
+    else:
+        lines = [
+            "CALIBRATION REVIEW — 4/4 CORNERS SELECTED",
+            "Verify the closed outline surrounds the complete machine envelope.",
+            "Enter saves this map | u undo last corner | x cancel",
+        ]
+    draw_info_box(frame, lines, origin=(4, 4),
+                  width=min(560, frame.shape[1] - 8), scale=0.40,
+                  highlight_first=True)
 
 
 def main():
@@ -312,8 +344,6 @@ def main():
         elif event == cv2.EVENT_LBUTTONDOWN and state["calibrating"]:
             if len(state["calibration_points"]) < 4:
                 state["calibration_points"].append(point)
-            if len(state["calibration_points"]) == 4:
-                state["pending_points"] = list(state["calibration_points"])
 
     cv2.namedWindow(window, cv2.WINDOW_AUTOSIZE)
     cv2.setMouseCallback(window, on_mouse, ui)
@@ -375,7 +405,7 @@ def main():
                 draw_machine_grid(display, workspace, grid, ui["hover"], calibrated)
                 draw_grid_status(display, grid, calibrated, rejection, enabled)
             if ui["calibrating"]:
-                draw_calibration(display, ui["calibration_points"])
+                draw_calibration(display, ui["calibration_points"], ui["hover"])
 
             if args.display_scale != 1.0:
                 shown = cv2.resize(display, None, fx=args.display_scale,
@@ -397,6 +427,18 @@ def main():
                 ui["calibration_points"] = []
                 ui["pending_points"] = None
                 print("Calibration cancelled; previous saved map kept.")
+            elif key == ord("u") and ui["calibrating"]:
+                if ui["calibration_points"]:
+                    ui["calibration_points"].pop()
+                    print("Removed the most recent calibration corner.")
+                else:
+                    print("No calibration corner to undo.")
+            elif key in (10, 13) and ui["calibrating"]:
+                if len(ui["calibration_points"]) == 4:
+                    ui["pending_points"] = list(ui["calibration_points"])
+                    print("Saving reviewed four-corner calibration.")
+                else:
+                    print("Click all four named corners before saving.")
             elif key == ord("g"):
                 ui["show_grid"] = not ui["show_grid"]
             elif key == ord("s"):

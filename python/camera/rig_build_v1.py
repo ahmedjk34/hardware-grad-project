@@ -19,6 +19,8 @@ Safety rules
 Keys
 ----
   c       calibrate/recalibrate the four machine-envelope corners
+  Enter   save the reviewed four-corner calibration
+  u       undo the most recent calibration corner
   x       cancel calibration without deleting the previous map
   g       toggle grid
   [ / ]   build level down/up
@@ -299,8 +301,6 @@ def main():
             if state["calibrating"]:
                 if len(state["calibration_points"]) < 4:
                     state["calibration_points"].append(point)
-                if len(state["calibration_points"]) == 4:
-                    state["pending_points"] = list(state["calibration_points"])
             else:
                 state["pending_select"] = point
 
@@ -417,7 +417,7 @@ def main():
                 draw_selected_cell(display, workspace, controller.selected)
                 draw_grid_status(display, grid, calibrated, rejection, enabled)
             if ui["calibrating"]:
-                draw_calibration(display, ui["calibration_points"])
+                draw_calibration(display, ui["calibration_points"], ui["hover"])
             else:
                 draw_build_panel(display, controller, rig.port_name, ui["message"],
                                  camera_state(snapshot, now),
@@ -454,6 +454,18 @@ def main():
                 ui["calibration_points"] = []
                 ui["pending_points"] = None
                 ui["message"] = "calibration cancelled; previous map retained"
+            elif key == ord("u") and ui["calibrating"]:
+                if ui["calibration_points"]:
+                    ui["calibration_points"].pop()
+                    ui["message"] = "removed the most recent calibration corner"
+                else:
+                    ui["message"] = "no calibration corner to undo"
+            elif key in (10, 13) and ui["calibrating"]:
+                if len(ui["calibration_points"]) == 4:
+                    ui["pending_points"] = list(ui["calibration_points"])
+                    ui["message"] = "saving reviewed four-corner calibration"
+                else:
+                    ui["message"] = "click all four named corners before saving"
             elif key == ord("g"):
                 ui["show_grid"] = not ui["show_grid"]
             elif key in (ord("["), ord("-")):
