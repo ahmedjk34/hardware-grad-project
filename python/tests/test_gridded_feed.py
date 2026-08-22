@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from camera.gridded_camera_feed import (  # noqa: E402
     approximate_workspace,
+    calibration_line_color,
     draw_calibration,
     draw_machine_grid,
     load_workspace,
@@ -44,6 +45,12 @@ calibration = np.zeros((180, 280, 3), dtype=np.uint8)
 draw_calibration(calibration, [(30, 150), (250, 150)], (250, 30))
 check("calibration joins accepted clicks with a straight line",
       bool(np.any(calibration[150, 80:200])), "edge 1 -> 2")
+check("horizontal calibration edge has its own colour",
+      calibration_line_color((30, 150), (250, 150)) == (255, 255, 0))
+check("vertical calibration edge has its own colour",
+      calibration_line_color((250, 150), (250, 30)) == (255, 0, 255))
+check("diagonal calibration edge keeps its own colour",
+      calibration_line_color((30, 150), (250, 30)) == (255, 180, 30))
 check("calibration previews the next straight edge",
       bool(np.any(calibration[70:130, 250])), "cursor preview")
 

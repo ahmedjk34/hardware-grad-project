@@ -67,7 +67,10 @@ from vision.overlays import (  # noqa: E402
 
 
 ENVELOPE_COLOR = (170, 170, 170)
-CALIBRATION_COLOR = (255, 180, 30)
+CALIBRATION_COLOR = (255, 180, 30)       # orange: diagonal
+CALIBRATION_HORIZONTAL = (255, 255, 0)   # cyan: screen-horizontal
+CALIBRATION_VERTICAL = (255, 0, 255)     # magenta: screen-vertical
+CALIBRATION_AXIS_TOLERANCE_PX = 2
 
 
 def parse_args():
@@ -228,6 +231,27 @@ def draw_grid_status(frame, grid, calibrated, rejection, correction_enabled):
                   width=width, scale=0.38, highlight_first=highlight)
 
 
+def calibration_line_color(start, end):
+    """Return a clear colour for an axis-aligned screen edge.
+
+    This deliberately classifies camera-image geometry, not physical machine
+    axes: perspective may make a physically horizontal rail diagonal on screen.
+    Two pixels of tolerance accommodates normal mouse-click imprecision.
+    """
+    dx = abs(end[0] - start[0])
+    dy = abs(end[1] - start[1])
+    if dy <= CALIBRATION_AXIS_TOLERANCE_PX and dx > dy:
+        return CALIBRATION_HORIZONTAL
+    if dx <= CALIBRATION_AXIS_TOLERANCE_PX and dy > dx:
+        return CALIBRATION_VERTICAL
+    return CALIBRATION_COLOR
+
+
+def _draw_calibration_line(frame, start, end, thickness):
+    cv2.line(frame, start, end, calibration_line_color(start, end), thickness,
+             cv2.LINE_AA)
+
+
 def draw_calibration(frame, points, cursor=None):
     """Draw an explicit, ordered four-corner calibration route.
 
@@ -237,17 +261,16 @@ def draw_calibration(frame, points, cursor=None):
     """
     rounded = [(round(x), round(y)) for x, y in points]
     for start, end in zip(rounded, rounded[1:]):
-        cv2.line(frame, start, end, CALIBRATION_COLOR, 2, cv2.LINE_AA)
+        _draw_calibration_line(frame, start, end, 2)
     if len(rounded) == 4:
         # Completing the outline makes an accidental crossed/crooked route
         # obvious during the review step before it is written to disk.
-        cv2.line(frame, rounded[-1], rounded[0], CALIBRATION_COLOR, 2,
-                 cv2.LINE_AA)
+        _draw_calibration_line(frame, rounded[-1], rounded[0], 2)
     elif rounded and cursor is not None:
         preview = (round(cursor[0]), round(cursor[1]))
-        cv2.line(frame, rounded[-1], preview, CALIBRATION_COLOR, 1,
-                 cv2.LINE_AA)
-        cv2.drawMarker(frame, preview, CALIBRATION_COLOR,
+        color = calibration_line_color(rounded[-1], preview)
+        cv2.line(frame, rounded[-1], preview, color, 1, cv2.LINE_AA)
+        cv2.drawMarker(frame, preview, color,
                        cv2.MARKER_TILTED_CROSS, 15, 1, cv2.LINE_AA)
 
     for index, (x, y) in enumerate(points):
@@ -265,6 +288,7 @@ def draw_calibration(frame, points, cursor=None):
             f"NEXT: {CORNER_NAMES[index]}",
             "Order: 1 home/home -> 2 far-X/home-Y",
             "       3 far-X/far-Y -> 4 home-X/far-Y",
+            "Cyan = horizontal | magenta = vertical | orange = diagonal.",
             "Solid lines = saved clicks; cursor line = next edge preview.",
             "Click the physical envelope corner | u undo | x cancel",
         ]

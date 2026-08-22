@@ -67,7 +67,9 @@ home/home, far-X/home-Y, far-X/far-Y, home-X/far-Y. During calibration the UI
 shows the next named corner, numbered saved clicks, solid straight edges between
 them, and a live line from the last click to the cursor. After the fourth click,
 inspect the closed outline and press Enter to save; press `u` to undo a
-misplaced corner or `x` to cancel without replacing the old map. It saves the generated map to
+misplaced corner or `x` to cancel without replacing the old map. Cyan edges are
+screen-horizontal, magenta edges screen-vertical, and orange edges diagonal
+(within a 2-pixel click tolerance). It saves the generated map to
 `config/workspace_map.json`; until then the amber full-frame grid is explicitly
 an approximation. Hovering a calibrated cell shows its `[col,row]`, physical
 centre and matching `G` command.
