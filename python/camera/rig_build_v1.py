@@ -400,8 +400,8 @@ def main():
                 except BuildStateError as exc:
                     ui["message"] = str(exc)
 
-            now = time.perf_counter()
-            dt, last = now - last, now
+            fps_now = time.perf_counter()
+            dt, last = fps_now - last, fps_now
             if dt > 0:
                 instant = 1.0 / dt
                 fps = 0.9 * fps + 0.1 * instant if fps else instant
