@@ -22,6 +22,7 @@ Keys
   u       undo the most recent calibration corner
   x       cancel an in-progress calibration
   g       toggle grid overlay
+  v       toggle block detection on/off
   s       save annotated frame and block detection JSON
   q/Esc   quit
 """
@@ -343,6 +344,7 @@ def main():
         "pending_points": None,
         "show_grid": True,
         "overlay": args.overlay,
+        "detect_enabled": True,
         "message": "ready",
     }
 
@@ -362,6 +364,7 @@ def main():
             buttons=(("Overlay (o)", "o"), ("Calibrate (c)", "c"),
                      ("Undo (u)", "u"),
                      ("Save (s)", "s"), ("Grid (g)", "g"),
+                     ("Detect (v)", "v"),
                      ("Quit (q)", "q")),
         )
     except (tk.TclError, cv2.error) as exc:
@@ -410,9 +413,9 @@ def main():
             f"Camera: {camera.name} | {camera_state} | capture "
             f"{capture_rate.rate:5.1f} fps | age {age_text}",
             f"Feed: {size_text} | preview {preview_rate.rate:5.1f} fps | overlay {ui['overlay']}",
-            f"Analysis: {result.rate_hz:4.1f} Hz | seq {result.source_sequence} | "
-            f"{analysis_text} | blocks {len(detections)} | replaced "
-            f"{result.replaced_count} | duplicate {result.duplicate_count}",
+            f"Analysis: {'OFF' if not ui['detect_enabled'] else f'{result.rate_hz:4.1f} Hz'} | "
+            f"seq {result.source_sequence} | {analysis_text} | blocks {len(detections)} | "
+            f"replaced {result.replaced_count} | duplicate {result.duplicate_count}",
             f"Grid: {grid.cols}x{grid.rows} | {calibration_text} | "
             f"hover {f'[{cell[0]},{cell[1]}]' if cell else 'none'}",
             block_hover_text(detections, ui["hover"]),
@@ -421,7 +424,7 @@ def main():
             f"grid {timings.ms.get('grid', 0):.1f} ms | "
             f"display {timings.ms.get('display', 0):.1f} ms",
             f"Status: {result.error or snapshot.error or ui['message']}",
-            "o overlay | c calibrate | Enter save | u undo | x cancel | g grid | s snapshot | q quit",
+            "o overlay | c calibrate | Enter save | u undo | x cancel | g grid | v detect | s snapshot | q quit",
         ]
 
     def handle_key(key):
@@ -455,6 +458,9 @@ def main():
                 ui["message"] = "click all four corners before saving"
         elif key == ord("g"):
             ui["show_grid"] = not ui["show_grid"]
+        elif key == ord("v"):
+            ui["detect_enabled"] = not ui["detect_enabled"]
+            ui["message"] = f"block detection {'on' if ui['detect_enabled'] else 'off'}"
         elif key == ord("s"):
             if last_display is None:
                 ui["message"] = "no frame is available to save"
@@ -468,7 +474,9 @@ def main():
         while True:
             snapshot = frame_pump.snapshot()
             result = analysis.snapshot()
-            if result.is_current(map_generation):
+            if not ui["detect_enabled"]:
+                detections = ()
+            elif result.is_current(map_generation):
                 detections = result.detections
             saved = snapshots.snapshot()
             if saved.completed_count != snapshot_count:
@@ -526,9 +534,10 @@ def main():
             )
             calibrated = saved_workspace is not None
             view.flags.writeable = False
-            analysis.submit(view, snapshot.sequence, map_generation,
-                            color_threshold=args.color_threshold,
-                            min_area=args.min_area)
+            if ui["detect_enabled"]:
+                analysis.submit(view, snapshot.sequence, map_generation,
+                                color_threshold=args.color_threshold,
+                                min_area=args.min_area)
             display = enhance_for_display(view) if args.enhance else view.copy()
             started = time.perf_counter()
             draw_block_overlay(

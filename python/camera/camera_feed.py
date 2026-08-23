@@ -13,7 +13,7 @@ the frame produced here rather than opening the camera a second time.
 Press ``q`` or Esc in the window to quit. ``camera_studio.py`` is the editor for
 the settings; this script is their consumer. Move the mouse over a block for
 pixel coordinates, and press ``s`` to save the annotated frame plus detection
-metadata in ``captures/``.
+metadata in ``captures/``. Press ``v`` to toggle block detection on/off.
 """
 
 import argparse
@@ -424,7 +424,8 @@ def main():
     print(f"Loaded settings: {args.settings}")
     print(f"Sensor settings: {len(applied)} applied")
 
-    ui = {"hover": None, "overlay": args.overlay, "message": "ready"}
+    ui = {"hover": None, "overlay": args.overlay, "detect_enabled": True,
+          "message": "ready"}
 
     def on_mouse(event, point):
         if event == "move":
@@ -434,8 +435,8 @@ def main():
         window = TkCameraWindow(
             f"Camera Feed - {camera.name}", size,
             display_scale=args.display_scale, mouse_callback=on_mouse,
-            buttons=(("Overlay (o)", "o"), ("Save snapshot", "s"),
-                     ("Quit", "q")),
+            buttons=(("Overlay (o)", "o"), ("Detect (v)", "v"),
+                     ("Save snapshot", "s"), ("Quit", "q")),
         )
     except (tk.TclError, cv2.error) as exc:
         print(f"Cannot open the camera UI: {exc}", file=sys.stderr)
@@ -475,8 +476,8 @@ def main():
             f"Camera: {camera.name} | {camera_state} | capture "
             f"{capture_rate.rate:5.1f} fps | age {age_text}",
             f"{feed_text} | preview {preview_rate.rate:5.1f} fps | overlay {ui['overlay']}",
-            f"Analysis: {analysis_snapshot.rate_hz:4.1f} Hz | seq "
-            f"{analysis_snapshot.source_sequence} | {analysis_text} | blocks {len(detections)} | "
+            f"Analysis: {'OFF' if not ui['detect_enabled'] else f'{analysis_snapshot.rate_hz:4.1f} Hz'} | "
+            f"seq {analysis_snapshot.source_sequence} | {analysis_text} | blocks {len(detections)} | "
             f"replaced {analysis_snapshot.replaced_count} | duplicate "
             f"{analysis_snapshot.duplicate_count}",
             f"Stages: remap {timings.ms.get('remap', 0):.1f} ms | "
@@ -484,7 +485,7 @@ def main():
             f"display {timings.ms.get('display', 0):.1f} ms",
             hover_text,
             f"Status: {analysis_snapshot.error or snapshot.error or ui['message']}",
-            "o overlay | s snapshot | q/Esc quit",
+            "o overlay | v detect | s snapshot | q/Esc quit",
         ]
 
     def handle_key(key):
@@ -494,6 +495,9 @@ def main():
             index = (OVERLAY_MODES.index(ui["overlay"]) + 1) % len(OVERLAY_MODES)
             ui["overlay"] = OVERLAY_MODES[index]
             ui["message"] = f"overlay: {ui['overlay']}"
+        elif key == ord("v"):
+            ui["detect_enabled"] = not ui["detect_enabled"]
+            ui["message"] = f"block detection {'on' if ui['detect_enabled'] else 'off'}"
         elif key == ord("s"):
             if last_display is None:
                 ui["message"] = "no frame is available to save"
@@ -507,7 +511,9 @@ def main():
         while True:
             snapshot = frame_pump.snapshot()
             analysis_snapshot = analysis.snapshot()
-            if analysis_snapshot.is_current(map_generation):
+            if not ui["detect_enabled"]:
+                detections = ()
+            elif analysis_snapshot.is_current(map_generation):
                 detections = analysis_snapshot.detections
 
             snapshot_state = snapshots.snapshot()
@@ -543,9 +549,10 @@ def main():
                 crop_resize(frame, roi, maps.out_size, interpolation)
             timings.observe("remap", time.perf_counter() - started)
             view.flags.writeable = False
-            analysis.submit(view, snapshot.sequence, map_generation,
-                            color_threshold=args.color_threshold,
-                            min_area=args.min_area)
+            if ui["detect_enabled"]:
+                analysis.submit(view, snapshot.sequence, map_generation,
+                                color_threshold=args.color_threshold,
+                                min_area=args.min_area)
             display = enhance_for_display(view) if args.enhance else view.copy()
             started = time.perf_counter()
             draw_block_overlay(display, detections, ui["hover"], None,

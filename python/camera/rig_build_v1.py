@@ -25,6 +25,7 @@ Keys
   u       undo the most recent calibration corner
   x       cancel calibration without deleting the previous map
   g       toggle grid
+  v       toggle block detection on/off
   [ / ]   build level down/up
   o       cycle rotation: NR -> R -> RR
   d       clear selected cell
@@ -259,6 +260,7 @@ def main():
         "pending_points": None,
         "show_grid": True,
         "overlay": args.overlay,
+        "detect_enabled": True,
         "message": "connected; click a grid cell",
     }
     if args.build_target is not None:
@@ -320,7 +322,8 @@ def main():
             close_request=allow_window_close, key_filter=allow_key,
             buttons=(("Overlay (i)", "i"), ("Calibrate (c)", "c"),
                      ("Undo (u)", "u"),
-                     ("Grid (g)", "g"), ("Level - ([)", "["),
+                     ("Grid (g)", "g"), ("Detect (v)", "v"),
+                     ("Level - ([)", "["),
                      ("Level + (])", "]"), ("Rotate (o)", "o"),
                      ("Deselect (d)", "d"), ("BUILD (b)", "b"),
                      ("Save (s)", "s"), ("Quit (q)", "q")),
@@ -366,6 +369,9 @@ def main():
             ui["message"] = f"overlay: {ui['overlay']}"
         elif key == ord("g"):
             ui["show_grid"] = not ui["show_grid"]
+        elif key == ord("v"):
+            ui["detect_enabled"] = not ui["detect_enabled"]
+            ui["message"] = f"block detection {'on' if ui['detect_enabled'] else 'off'}"
         elif key == ord("c"):
             try:
                 reject_mutation_if_unsafe()
@@ -466,9 +472,9 @@ def main():
         return [
             f"Camera: {camera.name} | {camera_state(snapshot, now)} | capture {capture_rate.rate:5.1f} fps",
             f"Feed: {size_text} | preview {preview_rate.rate:5.1f} fps | overlay {ui['overlay']}",
-            f"Analysis: {result.rate_hz:4.1f} Hz | seq {result.source_sequence} | "
-            f"{analysis_text} | blocks {len(detections)} | replaced "
-            f"{result.replaced_count} | duplicate {result.duplicate_count}",
+            f"Analysis: {'OFF' if not ui['detect_enabled'] else f'{result.rate_hz:4.1f} Hz'} | "
+            f"seq {result.source_sequence} | {analysis_text} | blocks {len(detections)} | "
+            f"replaced {result.replaced_count} | duplicate {result.duplicate_count}",
             f"Grid: {grid.cols}x{grid.rows} | {'CALIBRATED' if calibrated else 'APPROXIMATION ONLY'}",
             f"Rig: {rig.port_name} | level {controller.level} | rotation {controller.rotation}",
             f"Selected: {selected_text}",
@@ -480,7 +486,7 @@ def main():
             f"overlay {timings.ms.get('overlay', 0):.1f} ms | "
             f"grid {timings.ms.get('grid', 0):.1f} ms | "
             f"display {timings.ms.get('display', 0):.1f} ms",
-            "i overlay | c calibrate | g grid | [/] level | o rotate | d deselect",
+            "i overlay | c calibrate | g grid | v detect | [/] level | o rotate | d deselect",
             "b/Enter BUILD | s snapshot | q/Esc quit when safe",
         ]
 
@@ -495,7 +501,9 @@ def main():
                       file=sys.stderr if finished.locked else sys.stdout)
 
             result = analysis.snapshot()
-            if result.is_current(map_generation):
+            if not ui["detect_enabled"]:
+                detections = ()
+            elif result.is_current(map_generation):
                 detections = result.detections
             saved = snapshots.snapshot()
             if saved.completed_count != snapshot_count:
@@ -526,9 +534,10 @@ def main():
                     grid, image_size, projection)
                 calibrated = saved_workspace is not None
                 view.flags.writeable = False
-                analysis.submit(view, snapshot.sequence, map_generation,
-                                color_threshold=args.color_threshold,
-                                min_area=args.min_area)
+                if ui["detect_enabled"]:
+                    analysis.submit(view, snapshot.sequence, map_generation,
+                                    color_threshold=args.color_threshold,
+                                    min_area=args.min_area)
 
             if ui["pending_points"] is not None and image_size is not None:
                 try:
