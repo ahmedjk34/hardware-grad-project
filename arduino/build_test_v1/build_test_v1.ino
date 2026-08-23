@@ -6,7 +6,7 @@
 
   Plus a THIRD, independent motor driving a Z axis (single motor,
   not coupled to the X/Y pair), a GRIPPER SERVO on pin 6 with just
-  two positions (OPEN and CLOSE), and a FOURTH, independentB 
+  two positions (OPEN and CLOSE), and a FOURTH, independentB
   28BYJ-48 + ULN2003 stepper that only jogs +/-90 degrees on command.
 
   NEW IN build_tesT_v1:  the  B  (BUILD) command - one full
@@ -224,7 +224,7 @@ bool servoIsOpen = false;
 //   IN2 -> pin 37   RED
 //   IN3 -> pin 38   YELLOW
 //   IN4 -> pin 39   BLUE
-// Power the ULN2003 from a 5V external supply with a shared GND.
+// Power the ULN2003 from a 5V external supply with a shared GND
 
 const int AUX_STEPPER_IN1 = 36;
 const int AUX_STEPPER_IN2 = 37;
@@ -272,7 +272,7 @@ long auxStepperPos = 0;
 // two of these, so 500 us => 1.00 ms per step => ~1000 steps/sec.
 // RAISE the Z value to slow Z down (more torque, less chance of
 // losing steps under load); LOWER it to speed the lift up.
-unsigned int STEP_DELAY = 500;   // X and Y
+unsigned int STEP_DELAY = 500; // X and Y
 
 unsigned int STEP_DELAY_Z = 950; // Z only
 
@@ -281,7 +281,7 @@ unsigned int STEP_DELAY_Z = 950; // Z only
 //   stepsPerMoveZ -> the D/U commands (Z)
 // Z is worth setting finer: 150 steps is only ~2.9 cm of X/Y travel
 // but is nearly a fifth of the whole Z range.
-int stepsPerMove = 150;  // X and Y
+int stepsPerMove = 150; // X and Y
 
 int stepsPerMoveZ = 150; // Z only
 
@@ -394,7 +394,7 @@ const int LIMIT_PIN_Z_TOP = 29; // Z AXIS top limit switch   <<< NEW
 struct LimitSwitch
 {
   uint8_t axis;
-  int8_t end;   // DIR_NEG / DIR_POS - which end of the axis it guards
+  int8_t end; // DIR_NEG / DIR_POS - which end of the axis it guards
   uint8_t pin;
   bool useNC;   // true = normally-closed wiring
   bool enabled; // false = ignore this switch completely
@@ -459,8 +459,8 @@ const uint8_t LIMIT_CHECK_EVERY_N_STEPS = 1;
 
 const long SOFT_LIMIT_INFINITE = 0; // sentinel: no cap at all
 
-long SOFT_LIMIT_X_TRAVEL = 5050;                  // X- travel cap, in steps
-long SOFT_LIMIT_Y_TRAVEL = 7500;                  // Y+ travel cap, in steps
+long SOFT_LIMIT_X_TRAVEL = 5050;                      // X- travel cap, in steps
+long SOFT_LIMIT_Y_TRAVEL = 7500;                      // Y+ travel cap, in steps
 const long SOFT_LIMIT_Z_TRAVEL = SOFT_LIMIT_INFINITE; // Z: switch, not a cap
 
 // Tape-measured travel from each home switch to its software limit. These
@@ -654,9 +654,9 @@ float BLOCK_HEIGHT_CM = 1.5;
 //   Level 0 ignores all of these on purpose: ground is the physical
 //   switch, not a computed number, so it cannot drift.
 
-float Z_MARGIN_PER_LEVEL_CM = 0.0;  // cm added to EACH level (cumulative)
-float Z_MARGIN_FIXED_CM = 0.0;      // cm added ONCE to any level >= 1
-long Z_MARGIN_FIXED_STEPS = 0;      // raw step trim, applied last
+float Z_MARGIN_PER_LEVEL_CM = 0.0; // cm added to EACH level (cumulative)
+float Z_MARGIN_FIXED_CM = 0.0;     // cm added ONCE to any level >= 1
+long Z_MARGIN_FIXED_STEPS = 0;     // raw step trim, applied last
 
 // ------------------------------------------------------------
 //   HOW HIGH ARE WE ALLOWED TO BUILD?
@@ -769,17 +769,17 @@ const char *DISTANCE_UNIT = "mm";
 unsigned long statsSinceMs = 0;
 
 // --- commands accepted, by kind ---
-unsigned long statJogs = 0;         // 1-4, D, U
-unsigned long statGotos = 0;        // G
-unsigned long statHomeCommands = 0; // 0
-unsigned long statBuildCommands = 0;// B (parsed OK, whether or not it ran)
-unsigned long statBadCommands = 0;  // unparseable / unknown lines
+unsigned long statJogs = 0;          // 1-4, D, U
+unsigned long statGotos = 0;         // G
+unsigned long statHomeCommands = 0;  // 0
+unsigned long statBuildCommands = 0; // B (parsed OK, whether or not it ran)
+unsigned long statBadCommands = 0;   // unparseable / unknown lines
 
 // --- per axis ---
 unsigned long statHomeRuns[AXIS_COUNT] = {0, 0, 0};
 unsigned long statHomeFails[AXIS_COUNT] = {0, 0, 0};
-unsigned long statSoftBlocks[AXIS_COUNT] = {0, 0, 0};  // soft limit refusals
-unsigned long statShortMoves[AXIS_COUNT] = {0, 0, 0};  // moves that stopped early
+unsigned long statSoftBlocks[AXIS_COUNT] = {0, 0, 0}; // soft limit refusals
+unsigned long statShortMoves[AXIS_COUNT] = {0, 0, 0}; // moves that stopped early
 
 // --- per SWITCH, not per axis ---
 //
@@ -933,8 +933,8 @@ const char CMD_SERVO_CLOSE = 'C';
 
 const char CMD_AUX_STEPPER_CW = 'R'; // "R"  (RR is handled in handleLine)
 
-const char CMD_BUILD = 'B';      // B <col> <row> <level> [R|RR|NR]
-const char CMD_Z_TABLE = 'Z';    // print the Z / build calibration
+const char CMD_BUILD = 'B';   // B <col> <row> <level> [R|RR|NR]
+const char CMD_Z_TABLE = 'Z'; // print the Z / build calibration
 
 // ============================================================
 // BLOCK REASONS
@@ -1985,8 +1985,7 @@ float gridPackedCmOf(uint8_t axis, long count)
 // the complete packed grid. Positive means away from the axis home switch.
 float gridStartCmOf(uint8_t axis, long count)
 {
-  return (xyTravelCmOf(axis) - gridPackedCmOf(axis, count)) * 0.5
-         + gridTrimCmOf(axis);
+  return (xyTravelCmOf(axis) - gridPackedCmOf(axis, count)) * 0.5 + gridTrimCmOf(axis);
 }
 
 float gridEndCmOf(uint8_t axis, long count)
@@ -2001,8 +2000,7 @@ bool gridGeometryFits(uint8_t axis, long count)
     return false;
   }
   const float slack = 0.0001;
-  return gridStartCmOf(axis, count) >= -slack
-         && gridEndCmOf(axis, count) <= xyTravelCmOf(axis) + slack;
+  return gridStartCmOf(axis, count) >= -slack && gridEndCmOf(axis, count) <= xyTravelCmOf(axis) + slack;
 }
 
 long gridCountMaxOf(uint8_t axis)
@@ -2022,8 +2020,7 @@ long gridCountMaxOf(uint8_t axis)
 float cellCentreCmOf(uint8_t axis, long index)
 {
   long count = gridCountOf(axis);
-  return gridStartCmOf(axis, count)
-         + ((float)index - 0.5) * gridCellCmOf(axis);
+  return gridStartCmOf(axis, count) + ((float)index - 0.5) * gridCellCmOf(axis);
 }
 
 float toolOffsetCmOf(uint8_t axis, int8_t rotation)
@@ -2037,7 +2034,7 @@ float toolOffsetCmOf(uint8_t axis, int8_t rotation)
     return (axis == AXIS_X) ? TOOL_OFFSET_CCW_X_CM : TOOL_OFFSET_CCW_Y_CM;
   }
   return (axis == AXIS_X) ? TOOL_OFFSET_NEUTRAL_X_CM
-                           : TOOL_OFFSET_NEUTRAL_Y_CM;
+                          : TOOL_OFFSET_NEUTRAL_Y_CM;
 }
 
 // Convert a desired block centre to a holder position.  The target is refused
