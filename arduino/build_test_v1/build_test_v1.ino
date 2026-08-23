@@ -40,6 +40,7 @@
     S <cols> <rows> = change fixed-pitch grid count live. e.g.  S 20 4
 
     B <col> <row> <level> [R|RR|NR]   = BUILD one block   <<< NEW
+      BUILD calibration: col/row may be 0; B 0 0 is a no-op.
     Z               = print the Z / build calibration table  <<< NEW
     ?               = reprint the help text
 
@@ -2249,6 +2250,26 @@ bool gotoCell(long col, long row)
   return gotoCellForRotation(col, row, clawRotation);
 }
 
+// BUILD-only target. Zero means leave that axis at the origin after homing;
+// it is deliberately not accepted by the normal G command.
+bool gotoBuildTarget(long col, long row, int8_t rotation)
+{
+  if (!gridReady() || col < 0 || col > GRID_COLS || row < 0 || row > GRID_ROWS)
+    return false;
+
+  long targetX = 0;
+  long targetY = 0;
+  if ((col > 0 && !cellTargetPosition(AXIS_X, col, rotation, &targetX)) ||
+      (row > 0 && !cellTargetPosition(AXIS_Y, row, rotation, &targetY)))
+    return false;
+
+  if (!goToOrigin())
+    return false;
+  bool okY = row == 0 || moveAxisTo(AXIS_Y, targetY);
+  bool okX = col == 0 || moveAxisTo(AXIS_X, targetX);
+  return okX && okY;
+}
+
 // ============================================================
 // Z HEIGHT MATH  -  steps <-> cm <-> block levels      <<< NEW
 // ============================================================
@@ -2412,7 +2433,9 @@ bool zGoLevel(long level)
 //
 //    B <col> <row> <level> [R | RR | NR]
 //
-// col / row are grid cells, exactly as in the G command.
+// col / row are grid cells, exactly as in the G command. BUILD additionally
+// accepts zero as a calibration sentinel: B 0 5 moves only Y, B 17 0 moves
+// only X, and B 0 0 is a completely inert successful command.
 // level is a BLOCK level: 0 = ground, 1 = 1.5 cm, 2 = 3.0 cm ...
 // The rotation word is OPTIONAL and defaults to NR (no rotation).
 
@@ -2420,8 +2443,8 @@ void printBuildUsage()
 {
   Serial.println();
   Serial.println(F("  ERROR - use:  B <col> <row> <level> [R|RR|NR]"));
-  Serial.println(F("    col   1..GRID_COLS      (same as G)"));
-  Serial.println(F("    row   1..GRID_ROWS      (same as G)"));
+  Serial.println(F("    col   0..GRID_COLS      (0 = do not move X)"));
+  Serial.println(F("    row   0..GRID_ROWS      (0 = do not move Y)"));
   Serial.print(F("    level 0.."));
   Serial.print(maxBuildLevel());
   Serial.print(F("   (0 = ground, 1 = "));
@@ -2652,13 +2675,25 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
   statLastOk = false;
   statLastFailure = NULL;
 
+  // Calibration/no-op sentinel. B 0 0 <level> must not move anything.
+  if (col == 0 && row == 0)
+  {
+    statLastOk = true;
+    ackStart(F("OK"));
+    ackField(F("col"), col);
+    ackField(F("row"), row);
+    ackField(F("level"), level);
+    Serial.println();
+    return true;
+  }
+
   // ---- validation, all of it, before anything moves ----
 
   if (!gridReady())
   {
     return buildReject("grid needs both X/Y software limits");
   }
-  if (!cellInRange(col, row))
+  if (col < 0 || col > GRID_COLS || row < 0 || row > GRID_ROWS)
   {
     return buildReject("cell out of range");
   }
@@ -2667,8 +2702,8 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
   // block.  The same check is repeated in gotoCellForRotation() for direct G.
   long holderTargetX;
   long holderTargetY;
-  if (!cellTargetPosition(AXIS_X, col, wantRot, &holderTargetX) ||
-      !cellTargetPosition(AXIS_Y, row, wantRot, &holderTargetY))
+  if ((col > 0 && !cellTargetPosition(AXIS_X, col, wantRot, &holderTargetX)) ||
+      (row > 0 && !cellTargetPosition(AXIS_Y, row, wantRot, &holderTargetY)))
   {
     Serial.println(F("  ERROR - tool offset puts the holder outside the X/Y travel."));
     return buildReject("tool offset target outside X/Y travel");
@@ -2791,7 +2826,7 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
   // ---- 8. fly to the target cell ----
 
   buildStep(8, "Move X/Y to the target cell");
-  if (!gotoCellForRotation(col, row, wantRot))
+  if (!gotoBuildTarget(col, row, wantRot))
   {
     buildAbort("could not reach the target cell");
     return false;
@@ -4374,6 +4409,7 @@ void printInstructions()
   Serial.println(F("S <cols> <rows> fixed-pitch count, e.g. S 20 4"));
   Serial.println(F("--------------------------------------"));
   Serial.println(F("B <col> <row> <level> [R|RR|NR]   BUILD one block"));
+  Serial.println(F("    build calibration: col/row 0 skips that axis; B 0 0 is no-op"));
   Serial.println(F("    level 0 = ground, 1 = one block up, 2 = two ..."));
   Serial.println(F("    rotation is optional, default NR (no rotation)"));
   Serial.println(F("    e.g.  B 3 5 2 R     B 4 7 0     B 2 2 3 RR"));

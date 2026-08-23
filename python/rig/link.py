@@ -592,6 +592,9 @@ class Rig:
               timeout: float = 300.0) -> BuildResult:
         """`B <col> <row> <level>` — one full pick-and-place. Blocks until done.
 
+        For calibration, firmware also accepts zero for either coordinate:
+        ``B 0 5`` skips X and ``B 17 0`` skips Y; ``B 0 0`` is an inert no-op.
+
         Returns 'placed', 'rejected' or 'aborted'. **'aborted' means stop.**
         The claw may still be gripping a block somewhere unknown; the firmware
         says so itself. Do not retry it, do not home it, go and look.
