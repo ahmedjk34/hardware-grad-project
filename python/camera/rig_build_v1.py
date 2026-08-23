@@ -82,7 +82,6 @@ from camera.camera_feed import (  # noqa: E402
 from camera.snapshot_worker import SnapshotWorker  # noqa: E402
 from camera.gridded_camera_feed import (  # noqa: E402
     approximate_workspace,
-    axis_target_pixel,
     draw_calibration,
     draw_machine_grid,
     load_workspace,
@@ -147,29 +146,22 @@ def parse_args():
     return parser.parse_args()
 
 
-def draw_selected_cell(frame, workspace, grid, selected):
-    """Highlight the pending build target - a full cell, or a 0-axis mark."""
+def draw_selected_cell(frame, workspace, selected):
+    """Highlight the pending build target - always one full block-sized cell.
+
+    [0,5], [17,0] and [0,0] get exactly the same rectangle a normal [3,5]
+    would: they are real build sites, not points, via
+    ``WorkspaceMap.target_polygon``.
+    """
     if selected is None:
         return
     col, row = selected
     image_size = frame.shape[1::-1]
-    if col > 0 and row > 0:
-        polygon = np.asarray(
-            workspace.cell_polygon(col, row, image_size),
-            dtype=np.float32,
-        ).round().astype(np.int32)
-        cv2.polylines(frame, [polygon], True, SELECTED_COLOR, 4, cv2.LINE_AA)
-        return
-    # 0 on an axis: that axis stays parked at the machine origin, so there is
-    # no cell rectangle to draw - mark the point it will actually land on.
-    x, y = (round(v) for v in axis_target_pixel(workspace, grid, col, row, image_size))
-    cv2.drawMarker(frame, (x, y), SELECTED_COLOR, cv2.MARKER_CROSS, 16, 3, cv2.LINE_AA)
-    label = "HOME 0,0" if col == 0 and row == 0 else f"target [{col},{row}]"
-    at = (x + 10, y + 18)
-    cv2.putText(frame, label, at, cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 0, 0), 3,
-                cv2.LINE_AA)
-    cv2.putText(frame, label, at, cv2.FONT_HERSHEY_SIMPLEX, 0.42, SELECTED_COLOR, 1,
-                cv2.LINE_AA)
+    polygon = np.asarray(
+        workspace.target_polygon(col, row, image_size),
+        dtype=np.float32,
+    ).round().astype(np.int32)
+    cv2.polylines(frame, [polygon], True, SELECTED_COLOR, 4, cv2.LINE_AA)
 
 
 def camera_state(snapshot, now):
@@ -681,7 +673,7 @@ def main():
                     draw_machine_grid(
                         display, workspace, grid, ui["hover"], calibrated,
                         detail=ui["overlay"] == "detail")
-                    draw_selected_cell(display, workspace, grid, controller.selected)
+                    draw_selected_cell(display, workspace, controller.selected)
                 if ui["calibrating"]:
                     draw_calibration(
                         display, ui["calibration_points"], ui["hover"],

@@ -212,11 +212,11 @@ class WorkspaceMap:
     def axis_lane_polygon(self, axis, index, image_size):
         """Image polygon for the axis-only lane cell ``[index,0]`` or ``[0,index]``.
 
-        This is the origin margin - the real gap between the machine origin
-        and the packed grid's near edge, however wide or thin it actually is.
-        ``B``/``G``'s axis-only convention (0 on one axis means "stay at the
-        origin") lands exactly here, so this is what makes that a clickable,
-        drawable target instead of only reachable by typing a number.
+        Full block size, one cell-pitch beyond the packed grid's near edge -
+        the same size as every other cell, not squeezed into whatever trim
+        the calibration happens to have. ``B``/``G``'s axis-only convention
+        (0 on one axis means "stay at the origin") lands here, so a build
+        site there is exactly as real, and exactly as big, as any other.
         """
         if self._grid is None:
             raise ValueError("axis lanes need a physically scaled grid")
@@ -224,42 +224,79 @@ class WorkspaceMap:
         if axis == "col":
             x0_cm = g.x_start_cm + (index - 1) * g.cell_width_cm
             x1_cm = g.x_start_cm + index * g.cell_width_cm
-            y0_cm, y1_cm = 0.0, g.y_start_cm
+            y1_cm = g.y_start_cm
+            y0_cm = y1_cm - g.cell_height_cm
         elif axis == "row":
-            x0_cm, x1_cm = 0.0, g.x_start_cm
             y0_cm = g.y_start_cm + (index - 1) * g.cell_height_cm
             y1_cm = g.y_start_cm + index * g.cell_height_cm
+            x1_cm = g.x_start_cm
+            x0_cm = x1_cm - g.cell_width_cm
         else:
             raise ValueError("axis must be 'col' or 'row'")
         corners_cm = ((x0_cm, y0_cm), (x1_cm, y0_cm), (x1_cm, y1_cm), (x0_cm, y1_cm))
         return [self.pixel_at(x / g.workspace_width_cm, y / g.workspace_height_cm,
                               image_size) for x, y in corners_cm]
 
+    def origin_polygon(self, image_size):
+        """Image polygon for the ``[0,0]`` home cell - block-sized, like any other.
+
+        Home is a real place blocks get picked up from, not just a point: one
+        cell-pitch back from [1,1] on both axes, where the col-0 and row-0
+        lanes overlap.
+        """
+        if self._grid is None:
+            raise ValueError("the origin cell needs a physically scaled grid")
+        g = self._grid
+        x0_cm, x1_cm = g.x_start_cm - g.cell_width_cm, g.x_start_cm
+        y0_cm, y1_cm = g.y_start_cm - g.cell_height_cm, g.y_start_cm
+        corners_cm = ((x0_cm, y0_cm), (x1_cm, y0_cm), (x1_cm, y1_cm), (x0_cm, y1_cm))
+        return [self.pixel_at(x / g.workspace_width_cm, y / g.workspace_height_cm,
+                              image_size) for x, y in corners_cm]
+
+    def target_polygon(self, col, row, image_size):
+        """Image polygon for any valid B/G target - 0 on either axis included.
+
+        Always one full block-sized cell: a normal ``[col,row]`` polygon, the
+        ``[0,0]`` home cell, or whichever axis-only lane cell the non-zero
+        coordinate picks out.
+        """
+        if col > 0 and row > 0:
+            return self.cell_polygon(col, row, image_size)
+        if col == 0 and row == 0:
+            return self.origin_polygon(image_size)
+        if row == 0:
+            return self.axis_lane_polygon("col", col, image_size)
+        return self.axis_lane_polygon("row", row, image_size)
+
     def axis_lane_at(self, point, image_size):
         """Return the axis-only target a pixel falls on, or None.
 
-        ``(col, 0)`` in the near-Y margin, ``(0, row)`` in the near-X margin,
-        or ``(0, 0)`` in the corner where both margins overlap - the machine
-        origin itself. Distinct from :meth:`cell_at`, which only ever returns
-        a real 1-based block cell.
+        ``(col, 0)`` in the row-0 lane (Y held at the origin), ``(0, row)``
+        in the column-0 lane (X held at the origin), or ``(0, 0)`` where both
+        lanes overlap - the machine origin itself.
+        Distinct from :meth:`cell_at`, which only ever returns a real
+        1-based block cell. Each lane is a full block-sized cell, so it can
+        extend past the calibrated envelope corner when the real trim is
+        smaller than one cell pitch; that is fine for hit-testing here even
+        though :meth:`cell_at` deliberately refuses points outside the quad.
         """
         if self._grid is None:
             return None
         g = self._grid
         u, v = self.normalized_at(point, image_size)
+        x_cm = u * g.workspace_width_cm
+        y_cm = v * g.workspace_height_cm
         epsilon = 1e-9
-        if u < -epsilon or v < -epsilon or u > 1 + epsilon or v > 1 + epsilon:
-            return None
-        x_cm = min(max(u, 0.0), 1.0) * g.workspace_width_cm
-        y_cm = min(max(v, 0.0), 1.0) * g.workspace_height_cm
-        in_x_margin = x_cm <= g.x_start_cm + epsilon
-        in_y_margin = y_cm <= g.y_start_cm + epsilon
-        if in_x_margin and in_y_margin:
+        row0_lane_y0 = g.y_start_cm - g.cell_height_cm
+        col0_lane_x0 = g.x_start_cm - g.cell_width_cm
+        in_row0_lane_y = row0_lane_y0 - epsilon <= y_cm <= g.y_start_cm + epsilon
+        in_col0_lane_x = col0_lane_x0 - epsilon <= x_cm <= g.x_start_cm + epsilon
+        if in_col0_lane_x and in_row0_lane_y:
             return (0, 0)
-        if in_y_margin and g.x_start_cm - epsilon <= x_cm <= g.x_end_cm + epsilon:
+        if in_row0_lane_y and g.x_start_cm - epsilon <= x_cm <= g.x_end_cm + epsilon:
             col = min(int((x_cm - g.x_start_cm) / g.cell_width_cm), g.cols - 1) + 1
             return (col, 0)
-        if in_x_margin and g.y_start_cm - epsilon <= y_cm <= g.y_end_cm + epsilon:
+        if in_col0_lane_x and g.y_start_cm - epsilon <= y_cm <= g.y_end_cm + epsilon:
             row = min(int((y_cm - g.y_start_cm) / g.cell_height_cm), g.rows - 1) + 1
             return (0, row)
         return None
