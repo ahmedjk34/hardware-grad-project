@@ -192,13 +192,14 @@ check("workspace projective round-trip",
 check("workspace rejects outside click",
       workspace.cell_at((0, 0), (640, 480)) is None)
 
-# Physical mapping uses the four corners of the full 34x40 cm envelope. The
-# packed 34x37.5 cm block grid retains its centred Y margins instead of being
-# stretched over that whole quadrilateral.
+# Physical mapping uses the four corners of the [0,0] home cell through the
+# last block cell: one cell-pitch of margin at the start (2 cm x, 7.5 cm y
+# for this 2x7.5 cm grid), none left over at the far end - so the mapped
+# workspace is 36x45 cm, not the declared 34x40 cm bed.
 physical_workspace = WorkspaceMap.from_grid(from_cfg, corners, (640, 480))
 check("physical workspace matches grid JSON", physical_workspace.matches_grid(from_cfg))
-first_centre = physical_workspace.pixel_at(1.0 / 34.0, 5.0 / 40.0, (640, 480))
-last_centre = physical_workspace.pixel_at(33.0 / 34.0, 35.0 / 40.0, (640, 480))
+first_centre = physical_workspace.pixel_at(3.0 / 36.0, 11.25 / 45.0, (640, 480))
+last_centre = physical_workspace.pixel_at(35.0 / 36.0, 41.25 / 45.0, (640, 480))
 check("physical camera map finds first cell",
       physical_workspace.cell_at(first_centre, (640, 480)) == (1, 1))
 check("physical camera map finds last cell",

@@ -5,9 +5,13 @@ The saved points are normalized corrected-image coordinates.  The homography
 therefore survives display scaling and output resolution changes; it does not
 pretend to survive changing the lens projection/FOV after calibration.
 
-New maps use the four corners of the complete 34 x 40 cm machine envelope and
-retain the centred margins around the 33 x 37.5 cm block grid. Count-only maps
-remain readable for compatibility, but stretch their cells across the quad.
+New maps use the four corners of the [0,0] home cell through the last block
+cell - i.e. click the OUTER edge of [0,0], not the near edge of [1,1]. [0,0]
+is a real, block-sized build site (see rig.grid and B/G's axis-only 0), so it
+gets exactly one cell-pitch of margin at the start and none left over at the
+far end, regardless of the declared physical bed size in config/rig.json.
+Count-only maps remain readable for compatibility, but stretch their cells
+across the quad.
 """
 
 from __future__ import annotations
@@ -24,10 +28,10 @@ from rig.grid import MachineGrid
 
 WORKSPACE_MAP_PATH = Path(__file__).resolve().parents[2] / "config" / "workspace_map.json"
 CORNER_NAMES = (
-    "machine envelope X/Y home corner",
-    "machine envelope far-X/home-Y corner",
-    "machine envelope far-X/far-Y corner",
-    "machine envelope home-X/far-Y corner",
+    "outer X/Y corner of the [0,0] home cell",
+    "outer far-X corner of the [last-col,0] cell",
+    "outer far-X/far-Y corner of the [last-col,last-row] cell",
+    "outer far-Y corner of the [0,last-row] cell",
 )
 
 
@@ -90,15 +94,31 @@ class WorkspaceMap:
         self._grid = None
         if self.physical_grid is not None:
             geometry = self.physical_grid
+            cell_w = float(geometry["cell_width_cm"])
+            cell_h = float(geometry["cell_height_cm"])
+            trim_x = float(geometry.get("trim_x_cm", 0.0))
+            trim_y = float(geometry.get("trim_y_cm", 0.0))
+            # The four clicks bound the [0,0] home cell's outer corner to the
+            # last cell's far corner - one full cell-pitch of margin at the
+            # start (plus any configured fine trim), none left over at the
+            # far end. This is deliberately independent of the declared
+            # workspace_width_cm/height_cm: those size a real physical bed
+            # that may be larger than what anyone calibrates against, and a
+            # centred-in-a-bigger-envelope margin is not what "click the
+            # edge of cell [0,0]" means. See CORNER_NAMES.
+            near_x = cell_w + trim_x
+            near_y = cell_h + trim_y
+            packed_w = self.cols * cell_w
+            packed_h = self.rows * cell_h
             self._grid = MachineGrid(
                 cols=self.cols,
                 rows=self.rows,
-                cell_width_cm=float(geometry["cell_width_cm"]),
-                cell_height_cm=float(geometry["cell_height_cm"]),
-                workspace_width_cm=float(geometry["workspace_width_cm"]),
-                workspace_height_cm=float(geometry["workspace_height_cm"]),
-                trim_x_cm=float(geometry.get("trim_x_cm", 0.0)),
-                trim_y_cm=float(geometry.get("trim_y_cm", 0.0)),
+                cell_width_cm=cell_w,
+                cell_height_cm=cell_h,
+                workspace_width_cm=packed_w + near_x,
+                workspace_height_cm=packed_h + near_y,
+                trim_x_cm=near_x / 2,
+                trim_y_cm=near_y / 2,
             )
 
     @classmethod
@@ -110,11 +130,11 @@ class WorkspaceMap:
 
     @classmethod
     def from_grid(cls, grid: MachineGrid, corners, image_size, projection=None):
-        """Map four camera points around the full physical X/Y envelope.
+        """Map four camera points around the [0,0]-through-[cols,rows] footprint.
 
-        Unlike the legacy count-only constructor, this preserves the centred
-        leftover strips and the signed X/Y trims instead of stretching the
-        packed block grid to fill the complete camera quadrilateral.
+        Unlike the legacy count-only constructor, this keeps the [0,0] home
+        cell's own block size and the signed X/Y trims instead of stretching
+        the packed block grid to fill the complete camera quadrilateral.
         """
         if not grid.has_physical_scale:
             raise ValueError("workspace mapping needs a physically scaled grid")
