@@ -38,6 +38,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+import tkinter as tk
 from pathlib import Path
 
 import cv2
@@ -66,6 +67,7 @@ from camera.gridded_camera_feed import (  # noqa: E402
     load_workspace,
     projection_metadata,
 )
+from camera.tk_camera_window import TkCameraWindow  # noqa: E402
 from rig.build_controller import (  # noqa: E402
     BuildController,
     BuildStateError,
@@ -132,41 +134,9 @@ def draw_selected_cell(frame, workspace, selected):
 
 def draw_build_panel(frame, controller, port_name, message, camera_state,
                      building=False):
-    if controller.locked:
-        state = "LOCKED — HUMAN INSPECTION REQUIRED"
-    elif building:
-        state = "BUILDING — SERIAL INPUT LOCKED"
-    elif controller.selected is not None:
-        state = ("CALIBRATION TARGET — PRESS b OR ENTER TO CONFIRM"
-                 if 0 in controller.selected else
-                 "SELECTED — PRESS b OR ENTER TO CONFIRM")
-    else:
-        state = "READY — CLICK A CALIBRATED CELL"
-
-    command = controller.command or "B <select col> <select row> <level>"
-    last = "none"
-    if controller.last_result is not None:
-        last = str(controller.last_result)
-        if controller.last_result.reason:
-            last += f": {controller.last_result.reason}"
-    lines = [
-        f"RIG BUILD V1: {state}",
-        f"serial {port_name} | level {controller.level} | rotation {controller.rotation}",
-        f"next command: {command}",
-        f"status: {message}",
-        f"camera: {camera_state}",
-        f"last result: {last}",
-        "[ / ] level | o rotation | d deselect | b/Enter BUILD",
-    ]
-    width = min(600, frame.shape[1] - 8)
-    draw_info_box(
-        frame,
-        lines,
-        origin=(4, max(4, frame.shape[0] - 134)),
-        width=width,
-        scale=0.39,
-        highlight_first=controller.locked or building,
-    )
+    # The build state is shown in the Tk status panel.  Keep the image reserved
+    # for camera, grid, detection, and the selected-cell geometry.
+    return frame
 
 
 def camera_state(snapshot, now):
@@ -187,17 +157,9 @@ def camera_is_live(snapshot, now):
 
 def draw_camera_warning(frame, snapshot, now):
     """Make a stuck CSI capture visible while the rest of the UI stays alive."""
-    age = snapshot.age_s(now)
-    if age is None:
-        detail = snapshot.error or "capture worker has not delivered a frame"
-        lines = ["CAMERA WAITING", detail]
-    elif age >= CAMERA_STALE_AFTER_S:
-        detail = snapshot.error or "capture worker has not delivered a newer frame"
-        lines = [f"CAMERA STALLED — {age:.1f}s since frame #{snapshot.sequence}", detail]
-    else:
-        return
-    draw_info_box(frame, lines, origin=(4, 4), width=min(700, frame.shape[1] - 8),
-                  scale=0.42, highlight_first=True)
+    # A warning is status text, not camera content.  The caller puts the same
+    # detail in the Tk panel below the image.
+    return frame
 
 
 def result_message(result):
@@ -311,19 +273,34 @@ def main():
         ui["message"] = (f"calibration target [{args.build_target[0]},"
                           f"{args.build_target[1]}] selected; confirm command")
 
-    def on_mouse(event, x, y, _flags, state):
-        point = (x / args.display_scale, y / args.display_scale)
-        if event == cv2.EVENT_MOUSEMOVE:
-            state["hover"] = point
-        elif event == cv2.EVENT_LBUTTONDOWN:
-            if state["calibrating"]:
-                if len(state["calibration_points"]) < 4:
-                    state["calibration_points"].append(point)
+    def on_mouse(event, point):
+        if point is None:
+            return
+        if event == "move":
+            ui["hover"] = point
+        elif event == "click":
+            if ui["calibrating"]:
+                if len(ui["calibration_points"]) < 4:
+                    ui["calibration_points"].append(point)
             else:
-                state["pending_select"] = point
+                ui["pending_select"] = point
 
-    cv2.namedWindow(window, cv2.WINDOW_AUTOSIZE)
-    cv2.setMouseCallback(window, on_mouse, ui)
+    try:
+        window = TkCameraWindow(
+            f"Rig Build V1 - {camera.name} - {rig.port_name}", size,
+            display_scale=args.display_scale, mouse_callback=on_mouse,
+            buttons=(("Calibrate (c)", "c"), ("Undo (u)", "u"),
+                     ("Grid (g)", "g"), ("Level - ([)", "["),
+                     ("Level + (])", "]"), ("Rotate (o)", "o"),
+                     ("Deselect (d)", "d"), ("BUILD (b)", "b"),
+                     ("Save (s)", "s"), ("Quit (q)", "q")),
+        )
+    except tk.TclError as exc:
+        print(f"Cannot open the Tk rig window: {exc}", file=sys.stderr)
+        if frame_pump.stop():
+            camera.release()
+        rig.close()
+        return 1
     maps = None
     input_size = None
     fps = 0.0
@@ -341,14 +318,15 @@ def main():
                 w, h = camera.size
                 waiting = np.zeros((h, w, 3), dtype=np.uint8)
                 draw_camera_warning(waiting, snapshot, now)
-                shown = cv2.resize(
-                    waiting, None, fx=args.display_scale, fy=args.display_scale,
-                    interpolation=cv2.INTER_AREA,
-                ) if args.display_scale != 1.0 else waiting
-                cv2.imshow(window, shown)
-                key = cv2.waitKey(20) & 0xFF
-                if key in (ord("q"), 27) or \
-                        cv2.getWindowProperty(window, cv2.WND_PROP_VISIBLE) < 1:
+                window.show(waiting, [
+                    f"Camera: {camera.name}",
+                    f"Camera: {camera_state(snapshot, now)}",
+                    f"Error: {snapshot.error or 'waiting for first frame'}",
+                    f"Rig: {rig.port_name} | build: {'running' if job.running else 'idle'}",
+                    "q/Esc quits when no build is running",
+                ])
+                key = window.poll_key()
+                if key in (ord("q"), 27) or window.closed:
                     if job.running:
                         ui["message"] = "build in progress; cannot quit until it reports"
                     else:
@@ -427,28 +405,37 @@ def main():
                                        min_area=args.min_area)
             display = view.copy() if args.no_enhance else enhance_for_display(view)
             display = draw_block_overlay(
-                display, detections, ui["hover"], fps,
+                display, detections, ui["hover"], None,
                 "COORDS: corrected pixels + selectable machine grid",
+                show_info=False,
             )
             if ui["show_grid"]:
                 draw_machine_grid(display, workspace, grid, ui["hover"], calibrated)
                 draw_selected_cell(display, workspace, controller.selected)
                 draw_grid_status(display, grid, calibrated, rejection, enabled)
-            if ui["calibrating"]:
-                draw_calibration(display, ui["calibration_points"], ui["hover"])
-            else:
-                draw_build_panel(display, controller, rig.port_name, ui["message"],
-                                 camera_state(snapshot, now),
-                                 building=building)
-            draw_camera_warning(display, snapshot, now)
+            # Calibration/build/camera-health feedback is shown in the Tk panel;
+            # only grid, selected-cell, and block geometry remain on the image.
 
-            shown = cv2.resize(
-                display, None, fx=args.display_scale, fy=args.display_scale,
-                interpolation=cv2.INTER_AREA,
-            ) if args.display_scale != 1.0 else display
-
-            cv2.imshow(window, shown)
-            key = cv2.waitKey(1) & 0xFF
+            selected = controller.selected
+            selected_text = (
+                f"Selected: [{selected[0]},{selected[1]}] | command: {controller.command}"
+                if selected is not None else "Selected: none")
+            last_result = controller.last_result
+            result_text = f"Last result: {last_result}" if last_result else "Last result: none"
+            lock_text = controller.locked_reason if controller.locked else "unlocked"
+            window.show(display, [
+                f"Camera: {camera.name} | feed {image_size[0]}x{image_size[1]} | {fps:5.1f} fps",
+                f"Camera state: {camera_state(snapshot, now)} | blocks detected: {len(detections)}",
+                f"Grid: {grid.cols}x{grid.rows} | {'CALIBRATED' if calibrated else 'APPROXIMATION ONLY'}",
+                f"Rig: {rig.port_name} | level {controller.level} | rotation {controller.rotation}",
+                selected_text,
+                f"Build state: {'RUNNING' if building else ('LOCKED' if controller.locked else 'READY')} | {ui['message']}",
+                result_text,
+                f"Calibration: {'active ' + str(len(ui['calibration_points'])) + '/4' if ui['calibrating'] else 'inactive'} | {lock_text}",
+                "c calibrate | Enter save | u undo | x cancel | g grid | [/] level | o rotate | d deselect",
+                "b/Enter BUILD | s snapshot | q/Esc quit when safe",
+            ])
+            key = window.poll_key()
             if key in (ord("q"), 27):
                 if building:
                     ui["message"] = "build in progress; cannot quit until it reports"
@@ -530,7 +517,7 @@ def main():
                 except BuildStateError as exc:
                     ui["message"] = str(exc)
 
-            if cv2.getWindowProperty(window, cv2.WND_PROP_VISIBLE) < 1:
+            if window.closed:
                 break
     finally:
         if job.running:
@@ -547,7 +534,7 @@ def main():
             # safer owner of this exceptional cleanup path.
             print("Camera capture is still blocked; leaving it for process shutdown.",
                   file=sys.stderr)
-        cv2.destroyAllWindows()
+        window.close()
         rig.close()
     return status
 

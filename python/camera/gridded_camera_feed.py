@@ -32,6 +32,7 @@ import argparse
 import json
 import sys
 import time
+import tkinter as tk
 from dataclasses import asdict
 from pathlib import Path
 
@@ -68,6 +69,7 @@ from vision.overlays import (  # noqa: E402
     WARN_COLOR,
     draw_info_box,
 )
+from camera.tk_camera_window import TkCameraWindow  # noqa: E402
 
 
 ENVELOPE_COLOR = (170, 170, 170)
@@ -203,10 +205,8 @@ def draw_machine_grid(frame, workspace, grid, hover_point, calibrated):
             f"build cell: B {cell[0]} {cell[1]} <level>",
         ]
         width = min(400, frame.shape[1] - 8)
-        draw_info_box(frame, lines,
-                      origin=(max(4, frame.shape[1] - width - 4),
-                              max(4, frame.shape[0] - 70)),
-                      width=width, scale=0.40)
+        # Cell identity and coordinates are reported in the Tk status panel;
+        # the image remains available for the grid and block geometry.
     return cell
 
 
@@ -232,9 +232,7 @@ def draw_grid_status(frame, grid, calibrated, rejection, correction_enabled):
         "build calibration: rig_build_v1.py --build-target COL ROW",
     ]
     width = min(470, frame.shape[1] - 8)
-    draw_info_box(frame, lines,
-                  origin=(max(4, frame.shape[1] - width - 4), 4),
-                  width=width, scale=0.38, highlight_first=highlight)
+    # Diagnostics belong below the image in TkCameraWindow.
 
 
 def calibration_line_color(start, end):
@@ -304,9 +302,7 @@ def draw_calibration(frame, points, cursor=None):
             "Verify the closed outline surrounds the complete machine envelope.",
             "Enter saves this map | u undo last corner | x cancel",
         ]
-    draw_info_box(frame, lines, origin=(4, 4),
-                  width=min(560, frame.shape[1] - 8), scale=0.40,
-                  highlight_first=True)
+    # Calibration instructions/status are rendered in the Tk panel.
 
 
 def main():
@@ -367,16 +363,27 @@ def main():
         "show_grid": True,
     }
 
-    def on_mouse(event, x, y, _flags, state):
-        point = (x / args.display_scale, y / args.display_scale)
-        if event == cv2.EVENT_MOUSEMOVE:
-            state["hover"] = point
-        elif event == cv2.EVENT_LBUTTONDOWN and state["calibrating"]:
-            if len(state["calibration_points"]) < 4:
-                state["calibration_points"].append(point)
+    def on_mouse(event, point):
+        if point is None:
+            return
+        if event == "move":
+            ui["hover"] = point
+        elif event == "click" and ui["calibrating"]:
+            if len(ui["calibration_points"]) < 4:
+                ui["calibration_points"].append(point)
 
-    cv2.namedWindow(window, cv2.WINDOW_AUTOSIZE)
-    cv2.setMouseCallback(window, on_mouse, ui)
+    try:
+        window = TkCameraWindow(
+            f"Gridded Camera Feed - {camera.name}", size,
+            display_scale=args.display_scale, mouse_callback=on_mouse,
+            buttons=(("Calibrate (c)", "c"), ("Undo (u)", "u"),
+                     ("Save (s)", "s"), ("Grid (g)", "g"),
+                     ("Quit (q)", "q")),
+        )
+    except tk.TclError as exc:
+        print(f"Cannot open the Tk camera window: {exc}", file=sys.stderr)
+        camera.release()
+        return 1
     maps = None
     input_size = None
     fps = 0.0
@@ -428,23 +435,28 @@ def main():
                                        min_area=args.min_area)
             display = view.copy() if args.no_enhance else enhance_for_display(view)
             display = draw_block_overlay(
-                display, detections, ui["hover"], fps,
+                display, detections, ui["hover"], None,
                 "COORDS: corrected pixels + machine-grid mapping",
+                show_info=False,
             )
             if ui["show_grid"]:
                 draw_machine_grid(display, workspace, grid, ui["hover"], calibrated)
-                draw_grid_status(display, grid, calibrated, rejection, enabled)
-            if ui["calibrating"]:
-                draw_calibration(display, ui["calibration_points"], ui["hover"])
-
-            if args.display_scale != 1.0:
-                shown = cv2.resize(display, None, fx=args.display_scale,
-                                   fy=args.display_scale, interpolation=cv2.INTER_AREA)
-            else:
-                shown = display
-
-            cv2.imshow(window, shown)
-            key = cv2.waitKey(1) & 0xFF
+            cell = workspace.cell_at(ui["hover"], image_size) if ui["hover"] else None
+            cell_text = f"Hovered cell: [{cell[0]},{cell[1]}]" if cell else "Hovered cell: none"
+            calibration_text = (
+                f"Calibration: active ({len(ui['calibration_points'])}/4 corners)"
+                if ui["calibrating"] else
+                ("Grid: CALIBRATED" if calibrated else
+                 f"Grid: APPROXIMATION ONLY ({rejection or 'press c to calibrate'})"))
+            window.show(display, [
+                f"Camera: {camera.name} | input {input_size[0]}x{input_size[1]}",
+                f"Feed: {image_size[0]}x{image_size[1]} | {fps:5.1f} fps | blocks: {len(detections)}",
+                f"Grid: {grid.cols}x{grid.rows}, cell {grid.cell_width_cm:g}x{grid.cell_height_cm:g} cm",
+                calibration_text,
+                cell_text,
+                "c calibrate | Enter save corners | u undo | x cancel | g grid | s snapshot | q/Esc quit",
+            ])
+            key = window.poll_key()
             if key in (ord("q"), 27):
                 return 0
             if key == ord("c"):
@@ -474,11 +486,11 @@ def main():
             elif key == ord("s"):
                 image_path, data_path = save_detection_snapshot(display, detections)
                 print(f"Saved {image_path} and {data_path}")
-            if cv2.getWindowProperty(window, cv2.WND_PROP_VISIBLE) < 1:
+            if window.closed:
                 return 0
     finally:
         camera.release()
-        cv2.destroyAllWindows()
+        window.close()
 
 
 if __name__ == "__main__":

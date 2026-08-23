@@ -81,6 +81,7 @@ from vision.fisheye import (
     undistort,
 )
 from vision.overlays import draw_grid, draw_info_box
+from camera.tk_camera_window import TkCameraWindow
 
 INTERP_NAMES = list(INTERPOLATIONS)
 
@@ -287,8 +288,13 @@ def main():
               "visually straight, not metric.")
     print(__doc__.split("Keys\n----")[1].split("Tuning rule")[0])
 
-    window = "Undistorted Preview"
-    cv2.namedWindow(window, cv2.WINDOW_AUTOSIZE)
+    window = TkCameraWindow(
+        "Undistorted Preview", maps.out_size,
+        buttons=(("Correction (u)", "u"), ("Raw/Corrected (b)", "b"),
+                 ("Grid (g)", "g"), ("Save (s)", "s"),
+                 ("Reset (r)", "r"), ("Write profile (w)", "w"),
+                 ("Quit (q)", "q")),
+    )
 
     show_corrected, show_pair, show_grid = True, False, False
     fps = 0.0
@@ -329,23 +335,17 @@ def main():
                 fps = 0.9 * fps + 0.1 * (1.0 / dt) if fps else 1.0 / dt
 
             mode = "RAW|CORRECTED" if show_pair else ("CORRECTED" if show_corrected else "RAW")
-            draw_info_box(view, [
-                f"PROFILE: {'CALIBRATED' if profile.calibrated else 'ESTIMATED (uncalibrated)'}",
-                f"lens FOV {profile.lens_fov_deg:.0f}deg ({profile.fov_reference})  "
-                f"model {profile.model}",
-                f"output FOV {profile.output_fov_deg:.0f}deg  "
-                f"{maps.out_size[0]}x{maps.out_size[1]}  scale {profile.output_scale:.2f}",
-                f"in {camera.size[0]}x{camera.size[1]}  {fps:5.1f} fps  "
-                f"{state['interp']}  view {mode}",
+            window.show(view, [
+                f"Profile: {'CALIBRATED' if profile.calibrated else 'ESTIMATED (uncalibrated)'}",
+                f"Lens: {profile.lens_fov_deg:.0f}° {profile.fov_reference} | model {profile.model}",
+                f"Output: {maps.out_size[0]}x{maps.out_size[1]} | FOV {profile.output_fov_deg:.0f}° | scale {profile.output_scale:.2f}",
+                f"Input: {camera.size[0]}x{camera.size[1]} | {fps:5.1f} fps | {state['interp']} | view {mode}",
                 describe_sampling(maps),
-            ], highlight_first=not profile.calibrated)
+                "[ / ] lens FOV | -/= output FOV | m model | ,/. scale | i interpolation",
+                "u correction | b raw/corrected | g grid | s snapshot | r reset | w write | q/Esc quit",
+            ])
 
-            if args.display_scale != 1.0:
-                view = cv2.resize(view, None, fx=args.display_scale, fy=args.display_scale,
-                                  interpolation=cv2.INTER_AREA)
-
-            cv2.imshow(window, view)
-            key = cv2.waitKey(1) & 0xFF
+            key = window.poll_key()
 
             if key in (ord("q"), 27):
                 break
@@ -372,11 +372,11 @@ def main():
             elif key == ord("w"):
                 print(f"Wrote lens profile to {profile.save(args.profile)}")
 
-            if cv2.getWindowProperty(window, cv2.WND_PROP_VISIBLE) < 1:
+            if window.closed:
                 break
     finally:
         camera.release()
-        cv2.destroyAllWindows()
+        window.close()
 
 
 if __name__ == "__main__":

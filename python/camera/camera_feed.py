@@ -20,6 +20,7 @@ import argparse
 import json
 import sys
 import time
+import tkinter as tk
 from dataclasses import fields
 from pathlib import Path
 
@@ -43,6 +44,7 @@ from vision.fisheye import (  # noqa: E402
     undistort,
 )
 from vision.overlays import draw_info_box  # noqa: E402
+from camera.tk_camera_window import TkCameraWindow  # noqa: E402
 
 
 SETTINGS_PATH = Path(__file__).resolve().parents[1] / "config" / "camera_settings.json"
@@ -226,7 +228,8 @@ def hovered_block(detections, point):
 
 
 def draw_block_overlay(frame, detections, hover_point=None, fps=None,
-                       coordinates_label="COORDS: corrected-image pixels (machine mapping pending)"):
+                       coordinates_label="COORDS: corrected-image pixels (machine mapping pending)",
+                       show_info=True):
     """Draw clean colour-coded edges, boxes, IDs, centres and hover details."""
     fill = frame.copy()
     for index, detection in enumerate(detections):
@@ -255,6 +258,9 @@ def draw_block_overlay(frame, detections, hover_point=None, fps=None,
                     (0, 0, 0), 3, cv2.LINE_AA)
         cv2.putText(frame, label, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.42,
                     color, 1, cv2.LINE_AA)
+
+    if not show_info:
+        return frame
 
     rate = f"  |  {fps:4.1f} fps" if fps is not None else ""
     hud = [
@@ -369,15 +375,22 @@ def main():
     print(f"Loaded settings: {args.settings}")
     print(f"Sensor settings: {len(applied)} applied")
 
-    window = f"Camera Feed - {camera.name}"
     ui = {"hover": None}
 
-    def on_mouse(event, x, y, _flags, state):
-        if event == cv2.EVENT_MOUSEMOVE:
-            state["hover"] = (x / args.display_scale, y / args.display_scale)
+    def on_mouse(event, point):
+        if event == "move":
+            ui["hover"] = point
 
-    cv2.namedWindow(window, cv2.WINDOW_AUTOSIZE)
-    cv2.setMouseCallback(window, on_mouse, ui)
+    try:
+        window = TkCameraWindow(
+            f"Camera Feed - {camera.name}", size,
+            display_scale=args.display_scale, mouse_callback=on_mouse,
+            buttons=(("Save snapshot", "s"), ("Quit", "q")),
+        )
+    except tk.TclError as exc:
+        print(f"Cannot open the Tk camera window: {exc}", file=sys.stderr)
+        camera.release()
+        return 1
     maps = None
     input_size = None
     fps = 0.0
@@ -405,25 +418,28 @@ def main():
             detections = detect_blocks(view, color_threshold=args.color_threshold,
                                        min_area=args.min_area)
             display = view if args.no_enhance else enhance_for_display(view)
-            display = draw_block_overlay(display, detections, ui["hover"], fps)
-            if args.display_scale != 1.0:
-                shown = cv2.resize(display, None, fx=args.display_scale,
-                                   fy=args.display_scale, interpolation=cv2.INTER_AREA)
-            else:
-                shown = display
-
-            cv2.imshow(window, shown)
-            key = cv2.waitKey(1) & 0xFF
+            display = draw_block_overlay(display, detections, ui["hover"], None,
+                                         show_info=False)
+            image_size = display.shape[1::-1]
+            window.show(display, [
+                f"Camera: {camera.name} | input {input_size[0]}x{input_size[1]}",
+                f"Feed: {image_size[0]}x{image_size[1]} | {fps:5.1f} fps",
+                f"Blocks detected: {len(detections)}",
+                f"Sensor controls: {len(applied)} applied"
+                + (f", {len(skipped)} unavailable" if skipped else ""),
+                "Mouse: hover over blocks for coordinates.  s = save snapshot, q/Esc = quit",
+            ])
+            key = window.poll_key()
             if key in (ord("q"), 27):
                 return 0
             if key == ord("s"):
                 image_path, data_path = save_detection_snapshot(display, detections)
                 print(f"Saved {image_path} and {data_path}")
-            if cv2.getWindowProperty(window, cv2.WND_PROP_VISIBLE) < 1:
+            if window.closed:
                 return 0
     finally:
         camera.release()
-        cv2.destroyAllWindows()
+        window.close()
 
 
 if __name__ == "__main__":

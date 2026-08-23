@@ -13,6 +13,7 @@ Press 'q' or Esc in the window to quit.
 
 import argparse
 import sys
+import tkinter as tk
 from pathlib import Path
 
 import cv2
@@ -23,6 +24,7 @@ import cv2
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from vision.camera_source import DEFAULT_SIZE, open_camera
+from camera.tk_camera_window import TkCameraWindow
 
 
 def parse_args():
@@ -48,23 +50,30 @@ def main():
     print(f"Camera: {camera.name}")
     print("Streaming... press 'q' or Esc in the window to quit.")
 
-    window = f"Camera Preview - {camera.name}"
     try:
+        window = TkCameraWindow(
+            f"Camera Preview - {camera.name}", (args.width, args.height),
+            buttons=(("Quit (q)", "q"),),
+        )
         while True:
             ok, frame = camera.read()
             if not ok or frame is None:
                 print("Failed to read frame from camera.")
                 break
 
-            cv2.imshow(window, frame)
-            if (cv2.waitKey(1) & 0xFF) in (ord("q"), 27):
+            window.show(frame, [
+                f"Camera: {camera.name}",
+                f"Frame: {frame.shape[1]}x{frame.shape[0]}",
+                "Raw camera preview | q/Esc quits",
+            ])
+            if window.poll_key() in (ord("q"), 27):
                 break
-            # Also exit when the window is closed with the title-bar button.
-            if cv2.getWindowProperty(window, cv2.WND_PROP_VISIBLE) < 1:
+            if window.closed:
                 break
     finally:
         camera.release()
-        cv2.destroyAllWindows()
+        if "window" in locals():
+            window.close()
 
 
 if __name__ == "__main__":
