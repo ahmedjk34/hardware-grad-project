@@ -22,6 +22,14 @@ import cv2
 import numpy as np
 
 
+MAX_PROCESSING_WIDTH = 384
+MAX_RECTANGLE_HYPOTHESES = 256
+_OPEN_KERNEL = np.ones((3, 3), np.uint8)
+_CLOSE_KERNEL = np.ones((5, 5), np.uint8)
+_EDGE_KERNEL = np.ones((3, 3), np.uint8)
+_NEAR_KERNEL = np.ones((5, 5), np.uint8)
+
+
 @dataclass
 class BlockDetection:
     """One detected block, in pixels of the corrected feed image."""
@@ -44,6 +52,16 @@ class BlockDetection:
 
 
 @dataclass
+class DetectionMetrics:
+    input_size: tuple[int, int] = (0, 0)
+    processing_size: tuple[int, int] = (0, 0)
+    contours: int = 0
+    compound_components: int = 0
+    rectangle_hypotheses: int = 0
+    exhausted_components: int = 0
+
+
+@dataclass
 class _RectangleCandidate:
     """One standard-block hypothesis inside a compound colour component."""
 
@@ -52,6 +70,19 @@ class _RectangleCandidate:
     angle: float
     score: float
     mask: np.ndarray
+
+
+@dataclass
+class _CandidateBudget:
+    remaining: int = MAX_RECTANGLE_HYPOTHESES
+    evaluated: int = 0
+
+    def take(self) -> bool:
+        if self.remaining <= 0:
+            return False
+        self.remaining -= 1
+        self.evaluated += 1
+        return True
 
 
 def _warm_mask(frame: np.ndarray, color_threshold: int,
@@ -63,16 +94,20 @@ def _warm_mask(frame: np.ndarray, color_threshold: int,
     check rejects neutral highlights that happen to be bright.
     """
     blue, green, red = cv2.split(frame)
-    red_blue = red.astype(np.int16) - blue.astype(np.int16)
-    red_green = red.astype(np.int16) - green.astype(np.int16)
-    mask = ((red_blue >= color_threshold) &
-            (red_green >= red_green_threshold)).astype(np.uint8) * 255
+    # Saturating uint8 subtraction is equivalent here: both thresholds are
+    # non-negative, so negative channel differences should fail either way.
+    red_blue = cv2.subtract(red, blue)
+    red_green = cv2.subtract(red, green)
+    mask = cv2.bitwise_and(
+        cv2.compare(red_blue, int(color_threshold), cv2.CMP_GE),
+        cv2.compare(red_green, int(red_green_threshold), cv2.CMP_GE),
+    )
 
     # Remove single-pixel noise while joining the small gaps in a block's
     # shaded edge. These kernels are intentionally small: a large close would
     # join neighbouring blocks before the touch-splitting step gets a chance.
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
-    return cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, _OPEN_KERNEL)
+    return cv2.morphologyEx(mask, cv2.MORPH_CLOSE, _CLOSE_KERNEL)
 
 
 def _split_touching(contour: np.ndarray, min_area: float) -> list[np.ndarray]:
@@ -252,7 +287,7 @@ def _seed_centers(eroded: np.ndarray, block_length: float, block_width: float,
 def _best_rectangle(component: np.ndarray, edge_support: np.ndarray,
                     seed: tuple[float, float], multiple: bool,
                     block_length: float, block_width: float,
-                    angle: float) -> _RectangleCandidate:
+                    angle: float, budget: _CandidateBudget) -> _RectangleCandidate | None:
     """Slide one standard rectangle near a seed and maximise fill + edge support."""
     radians = math.radians(angle)
     ux, uy = math.cos(radians), math.sin(radians)
@@ -264,8 +299,13 @@ def _best_rectangle(component: np.ndarray, edge_support: np.ndarray,
     across_radius = block_width * (0.12 if multiple else 0.18)
     best = None
 
-    for along_shift in np.arange(-along_radius, along_radius + 0.1, 3.0):
-        for across_shift in np.arange(-across_radius, across_radius + 0.1, 2.0):
+    # Five samples on each axis keep each seed bounded to 25 hypotheses. Local
+    # masks make every score proportional to this component, not to the full
+    # camera frame.
+    for along_shift in np.linspace(-along_radius, along_radius, 5):
+        for across_shift in np.linspace(-across_radius, across_radius, 5):
+            if not budget.take():
+                return best
             center = (
                 float(seed[0] + along_shift * ux + across_shift * nx),
                 float(seed[1] + along_shift * uy + across_shift * ny),
@@ -294,37 +334,67 @@ def _box_iou(a: _RectangleCandidate, b: _RectangleCandidate) -> float:
     return float(intersection / union) if union > 0 else 0.0
 
 
-def _decompose_compound(frame: np.ndarray, contour: np.ndarray,
+def _decompose_compound(frame: np.ndarray, hsv: np.ndarray, contour: np.ndarray,
                         block_length: float, block_width: float,
-                        min_area: float) -> list[BlockDetection]:
+                        min_area: float,
+                        metrics: DetectionMetrics | None = None
+                        ) -> list[BlockDetection]:
     """Explain one irregular colour blob as standard four-sided blocks."""
-    component = np.zeros(frame.shape[:2], dtype=np.uint8)
-    cv2.drawContours(component, [contour], -1, 255, -1)
+    x, y, w, h = cv2.boundingRect(contour)
+    pad = max(4, int(round(block_width * 0.25)))
+    x0, y0 = max(0, x - pad), max(0, y - pad)
+    x1 = min(frame.shape[1], x + w + pad)
+    y1 = min(frame.shape[0], y + h + pad)
+    offset = np.array([[[x0, y0]]], dtype=np.int32)
+    local_contour = contour - offset
+    component = np.zeros((y1 - y0, x1 - x0), dtype=np.uint8)
+    cv2.drawContours(component, [local_contour], -1, 255, -1)
     orientations = _line_orientations(component, block_length, block_width)
     if not orientations:
         return []
 
     # Outer colour boundaries and internal grayscale seams both matter. The
     # latter are what separate aligned blocks whose union has no concavity.
-    boundary = cv2.morphologyEx(component, cv2.MORPH_GRADIENT,
-                                np.ones((3, 3), np.uint8))
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    boundary = cv2.morphologyEx(component, cv2.MORPH_GRADIENT, _EDGE_KERNEL)
+    local_frame = frame[y0:y1, x0:x1]
+    gray = cv2.cvtColor(local_frame, cv2.COLOR_BGR2GRAY)
     image_edges = cv2.Canny(cv2.GaussianBlur(gray, (3, 3), 0), 20, 60)
-    near = cv2.dilate(component, np.ones((5, 5), np.uint8))
+    near = cv2.dilate(component, _NEAR_KERNEL)
     edge_support = cv2.bitwise_or(boundary, cv2.bitwise_and(image_edges, near))
-    edge_support = cv2.dilate(edge_support, np.ones((3, 3), np.uint8))
+    edge_support = cv2.dilate(edge_support, _EDGE_KERNEL)
 
     candidates = []
+    budget = _CandidateBudget()
+    if metrics is not None:
+        metrics.compound_components += 1
+    # Find every cheap erosion-derived seed first, then spend the bounded
+    # rectangle-scoring budget on the most plausible ones. Distance from the
+    # component boundary is a useful, allocation-free proxy for block support;
+    # multi-block lattice seeds win ties because they encode the dimensions of
+    # the complete connected union rather than one possibly biased centroid.
+    distance = cv2.distanceTransform(component, cv2.DIST_L2, 3)
+    ranked_seeds = []
     for angle in orientations:
         kernel = _rotated_kernel(block_length * 0.58, block_width * 0.58, angle)
         eroded = cv2.erode(component, kernel)
         for seed, multiple in _seed_centers(
                 eroded, block_length, block_width, angle):
-            candidate = _best_rectangle(
-                component, edge_support, seed, multiple,
-                block_length, block_width, angle)
-            if candidate.score >= 0.80:
-                candidates.append(candidate)
+            sx = min(component.shape[1] - 1, max(0, round(seed[0])))
+            sy = min(component.shape[0] - 1, max(0, round(seed[1])))
+            ranked_seeds.append((bool(multiple), float(distance[sy, sx]),
+                                 seed, angle))
+    ranked_seeds.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    for multiple, _support, seed, angle in ranked_seeds:
+        candidate = _best_rectangle(
+            component, edge_support, seed, multiple,
+            block_length, block_width, angle, budget)
+        if candidate is not None and candidate.score >= 0.80:
+            candidates.append(candidate)
+        if budget.remaining <= 0:
+            break
+    if metrics is not None:
+        metrics.rectangle_hypotheses += budget.evaluated
+        metrics.exhausted_components += int(budget.remaining <= 0)
 
     candidates.sort(key=lambda candidate: candidate.score, reverse=True)
     selected = []
@@ -354,14 +424,16 @@ def _decompose_compound(frame: np.ndarray, contour: np.ndarray,
 
     detections = []
     for candidate in selected:
-        ideal_contour = candidate.box.reshape(-1, 1, 2).astype(np.int32)
-        detection = _geometry(frame, ideal_contour)
+        ideal_contour = (candidate.box.reshape(-1, 1, 2).astype(np.int32)
+                         + offset)
+        detection = _geometry(frame, ideal_contour, hsv)
         detection.confidence = candidate.score
         detections.append(detection)
     return detections
 
 
-def _geometry(frame: np.ndarray, contour: np.ndarray) -> BlockDetection:
+def _geometry(frame: np.ndarray, contour: np.ndarray,
+              hsv: np.ndarray | None = None) -> BlockDetection:
     area = float(cv2.contourArea(contour))
     rect = cv2.minAreaRect(contour)
     (cx, cy), (rw, rh), angle = rect
@@ -382,10 +454,13 @@ def _geometry(frame: np.ndarray, contour: np.ndarray) -> BlockDetection:
     # in the HUD when a shadow or stray warm object gets near the threshold.
     confidence = float(np.clip(0.55 * rectangularity + 0.45 * solidity, 0, 1))
 
-    mask = np.zeros(frame.shape[:2], dtype=np.uint8)
-    cv2.drawContours(mask, [contour], -1, 255, -1)
-    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    hue = float(cv2.mean(hsv[:, :, 0], mask=mask)[0])
+    if hsv is None:
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    x, y, w, h = cv2.boundingRect(contour)
+    local_mask = np.zeros((h, w), dtype=np.uint8)
+    local_contour = contour - np.array([[[x, y]]], dtype=np.int32)
+    cv2.drawContours(local_mask, [local_contour], -1, 255, -1)
+    hue = float(cv2.mean(hsv[y:y + h, x:x + w, 0], mask=local_mask)[0])
     return BlockDetection(
         contour=contour,
         box=box,
@@ -401,32 +476,28 @@ def _geometry(frame: np.ndarray, contour: np.ndarray) -> BlockDetection:
     )
 
 
-def detect_blocks(frame: np.ndarray, *, color_threshold: int = 8,
-                  red_green_threshold: int = 3, min_area: int = 500,
-                  max_area: int | None = None) -> list[BlockDetection]:
-    """Detect warm rectangular blocks in one corrected BGR frame.
-
-    Results are sorted top-to-bottom then left-to-right, making the displayed
-    IDs stable and making hover information easy to compare frame to frame.
-    Thresholds are arguments so a later camera position or block colour can be
-    tuned without changing the detector's geometry code.
-    """
-    if frame is None or frame.ndim != 3 or frame.shape[2] != 3:
-        raise ValueError("detect_blocks expects a BGR colour image")
-
+def _detect_blocks_native(frame: np.ndarray, *, color_threshold: int,
+                          red_green_threshold: int, min_area: float,
+                          max_area: float | None,
+                          metrics: DetectionMetrics | None = None
+                          ) -> list[BlockDetection]:
+    """Detector implementation at its bounded working resolution."""
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     mask = _warm_mask(frame, int(color_threshold), int(red_green_threshold))
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL,
                                    cv2.CHAIN_APPROX_SIMPLE)
     contours = [contour for contour in contours
                 if cv2.contourArea(contour) >= min_area]
+    if metrics is not None:
+        metrics.processing_size = frame.shape[1::-1]
+        metrics.contours = len(contours)
 
     # The blocks have one physical size. Derive its image size from isolated
     # rectangles when possible, with a resolution-scaled fallback that matches
-    # the supplied captures. Merged end-to-end/side-by-side rectangles are kept
-    # out of this estimate by the size window.
+    # the supplied captures. Merged rectangles stay out of this estimate.
     default_length = frame.shape[1] * 0.18
     default_width = frame.shape[1] * 0.052
-    records = [(contour, _geometry(frame, contour)) for contour in contours]
+    records = [(contour, _geometry(frame, contour, hsv)) for contour in contours]
     size_sources = []
     for _contour, detection in records:
         long_side, short_side = detection.size
@@ -451,7 +522,7 @@ def detect_blocks(frame: np.ndarray, *, color_threshold: int = 8,
     detections = []
     for contour, original in records:
         pieces = _split_touching(contour, min_area)
-        split_detections = [_geometry(frame, piece) for piece in pieces]
+        split_detections = [_geometry(frame, piece, hsv) for piece in pieces]
         split_is_valid = len(split_detections) > 1 and all(
             standard_sized(detection) and
             detection.rectangularity >= 0.72 and detection.solidity >= 0.75
@@ -463,11 +534,8 @@ def detect_blocks(frame: np.ndarray, *, color_threshold: int = 8,
               original.solidity >= 0.75):
             candidates = [original]
         else:
-            # This is the smarter edge path: fit several known-size four-sided
-            # blocks to the straight boundary segments and internal seams of an
-            # L/U/cross/row-shaped colour union.
             candidates = _decompose_compound(
-                frame, contour, block_length, block_width, min_area)
+                frame, hsv, contour, block_length, block_width, min_area, metrics)
 
         for detection in candidates:
             if detection.area < min_area:
@@ -477,3 +545,79 @@ def detect_blocks(frame: np.ndarray, *, color_threshold: int = 8,
             detections.append(detection)
 
     return sorted(detections, key=lambda d: (d.center[1], d.center[0]))
+
+
+def _rescale_detection(detection: BlockDetection, sx: float,
+                       sy: float) -> BlockDetection:
+    contour = detection.contour.astype(np.float32)
+    contour[:, :, 0] *= sx
+    contour[:, :, 1] *= sy
+    contour = contour.round().astype(np.int32)
+    rect = cv2.minAreaRect(contour)
+    (cx, cy), (rw, rh), angle = rect
+    if rw < rh:
+        angle += 90.0
+    if angle >= 90.0:
+        angle -= 180.0
+    box = cv2.boxPoints(rect).round().astype(np.int32)
+    area = float(cv2.contourArea(contour))
+    box_area = max(float(rw * rh), 1.0)
+    hull_area = max(float(cv2.contourArea(cv2.convexHull(contour))), 1.0)
+    return BlockDetection(
+        contour=contour, box=box, center=(float(cx), float(cy)),
+        width=float(rw), height=float(rh), angle=float(angle), area=area,
+        rectangularity=min(1.0, area / box_area),
+        solidity=min(1.0, area / hull_area),
+        confidence=detection.confidence, hue=detection.hue,
+    )
+
+
+def detect_blocks(frame: np.ndarray, *, color_threshold: int = 8,
+                  red_green_threshold: int = 3, min_area: int = 500,
+                  max_area: int | None = None,
+                  max_processing_width: int = MAX_PROCESSING_WIDTH,
+                  metrics: DetectionMetrics | None = None,
+                  ) -> list[BlockDetection]:
+    """Detect warm rectangular blocks in one corrected BGR frame.
+
+    Results are sorted top-to-bottom then left-to-right, making the displayed
+    IDs stable and making hover information easy to compare frame to frame.
+    Thresholds are arguments so a later camera position or block colour can be
+    tuned without changing the detector's geometry code.
+    """
+    if frame is None or frame.ndim != 3 or frame.shape[2] != 3:
+        raise ValueError("detect_blocks expects a BGR colour image")
+    if min_area <= 0 or max_processing_width <= 0:
+        raise ValueError("min_area and max_processing_width must be positive")
+
+    original_h, original_w = frame.shape[:2]
+    if metrics is not None:
+        metrics.processing_size = (0, 0)
+        metrics.contours = 0
+        metrics.compound_components = 0
+        metrics.rectangle_hypotheses = 0
+        metrics.exhausted_components = 0
+        metrics.input_size = (original_w, original_h)
+    if original_w <= max_processing_width:
+        return _detect_blocks_native(
+            frame, color_threshold=int(color_threshold),
+            red_green_threshold=int(red_green_threshold),
+            min_area=float(min_area),
+            max_area=None if max_area is None else float(max_area),
+            metrics=metrics)
+
+    scale = max_processing_width / original_w
+    work_h = max(1, round(original_h * scale))
+    work = cv2.resize(frame, (max_processing_width, work_h),
+                      interpolation=cv2.INTER_AREA)
+    sx, sy = original_w / work.shape[1], original_h / work.shape[0]
+    area_scale = sx * sy
+    detections = _detect_blocks_native(
+        work, color_threshold=int(color_threshold),
+        red_green_threshold=int(red_green_threshold),
+        min_area=float(min_area) / area_scale,
+        max_area=None if max_area is None else float(max_area) / area_scale,
+        metrics=metrics)
+    return sorted((_rescale_detection(detection, sx, sy)
+                   for detection in detections),
+                  key=lambda d: (d.center[1], d.center[0]))

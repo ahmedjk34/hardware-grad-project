@@ -40,6 +40,11 @@ frame = np.zeros((image_size[1], image_size[0], 3), dtype=np.uint8)
 hovered = draw_machine_grid(frame, workspace, grid, first_pixel, calibrated=False)
 check("overlay maps first physical centre", hovered == (1, 1), str(hovered))
 check("overlay actually draws pixels", bool(np.any(frame)))
+detail_frame = np.zeros_like(frame)
+draw_machine_grid(detail_frame, workspace, grid, first_pixel,
+                  calibrated=False, detail=True)
+check("geometry grid omits detail-mode cell labels",
+      not np.array_equal(frame, detail_frame))
 
 calibration = np.zeros((180, 280, 3), dtype=np.uint8)
 draw_calibration(calibration, [(30, 150), (250, 150)], (250, 30))
@@ -53,6 +58,11 @@ check("diagonal calibration edge keeps its own colour",
       calibration_line_color((30, 150), (250, 30)) == (255, 180, 30))
 check("calibration previews the next straight edge",
       bool(np.any(calibration[70:130, 250])), "cursor preview")
+calibration_detail = np.zeros_like(calibration)
+draw_calibration(calibration_detail, [(30, 150), (250, 150)], (250, 30),
+                 detail=True)
+check("geometry calibration omits full corner-name prose",
+      not np.array_equal(calibration, calibration_detail))
 
 review = np.zeros((180, 280, 3), dtype=np.uint8)
 draw_calibration(review, [(30, 150), (250, 150), (250, 130), (30, 130)])

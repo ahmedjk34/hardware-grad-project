@@ -44,7 +44,10 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from camera.camera_feed import (  # noqa: E402
+    OVERLAY_MODES,
     SETTINGS_PATH,
+    STALE_FRAME_AFTER_S,
+    block_hover_text,
     capture_settings,
     crop_resize,
     draw_block_overlay,
@@ -56,11 +59,13 @@ from camera.camera_feed import (  # noqa: E402
     save_detection_snapshot,
     sensor_from_settings,
 )
+from camera.snapshot_worker import SnapshotWorker  # noqa: E402
 from rig.config import CONFIG_PATH, load as load_rig_config  # noqa: E402
 from rig.grid import MachineGrid  # noqa: E402
 from rig.workspace import CORNER_NAMES, WORKSPACE_MAP_PATH, WorkspaceMap  # noqa: E402
 from vision.block_detector import detect_blocks  # noqa: E402
-from vision.camera_source import open_camera  # noqa: E402
+from vision.analysis_worker import AnalysisWorker  # noqa: E402
+from vision.camera_source import LatestFramePump, open_camera  # noqa: E402
 from vision.fisheye import INTERPOLATIONS, build_maps, undistort  # noqa: E402
 from vision.overlays import (  # noqa: E402
     GRID_COLOR,
@@ -68,6 +73,7 @@ from vision.overlays import (  # noqa: E402
     LABEL_COLOR,
     WARN_COLOR,
 )
+from vision.performance import RateMeter, StageTimings  # noqa: E402
 from camera.tk_camera_window import TkCameraWindow  # noqa: E402
 
 
@@ -76,6 +82,7 @@ CALIBRATION_COLOR = (255, 180, 30)       # orange: diagonal
 CALIBRATION_HORIZONTAL = (255, 255, 0)   # cyan: screen-horizontal
 CALIBRATION_VERTICAL = (255, 0, 255)     # magenta: screen-vertical
 CALIBRATION_AXIS_TOLERANCE_PX = 2
+_GRID_GEOMETRY_CACHE = {}
 
 
 def parse_args():
@@ -94,8 +101,13 @@ def parse_args():
                         help="minimum red-minus-blue value for a block (default: 8)")
     parser.add_argument("--min-area", type=int, default=500,
                         help="minimum detected block area in feed pixels (default: 500)")
-    parser.add_argument("--no-enhance", action="store_true",
-                        help="disable display contrast/sharpness enhancement")
+    parser.add_argument("--enhance", action="store_true",
+                        help="enable costly software contrast/sharpness enhancement")
+    parser.add_argument("--no-enhance", action="store_false", dest="enhance",
+                        help=argparse.SUPPRESS)
+    parser.add_argument("--overlay", choices=OVERLAY_MODES, default="geometry")
+    parser.add_argument("--analysis-hz", type=float, default=10.0)
+    parser.add_argument("--opencv-threads", type=int, default=2)
     return parser.parse_args()
 
 
@@ -144,36 +156,37 @@ def _pixel(point):
     return tuple(round(value) for value in point)
 
 
-def draw_machine_grid(frame, workspace, grid, hover_point, calibrated):
-    """Draw envelope, fixed-pitch cells, labels and the hovered cell."""
-    image_size = frame.shape[1::-1]
+def _grid_geometry(workspace, grid, image_size):
+    """Cache static projected grid geometry; only hover changes per frame."""
+    key = (
+        image_size, tuple(workspace.corners), grid.cols, grid.rows,
+        grid.cell_width_cm, grid.cell_height_cm, grid.workspace_width_cm,
+        grid.workspace_height_cm, grid.trim_x_cm, grid.trim_y_cm,
+    )
+    cached = _GRID_GEOMETRY_CACHE.get(key)
+    if cached is not None:
+        return cached
 
-    # The four calibration points surround the complete motion envelope. Draw
-    # it separately so the unused centred strips are visible around the cells.
     envelope = np.asarray([
         workspace.pixel_at(0.0, 0.0, image_size),
         workspace.pixel_at(1.0, 0.0, image_size),
         workspace.pixel_at(1.0, 1.0, image_size),
         workspace.pixel_at(0.0, 1.0, image_size),
     ], dtype=np.float32).round().astype(np.int32)
-    cv2.polylines(frame, [envelope], True, ENVELOPE_COLOR, 2, cv2.LINE_AA)
 
-    # A projective transform keeps each constant-X/Y boundary straight, so one
-    # line per boundary is enough and avoids redrawing all 110 cell polygons.
+    lines = []
     for col_edge in range(grid.cols + 1):
         x_cm = grid.x_start_cm + col_edge * grid.cell_width_cm
         p0 = _pixel(_point(workspace, grid, x_cm, grid.y_start_cm, image_size))
         p1 = _pixel(_point(workspace, grid, x_cm, grid.y_end_cm, image_size))
-        cv2.line(frame, p0, p1, GRID_COLOR if calibrated else WARN_COLOR,
-                 1, cv2.LINE_AA)
+        lines.append((p0, p1))
     for row_edge in range(grid.rows + 1):
         y_cm = grid.y_start_cm + row_edge * grid.cell_height_cm
         p0 = _pixel(_point(workspace, grid, grid.x_start_cm, y_cm, image_size))
         p1 = _pixel(_point(workspace, grid, grid.x_end_cm, y_cm, image_size))
-        cv2.line(frame, p0, p1, GRID_COLOR if calibrated else WARN_COLOR,
-                 1, cv2.LINE_AA)
+        lines.append((p0, p1))
 
-    # Label only when the projected cells are large enough to remain readable.
+    labels = []
     first = workspace.cell_polygon(1, 1, image_size)
     approx_w = np.linalg.norm(np.asarray(first[1]) - np.asarray(first[0]))
     approx_h = np.linalg.norm(np.asarray(first[3]) - np.asarray(first[0]))
@@ -186,10 +199,29 @@ def draw_machine_grid(frame, workspace, grid, hover_point, calibrated):
                 (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX,
                                               0.34, 1)
                 at = (x - tw // 2, y + th // 2)
-                cv2.putText(frame, label, at, cv2.FONT_HERSHEY_SIMPLEX, 0.34,
-                            (0, 0, 0), 3, cv2.LINE_AA)
-                cv2.putText(frame, label, at, cv2.FONT_HERSHEY_SIMPLEX, 0.34,
-                            LABEL_COLOR, 1, cv2.LINE_AA)
+                labels.append((label, at))
+
+    cached = (envelope, tuple(lines), tuple(labels))
+    if len(_GRID_GEOMETRY_CACHE) >= 16:
+        _GRID_GEOMETRY_CACHE.pop(next(iter(_GRID_GEOMETRY_CACHE)))
+    _GRID_GEOMETRY_CACHE[key] = cached
+    return cached
+
+
+def draw_machine_grid(frame, workspace, grid, hover_point, calibrated, *, detail=False):
+    """Draw cached static grid geometry and the dynamic hovered cell."""
+    image_size = frame.shape[1::-1]
+    envelope, lines, labels = _grid_geometry(workspace, grid, image_size)
+    cv2.polylines(frame, [envelope], True, ENVELOPE_COLOR, 2, cv2.LINE_AA)
+    color = GRID_COLOR if calibrated else WARN_COLOR
+    for p0, p1 in lines:
+        cv2.line(frame, p0, p1, color, 1, cv2.LINE_AA)
+    if detail:
+        for label, at in labels:
+            cv2.putText(frame, label, at, cv2.FONT_HERSHEY_SIMPLEX, 0.34,
+                        (0, 0, 0), 3, cv2.LINE_AA)
+            cv2.putText(frame, label, at, cv2.FONT_HERSHEY_SIMPLEX, 0.34,
+                        LABEL_COLOR, 1, cv2.LINE_AA)
 
     cell = workspace.cell_at(hover_point, image_size) if hover_point else None
     if cell is not None:
@@ -220,7 +252,7 @@ def _draw_calibration_line(frame, start, end, thickness):
              cv2.LINE_AA)
 
 
-def draw_calibration(frame, points, cursor=None):
+def draw_calibration(frame, points, cursor=None, *, detail=False):
     """Draw an explicit, ordered four-corner calibration route.
 
     Accepted clicks are joined with straight line segments.  A line from the
@@ -245,15 +277,20 @@ def draw_calibration(frame, points, cursor=None):
         point = (round(x), round(y))
         cv2.drawMarker(frame, point, CALIBRATION_COLOR, cv2.MARKER_CROSS,
                        22, 3, cv2.LINE_AA)
-        cv2.putText(frame, f"{index + 1}: {CORNER_NAMES[index]}",
+        label = (f"{index + 1}: {CORNER_NAMES[index]}" if detail
+                 else str(index + 1))
+        cv2.putText(frame, label,
                     (point[0] + 9, point[1] - 9),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, CALIBRATION_COLOR, 2,
                     cv2.LINE_AA)
 def main():
     args = parse_args()
-    if args.display_scale <= 0 or args.min_area <= 0:
-        print("--display-scale and --min-area must be positive", file=sys.stderr)
+    if (args.display_scale <= 0 or args.min_area <= 0 or args.analysis_hz <= 0
+            or args.opencv_threads <= 0):
+        print("display/min-area/analysis-hz/opencv-threads values must be positive",
+              file=sys.stderr)
         return 1
+    cv2.setNumThreads(args.opencv_threads)
 
     try:
         camera_data = load_settings(args.settings)
@@ -305,6 +342,8 @@ def main():
         "calibration_points": [],
         "pending_points": None,
         "show_grid": True,
+        "overlay": args.overlay,
+        "message": "ready",
     }
 
     def on_mouse(event, point):
@@ -320,33 +359,148 @@ def main():
         window = TkCameraWindow(
             f"Gridded Camera Feed - {camera.name}", size,
             display_scale=args.display_scale, mouse_callback=on_mouse,
-            buttons=(("Calibrate (c)", "c"), ("Undo (u)", "u"),
+            buttons=(("Overlay (o)", "o"), ("Calibrate (c)", "c"),
+                     ("Undo (u)", "u"),
                      ("Save (s)", "s"), ("Grid (g)", "g"),
                      ("Quit (q)", "q")),
         )
-    except tk.TclError as exc:
-        print(f"Cannot open the Tk camera window: {exc}", file=sys.stderr)
+    except (tk.TclError, cv2.error) as exc:
+        print(f"Cannot open the camera UI: {exc}", file=sys.stderr)
         camera.release()
         return 1
+
+    frame_pump = LatestFramePump(camera)
+    analysis = AnalysisWorker(detect_blocks, max_hz=args.analysis_hz)
+    snapshots = SnapshotWorker(save_detection_snapshot)
+    frame_pump.start()
+    analysis.start()
     maps = None
     input_size = None
-    fps = 0.0
-    last = time.perf_counter()
+    map_generation = 0
+    last_sequence = 0
+    last_display = None
+    image_size = None
+    workspace = None
+    calibrated = False
+    detections = ()
+    capture_rate, preview_rate = RateMeter(), RateMeter()
+    timings = StageTimings()
+    snapshot_count = 0
+
+    def status_lines(snapshot, result):
+        age = snapshot.age_s()
+        age_text = "waiting" if age is None else f"{age * 1000:.0f} ms"
+        camera_state = ("WAITING" if age is None else
+                        "STALE" if age >= STALE_FRAME_AFTER_S else "LIVE")
+        result_age = result.age_s()
+        analysis_text = ("waiting" if result.completed_at is None else
+                         f"{result.duration_s * 1000:.1f} ms / "
+                         f"age {result_age * 1000:.0f} ms")
+        cell = (workspace.cell_at(ui["hover"], image_size)
+                if workspace is not None and image_size and ui["hover"] else None)
+        calibration_text = (
+            ("REVIEW 4/4 — Enter saves" if len(ui["calibration_points"]) == 4 else
+             f"active {len(ui['calibration_points'])}/4 — next: "
+             f"{CORNER_NAMES[len(ui['calibration_points'])]}")
+            if ui["calibrating"] else
+            ("CALIBRATED" if calibrated else
+             f"APPROXIMATION ONLY ({rejection or 'press c to calibrate'})"))
+        size_text = (f"{image_size[0]}x{image_size[1]}" if image_size else "waiting")
+        return [
+            f"Camera: {camera.name} | {camera_state} | capture "
+            f"{capture_rate.rate:5.1f} fps | age {age_text}",
+            f"Feed: {size_text} | preview {preview_rate.rate:5.1f} fps | overlay {ui['overlay']}",
+            f"Analysis: {result.rate_hz:4.1f} Hz | seq {result.source_sequence} | "
+            f"{analysis_text} | blocks {len(detections)} | replaced "
+            f"{result.replaced_count} | duplicate {result.duplicate_count}",
+            f"Grid: {grid.cols}x{grid.rows} | {calibration_text} | "
+            f"hover {f'[{cell[0]},{cell[1]}]' if cell else 'none'}",
+            block_hover_text(detections, ui["hover"]),
+            f"Stages: remap {timings.ms.get('remap', 0):.1f} ms | "
+            f"overlay {timings.ms.get('overlay', 0):.1f} ms | "
+            f"grid {timings.ms.get('grid', 0):.1f} ms | "
+            f"display {timings.ms.get('display', 0):.1f} ms",
+            f"Status: {result.error or snapshot.error or ui['message']}",
+            "o overlay | c calibrate | Enter save | u undo | x cancel | g grid | s snapshot | q quit",
+        ]
+
+    def handle_key(key):
+        if key in (ord("q"), 27):
+            return False
+        if key == ord("o"):
+            ui["overlay"] = OVERLAY_MODES[
+                (OVERLAY_MODES.index(ui["overlay"]) + 1) % len(OVERLAY_MODES)]
+            ui["message"] = f"overlay: {ui['overlay']}"
+        elif key == ord("c"):
+            ui["calibrating"] = True
+            ui["calibration_points"] = []
+            ui["pending_points"] = None
+            ui["message"] = "click the four prompted envelope corners"
+        elif key == ord("x") and ui["calibrating"]:
+            ui["calibrating"] = False
+            ui["calibration_points"] = []
+            ui["pending_points"] = None
+            ui["message"] = "calibration cancelled; previous map kept"
+        elif key == ord("u") and ui["calibrating"]:
+            if ui["calibration_points"]:
+                ui["calibration_points"].pop()
+                ui["message"] = "removed the most recent corner"
+            else:
+                ui["message"] = "no calibration corner to undo"
+        elif key in (10, 13) and ui["calibrating"]:
+            if len(ui["calibration_points"]) == 4:
+                ui["pending_points"] = list(ui["calibration_points"])
+                ui["message"] = "saving reviewed calibration"
+            else:
+                ui["message"] = "click all four corners before saving"
+        elif key == ord("g"):
+            ui["show_grid"] = not ui["show_grid"]
+        elif key == ord("s"):
+            if last_display is None:
+                ui["message"] = "no frame is available to save"
+            elif snapshots.submit(last_display.copy(), tuple(detections)):
+                ui["message"] = "saving snapshot in background"
+            else:
+                ui["message"] = "snapshot writer busy; try again shortly"
+        return True
+
     try:
         while True:
-            ok, frame = camera.read()
-            if not ok or frame is None:
-                print("Failed to read frame from camera.", file=sys.stderr)
-                return 1
+            snapshot = frame_pump.snapshot()
+            result = analysis.snapshot()
+            if result.is_current(map_generation):
+                detections = result.detections
+            saved = snapshots.snapshot()
+            if saved.completed_count != snapshot_count:
+                snapshot_count = saved.completed_count
+                if saved.error:
+                    ui["message"] = saved.error
+                    print(saved.error, file=sys.stderr)
+                elif saved.result:
+                    ui["message"] = f"saved {saved.result[0].name} and {saved.result[1].name}"
+                    print(f"Saved {saved.result[0]} and {saved.result[1]}")
 
+            if snapshot.frame is None or snapshot.sequence == last_sequence:
+                window.pump(status_lines(snapshot, result))
+                key = window.poll_key()
+                if (key >= 0 and not handle_key(key)) or window.closed:
+                    return 0
+                continue
+
+            last_sequence = snapshot.sequence
+            capture_rate.tick()
+            frame = snapshot.frame
             frame = frame_orientation(frame, capture)
             if maps is None or frame.shape[1::-1] != input_size:
                 maps = build_maps(profile, frame.shape[1::-1], interpolation, mip=mip,
                                   roi=roi)
                 input_size = frame.shape[1::-1]
+                map_generation += 1
 
+            started = time.perf_counter()
             view = undistort(frame, maps) if enabled else \
                 crop_resize(frame, roi, maps.out_size, interpolation)
+            timings.observe("remap", time.perf_counter() - started)
             image_size = view.shape[1::-1]
 
             if ui["pending_points"] is not None:
@@ -357,9 +511,11 @@ def main():
                     candidate.save(args.workspace_map)
                     saved_workspace = candidate
                     rejection = None
+                    ui["message"] = "calibration saved"
                     print(f"Saved workspace calibration: {args.workspace_map}")
                 except (OSError, ValueError) as exc:
                     rejection = f"calibration rejected: {exc}"
+                    ui["message"] = rejection
                     print(rejection, file=sys.stderr)
                 ui["pending_points"] = None
                 ui["calibrating"] = False
@@ -369,79 +525,41 @@ def main():
                 grid, image_size, projection
             )
             calibrated = saved_workspace is not None
-
-            now = time.perf_counter()
-            dt, last = now - last, now
-            if dt > 0:
-                instant = 1.0 / dt
-                fps = 0.9 * fps + 0.1 * instant if fps else instant
-            detections = detect_blocks(view, color_threshold=args.color_threshold,
-                                       min_area=args.min_area)
-            display = view.copy() if args.no_enhance else enhance_for_display(view)
-            display = draw_block_overlay(
+            view.flags.writeable = False
+            analysis.submit(view, snapshot.sequence, map_generation,
+                            color_threshold=args.color_threshold,
+                            min_area=args.min_area)
+            display = enhance_for_display(view) if args.enhance else view.copy()
+            started = time.perf_counter()
+            draw_block_overlay(
                 display, detections, ui["hover"], None,
                 "COORDS: corrected pixels + machine-grid mapping",
-                show_info=False,
+                show_info=False, mode=ui["overlay"],
             )
-            if ui["show_grid"]:
-                draw_machine_grid(display, workspace, grid, ui["hover"], calibrated)
+            timings.observe("overlay", time.perf_counter() - started)
+            started = time.perf_counter()
+            if ui["show_grid"] and ui["overlay"] != "off":
+                draw_machine_grid(
+                    display, workspace, grid, ui["hover"], calibrated,
+                    detail=ui["overlay"] == "detail")
             if ui["calibrating"]:
-                # Calibration geometry is deliberate camera feedback, not a
-                # diagnostic HUD: keep the accepted corner markers, outline,
-                # and live next-edge preview visible while clicking.
-                draw_calibration(display, ui["calibration_points"], ui["hover"])
-            cell = workspace.cell_at(ui["hover"], image_size) if ui["hover"] else None
-            cell_text = f"Hovered cell: [{cell[0]},{cell[1]}]" if cell else "Hovered cell: none"
-            calibration_text = (
-                (f"Calibration: REVIEW 4/4 corners — press Enter to save"
-                 if len(ui["calibration_points"]) == 4 else
-                 f"Calibration: active ({len(ui['calibration_points'])}/4); "
-                 f"next: {CORNER_NAMES[len(ui['calibration_points'])]}")
-                if ui["calibrating"] else
-                ("Grid: CALIBRATED" if calibrated else
-                 f"Grid: APPROXIMATION ONLY ({rejection or 'press c to calibrate'})"))
-            window.show(display, [
-                f"Camera: {camera.name} | input {input_size[0]}x{input_size[1]}",
-                f"Feed: {image_size[0]}x{image_size[1]} | {fps:5.1f} fps | blocks: {len(detections)}",
-                f"Grid: {grid.cols}x{grid.rows}, cell {grid.cell_width_cm:g}x{grid.cell_height_cm:g} cm",
-                calibration_text,
-                cell_text,
-                "c calibrate | Enter save corners | u undo | x cancel | g grid | s snapshot | q/Esc quit",
-            ])
+                draw_calibration(
+                    display, ui["calibration_points"], ui["hover"],
+                    detail=ui["overlay"] == "detail")
+            timings.observe("grid", time.perf_counter() - started)
+            last_display = display
+            started = time.perf_counter()
+            window.show(display, status_lines(snapshot, result))
+            timings.observe("display", time.perf_counter() - started)
+            preview_rate.tick()
             key = window.poll_key()
-            if key in (ord("q"), 27):
-                return 0
-            if key == ord("c"):
-                ui["calibrating"] = True
-                ui["calibration_points"] = []
-                ui["pending_points"] = None
-                print("Calibration started: click the four prompted envelope corners.")
-            elif key == ord("x") and ui["calibrating"]:
-                ui["calibrating"] = False
-                ui["calibration_points"] = []
-                ui["pending_points"] = None
-                print("Calibration cancelled; previous saved map kept.")
-            elif key == ord("u") and ui["calibrating"]:
-                if ui["calibration_points"]:
-                    ui["calibration_points"].pop()
-                    print("Removed the most recent calibration corner.")
-                else:
-                    print("No calibration corner to undo.")
-            elif key in (10, 13) and ui["calibrating"]:
-                if len(ui["calibration_points"]) == 4:
-                    ui["pending_points"] = list(ui["calibration_points"])
-                    print("Saving reviewed four-corner calibration.")
-                else:
-                    print("Click all four named corners before saving.")
-            elif key == ord("g"):
-                ui["show_grid"] = not ui["show_grid"]
-            elif key == ord("s"):
-                image_path, data_path = save_detection_snapshot(display, detections)
-                print(f"Saved {image_path} and {data_path}")
-            if window.closed:
+            if (key >= 0 and not handle_key(key)) or window.closed:
                 return 0
     finally:
-        camera.release()
+        analysis.stop()
+        snapshots.stop(finish=True)
+        if frame_pump.stop():
+            camera.release()
         window.close()
 
 

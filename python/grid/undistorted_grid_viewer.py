@@ -67,10 +67,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from vision.camera_source import (
     DEFAULT_SIZE,
     FULL_RES_SIZE,
+    LatestFramePump,
     build_controls,
     describe_sensor_modes,
     open_camera,
 )
+from vision.performance import RateMeter
 from vision.fisheye import (
     DEFAULT_INTERPOLATION,
     INTERPOLATIONS,
@@ -82,6 +84,7 @@ from vision.fisheye import (
     undistort,
 )
 from vision.overlays import draw_grid
+from camera.snapshot_worker import SnapshotWorker
 from camera.tk_camera_window import TkCameraWindow
 
 INTERP_NAMES = list(INTERPOLATIONS)
@@ -117,6 +120,8 @@ def parse_args():
                              "when rendering a wide output FOV")
     parser.add_argument("--display-scale", type=float, default=1.0,
                         help="scale the window only; does not affect processing")
+    parser.add_argument("--opencv-threads", type=int, default=2,
+                        help="OpenCV worker threads (default: 2)")
     parser.add_argument("--profile", type=Path, default=PROFILE_PATH,
                         help="lens profile JSON to load (and to write with 'w')")
     parser.add_argument("--swap-rb", action="store_true",
@@ -259,6 +264,10 @@ def describe_sampling(maps):
 
 def main():
     args = parse_args()
+    if args.display_scale <= 0 or args.opencv_threads <= 0:
+        print("--display-scale and --opencv-threads must be positive", file=sys.stderr)
+        return 1
+    cv2.setNumThreads(args.opencv_threads)
     profile = profile_from_args(args)
     state = {"interp": args.interp}
 
@@ -292,6 +301,7 @@ def main():
     try:
         window = TkCameraWindow(
             "Undistorted Grid Preview", maps.out_size,
+            display_scale=args.display_scale,
             buttons=(("Correction (u)", "u"), ("Raw/Corrected (b)", "b"),
                      ("Grid (g)", "g"), ("Save (s)", "s"),
                      ("Reset (r)", "r"), ("Write profile (w)", "w"),
@@ -303,53 +313,60 @@ def main():
         return
 
     show_corrected, show_pair, show_grid = True, False, False
-    fps = 0.0
-    last = time.perf_counter()
+    pump = LatestFramePump(camera)
+    snapshots = SnapshotWorker(save_snapshot)
+    pump.start()
+    rate = RateMeter()
+    last_sequence = 0
+    raw = corrected = None
+    status_lines = [f"Camera: {camera.name} | waiting for first frame"]
 
     try:
         while True:
-            ok, frame = camera.read()
-            if not ok or frame is None:
-                print("Failed to read frame from camera.")
-                break
-            if args.swap_rb:
-                frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            snapshot = pump.snapshot()
+            new_frame = (snapshot.frame is not None
+                         and snapshot.sequence != last_sequence)
+            if new_frame:
+                last_sequence = snapshot.sequence
+                rate.tick()
+                frame = snapshot.frame
+                if args.swap_rb:
+                    frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
 
-            # The driver can hand back a size we didn't ask for; the maps are
-            # built for one exact input size, so rebuild if it ever changes.
-            if frame.shape[1::-1] != camera.size:
-                camera.size = frame.shape[1::-1]
-                maps = build_maps(profile, camera.size, state["interp"],
-                                  mip=not args.no_mip)
+                if frame.shape[1::-1] != camera.size:
+                    camera.size = frame.shape[1::-1]
+                    maps = build_maps(profile, camera.size, state["interp"],
+                                      mip=not args.no_mip)
 
-            corrected = undistort(frame, maps)
+                raw = frame
+                corrected = undistort(frame, maps)
 
-            if show_pair:
-                view = side_by_side(frame, corrected)
+                if show_pair:
+                    view = side_by_side(raw, corrected)
+                else:
+                    view = corrected.copy() if show_corrected else raw.copy()
+
+                if show_grid:
+                    draw_grid(view, 8, 8)
+
+                mode = ("RAW|CORRECTED" if show_pair else
+                        ("CORRECTED" if show_corrected else "RAW"))
+                status_lines = [
+                    f"Profile: {'CALIBRATED' if profile.calibrated else 'ESTIMATED (uncalibrated)'}",
+                    f"Lens: {profile.lens_fov_deg:.0f}° {profile.fov_reference} | model {profile.model}",
+                    f"Output: {maps.out_size[0]}x{maps.out_size[1]} | FOV {profile.output_fov_deg:.0f}° | scale {profile.output_scale:.2f}",
+                    f"Input: {camera.size[0]}x{camera.size[1]} | capture {rate.rate:5.1f} fps | {state['interp']} | view {mode}",
+                    describe_sampling(maps),
+                    "[ / ] lens FOV | -/= output FOV | m model | ,/. scale | i interpolation",
+                    "u correction | b raw/corrected | g grid | s snapshot | r reset | w write | q/Esc quit",
+                ]
+                window.show(view, status_lines)
             else:
-                # copy() so the overlays never contaminate the snapshot images.
-                view = corrected.copy() if show_corrected else frame.copy()
-
-            if show_grid:
-                draw_grid(view, 8, 8)
-
-            # Exponential moving average: a raw instantaneous rate is too jumpy
-            # to read off the screen.
-            now = time.perf_counter()
-            dt, last = now - last, now
-            if dt > 0:
-                fps = 0.9 * fps + 0.1 * (1.0 / dt) if fps else 1.0 / dt
-
-            mode = "RAW|CORRECTED" if show_pair else ("CORRECTED" if show_corrected else "RAW")
-            window.show(view, [
-                f"Profile: {'CALIBRATED' if profile.calibrated else 'ESTIMATED (uncalibrated)'}",
-                f"Lens: {profile.lens_fov_deg:.0f}° {profile.fov_reference} | model {profile.model}",
-                f"Output: {maps.out_size[0]}x{maps.out_size[1]} | FOV {profile.output_fov_deg:.0f}° | scale {profile.output_scale:.2f}",
-                f"Input: {camera.size[0]}x{camera.size[1]} | {fps:5.1f} fps | {state['interp']} | view {mode}",
-                describe_sampling(maps),
-                "[ / ] lens FOV | -/= output FOV | m model | ,/. scale | i interpolation",
-                "u correction | b raw/corrected | g grid | s snapshot | r reset | w write | q/Esc quit",
-            ])
+                age = snapshot.age_s()
+                waiting = (snapshot.error or
+                           ("waiting for first frame" if age is None else
+                            f"frame age {age * 1000:.0f} ms"))
+                window.pump(status_lines + [f"Camera state: {waiting}"])
 
             key = window.poll_key()
 
@@ -365,7 +382,10 @@ def main():
             elif key == ord("g"):
                 show_grid = not show_grid
             elif key == ord("s"):
-                save_snapshot(frame, corrected, profile)
+                if raw is not None and corrected is not None:
+                    frozen_profile = LensProfile(**vars(profile))
+                    if not snapshots.submit(raw.copy(), corrected.copy(), frozen_profile):
+                        print("Snapshot writer busy; try again shortly.")
             elif key == ord("r"):
                 # Defaults, but keep the framing --hq launched with — resetting
                 # to output_scale 1.0 there would resize the window to the full
@@ -381,7 +401,9 @@ def main():
             if window.closed:
                 break
     finally:
-        camera.release()
+        snapshots.stop(finish=True)
+        if pump.stop():
+            camera.release()
         window.close()
 
 

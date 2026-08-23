@@ -1,87 +1,83 @@
-"""Small Tk presentation layer shared by the camera viewers.
+"""Hybrid Tk dashboard and OpenCV camera preview shared by camera tools.
 
-The viewers still produce ordinary OpenCV/NumPy frames.  This module owns only
-the presentation: a resizable Tk Canvas for the image and a status/control
-area below it.  Keeping this separate prevents diagnostic text from becoming
-part of the camera pixels and gives the live feed, grid viewer, and build UI
-the same interaction model as Camera Studio.
+Tk is intentionally kept out of the video-pixel path.  It owns controls,
+status text and keyboard shortcuts while HighGUI presents the NumPy/OpenCV
+frame directly.  This avoids the BGR -> RGB -> PPM -> Tcl ``PhotoImage`` copy
+that previously dominated every viewer on the Raspberry Pi.
 """
 
 from __future__ import annotations
 
-import tkinter as tk
+from collections import deque
 import time
+import tkinter as tk
 from tkinter import ttk
 
 import cv2
 
 
 class TkCameraWindow:
-    """Display BGR frames in Tk and expose OpenCV-like polling semantics.
+    """A Tk control dashboard paired with one clean OpenCV preview window.
 
-    ``show`` must be called from the UI/main thread.  ``poll_key`` returns the
-    next key code as an integer, matching the useful subset of ``waitKey``.
-    Mouse callbacks receive image-space coordinates, not Canvas coordinates.
+    ``show`` and ``pump`` must run on the UI/main thread.  Mouse callbacks use
+    corrected-frame coordinates even when ``display_scale`` resizes the
+    HighGUI image.  Keys received by either Tk or OpenCV are merged into the
+    queue returned by :meth:`poll_key`.
     """
 
+    STATUS_INTERVAL_S = 0.1
+
     def __init__(self, title, size, *, display_scale=1.0, mouse_callback=None,
-                 buttons=(), close_request=None):
+                 buttons=(), close_request=None, key_filter=None):
+        if display_scale <= 0:
+            raise ValueError("display_scale must be positive")
         self.root = tk.Tk()
-        self.root.title(title)
+        self.root.title(f"{title} - Controls")
+        self.preview_title = f"{title} - Preview"
         self._close_request = close_request
+        self._key_filter = key_filter
         self.root.protocol("WM_DELETE_WINDOW", self._request_close)
         self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(0, weight=1)
-        self._photo = None
-        self._image_item = None
-        self._layout = None
-        self._keys = []
+
+        self._keys = deque()
         self._closed = False
         self._mouse_callback = mouse_callback
         self._display_scale = float(display_scale)
+        self._source_size = tuple(size)
+        self._shown_size = tuple(size)
+        self._preview_created = False
+        self._preview_was_presented = False
 
-        self.video = tk.Canvas(self.root, background="#0c0c0c",
-                               highlightthickness=0, takefocus=True)
-        self.video.grid(row=0, column=0, sticky="nsew")
-        self.video.bind("<Motion>", self._motion)
-        self.video.bind("<Button-1>", self._click)
-        self.root.bind("<Configure>", self._on_resize)
-
-        panel = ttk.Frame(self.root, padding=(8, 6))
-        panel.grid(row=1, column=0, sticky="ew")
+        panel = ttk.Frame(self.root, padding=(8, 7))
+        panel.grid(row=0, column=0, sticky="nsew")
         panel.columnconfigure(0, weight=1)
         self.status = tk.Label(panel, anchor="nw", justify="left",
                                relief="flat", background="#f2f2f2",
                                foreground="#333333", font="TkFixedFont")
-        self.status.grid(row=0, column=0, sticky="ew", pady=(0, 5))
+        self.status.grid(row=0, column=0, sticky="ew", pady=(0, 6))
 
-        button_bar = ttk.Frame(panel)
-        button_bar.grid(row=1, column=0, sticky="ew")
-        self._button_bar = button_bar
+        self._button_bar = ttk.Frame(panel)
+        self._button_bar.grid(row=1, column=0, sticky="ew")
         self._buttons = []
         for label, key in buttons:
             button = ttk.Button(
-                button_bar, text=label,
+                self._button_bar, text=label,
                 command=lambda value=key: self.push_key(value),
             )
             self._buttons.append(button)
-        button_bar.bind("<Configure>", self._layout_buttons)
+        self._button_bar.bind("<Configure>", self._layout_buttons)
 
         self.root.bind_all("<KeyPress>", self._key)
+        self.root.bind("<Configure>", self._on_resize)
         self._status_text = None
-        self._pending_status = None
+        self._pending_status = ""
         self._last_status_at = 0.0
+
         self.root.update_idletasks()
         screen_w = self.root.winfo_screenwidth()
-        screen_h = self.root.winfo_screenheight()
-        width = min(max(780, int(size[0] * self._display_scale)), screen_w - 80)
-        # Reserve room for the multi-line diagnostics/control panel.  The
-        # camera row is weighted and gives back space on smaller displays, so
-        # the status area never silently falls below the build/calibration
-        # information it is meant to replace.
-        height = min(max(560, int(size[1] * self._display_scale) + 240), screen_h - 100)
-        self.root.geometry(f"{width}x{height}")
-        self.root.minsize(min(640, screen_w), min(420, screen_h))
+        width = min(max(680, self.root.winfo_reqwidth()), max(320, screen_w - 80))
+        self.root.geometry(f"{width}x{max(180, self.root.winfo_reqheight())}")
+        self.root.minsize(min(520, screen_w), 150)
         self.root.update_idletasks()
         self._layout_buttons()
 
@@ -92,7 +88,10 @@ class TkCameraWindow:
     def push_key(self, key):
         if isinstance(key, str):
             key = ord(key)
-        self._keys.append(int(key))
+        key = int(key)
+        key_filter = getattr(self, "_key_filter", None)
+        if key_filter is None or key_filter(key):
+            self._keys.append(key)
 
     def _key(self, event):
         if event.keysym == "Escape":
@@ -107,10 +106,10 @@ class TkCameraWindow:
 
     def _on_resize(self, _event=None):
         if not self._closed:
-            self.status.configure(wraplength=max(420, self.root.winfo_width() - 32))
+            self.status.configure(wraplength=max(360, self.root.winfo_width() - 32))
 
     def _layout_buttons(self, _event=None):
-        """Wrap action buttons so narrow windows never hide a control."""
+        """Wrap action buttons so narrow dashboards never hide a control."""
         if not self._buttons:
             return
         available = max(260, self._button_bar.winfo_width())
@@ -127,84 +126,121 @@ class TkCameraWindow:
 
     def _request_close(self):
         if self._close_request is not None and not self._close_request():
-            return
+            return False
         self.close()
+        return True
 
-    def _image_point(self, event):
-        if not self._layout:
-            return None
-        dx = event.x - self._layout["x"]
-        dy = event.y - self._layout["y"]
-        if not (0 <= dx < self._layout["w"] and 0 <= dy < self._layout["h"]):
-            return None
-        scale = self._layout["scale"] or 1.0
-        return (dx / scale, dy / scale)
+    def _create_preview(self):
+        if self._preview_created or self._closed:
+            return
+        cv2.namedWindow(self.preview_title, cv2.WINDOW_AUTOSIZE)
+        cv2.setMouseCallback(self.preview_title, self._opencv_mouse)
+        self._preview_created = True
 
-    def _motion(self, event):
-        if self._mouse_callback:
-            point = self._image_point(event)
+    def _opencv_mouse(self, event, x, y, _flags, _param=None):
+        if self._mouse_callback is None:
+            return
+        shown_w, shown_h = self._shown_size
+        source_w, source_h = self._source_size
+        if shown_w <= 0 or shown_h <= 0:
+            return
+        point = None
+        if 0 <= x < shown_w and 0 <= y < shown_h:
+            point = (min(source_w - 1, x * source_w / shown_w),
+                     min(source_h - 1, y * source_h / shown_h))
+        if event == cv2.EVENT_MOUSEMOVE:
             self._mouse_callback("move", point)
+        elif event == cv2.EVENT_LBUTTONDOWN:
+            self._mouse_callback("click", point)
 
-    def _click(self, event):
-        self.video.focus_set()
-        if self._mouse_callback:
-            self._mouse_callback("click", self._image_point(event))
-
-    def show(self, frame, status_lines=()):
+    def present(self, frame):
+        """Present one BGR frame without copying it through Tk/Tcl."""
         if self._closed:
             return
-        self.root.update_idletasks()
-        vw = max(2, self.video.winfo_width())
-        vh = max(2, self.video.winfo_height())
+        self._create_preview()
         h, w = frame.shape[:2]
-        scale = min(vw / w, vh / h, 1.0)
-        iw, ih = max(1, round(w * scale)), max(1, round(h * scale))
-        shown = frame if scale == 1.0 else cv2.resize(
-            frame, (iw, ih), interpolation=cv2.INTER_AREA)
-        canvas = cv2.cvtColor(shown, cv2.COLOR_BGR2RGB)
-        header = b"P6 %d %d 255 " % (iw, ih)
-        self._photo = tk.PhotoImage(data=header + canvas.tobytes())
-        x, y = (vw - iw) // 2, (vh - ih) // 2
-        self._layout = {"x": x, "y": y, "w": iw, "h": ih,
-                        "scale": scale, "render_w": w, "render_h": h}
-        if self._image_item is None:
-            self._image_item = self.video.create_image(x, y, anchor="nw",
-                                                       image=self._photo)
-        else:
-            self.video.coords(self._image_item, x, y)
-            self.video.itemconfigure(self._image_item, image=self._photo)
-        self.set_status(status_lines)
-        self.root.update()
+        self._source_size = (w, h)
+        shown = frame
+        if abs(self._display_scale - 1.0) > 1e-6:
+            shown_w = max(1, round(w * self._display_scale))
+            shown_h = max(1, round(h * self._display_scale))
+            interpolation = (cv2.INTER_AREA if self._display_scale < 1.0
+                             else cv2.INTER_LINEAR)
+            shown = cv2.resize(frame, (shown_w, shown_h), interpolation=interpolation)
+        self._shown_size = shown.shape[1::-1]
+        cv2.imshow(self.preview_title, shown)
+        self._preview_was_presented = True
 
-    def set_status(self, lines):
+    def show(self, frame, status_lines=()):
+        """Compatibility wrapper: present a frame, update status, pump events."""
+        self.present(frame)
+        self.set_status(status_lines)
+        self.pump()
+
+    def set_status(self, lines, *, force=False):
         if isinstance(lines, str):
             lines = [lines]
         text = "\n".join(str(line) for line in lines)
-        if text != self._pending_status:
-            self._pending_status = text
-        elif text == self._status_text:
-            return
+        self._pending_status = text
         now = time.monotonic()
-        # FPS and frame counters change every iteration.  Updating a Tk text
-        # widget at camera rate needlessly competes with capture/rendering, so
-        # diagnostics are refreshed at a readable 10 Hz while the image keeps
-        # updating every iteration.
-        if self._status_text is not None and now - self._last_status_at < 0.1:
-            return
+        if not force and self._status_text is not None:
+            if text == self._status_text or now - self._last_status_at < self.STATUS_INTERVAL_S:
+                return
         self._status_text = text
         self._last_status_at = now
         self.status.configure(text=text,
-                              wraplength=max(420, self.root.winfo_width() - 32))
+                              wraplength=max(360, self.root.winfo_width() - 32))
+
+    def pump(self, status_lines=None):
+        """Service Tk and HighGUI without presenting or reprocessing a frame."""
+        if self._closed:
+            return
+        if status_lines is not None:
+            self.set_status(status_lines)
+        try:
+            self.root.update()
+        except tk.TclError:
+            self._closed = True
+            return
+
+        try:
+            key = cv2.waitKey(1)
+            if key >= 0:
+                self.push_key(key & 0xFF)
+        except cv2.error:
+            # ``present`` raises a useful error when HighGUI is unavailable;
+            # do not mask it with an event-pump failure during teardown.
+            key = -1
+
+        if self._preview_created and self._preview_was_presented:
+            try:
+                visible = cv2.getWindowProperty(
+                    self.preview_title, cv2.WND_PROP_VISIBLE)
+            except cv2.error:
+                visible = -1
+            if visible < 1:
+                self._preview_created = False
+                self._preview_was_presented = False
+                if not self._request_close():
+                    # A running Rig Build can deny closure. Recreate the camera
+                    # surface on the next frame while the dashboard stays live.
+                    self._preview_created = False
 
     def poll_key(self):
         if self._closed or not self._keys:
             return -1
-        return self._keys.pop(0)
+        return self._keys.popleft()
 
     def close(self):
         if self._closed:
             return
         self._closed = True
+        if self._preview_created:
+            try:
+                cv2.destroyWindow(self.preview_title)
+            except cv2.error:
+                pass
+            self._preview_created = False
         try:
             self.root.destroy()
         except tk.TclError:

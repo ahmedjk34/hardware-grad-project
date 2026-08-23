@@ -15,11 +15,9 @@ window, and `save` writes the whole state to one JSON file.
 Where the settings come from
 ----------------------------
 It reads config/camera_settings.json at startup and `save` writes it back, so
-the tool picks up where it left off. The committed default in that file is
-exactly what undistorted_viewer.py renders, so a first run — or a run after
-`--fresh`, or after `reset` — shows the same picture that tool does: the same
-lens profile, the same 120-degree rectilinear output at the same size,
-correction on, no zoom, no crop, no grid.
+the tool picks up where it left off and opens exactly like camera_feed.py from
+that file. `--fresh` and `reset` deliberately return to the uncropped built-in
+defaults shared with undistorted_viewer.py.
 
 Four layers, each overriding the one before:
 
@@ -28,28 +26,22 @@ Four layers, each overriding the one before:
   3. config/camera_settings.json, or whatever --settings names;
   4. the command-line flags.
 
-One resizable application window, two genuinely separate regions
------------------------------------------------------------------
-The top is a camera canvas that grows and shrinks with the window. The bottom
-is a Tk control centre:
-real text entries, read-only dropdowns, buttons, status labels and an arbitrary
-command entry. Click an entry, type a value and press Enter; Up/Down step it.
-Choosing a dropdown applies immediately. Drag a rectangle on the image to crop.
+Two windows, one process
+------------------------
+Tk is the control centre: real text entries, read-only dropdowns, buttons,
+status labels and an arbitrary command entry. OpenCV presents the clean camera
+image directly, without a per-frame Tk PhotoImage conversion. Click an entry,
+type a value and press Enter; Up/Down step it. Choosing a dropdown applies
+immediately. Drag a rectangle on the OpenCV preview to crop.
 
-The window starts inside the available desktop instead of insisting on the
-camera's full pixel size. Resizing gives the control centre the rows it needs,
-reflows fields and buttons at narrow widths, and gives the camera the remaining
-space. The image is letterboxed into that space, so controls can never be pushed
-off-screen by a 1296x972 or HQ frame.
+`--window WxH` and `--display-scale` affect display only. The processing size
+is derived from the saved lens/ROI exactly as camera_feed.py derives it, so
+desktop geometry cannot silently turn the canonical 384x440 feed into a much
+larger render.
 
-`--window WxH` sets the correction's processing viewport; the default is the
-corrected output size used by undistorted_viewer.py. Resizing the application
-changes only its display canvas, not the correction maps or saved geometry.
-
-It opens rendering EXACTLY the same corrected image as undistorted_viewer.py:
-the same lens profile, the same 120-degree rectilinear output, correction on, no
-zoom, no crop, no grid. A smaller desktop may downscale that image for display;
-the underlying render and remap remain identical. `reset` gets back to them.
+It opens rendering exactly the same corrected/framed image as camera_feed.py
+from the selected settings file. A smaller desktop may downscale that image for
+display; the underlying render and remap remain identical.
 
 Zoom and crop are not what they usually are
 -------------------------------------------
@@ -153,11 +145,14 @@ from vision.camera_source import (
     AUTO,
     DEFAULT_SIZE,
     FULL_RES_SIZE,
+    LatestFramePump,
     SENSOR_CONTROLS,
     build_controls,
     describe_sensor_modes,
     open_camera,
 )
+from vision.latest_worker import LatestValueWorker
+from vision.performance import RateMeter
 from vision.commands import (
     CommandError,
     CommandSet,
@@ -180,8 +175,8 @@ from vision.overlays import (
     FONT,
     LABEL_COLOR,
     draw_grid,
-    draw_info_box,
 )
+from camera.snapshot_worker import SnapshotWorker
 
 CAPTURE_DIR = Path(__file__).resolve().parents[1] / "captures"
 SETTINGS_PATH = Path(__file__).resolve().parents[1] / "config" / "camera_settings.json"
@@ -192,10 +187,6 @@ FIT_MODES = ("fit", "native")
 FLIPS = ("none", "h", "v", "both")
 ROTATIONS = (0, 90, 180, 270)
 
-# The camera feed is still a numpy image, but the control centre is not. Tk owns
-# the layout and input now; this colour is only the letterbox inside the video
-# widget. There are deliberately no cv2 trackbars.
-VIEWPORT_BG = (12, 12, 12)
 LOG_LINES = 4
 
 # Smallest drag that counts as a crop rather than a click, in image pixels. A
@@ -250,7 +241,8 @@ class Studio:
         self.pan = (0.5, 0.5)          # zoom centre, normalised to the full output
         self.fit_mode = "fit"
         self.view_size = None          # resolved once the camera size is known
-        self.viewport = None           # fixed (w, h) the image is drawn into
+        self.viewport = None           # canonical corrected size; not a UI size
+        self.preview_size = None       # optional display-only --window box
 
         self.flip = "none"
         self.rotate = 0
@@ -267,6 +259,7 @@ class Studio:
         self.maps = None
         self.last_raw = None           # kept so 'snap' writes clean images,
         self.last_corrected = None     # i.e. without the grid drawn on them
+        self.snapshot_submitter = None
 
         self.drag = None               # (start, current) in image coords, mid-crop
         self.pending = []              # command lines queued by the stdin thread
@@ -366,13 +359,12 @@ class Studio:
     def render_size(self):
         """(w, h) to render the ROI at, or None to render it 1:1.
 
-        fit     the ROI is scaled to fill the view box, so the window keeps the
-                same size however far you zoom in. `scale` then becomes a pure
-                quality knob: it changes how much source detail feeds the
-                correction, not how big the window is.
+        fit     the ROI is scaled to fill an explicitly selected processing
+                view box. With no view box, the canonical feed's natural ROI
+                size is used. Display-window dimensions never enter this path.
         native  the ROI is rendered at its natural size, so zoom and crop never
-                interpolate anything — at the cost of the window resizing under
-                you every time you touch them.
+                interpolate anything. The OpenCV window scales that result only
+                for presentation when a display-only bound was requested.
         """
         if self.fit_mode == "native" or self.view_size is None:
             return None
@@ -557,17 +549,12 @@ class Studio:
 
     def rebuild(self, input_size):
         self.capture_size = input_size
-        if self.viewport is None:
-            self.viewport = full_output_size(self.profile, input_size)
-        if self.view_size is None:
-            # Render straight into the viewport. Anything else would mean
-            # rendering at one size and resampling to another for display — a
-            # second interpolation on top of the correction, for nothing. At the
-            # default viewport this IS the untouched output size, which is what
-            # keeps the launch view identical to undistorted_viewer.py.
-            self.view_size = tuple(self.viewport)
         self.maps = build_maps(self.profile, input_size, self.interp, mip=self.mip,
                                roi=self.roi(), view_size=self.render_size())
+        if self.view_size is None:
+            # The canonical viewport is the feed's natural corrected ROI. It
+            # is deliberately derived from the maps, never from a Tk window.
+            self.viewport = tuple(self.maps.out_size)
         self.dirty = False
         return self.maps
 
@@ -682,7 +669,7 @@ class Studio:
         cmds.add("save", self._cmd_save, "[path]",
                  "WRITE THE JSON — everything above, in one file", aliases=("w",))
         cmds.add("autosave", self._cmd_autosave, "[on|off]",
-                 "rewrite that JSON after every single change")
+                 "save the newest JSON after changes settle for 500 ms")
         cmds.add("load", self._cmd_load, "[path]", "read a settings JSON back in")
         cmds.add("lens", self._cmd_lens, "[path]",
                  f"also write the lens half to {PROFILE_PATH.name}, for the other tools")
@@ -733,7 +720,7 @@ class Studio:
         self.autosave = self._flag(args, self.autosave)
         if self.autosave:
             self.write_settings(self.settings_path)
-            return f"autosave ON — {self.settings_path} rewritten on every change"
+            return f"autosave ON — {self.settings_path} uses a 500 ms debounce"
         return "autosave off"
 
     def _cmd_rotate(self, args):
@@ -798,17 +785,14 @@ class Studio:
         self.dirty = True
         note = ""
         if self.viewport and (w > self.viewport[0] or h > self.viewport[1]):
-            # Bigger than the window: it will be scaled back down to be shown,
-            # so say so rather than let it look like free extra resolution.
-            note = " — larger than the viewport, so it is scaled down to display"
+            note = " — larger than the canonical feed output"
         return f"view box {self.view_size[0]}x{self.view_size[1]}{note}"
 
     def _cmd_fill(self, args):
-        self.view_size = tuple(self.viewport)
+        self.view_size = None
         self.fit_mode = "fit"
         self.dirty = True
-        return (f"view box back to the viewport, {self.viewport[0]}x"
-                f"{self.viewport[1]} — the image fills the window again")
+        return "view box back to the canonical feed's natural corrected size"
 
     def _cmd_refit(self, args):
         if self.capture_size is None:
@@ -852,6 +836,10 @@ class Studio:
     def _cmd_snap(self, args):
         if self.last_raw is None:
             raise CommandError("no frame captured yet")
+        if self.snapshot_submitter is not None:
+            if self.snapshot_submitter():
+                return "saving raw + corrected PNGs in the background"
+            raise CommandError("snapshot writer busy — try again shortly")
         return save_snapshot(self.last_raw, self.last_corrected, self.profile)
 
     def _cmd_params(self, args):
@@ -872,7 +860,7 @@ class Studio:
         self.mip = True
         self.correct = True
         self.crops, self.zoom, self.pan = [], 1.0, (0.5, 0.5)
-        self.view_size = None          # rebuild() puts it back to the viewport
+        self.view_size = None          # rebuild() uses the canonical natural ROI
         self.fit_mode = "fit"
         self.flip, self.rotate, self.swap_rb = "none", 0, False
         self.all_auto()
@@ -930,9 +918,9 @@ class Studio:
                 "zoom": round(self.zoom, 4),
                 "pan": [round(self.pan[0], 5), round(self.pan[1], 5)],
                 "fit_mode": self.fit_mode,
-                # Recorded for reference only — read_settings does not restore
-                # it, because it belongs to the window this ran in, not to the
-                # camera setup the rest of the file describes.
+                # Recorded for reference only. Normal startup intentionally
+                # resolves the saved lens/ROI to Camera Feed's natural output;
+                # an explicit live `viewbox` remains a Studio inspection tool.
                 "view_size": list(self.view_size) if self.view_size else None,
             },
             "sensor": dict(self.sensor),
@@ -989,11 +977,10 @@ class Studio:
         self.pan = tuple(fr.get("pan", (0.5, 0.5)))
         if fr.get("fit_mode") in FIT_MODES:
             self.fit_mode = fr["fit_mode"]
-        # Deliberately NOT restored: view_size is the size the correction
-        # renders at, which rebuild() derives from this session's viewport. A
-        # file saved on a 1600-wide window must not force that window here.
-        # `refit` is how you ask for a specific render size, and it is a
-        # decision about sharpness rather than about the layout.
+        # Deliberately NOT restored: a normal launch must resolve these saved
+        # lens/ROI settings to Camera Feed's natural corrected size. `viewbox`
+        # and `refit` are explicit Studio inspection choices, never UI-window
+        # dimensions and never part of the canonical runtime geometry.
 
         cap = data.get("capture") or {}
         self.swap_rb = bool(cap.get("swap_rb", self.swap_rb))
@@ -1291,7 +1278,7 @@ def side_by_side(raw, corrected):
 
 
 def draw_drag(image, studio):
-    """The crop rectangle being dragged, with its size in output pixels."""
+    """Draw only the crop geometry; detailed values belong in Tk."""
     if studio.drag is None:
         return
     (x0, y0), (x1, y1) = studio.drag
@@ -1303,9 +1290,6 @@ def draw_drag(image, studio):
     mask[y0:y1, x0:x1] = True
     image[~mask] = (image[~mask] * 0.45).astype(np.uint8)
     cv2.rectangle(image, (x0, y0), (x1, y1), (0, 255, 0), 1)
-    label = f"{x1 - x0}x{y1 - y0}"
-    cv2.putText(image, label, (x0 + 4, max(14, y0 - 6)), FONT, 0.45,
-                (0, 255, 0), 1, cv2.LINE_AA)
 
 
 # --- Tk application ---------------------------------------------------------
@@ -1322,18 +1306,36 @@ class StudioWindow:
         self.root = root
         self.studio = studio
         self.camera = camera
-        self._photo = None
-        self._image_item = None
         self._image_layout = None
+        self.preview_title = "Camera Studio - Preview"
+        self._preview_created = False
         self._help_window = None
         self._after_id = None
         self._closing = False
         self._fps = 0.0
-        self._last_frame_at = time.perf_counter()
+        self._capture_rate = RateMeter()
+        self._preview_rate = RateMeter()
+        self._last_sequence = 0
+        self._last_frame_age = None
         self._autosave_state = None
-        self._last_display_note = None
+        self._autosave_due_at = time.monotonic() + 0.5 if studio.autosave else None
+        self._last_widget_refresh = 0.0
+        self._widgets_dirty = True
         self._reflow_after = None
         self._flow_width = None
+        self._map_generation = 0
+        self._map_applied_generation = 0
+        self._last_map_result_count = 0
+        self._last_snapshot_count = 0
+        self._active_input_size = tuple(studio.capture_size)
+        self._requested_input_size = tuple(studio.capture_size)
+
+        self.frame_pump = LatestFramePump(camera)
+        self.map_worker = LatestValueWorker(self._build_map_value,
+                                            name="studio-map-builder")
+        self.snapshot_worker = SnapshotWorker(save_snapshot, name="studio-snapshot")
+        self.studio.snapshot_submitter = self._queue_snapshot
+        self.frame_pump.start()
 
         self.field_vars = []
         self.field_widgets = []
@@ -1347,22 +1349,19 @@ class StudioWindow:
         self._build_widgets()
         self._bind_shortcuts()
 
-        # The correction's viewport is a processing size, not a demand that the
-        # desktop donate that many physical pixels. Start inside the available
-        # screen, then let the grid give the control centre its natural height
-        # and the camera whatever remains. Freezing the old requested geometry
-        # is what made a 1296x972 feed hide the panel on a 1080p display.
+        # Tk is controls only; the NumPy frame lives in the separate HighGUI
+        # preview and therefore cannot push this panel off a small Pi display.
         self.root.update_idletasks()
         screen_w, screen_h = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
         requested_w = self.root.winfo_reqwidth()
         requested_h = self.root.winfo_reqheight()
         width = max(780, min(requested_w, screen_w - 80))
-        height = max(560, min(requested_h, screen_h - 100))
+        height = max(420, min(requested_h, screen_h - 100))
         width, height = min(width, screen_w), min(height, screen_h)
         x = max(0, (screen_w - width) // 2)
         y = max(0, (screen_h - height) // 3)
         self.root.geometry(f"{width}x{height}+{x}+{y}")
-        self.root.minsize(min(780, screen_w), min(560, screen_h))
+        self.root.minsize(min(780, screen_w), min(400, screen_h))
         self.root.resizable(True, True)
         self.root.update_idletasks()
         self._reflow_controls(force=True)
@@ -1377,22 +1376,10 @@ class StudioWindow:
         style.configure("Studio.LogError.TLabel", foreground="#b02020")
 
     def _build_widgets(self):
-        vw, vh = self.studio.viewport
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
-        video_frame = ttk.Frame(self.root)
-        video_frame.grid(row=0, column=0, sticky="nsew")
-        self.video = tk.Canvas(video_frame, width=vw, height=vh,
-                               background="#0c0c0c", highlightthickness=0,
-                               takefocus=True)
-        self.video.pack(fill="both", expand=True)
-        self.video.bind("<Button-1>", self._drag_start)
-        self.video.bind("<B1-Motion>", self._drag_move)
-        self.video.bind("<ButtonRelease-1>", self._drag_end)
-        self.video.bind("<Button-3>", self._drag_cancel)
-
         controls = ttk.Frame(self.root, padding=(6, 5))
-        controls.grid(row=1, column=0, sticky="ew")
+        controls.grid(row=0, column=0, sticky="nsew")
         self.controls = controls
 
         buttons = ttk.Frame(controls)
@@ -1524,6 +1511,9 @@ class StudioWindow:
         if self.studio.show_keys:
             self.studio.show_keys = False
             self.show_help()
+        self._widgets_dirty = True
+        if self.studio.autosave:
+            self._autosave_due_at = time.monotonic() + 0.5
         return result
 
     def _run_button(self, line):
@@ -1599,11 +1589,16 @@ class StudioWindow:
         except tk.TclError:
             return None
 
-    def _refresh_widgets(self):
-        # A per-frame refresh is what makes terminal commands, shortcuts and
-        # buttons visible in the fields. The focused widget is load-bearing:
+    def _refresh_widgets(self, *, force=False):
+        # A throttled refresh makes terminal commands, shortcuts and buttons
+        # visible in the fields. The focused widget is load-bearing:
         # replacing its StringVar while somebody types would make entries lose
         # half-written values at camera frame rate.
+        now = time.monotonic()
+        if not force and not self._widgets_dirty and now - self._last_widget_refresh < 0.2:
+            return
+        self._widgets_dirty = False
+        self._last_widget_refresh = now
         focused = self._focused_widget()
         for field, var, widget in zip(FIELDS, self.field_vars, self.field_widgets):
             if widget is not focused:
@@ -1615,7 +1610,12 @@ class StudioWindow:
             text=self.studio.derived_line(self._fps),
             style=("Studio.Calibrated.TLabel" if self.studio.profile.calibrated
                    else "Studio.Derived.TLabel"))
-        self.camera_label.configure(text=f"camera: {self.studio.sensor_status}")
+        age = ("waiting" if self._last_frame_age is None else
+               f"{self._last_frame_age * 1000:.0f} ms old")
+        self.camera_label.configure(
+            text=(f"camera: {self.studio.sensor_status} | capture "
+                  f"{self._capture_rate.rate:5.1f} fps | preview "
+                  f"{self._preview_rate.rate:5.1f} fps | {age}"))
         recent = self.studio.log.recent(count=LOG_LINES, max_age=12.0)
         padded = [(True, "")] * (LOG_LINES - len(recent)) + recent
         for label, (ok, message) in zip(self.log_labels, padded):
@@ -1637,7 +1637,7 @@ class StudioWindow:
         # Root bindings also run after a child widget's class binding. Guarding
         # on focus is therefore essential: without it, typing 158 into an Entry
         # would also fire the 1, 5 and 8 lens shortcuts.
-        if self._is_text_widget(self._focused_widget()):
+        if not getattr(event, "opencv", False) and self._is_text_widget(self._focused_widget()):
             return None
 
         p = self.studio.profile
@@ -1723,25 +1723,18 @@ class StudioWindow:
         return None
 
     def _widget_to_image(self, x, y):
-        """Video-widget coordinates -> pixels in the rendered image.
-
-        The PPM follows the current canvas size. This undoes only the letterbox
-        offset and its fit scale; the controls are separate widgets, so there
-        is no panel offset or OpenCV display-scale transform anymore.
-        """
+        """OpenCV preview coordinates -> pixels in the rendered image."""
         lay = self._image_layout
         if lay is None:
             return None
-        dx, dy = int(x) - lay["image_x"], int(y) - lay["image_y"]
-        if not (0 <= dx < lay["image_w"] and 0 <= dy < lay["image_h"]):
+        if not (0 <= x < lay["image_w"] and 0 <= y < lay["image_h"]):
             return None
-        scale = lay["image_scale"] or 1.0
-        return (min(lay["render_w"] - 1, int(dx / scale)),
-                min(lay["render_h"] - 1, int(dy / scale)))
+        return (min(lay["render_w"] - 1,
+                    int(x * lay["render_w"] / lay["image_w"])),
+                min(lay["render_h"] - 1,
+                    int(y * lay["render_h"] / lay["image_h"])))
 
-    def _drag_start(self, event):
-        self.video.focus_set()
-        point = self._widget_to_image(event.x, event.y)
+    def _drag_start(self, point):
         if point is None:
             return
         if self.studio.view == "both":
@@ -1749,17 +1742,15 @@ class StudioWindow:
             return
         self.studio.drag = (point, point)
 
-    def _drag_move(self, event):
+    def _drag_move(self, point):
         if self.studio.drag is None:
             return
-        point = self._widget_to_image(event.x, event.y)
         if point is not None:
             self.studio.drag = (self.studio.drag[0], point)
 
-    def _drag_end(self, event):
+    def _drag_end(self, point):
         if self.studio.drag is None:
             return
-        point = self._widget_to_image(event.x, event.y)
         if point is not None:
             self.studio.drag = (self.studio.drag[0], point)
         (sx, sy), (ex, ey) = self.studio.drag
@@ -1787,50 +1778,78 @@ class StudioWindow:
         self.studio.drag = None
         self.studio.log.add(True, "crop drag cancelled")
 
-    def _letterbox(self, image):
-        """Fit the rendered image into the current video canvas, down only."""
-        vw = max(2, self.video.winfo_width())
-        vh = max(2, self.video.winfo_height())
-        render_h, render_w = image.shape[:2]
-        scale = min(vw / render_w, vh / render_h, 1.0)
-        iw = max(1, int(render_w * scale))
-        ih = max(1, int(render_h * scale))
-        shown = image
-        if scale < 1.0:
-            shown = cv2.resize(image, (iw, ih), interpolation=cv2.INTER_AREA)
-        canvas = np.full((vh, vw, 3), VIEWPORT_BG, np.uint8)
-        x_off, y_off = (vw - iw) // 2, (vh - ih) // 2
-        canvas[y_off:y_off + ih, x_off:x_off + iw] = shown
-        self._image_layout = {
-            "image_x": x_off, "image_y": y_off,
-            "image_w": iw, "image_h": ih, "image_scale": scale,
-            "render_w": render_w, "render_h": render_h,
-        }
-        return canvas
+    def _opencv_mouse(self, event, x, y, _flags, _param=None):
+        point = self._widget_to_image(x, y)
+        if event == cv2.EVENT_LBUTTONDOWN:
+            self._drag_start(point)
+        elif event == cv2.EVENT_MOUSEMOVE and self.studio.drag is not None:
+            self._drag_move(point)
+        elif event == cv2.EVENT_LBUTTONUP:
+            self._drag_end(point)
+        elif event == cv2.EVENT_RBUTTONDOWN:
+            self._drag_cancel()
+
+    def _create_preview(self):
+        if self._preview_created:
+            return
+        cv2.namedWindow(self.preview_title, cv2.WINDOW_AUTOSIZE)
+        cv2.setMouseCallback(self.preview_title, self._opencv_mouse)
+        self._preview_created = True
 
     def _push_image(self, frame):
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        header = b"P6 %d %d 255 " % (rgb.shape[1], rgb.shape[0])
-        photo = tk.PhotoImage(data=header + rgb.tobytes())
-        # Tk keeps only a Tcl-side image name. Without a Python reference the
-        # PhotoImage is collected and the video widget silently goes blank.
-        self._photo = photo
-        if self._image_item is None:
-            self._image_item = self.video.create_image(0, 0, anchor="nw", image=photo)
-        else:
-            self.video.itemconfigure(self._image_item, image=photo)
+        self._create_preview()
+        render_h, render_w = frame.shape[:2]
+        scale = float(self.studio.args.display_scale)
+        if self.studio.preview_size is not None:
+            scale = min(self.studio.preview_size[0] / render_w,
+                        self.studio.preview_size[1] / render_h)
+        iw, ih = max(1, round(render_w * scale)), max(1, round(render_h * scale))
+        shown = frame
+        if (iw, ih) != (render_w, render_h):
+            shown = cv2.resize(
+                frame, (iw, ih),
+                interpolation=cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR)
+        self._image_layout = {
+            "image_w": iw, "image_h": ih,
+            "render_w": render_w, "render_h": render_h,
+        }
+        cv2.imshow(self.preview_title, shown)
 
-    def _viewport_note(self):
-        lay = self._image_layout
-        if not lay or lay["image_scale"] >= 0.999:
-            return None
-        return (f"display only: the {lay['render_w']}x{lay['render_h']} render is "
-                f"shown at {lay['image_scale'] * 100:.0f}% to fit the current "
-                "window — enlarge it for a 1:1 preview")
+    def _pump_preview(self):
+        if not self._preview_created:
+            return
+        key = cv2.waitKeyEx(1)
+        if key >= 0:
+            # waitKeyEx preserves special keys, but their values differ between
+            # GTK/X11 and Win32. Keep the command layer platform-independent.
+            keysym = {
+                27: "Escape", 10: "Return", 13: "Return",
+                8: "BackSpace", 127: "BackSpace",
+                65361: "Left", 2424832: "Left",
+                65362: "Up", 2490368: "Up",
+                65363: "Right", 2555904: "Right",
+                65364: "Down", 2621440: "Down",
+            }.get(key, "")
+            char = (chr(key) if 0 <= key < 256
+                    and key not in (8, 10, 13, 27, 127) else "")
+            event = type("OpenCVKey", (), {
+                "char": char, "keysym": keysym, "opencv": True})()
+            self._shortcut(event)
+        try:
+            visible = cv2.getWindowProperty(self.preview_title, cv2.WND_PROP_VISIBLE)
+        except cv2.error:
+            visible = -1
+        if visible < 1:
+            self.close()
 
     def _autosave(self):
-        if not self.studio.autosave:
+        if (not self.studio.autosave or self._autosave_due_at is None
+                or time.monotonic() < self._autosave_due_at):
             return
+        if self.studio.dirty or self._map_applied_generation < self._map_generation:
+            self._autosave_due_at = time.monotonic() + 0.1
+            return
+        self._autosave_due_at = None
         settings = self.studio.settings_dict()
         state = json.dumps([settings[k] for k in
                             ("lens", "correction", "framing", "sensor", "capture")],
@@ -1838,6 +1857,55 @@ class StudioWindow:
         if state != self._autosave_state:
             self._autosave_state = state
             self.studio.write_settings(self.studio.settings_path)
+
+    def _queue_snapshot(self):
+        if self.studio.last_raw is None or self.studio.last_corrected is None:
+            return False
+        profile = LensProfile(**asdict(self.studio.profile))
+        return self.snapshot_worker.submit(
+            self.studio.last_raw.copy(), self.studio.last_corrected.copy(), profile)
+
+    @staticmethod
+    def _build_map_value(profile, input_size, interpolation, mip, roi, view_size):
+        maps = build_maps(profile, input_size, interpolation, mip=mip,
+                          roi=roi, view_size=view_size)
+        return tuple(input_size), maps
+
+    def _request_map_rebuild(self, input_size):
+        self.studio.capture_size = tuple(input_size)
+        self._requested_input_size = tuple(input_size)
+        profile = LensProfile(**asdict(self.studio.profile))
+        self._map_generation += 1
+        self.map_worker.submit(
+            self._map_generation, profile, tuple(input_size), self.studio.interp,
+            self.studio.mip, tuple(self.studio.roi()), self.studio.render_size())
+        self.studio.dirty = False
+
+    def _poll_background_work(self):
+        result = self.map_worker.snapshot()
+        if result.completed_count != self._last_map_result_count:
+            self._last_map_result_count = result.completed_count
+            if result.generation == self._map_generation:
+                if result.error:
+                    self.studio.log.add(False, result.error)
+                elif result.value is not None:
+                    input_size, maps = result.value
+                    self.studio.maps = maps
+                    self.studio.capture_size = tuple(input_size)
+                    self._active_input_size = tuple(input_size)
+                    self._map_applied_generation = result.generation
+                    if self.studio.view_size is None:
+                        self.studio.viewport = tuple(maps.out_size)
+                    self._widgets_dirty = True
+
+        snapshot = self.snapshot_worker.snapshot()
+        if snapshot.completed_count != self._last_snapshot_count:
+            self._last_snapshot_count = snapshot.completed_count
+            if snapshot.error:
+                self.studio.log.add(False, snapshot.error)
+            elif snapshot.result is not None:
+                self.studio.log.add(True, str(snapshot.result))
+            self._widgets_dirty = True
 
     def show_help(self):
         if self._help_window is not None and self._help_window.winfo_exists():
@@ -1868,72 +1936,71 @@ class StudioWindow:
             row=2, column=0, pady=(6, 0), sticky="e")
 
     def tick(self):
-        """Capture and render one frame, then give control back to Tk."""
+        """Present each unique captured frame and keep both UIs responsive."""
         if self._closing or not self.studio.running:
             self.close()
             return
         try:
-            ok, frame = self.camera.read()
-            if not ok or frame is None:
-                print("Failed to read frame from camera.")
-                self.studio.log.add(False, "failed to read frame from camera")
-                self.close()
-                return
-            if self.studio.swap_rb:
-                frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-            frame = self.studio.orient(frame)
+            for line in self.studio.drain_pending():
+                self._execute(line, echo_terminal=True)
+            self._poll_background_work()
 
             if self.studio.sensor_dirty:
                 self.studio.log.add(
                     True, f"sensor: {self.studio.apply_sensor(self.camera)}")
+                self._widgets_dirty = True
 
-            # Camera drivers may return a size they did not promise, and a 90°
-            # rotation swaps axes. A map is valid for exactly one input size.
-            if frame.shape[1::-1] != self.studio.capture_size:
-                self.camera.size = frame.shape[1::-1]
-                self.studio.dirty = True
+            snapshot = self.frame_pump.snapshot()
+            self._last_frame_age = snapshot.age_s()
+            new_frame = (snapshot.frame is not None
+                         and snapshot.sequence != self._last_sequence)
+            frame = None
+            target_input = self._active_input_size
+            if new_frame:
+                self._last_sequence = snapshot.sequence
+                self._capture_rate.tick()
+                frame = snapshot.frame
+                if self.studio.swap_rb:
+                    frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                frame = self.studio.orient(frame)
+                target_input = frame.shape[1::-1]
+
             if self.studio.dirty:
-                self.studio.rebuild(frame.shape[1::-1])
+                self._request_map_rebuild(target_input)
+            elif (target_input != self._active_input_size
+                  and target_input != self._requested_input_size):
+                self._request_map_rebuild(target_input)
 
-            if self.studio.correct:
-                corrected = undistort(frame, self.studio.maps)
-            else:
-                corrected = crop_resize(frame, self.studio.roi(),
-                                        self.studio.maps.out_size,
-                                        INTERPOLATIONS[self.studio.interp])
-            self.studio.last_raw, self.studio.last_corrected = frame, corrected
+            # A size-changing rotation needs its matching maps before display;
+            # ordinary parameter rebuilds may safely keep showing the previous
+            # valid map until the latest background result arrives.
+            if (new_frame and target_input == self._active_input_size
+                    and self.studio.maps is not None):
+                if self.studio.correct:
+                    corrected = undistort(frame, self.studio.maps)
+                else:
+                    corrected = crop_resize(
+                        frame, self.studio.roi(), self.studio.maps.out_size,
+                        INTERPOLATIONS[self.studio.interp])
+                self.studio.last_raw, self.studio.last_corrected = frame, corrected
 
-            if self.studio.view in ("both", "raw"):
-                raw_view = crop_resize(frame, self.studio.roi(),
-                                       self.studio.maps.out_size,
-                                       INTERPOLATIONS[self.studio.interp])
-                image = (side_by_side(raw_view, corrected)
-                         if self.studio.view == "both" else raw_view.copy())
-            else:
-                image = corrected.copy()
+                if self.studio.view in ("both", "raw"):
+                    raw_view = crop_resize(
+                        frame, self.studio.roi(), self.studio.maps.out_size,
+                        INTERPOLATIONS[self.studio.interp])
+                    image = (side_by_side(raw_view, corrected)
+                             if self.studio.view == "both" else raw_view.copy())
+                else:
+                    image = corrected.copy()
 
-            if self.studio.show_grid:
-                draw_grid(image, 8, 8)
-            if not self.studio.correct:
-                draw_info_box(image, ["CORRECTION OFF — press 'n'"],
-                              origin=(8, 8), highlight_first=True)
-            draw_drag(image, self.studio)
-            self._push_image(self._letterbox(image))
+                if self.studio.show_grid:
+                    draw_grid(image, 8, 8)
+                draw_drag(image, self.studio)
+                self._push_image(image)
+                self._preview_rate.tick()
+                self._fps = self._preview_rate.rate
 
-            now = time.perf_counter()
-            dt, self._last_frame_at = now - self._last_frame_at, now
-            if dt > 0:
-                rate = 1.0 / dt
-                self._fps = 0.9 * self._fps + 0.1 * rate if self._fps else rate
-
-            note = self._viewport_note()
-            if note != self._last_display_note:
-                self._last_display_note = note
-                if note:
-                    self.studio.log.add(False, note)
-
-            for line in self.studio.drain_pending():
-                self._execute(line, echo_terminal=True)
+            self._pump_preview()
             self._refresh_widgets()
             self._autosave()
         except Exception as exc:
@@ -1943,7 +2010,7 @@ class StudioWindow:
             return
 
         if self.studio.running:
-            self._after_id = self.root.after(1, self.tick)
+            self._after_id = self.root.after(2, self.tick)
         else:
             self.close()
 
@@ -1964,7 +2031,20 @@ class StudioWindow:
             except tk.TclError:
                 pass
             self._reflow_after = None
-        self.camera.release()
+        self.studio.snapshot_submitter = None
+        self.map_worker.stop()
+        self.snapshot_worker.stop(finish=True)
+        if self.frame_pump.stop():
+            self.camera.release()
+        else:
+            print("Camera Studio capture is still blocked; leaving it for process shutdown.",
+                  file=sys.stderr)
+        if self._preview_created:
+            try:
+                cv2.destroyWindow(self.preview_title)
+            except cv2.error:
+                pass
+            self._preview_created = False
         try:
             self.root.destroy()
         except tk.TclError:
@@ -1989,14 +2069,12 @@ def parse_args():
                              "field of view, ~2x the real detail at the frame edges, "
                              "and the only thing that makes zooming worthwhile")
     parser.add_argument("--window", metavar="WxH", type=parse_size,
-                        help="processing size of the camera viewport, e.g. "
-                             "1600x900. The resizable Tk canvas fits that render "
-                             "into the available window. Default: the corrected "
-                             "output size used by undistorted_viewer.py")
+                        help="display-only bounding box for the OpenCV preview, "
+                             "e.g. 800x600; processing geometry is unchanged")
     parser.add_argument("--display-scale", type=float, default=1.0,
-                        help="legacy OpenCV-UI option, retained for command-line "
-                             "compatibility but ignored by the responsive Tk "
-                             "window; resize it or use --window")
+                        help="display-only OpenCV preview scale (default 1.0)")
+    parser.add_argument("--opencv-threads", type=int, default=2,
+                        help="OpenCV worker threads (default: 2)")
     parser.add_argument("--list-modes", action="store_true",
                         help="print the sensor's modes and exit")
 
@@ -2008,7 +2086,7 @@ def parse_args():
                        help="ignore the settings file and start from the "
                             "built-in defaults (which are undistorted_viewer.py's)")
     files.add_argument("--autosave", action="store_true",
-                       help="rewrite the settings JSON after every change")
+                       help="save the newest settings after a 500 ms debounce")
     files.add_argument("--profile", type=Path, default=PROFILE_PATH,
                        help="lens profile the 'lens' command writes, for the other tools")
 
@@ -2037,9 +2115,9 @@ def parse_args():
 
     frame = parser.add_argument_group("framing")
     frame.add_argument("--fit", choices=list(FIT_MODES),
-                       help="fit (the default): the window stays the same size "
-                            "as you zoom. native: the crop renders 1:1 and the "
-                            "window resizes")
+                       help="fit (the default): render into an explicit view box; "
+                            "native: render the crop at its natural size. Neither "
+                            "mode derives processing size from a UI window")
     frame.add_argument("--flip", choices=list(FLIPS),
                        help="mirror the captured frame")
     frame.add_argument("--rotate", type=int, choices=list(ROTATIONS),
@@ -2121,8 +2199,7 @@ def apply_overrides(studio, args):
             setattr(studio, attr, value)
             changed.append(f"{label}={value}")
     if args.window is not None:
-        studio.viewport = tuple(args.window)
-        studio.view_size = None        # rebuild() refits it to the new viewport
+        studio.preview_size = tuple(args.window)
         changed.append(f"window={args.window[0]}x{args.window[1]}")
     for flag, attr, value, label in ((args.no_mip, "mip", False, "mip=off"),
                                      (args.no_correct, "correct", False, "correction=off"),
@@ -2147,6 +2224,11 @@ def apply_overrides(studio, args):
 
 def main():
     args = parse_args()
+    if args.display_scale <= 0 or args.opencv_threads <= 0:
+        print("--display-scale and --opencv-threads must be positive",
+              file=sys.stderr)
+        return 1
+    cv2.setNumThreads(args.opencv_threads)
     # Step 2 of the precedence chain in apply_overrides: the lens profile the
     # other tools read. The settings file, if there is one, lands on top of this
     # once the camera is open and the capture size is known.

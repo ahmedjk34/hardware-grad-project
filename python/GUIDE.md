@@ -14,20 +14,24 @@ below assume you are in the `python/` directory with the venv active.
 | **Run the configured camera feed for the vision pipeline** | [`camera_feed.py`](#camera_feedpy) |
 | **See/calibrate the Arduino block grid on the camera** | [`gridded_camera_feed.py`](#gridded_camera_feedpy) |
 | **Select a camera cell and build there** | [`rig_build_v1.py`](#rig_build_v1py) |
-| **Correct the fisheye AND measure on the result** | [`undistorted_grid_viewer.py`](#undistorted_grid_viewerpy) |
+| **Correct the fisheye with a straightness grid** | [`undistorted_grid_viewer.py`](#undistorted_grid_viewerpy) |
 | **Tune every camera setting and save them to JSON** | [`camera_studio.py`](#camera_studiopy) |
 | Check the camera is connected and working | [`camera_viewer.py`](#camera_viewerpy) |
-| Read pixel coordinates off the image | [`grid_viewer.py`](#grid_viewerpy) |
-| Estimate real-world sizes in centimetres | [`measured_grid_viewer.py`](#measured_grid_viewerpy) |
 | Remove the fisheye distortion / tune the lens model | [`undistorted_viewer.py`](#undistorted_viewerpy) |
 | Zoom or crop the preview, or hand-correct residual bowing | [`camera_studio.py`](#camera_studiopy) |
 
 All of them exit on `q` or `Esc`, or when you close the window.
 
-The first is the other two grid tools and the undistortion tool merged, and is
-the one to reach for by default. The single-purpose viewers are kept because
-each is short enough to read end to end when you want to see one stage in
-isolation.
+Live tools now open two windows in one process: a small **Tk Controls**
+dashboard and a clean **OpenCV Preview**. Tk owns buttons, commands, hover
+details, FPS and warnings; OpenCV owns only camera pixels and useful geometry.
+This avoids copying every frame through Tk's `PhotoImage` transport. Keys from
+either window are merged, and mouse coordinates from a scaled preview are
+translated back to corrected-feed pixels.
+
+Use the canonical feed by default. The single-purpose viewers remain useful
+when you want to isolate camera capture or lens correction from detection and
+machine mapping.
 
 `camera_feed.py` is the main camera script. It reads
 `config/camera_settings.json` and is the starting point for future vision
@@ -46,8 +50,9 @@ writes.
 pipeline. It opens the configured source, applies the saved sensor controls and
 orientation, renders the saved correction and framing from
 `config/camera_settings.json`, and detects the warm rectangular blocks in the
-current captures. Each block gets a clean contour, a rotated box, a centre,
-an ID and a colour-coded overlay.
+current captures. The default geometry overlay draws clean contours, rotated
+boxes and centres. IDs and coordinates live in the Tk dashboard so they cannot
+hide the camera feed.
 
 Colour finds candidate material; it does not decide the block count. If several
 blocks touch, the detector fits the known standard rectangle to long straight
@@ -68,6 +73,12 @@ frame and a JSON file containing the block geometry. `--color-threshold` and
 segmentation. Future workspace mapping and robot-coordinate code should build
 from this feed rather than opening the camera independently. Run
 `camera_studio.py` first when the camera settings need tuning.
+
+Block analysis runs latest-only at 10 Hz while preview/capture continue at the
+camera rate. `o` cycles `off → geometry → detail`; `--overlay` chooses the
+startup mode. Software CLAHE/sharpening is off by default; request it explicitly
+with `--enhance`. `--analysis-hz` changes the analysis cap and
+`--opencv-threads` defaults to two on the Pi.
 
 ---
 
@@ -91,17 +102,18 @@ camera and motor cells match. To calibrate:
 1. Press `c`.
 2. Click the complete 34×40 cm machine-envelope corners in the prompted order:
    X/Y home, far-X/home-Y, far-X/far-Y, home-X/far-Y.
-3. Confirm the status panel below the camera changes to `Grid: CALIBRATED`.
+3. Confirm the Tk dashboard changes to `Grid: CALIBRATED`.
 4. Hover cells and verify several displayed `G col row` commands with the rig
    before placing a block.
 
 `x` cancels calibration without destroying the previous saved map, `g` toggles
-the overlay, and `s` saves the annotated frame and detection JSON. Changing the
+the grid, `o` cycles block/geometry overlay detail, and `s` saves the annotated
+frame and detection JSON. Changing the
 lens geometry, orientation, crop, physical workspace, cell size or signed trim
 invalidates the old map and returns to the amber approximation.
 
 The camera image contains only the camera, grid, and block visualization;
-calibration state, cell details, FPS, and controls are in the Tk panel below it.
+calibration state, cell details, FPS, and controls are in the separate Tk dashboard.
 
 The JSON deliberately does not duplicate `5050×7500` motor safety limits. The
 Pi maps pixels through centimetres to a logical cell; the Arduino remains the
@@ -126,7 +138,7 @@ pipeline as `camera_feed.py`. The amber approximate grid is selectable and can
 issue a build immediately. A matching `workspace_map.json` refines the mapping
 when present, but it is not required. The camera image contains only the camera,
 grid, detections, and selected-cell outline; build, camera, calibration, and
-command feedback live in the Tk panel below it.
+command feedback live in the separate Tk dashboard.
 
 Workflow:
 
@@ -141,13 +153,15 @@ The firmware build runs on a worker thread and camera capture runs on a second
 worker thread, so a serial wait or stalled CSI capture cannot freeze the UI.
 The panel reads **BUILDING — SERIAL INPUT LOCKED** for the duration: clicks,
 `[`/`]`, `o`, `d`, `c`, a second `b` and even `q` are all refused, so nothing
-can queue while the Mega is deaf. `g` (toggle grid) and `s` (snapshot) still
+can queue while the Mega is deaf. `i` cycles overlay detail; `g` (toggle grid)
+and `s` (snapshot) still
 work, since neither touches the rig. If no new camera frame arrives for 0.75 s,
-the image is labelled **CAMERA STALLED** with its age; inspect camera power/CSI
+the Tk dashboard reports **STALE** with its age; inspect camera power/CSI
 wiring after the build rather than trusting the frozen image. Selection,
 calibration and build confirmation are refused until live frames resume.
-Closing the
-window mid-build waits for the build to report before the serial port is closed. `placed`
+Closing either window mid-build is refused and a closed preview is recreated;
+after the build reports, normal shutdown joins the worker before the serial
+port is closed. `placed`
 clears the selection and requires a fresh click. A safe `rejected` result keeps
 the selection for correction. `aborted`, reset, timeout or cable loss locks the
 session—inspect the rig and restart; do not retry or auto-home.
@@ -157,11 +171,44 @@ high, and so on. It is not a raw Z step count.
 
 ---
 
+## Camera performance checks
+
+Use the read-only diagnostic before blaming camera code or changing packages:
+
+```bash
+python camera/camera_perf_check.py
+python camera/camera_perf_check.py --probe-camera
+```
+
+It reports configured and corrected sizes, actual backend when probed, Python /
+OpenCV / NumPy locations, OpenCV thread count, display session, Pi temperature,
+ARM clock and `get_throttled`. On the Pi, OpenCV, NumPy and Picamera2 must remain
+the apt builds visible through the system-site-packages venv—do not install
+`opencv-python` or NumPy with pip there.
+
+The camera-free regression benchmark uses the committed captures:
+
+```bash
+python camera/benchmark_camera_pipeline.py
+python camera/benchmark_camera_pipeline.py --iterations 100 --json
+```
+
+It records detector/enhancement median and p95 time, normalized processing
+size, contour/compound counts, Python allocation/peak-memory counts, and the
+rectangle-hypothesis budget. Run the live
+acceptance check for five minutes on local HDMI: preview should normally remain
+24–30 FPS, analysis at least 8 Hz with results under 300 ms old, and the Pi must
+report no undervoltage or thermal throttling. VNC and `ssh -X` add display-copy
+latency and are useful for control, not for validating camera FPS.
+
+---
+
 ## `undistorted_grid_viewer.py`
 
-**Use it for:** everything — the corrected preview, tuning the lens model, and
-reading positions and sizes off the result. It is the combination that actually
-makes sense, because a centimetre grid is only meaningful on a corrected image.
+**Use it for:** a corrected preview with a clean 8×8 straightness reference.
+It is the grid-flavoured companion to `undistorted_viewer.py`; machine-cell
+calibration and selection belong to `gridded_camera_feed.py` and
+`rig_build_v1.py`.
 
 > Every `python ...` line below assumes the venv is **activated**
 > (`source .venv/bin/activate`). Inside a venv `python` always exists, on
@@ -171,118 +218,26 @@ makes sense, because a centimetre grid is only meaningful on a corrected image.
 ```bash
 python grid/undistorted_grid_viewer.py
 python grid/undistorted_grid_viewer.py --hq                       # sharpest
-python grid/undistorted_grid_viewer.py --frame-width-cm 60 --frame-height-cm 45
+python grid/undistorted_grid_viewer.py --display-scale 1.5
 ```
-
-### Driving it — three input channels
-
-OpenCV hands a keystroke to the program **only while the image window has
-focus**. Not the terminal. Over VNC or `ssh -X`, often not until the window has
-been clicked. This is nearly always the cause of "I press keys and nothing
-happens", and there is no way to tell from the outside whether the key arrived.
-
-So this tool takes the same commands three ways, and echoes every one of them
-into a log at the bottom of the frame:
-
-| Channel | How | Needs window focus |
-| --- | --- | --- |
-| **Terminal** | type `fov 158` + Enter in the shell you launched it from | **no** |
-| **In-window prompt** | press `:`, type, press Enter (Esc cancels, ↑/↓ for history) | yes |
-| **Sliders and keys** | trackbars along the top of the window; single-key shortcuts | mouse: no / keys: yes |
-
-Every keypress is reported, *including ones that are not bound* — so if you
-press a key and nothing at all appears in the log, the window does not have
-focus and the terminal channel is what you want.
-
-### Commands
-
-Run `help` (in either the terminal or the `:` prompt) for the live list. Numeric
-commands take an absolute value **or a signed step**, so `fov 158` and `fov +2`
-both work, and choices accept any unambiguous prefix (`model stereo`).
-
-| Command | Does |
-| --- | --- |
-| `fov <deg\|+N\|-N>` | quoted lens FOV — the main correction knob |
-| `out <deg>` | how much of the lens cone to render |
-| `scale <f>` | output size relative to the capture |
-| `model <name>` | projection curve |
-| `ref <diagonal\|horizontal>` | which FOV the lens number refers to |
-| `interp <name>` | resampling kernel: `linear`, `cubic`, `lanczos4` |
-| `rows <n>` / `cols <n>` | grid divisions — the px/cm ruler only |
-| `grid <machine\|off\|px\|cm>` | grid overlay: the rig's cells, or the ruler |
-| `origin <corner>` | which image corner holds machine cell `[1,1]` |
-| `swapaxes [on\|off]` | machine columns run down the image, not across |
-| `map` | print the rig's grid map — hold it next to `9` |
-| `view <corrected\|raw\|both>` | which image to show |
-| `wcm <cm>` / `hcm <cm>` | the measured span of the whole frame |
-| `mip [on\|off]`, `hover [on\|off]` | bare word toggles |
-| `show` | dump every current parameter into the log |
-| `save` / `snap` / `reset` / `help` / `quit` | as named |
 
 ### Keys
 
 | Key | Effect |
 | --- | --- |
-| `:` | open the command prompt |
-| `?` | show / hide the key list on the frame |
-| `u` | cycle view: corrected → raw → both |
-| `g` | cycle grid: machine → off → px → cm |
+| `u` | toggle correction |
+| `b` | toggle raw/corrected side-by-side view |
+| `g` | toggle the 8×8 straightness grid |
 | `[` `]` | lens FOV ∓2° — **the main correction-strength knob** |
 | `-` `=` | output FOV ∓5° |
 | `,` `.` | output scale ∓0.1 |
 | `m` / `i` | cycle projection model / interpolation kernel |
-| `h` | toggle the hovered-cell readout |
-| `c` | clear the measurement points |
 | `s` / `w` / `r` | snapshot / write profile / reset |
 | `q`, `Esc` | quit |
 
-### Mouse
-
-Hover a grid cell to read its bounds in pixels and, on the corrected view with
-`grid cm`, in centimetres. Left-click two points to measure the distance between
-them; right-click clears them.
-
-### The machine grid
-
-`grid machine` (the default) draws the **rig's** grid: 17 × 5 cells read from
-`config/rig.json`, each representing one 2 cm X × 7.5 cm Y block footprint
-and labelled with the `col,row` you would type into `G` or `B`. Hover a cell
-and it prints the commands for it. `map` prints the same
-picture the rig's own `9` prints, so the two can be held side by side.
-
-**Only the numbering is real. The position is not.** The grid is spread over the
-whole frame because nothing has yet told the software where the build area is,
-and the build area is almost certainly not the whole frame. The amber banner
-says so, and Plan 2 step 4 replaces the guess with four clicked corners.
-
-The numbering comes from `printGrid()` in the firmware: 1-based, col 1 on the X
-switch side, row 1 on the Y switch side, `[1,1]` drawn bottom-left. If it runs
-the wrong way on screen, the camera is mounted turned or mirrored relative to
-the rig — `origin <bottom-left|bottom-right|top-left|top-right>` moves `[1,1]`,
-and `swapaxes` handles a camera a quarter turn out. Eight combinations, and the
-edge labels carry a `c`/`r` prefix so none of them can be read ambiguously.
-
-`rows` / `cols` do not apply here. The physical 34 × 37.5 cm packed grid fills
-the 34 cm X motion envelope and is centred inside the 40 cm Y envelope, with
-signed X/Y trims available for measured placement correction. Those two options
-still drive the px/cm ruler.
-
-### The centimetre readings
-
-`--frame-width-cm` / `--frame-height-cm` (live: `wcm` / `hcm`) say what physical
-rectangle the **whole frame** spans. Everything in centimetres is that span
-scaled linearly, which assumes a flat plane viewed square-on — so:
-
-- it is only offered on the **corrected** view. Ask for `grid cm` on the raw
-  fisheye and you get pixels plus a warning, because centimetres per pixel there
-  grows by a factor of three toward the edges.
-- it is still an estimate on the corrected view, because the correction itself
-  is built on an estimated FOV rather than a calibration.
-- it only describes objects lying in the plane you measured the span against.
-  A block 5 cm tall reads wide.
-
-Treat it as a working approximation, not a measurement, until the checkerboard
-calibration lands.
+Like the other live tools, it uses one latest-frame capture thread, shows only
+image/grid geometry in OpenCV, and puts profile, sampling, FPS, warnings, and
+controls in Tk. `--opencv-threads` defaults to two.
 
 ---
 
@@ -290,7 +245,7 @@ calibration lands.
 
 **The tuning bench.** Everything that decides what the picture looks like — the
 fisheye correction, the sensor's own controls, zoom, crop, flip — adjustable
-live, with a control panel under the image and one `save` that writes the whole
+live, with a separate Tk control dashboard and one `save` that writes the whole
 state to JSON.
 
 ```bash
@@ -302,15 +257,15 @@ python camera/camera_studio.py --fresh               # ignore the settings file
 
 Reach for this when you are *deciding* what the camera settings should be.
 Reach for `camera_feed.py` when you are using the saved result in the pipeline,
-or `undistorted_grid_viewer.py` when you are working with the machine grid.
+or `gridded_camera_feed.py` when you are working with the machine grid.
 
 ### It starts where you left off
 
 The tool **reads `config/camera_settings.json` at startup** and `save` writes it
-back, so a session resumes rather than restarting. The committed default in that
-file is exactly what `undistorted_viewer.py` renders — same lens profile, same
-120° rectilinear output at the same size, correction on, no zoom, no crop, no
-grid — so a first run, a `--fresh` run and a `reset` all show that same picture.
+back, so a session resumes rather than restarting. A normal launch renders that
+saved file exactly as `camera_feed.py` does, including its crop stack and natural
+corrected output size. `--fresh` and `reset` return to the uncropped built-in
+defaults shared with `undistorted_viewer.py`.
 
 Four layers, each overriding the one before:
 
@@ -325,29 +280,18 @@ Four layers, each overriding the one before:
 argparse default: a default is indistinguishable from an explicit value, so it
 would silently outrank the settings file.
 
-### The window
+### The windows
 
-**One resizable Tk window, two genuinely separate widget regions.** The top is
-a camera canvas that receives whatever height remains. The bottom is a `ttk`
-control centre: real entries, read-only dropdowns, buttons and status labels.
-The controls are not pixels in the camera image, so image operations cannot
-zoom or pan them.
+Camera Studio uses a resizable Tk control centre plus a separate clean OpenCV
+preview. The preview never passes through Tk/Tcl, while the control centre keeps
+real entries, dropdowns, buttons, status labels, logs and the command entry.
+Field and button groups wrap when the dashboard narrows.
 
-The window starts within the detected desktop bounds, even when the camera's
-render is 1296×972 or larger. Drag any edge or use the desktop's maximise button:
-the image is letterboxed into the current canvas, while buttons and field groups
-wrap onto extra rows when the window narrows. The controls therefore remain on
-screen instead of being pushed below or beyond it.
-
-`--window WxH` chooses the correction's processing viewport; otherwise it is
-the corrected output size used by `undistorted_viewer.py`. Resizing the Tk
-window changes only the display fit. It does not rebuild the correction maps,
-change the saved framing, or alter the byte-verified default render.
-
-`native` mode and `refit` deliberately render at another size. When a render is
-larger than the available canvas, the status log says how far it was reduced;
-enlarge the window for a 1:1 preview, or use `fill` to restore the processing
-viewport after a refit.
+The correction always opens at the canonical Camera Feed size derived from the
+saved lens and ROI—currently 384×440—not at the desktop window size.
+`--window WxH` and `--display-scale` are display-only. Only explicit processing
+commands such as `viewbox` and `refit` change rendered resolution. `fill`
+returns to the canonical feed's natural corrected size.
 
 There are deliberately no OpenCV trackbars. The exact value remains visible in
 a real text entry, and a fixed-choice parameter is a real dropdown.
@@ -406,8 +350,8 @@ four coloured log labels show recent success and error messages.
    press Enter. Pressing `:` while no field has focus jumps there.
 3. **Fields and buttons.** Entries, dropdowns and buttons all execute command
    strings through the same dispatcher.
-4. **Crop drag.** Drag on the video widget. The area outside the selection
-   dims; right-click cancels. Letterbox and fit scaling are undone before the
+4. **Crop drag.** Drag on the OpenCV preview. The area outside the selection
+   dims; right-click cancels. Display scaling is undone before the
    crop is converted to the rendered image's coordinates.
 
 Single-key shortcuts are bound to the Tk window. They are deliberately ignored
@@ -466,7 +410,7 @@ Two ways of sizing the result, toggled with `v`:
 
 `refit` gets the best of both: it resizes the view box to the crop's own size,
 so the crop renders exactly 1:1 and *stays* there as you keep working. `fill`
-undoes it, putting the view box back to the viewport.
+undoes it, putting the view box back to the canonical Camera Feed output.
 
 ### Sensor controls
 
@@ -517,8 +461,9 @@ one that re-reads.
 ### The JSON
 
 `save` writes `config/camera_settings.json` (or `--settings <path>`), and
-`--autosave` rewrites it after every change. It is also read back automatically
-at startup; `load` re-reads it mid-session.
+`--autosave` marks changes dirty and writes the newest state after a 500 ms
+debounce. It is also read back automatically at startup; `load` re-reads it
+mid-session.
 
 ```
 capture     backend, device, resolution, swap_rb, flip, rotate
@@ -566,63 +511,6 @@ it is what `undistorted_viewer.py` fixes.
 
 ---
 
-## `grid_viewer.py`
-
-**Use it for:** reading image coordinates. Overlays an 8×8 grid; hover any cell
-to see its row/column index and pixel bounds.
-
-```bash
-python grid/grid_viewer.py
-python grid/grid_viewer.py --rows 6 --cols 12   # any grid size
-```
-
-**Hover readout:**
-
-```
-cell (row=3, col=5)
-start: (810, 364)
-end:   (972, 486)
-size:  162 x 122
-```
-
-Also a quick way to *see* the distortion: the grid lines are perfectly straight,
-so any real straight edge that diverges from them is showing you the barrel
-effect.
-
----
-
-## `measured_grid_viewer.py`
-
-**Use it for:** rough real-world measurements. Same grid, but labelled in
-centimetres and metres instead of pixels.
-
-```bash
-python grid/measured_grid_viewer.py                                  # built-in defaults
-python grid/measured_grid_viewer.py --frame-width-cm 60 --frame-height-cm 30
-```
-
-You tell it the physical span of the **whole frame** — measure it by hand with a
-tape measure across what the camera actually sees. That `frame` scale remains
-separate from the 34 cm × 40 cm machine `workspace`; explicit flags can override
-the frame measurement for a different camera view.
-
-**Hover readout:**
-
-```
-cell (row=3, col=5)
-px:  (810,364) -> (972,486)
-X: 12.50cm -> 15.00cm  (w=2.50cm / 0.0250m)
-Y: 13.13cm -> 17.50cm  (h=4.37cm / 0.0437m)
-```
-
-> **Caveat that matters.** The cm conversion is a straight linear scaling, which
-> assumes an ideal flat projection. The raw fisheye is nothing of the sort —
-> centimetres per pixel grows sharply toward the edges, so readings away from
-> the centre will come out short. Numbers near the frame edge are effectively
-> meaningless until the feed is both undistorted *and* properly calibrated.
-
----
-
 ## `undistorted_viewer.py`
 
 **Use it for:** a standalone corrected live preview and for tuning the lens
@@ -637,7 +525,7 @@ python camera/undistorted_viewer.py --backend v4l2 --device /dev/video0
 ```
 
 The corrected image is kept clear. Profile state, FPS, sampling information,
-and tuning commands are shown in the Tk status panel below the image.
+and tuning commands are shown in the separate Tk controls dashboard.
 
 ### Keys
 

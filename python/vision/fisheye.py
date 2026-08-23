@@ -219,6 +219,7 @@ class UndistortMaps:
     blend_weights: list[tuple[np.ndarray, np.ndarray]] = field(default_factory=list)
     roi: tuple = (0.0, 0.0, 1.0, 1.0)      # sub-rect of the full output, normalised
     full_out_size: tuple = (0, 0)          # (w, h) the output would be at roi = full
+    _sampling_stats: dict | None = field(default=None, init=False, repr=False)
 
     @property
     def map1(self) -> np.ndarray:
@@ -539,9 +540,11 @@ def sampling_stats(maps: "UndistortMaps") -> dict:
     Used by the tools' HUD so the sharpness cost of a parameter change is
     visible while making it.
     """
+    if maps._sampling_stats is not None:
+        return maps._sampling_stats
     d = maps.detail
     h, w = d.shape
-    return {
+    maps._sampling_stats = {
         "centre": float(d[h // 2, w // 2]),
         "edge": float(np.percentile(d, 1.0)),
         "worst_upscale": float(d.min()),
@@ -549,6 +552,7 @@ def sampling_stats(maps: "UndistortMaps") -> dict:
         "upscaled_fraction": float((d < 0.95).mean()),
         "mip_levels": len(maps.levels),
     }
+    return maps._sampling_stats
 
 
 def undistort(frame: np.ndarray, maps: UndistortMaps) -> np.ndarray:

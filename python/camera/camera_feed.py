@@ -25,6 +25,7 @@ from dataclasses import fields
 from pathlib import Path
 
 import cv2
+import numpy as np
 
 # This tool lives one folder down, so python/ is not on the import path when it
 # is run directly from either the repo root or python/.
@@ -33,9 +34,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from vision.camera_source import (  # noqa: E402
     AUTO,
     DEFAULT_SIZE,
+    LatestFramePump,
     SENSOR_CONTROLS,
     open_camera,
 )
+from vision.analysis_worker import AnalysisWorker  # noqa: E402
 from vision.block_detector import BlockDetection, detect_blocks  # noqa: E402
 from vision.fisheye import (  # noqa: E402
     INTERPOLATIONS,
@@ -44,6 +47,8 @@ from vision.fisheye import (  # noqa: E402
     undistort,
 )
 from vision.overlays import draw_info_box  # noqa: E402
+from vision.performance import RateMeter, StageTimings  # noqa: E402
+from camera.snapshot_worker import SnapshotWorker  # noqa: E402
 from camera.tk_camera_window import TkCameraWindow  # noqa: E402
 
 
@@ -187,13 +192,16 @@ BLOCK_COLORS = (
     (255, 180, 40),   # cyan
     (180, 80, 255),   # purple
 )
+OVERLAY_MODES = ("off", "geometry", "detail")
+STALE_FRAME_AFTER_S = 0.75
+_DISPLAY_CLAHE = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8, 8))
 
 
 def enhance_for_display(frame):
     """Increase local contrast and edge crispness without changing detection data."""
     lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
     lightness, a_channel, b_channel = cv2.split(lab)
-    lightness = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8, 8)).apply(lightness)
+    lightness = _DISPLAY_CLAHE.apply(lightness)
     enhanced = cv2.cvtColor(cv2.merge((lightness, a_channel, b_channel)),
                             cv2.COLOR_LAB2BGR)
     soft = cv2.GaussianBlur(enhanced, (0, 0), 1.0)
@@ -227,15 +235,44 @@ def hovered_block(detections, point):
     return None
 
 
+def block_hover_text(detections, point):
+    """Detailed hover diagnostics for Tk, never for the default image overlay."""
+    index = hovered_block(detections, point)
+    if index is None:
+        return "Hovered block: none"
+    detection = detections[index]
+    cx, cy = (round(v) for v in detection.center)
+    return (f"Hovered block: #{index + 1} | {_block_color_name(detection)} | "
+            f"center {cx},{cy} px | size {detection.size[0]:.0f}x"
+            f"{detection.size[1]:.0f} px | angle {detection.angle:.1f}° | "
+            f"edge confidence {detection.confidence * 100:.0f}%")
+
+
 def draw_block_overlay(frame, detections, hover_point=None, fps=None,
                        coordinates_label="COORDS: corrected-image pixels (machine mapping pending)",
-                       show_info=True):
+                       show_info=True, mode=None):
     """Draw clean colour-coded edges, boxes, IDs, centres and hover details."""
-    fill = frame.copy()
+    if mode is None:
+        mode = "detail" if show_info else "geometry"
+    if mode not in OVERLAY_MODES:
+        raise ValueError(f"overlay mode must be one of {OVERLAY_MODES}")
+    if mode == "off" or not detections:
+        return frame
+
+    # Blend only each block's small bounding ROI. The former full-frame copy +
+    # blend paid for every pixel even when no blocks were visible.
     for index, detection in enumerate(detections):
         color = BLOCK_COLORS[index % len(BLOCK_COLORS)]
-        cv2.fillPoly(fill, [detection.box], color)
-    cv2.addWeighted(fill, 0.12, frame, 0.88, 0, frame)
+        x, y, w, h = cv2.boundingRect(detection.box)
+        x0, y0 = max(0, x), max(0, y)
+        x1, y1 = min(frame.shape[1], x + w), min(frame.shape[0], y + h)
+        if x1 <= x0 or y1 <= y0:
+            continue
+        roi = frame[y0:y1, x0:x1]
+        fill = roi.copy()
+        local_box = detection.box - np.array((x0, y0), dtype=np.int32)
+        cv2.fillPoly(fill, [local_box], color)
+        cv2.addWeighted(fill, 0.12, roi, 0.88, 0, roi)
 
     hovered = hovered_block(detections, hover_point)
     for index, detection in enumerate(detections):
@@ -251,15 +288,16 @@ def draw_block_overlay(frame, detections, hover_point=None, fps=None,
         cx, cy = (round(v) for v in detection.center)
         cv2.drawMarker(frame, (cx, cy), color, cv2.MARKER_CROSS, 16, 2, cv2.LINE_AA)
 
-        label = f"#{index + 1} ({cx},{cy})"
-        x = max(3, int(detection.box[:, 0].min()))
-        y = max(16, int(detection.box[:, 1].min()) - 5)
-        cv2.putText(frame, label, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.42,
-                    (0, 0, 0), 3, cv2.LINE_AA)
-        cv2.putText(frame, label, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.42,
-                    color, 1, cv2.LINE_AA)
+        if mode == "detail":
+            label = f"#{index + 1} ({cx},{cy})"
+            x = max(3, int(detection.box[:, 0].min()))
+            y = max(16, int(detection.box[:, 1].min()) - 5)
+            cv2.putText(frame, label, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.42,
+                        (0, 0, 0), 3, cv2.LINE_AA)
+            cv2.putText(frame, label, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.42,
+                        color, 1, cv2.LINE_AA)
 
-    if not show_info:
+    if mode != "detail":
         return frame
 
     rate = f"  |  {fps:4.1f} fps" if fps is not None else ""
@@ -331,16 +369,27 @@ def parse_args():
                         help="minimum red-minus-blue value for a block (default: 8)")
     parser.add_argument("--min-area", type=int, default=500,
                         help="minimum detected block area in feed pixels (default: 500)")
-    parser.add_argument("--no-enhance", action="store_true",
-                        help="disable display contrast/sharpness enhancement")
+    parser.add_argument("--enhance", action="store_true",
+                        help="enable costly software contrast/sharpness enhancement")
+    parser.add_argument("--no-enhance", action="store_false", dest="enhance",
+                        help=argparse.SUPPRESS)
+    parser.add_argument("--overlay", choices=OVERLAY_MODES, default="geometry",
+                        help="preview overlay detail (default: geometry)")
+    parser.add_argument("--analysis-hz", type=float, default=10.0,
+                        help="maximum block-analysis rate (default: 10)")
+    parser.add_argument("--opencv-threads", type=int, default=2,
+                        help="OpenCV worker threads (default: 2)")
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
-    if args.display_scale <= 0 or args.min_area <= 0:
-        print("--display-scale and --min-area must be positive", file=sys.stderr)
+    if (args.display_scale <= 0 or args.min_area <= 0 or args.analysis_hz <= 0
+            or args.opencv_threads <= 0):
+        print("display/min-area/analysis-hz/opencv-threads values must be positive",
+              file=sys.stderr)
         return 1
+    cv2.setNumThreads(args.opencv_threads)
     try:
         data = load_settings(args.settings)
         backend, device, size = capture_settings(data)
@@ -375,7 +424,7 @@ def main():
     print(f"Loaded settings: {args.settings}")
     print(f"Sensor settings: {len(applied)} applied")
 
-    ui = {"hover": None}
+    ui = {"hover": None, "overlay": args.overlay, "message": "ready"}
 
     def on_mouse(event, point):
         if event == "move":
@@ -385,70 +434,136 @@ def main():
         window = TkCameraWindow(
             f"Camera Feed - {camera.name}", size,
             display_scale=args.display_scale, mouse_callback=on_mouse,
-            buttons=(("Save snapshot", "s"), ("Quit", "q")),
+            buttons=(("Overlay (o)", "o"), ("Save snapshot", "s"),
+                     ("Quit", "q")),
         )
-    except tk.TclError as exc:
-        print(f"Cannot open the Tk camera window: {exc}", file=sys.stderr)
+    except (tk.TclError, cv2.error) as exc:
+        print(f"Cannot open the camera UI: {exc}", file=sys.stderr)
         camera.release()
         return 1
+
+    frame_pump = LatestFramePump(camera)
+    analysis = AnalysisWorker(detect_blocks, max_hz=args.analysis_hz)
+    snapshots = SnapshotWorker(save_detection_snapshot)
+    frame_pump.start()
+    analysis.start()
     maps = None
     input_size = None
-    fps = 0.0
-    last = time.perf_counter()
+    map_generation = 0
+    last_sequence = 0
+    last_display = None
+    detections = ()
+    capture_rate = RateMeter()
+    preview_rate = RateMeter()
+    timings = StageTimings()
+    snapshot_count = 0
+
+    def status_lines(snapshot, analysis_snapshot):
+        age = snapshot.age_s()
+        age_text = "waiting" if age is None else f"{age * 1000:.0f} ms"
+        camera_state = ("WAITING" if age is None else
+                        "STALE" if age >= STALE_FRAME_AFTER_S else "LIVE")
+        analysis_age = analysis_snapshot.age_s()
+        analysis_text = ("waiting" if analysis_snapshot.completed_at is None else
+                         f"{analysis_snapshot.duration_s * 1000:.1f} ms, "
+                         f"age {analysis_age * 1000:.0f} ms")
+        hover_text = block_hover_text(detections, ui["hover"])
+        feed_text = "waiting for first corrected frame"
+        if last_display is not None:
+            feed_text = f"Feed: {last_display.shape[1]}x{last_display.shape[0]}"
+        return [
+            f"Camera: {camera.name} | {camera_state} | capture "
+            f"{capture_rate.rate:5.1f} fps | age {age_text}",
+            f"{feed_text} | preview {preview_rate.rate:5.1f} fps | overlay {ui['overlay']}",
+            f"Analysis: {analysis_snapshot.rate_hz:4.1f} Hz | seq "
+            f"{analysis_snapshot.source_sequence} | {analysis_text} | blocks {len(detections)} | "
+            f"replaced {analysis_snapshot.replaced_count} | duplicate "
+            f"{analysis_snapshot.duplicate_count}",
+            f"Stages: remap {timings.ms.get('remap', 0):.1f} ms | "
+            f"overlay {timings.ms.get('overlay', 0):.1f} ms | "
+            f"display {timings.ms.get('display', 0):.1f} ms",
+            hover_text,
+            f"Status: {analysis_snapshot.error or snapshot.error or ui['message']}",
+            "o overlay | s snapshot | q/Esc quit",
+        ]
+
+    def handle_key(key):
+        if key in (ord("q"), 27):
+            return False
+        if key == ord("o"):
+            index = (OVERLAY_MODES.index(ui["overlay"]) + 1) % len(OVERLAY_MODES)
+            ui["overlay"] = OVERLAY_MODES[index]
+            ui["message"] = f"overlay: {ui['overlay']}"
+        elif key == ord("s"):
+            if last_display is None:
+                ui["message"] = "no frame is available to save"
+            elif snapshots.submit(last_display.copy(), tuple(detections)):
+                ui["message"] = "saving snapshot in background"
+            else:
+                ui["message"] = "snapshot writer busy; try again shortly"
+        return True
+
     try:
         while True:
-            ok, frame = camera.read()
-            if not ok or frame is None:
-                print("Failed to read frame from camera.", file=sys.stderr)
-                return 1
+            snapshot = frame_pump.snapshot()
+            analysis_snapshot = analysis.snapshot()
+            if analysis_snapshot.is_current(map_generation):
+                detections = analysis_snapshot.detections
 
+            snapshot_state = snapshots.snapshot()
+            if snapshot_state.completed_count != snapshot_count:
+                snapshot_count = snapshot_state.completed_count
+                if snapshot_state.error:
+                    ui["message"] = snapshot_state.error
+                    print(snapshot_state.error, file=sys.stderr)
+                elif snapshot_state.result:
+                    image_path, data_path = snapshot_state.result
+                    ui["message"] = f"saved {image_path.name} and {data_path.name}"
+                    print(f"Saved {image_path} and {data_path}")
+
+            if snapshot.frame is None or snapshot.sequence == last_sequence:
+                window.pump(status_lines(snapshot, analysis_snapshot))
+                key = window.poll_key()
+                if (key >= 0 and not handle_key(key)) or window.closed:
+                    return 0
+                continue
+
+            last_sequence = snapshot.sequence
+            capture_rate.tick()
+            frame = snapshot.frame
             frame = frame_orientation(frame, capture)
             if maps is None or frame.shape[1::-1] != input_size:
                 maps = build_maps(profile, frame.shape[1::-1], interpolation, mip=mip,
                                   roi=roi)
                 input_size = frame.shape[1::-1]
+                map_generation += 1
 
+            started = time.perf_counter()
             view = undistort(frame, maps) if enabled else \
                 crop_resize(frame, roi, maps.out_size, interpolation)
-            now = time.perf_counter()
-            dt, last = now - last, now
-            if dt > 0:
-                instant = 1.0 / dt
-                fps = 0.9 * fps + 0.1 * instant if fps else instant
-            detections = detect_blocks(view, color_threshold=args.color_threshold,
-                                       min_area=args.min_area)
-            display = view if args.no_enhance else enhance_for_display(view)
-            display = draw_block_overlay(display, detections, ui["hover"], None,
-                                         show_info=False)
-            image_size = display.shape[1::-1]
-            hovered = hovered_block(detections, ui["hover"])
-            if hovered is None:
-                hover_text = "Hovered block: none"
-            else:
-                detection = detections[hovered]
-                cx, cy = (round(v) for v in detection.center)
-                hover_text = (f"Hovered block: #{hovered + 1} | center {cx},{cy} px | "
-                              f"size {detection.size[0]:.0f}x{detection.size[1]:.0f} px | "
-                              f"angle {detection.angle:.1f}°")
-            window.show(display, [
-                f"Camera: {camera.name} | input {input_size[0]}x{input_size[1]}",
-                f"Feed: {image_size[0]}x{image_size[1]} | {fps:5.1f} fps",
-                f"Blocks detected: {len(detections)}",
-                hover_text,
-                f"Sensor controls: {len(applied)} applied"
-                + (f", {len(skipped)} unavailable" if skipped else ""),
-                "Mouse: hover over blocks for coordinates.  s = save snapshot, q/Esc = quit",
-            ])
+            timings.observe("remap", time.perf_counter() - started)
+            view.flags.writeable = False
+            analysis.submit(view, snapshot.sequence, map_generation,
+                            color_threshold=args.color_threshold,
+                            min_area=args.min_area)
+            display = enhance_for_display(view) if args.enhance else view.copy()
+            started = time.perf_counter()
+            draw_block_overlay(display, detections, ui["hover"], None,
+                               show_info=False, mode=ui["overlay"])
+            timings.observe("overlay", time.perf_counter() - started)
+            last_display = display
+            started = time.perf_counter()
+            window.show(display, status_lines(snapshot, analysis_snapshot))
+            timings.observe("display", time.perf_counter() - started)
+            preview_rate.tick()
             key = window.poll_key()
-            if key in (ord("q"), 27):
-                return 0
-            if key == ord("s"):
-                image_path, data_path = save_detection_snapshot(display, detections)
-                print(f"Saved {image_path} and {data_path}")
-            if window.closed:
+            if (key >= 0 and not handle_key(key)) or window.closed:
                 return 0
     finally:
-        camera.release()
+        analysis.stop()
+        snapshots.stop(finish=True)
+        if frame_pump.stop():
+            camera.release()
         window.close()
 
 

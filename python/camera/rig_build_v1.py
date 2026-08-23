@@ -47,7 +47,10 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from camera.camera_feed import (  # noqa: E402
+    OVERLAY_MODES,
     SETTINGS_PATH,
+    STALE_FRAME_AFTER_S,
+    block_hover_text,
     capture_settings,
     crop_resize,
     draw_block_overlay,
@@ -59,6 +62,7 @@ from camera.camera_feed import (  # noqa: E402
     save_detection_snapshot,
     sensor_from_settings,
 )
+from camera.snapshot_worker import SnapshotWorker  # noqa: E402
 from camera.gridded_camera_feed import (  # noqa: E402
     approximate_workspace,
     draw_calibration,
@@ -77,13 +81,15 @@ from rig.config import CONFIG_PATH, load as load_rig_config  # noqa: E402
 from rig.grid import MachineGrid  # noqa: E402
 from rig.link import ABORTED, PLACED, REJECTED, Rig, RigError  # noqa: E402
 from rig.workspace import CORNER_NAMES, WORKSPACE_MAP_PATH, WorkspaceMap  # noqa: E402
+from vision.analysis_worker import AnalysisWorker  # noqa: E402
 from vision.block_detector import detect_blocks  # noqa: E402
 from vision.camera_source import LatestFramePump, open_camera  # noqa: E402
 from vision.fisheye import INTERPOLATIONS, build_maps, undistort  # noqa: E402
+from vision.performance import RateMeter, StageTimings  # noqa: E402
 
 
 SELECTED_COLOR = (255, 80, 255)
-CAMERA_STALE_AFTER_S = 0.75
+CAMERA_STALE_AFTER_S = STALE_FRAME_AFTER_S
 
 
 def parse_args():
@@ -113,8 +119,13 @@ def parse_args():
                         help="minimum red-minus-blue value for a block (default: 8)")
     parser.add_argument("--min-area", type=int, default=500,
                         help="minimum detected block area in feed pixels (default: 500)")
-    parser.add_argument("--no-enhance", action="store_true",
-                        help="disable display contrast/sharpness enhancement")
+    parser.add_argument("--enhance", action="store_true",
+                        help="enable costly software contrast/sharpness enhancement")
+    parser.add_argument("--no-enhance", action="store_false", dest="enhance",
+                        help=argparse.SUPPRESS)
+    parser.add_argument("--overlay", choices=OVERLAY_MODES, default="geometry")
+    parser.add_argument("--analysis-hz", type=float, default=10.0)
+    parser.add_argument("--opencv-threads", type=int, default=2)
     return parser.parse_args()
 
 
@@ -166,10 +177,12 @@ def outcome_message(outcome, controller):
 def main():
     args = parse_args()
     if (args.level < 0 or args.display_scale <= 0 or args.min_area <= 0
-            or args.connect_timeout <= 0 or args.build_timeout <= 0):
+            or args.connect_timeout <= 0 or args.build_timeout <= 0
+            or args.analysis_hz <= 0 or args.opencv_threads <= 0):
         print("level must be >= 0 and timeout/display/min-area values must be positive",
               file=sys.stderr)
         return 1
+    cv2.setNumThreads(args.opencv_threads)
 
     try:
         camera_data = load_settings(args.settings)
@@ -245,6 +258,7 @@ def main():
         "calibration_points": [],
         "pending_points": None,
         "show_grid": True,
+        "overlay": args.overlay,
         "message": "connected; click a grid cell",
     }
     if args.build_target is not None:
@@ -252,6 +266,8 @@ def main():
             controller.select(tuple(args.build_target))
         except BuildStateError as exc:
             print(f"Invalid --build-target: {exc}", file=sys.stderr)
+            if frame_pump.stop():
+                camera.release()
             rig.close()
             return 1
         ui["message"] = (f"calibration target [{args.build_target[0]},"
@@ -263,12 +279,34 @@ def main():
             return False
         return True
 
+    forbidden_during_build = {
+        ord("c"), ord("u"), ord("x"), ord("["), ord("-"),
+        ord("]"), ord("+"), ord("="), ord("o"), ord("d"),
+        ord("b"), ord("q"), 10, 13, 27,
+    }
+
+    def allow_key(key):
+        if job.running and key in forbidden_during_build:
+            ui["message"] = ("build in progress; cannot quit until it reports"
+                             if key in (ord("q"), 27) else BUSY_MESSAGE)
+            return False
+        return True
+
     def on_mouse(event, point):
         if point is None:
             return
         if event == "move":
             ui["hover"] = point
         elif event == "click":
+            # Reject at callback time, not one loop later. Otherwise a click in
+            # the final milliseconds of a build could remain pending until
+            # job.poll() marks it finished and then become a real selection.
+            if job.running:
+                ui["message"] = BUSY_MESSAGE
+                return
+            if controller.locked:
+                ui["message"] = controller.locked_reason
+                return
             if ui["calibrating"]:
                 if len(ui["calibration_points"]) < 4:
                     ui["calibration_points"].append(point)
@@ -279,81 +317,235 @@ def main():
         window = TkCameraWindow(
             f"Rig Build V1 - {camera.name} - {rig.port_name}", size,
             display_scale=args.display_scale, mouse_callback=on_mouse,
-            close_request=allow_window_close,
-            buttons=(("Calibrate (c)", "c"), ("Undo (u)", "u"),
+            close_request=allow_window_close, key_filter=allow_key,
+            buttons=(("Overlay (i)", "i"), ("Calibrate (c)", "c"),
+                     ("Undo (u)", "u"),
                      ("Grid (g)", "g"), ("Level - ([)", "["),
                      ("Level + (])", "]"), ("Rotate (o)", "o"),
                      ("Deselect (d)", "d"), ("BUILD (b)", "b"),
                      ("Save (s)", "s"), ("Quit (q)", "q")),
         )
-    except tk.TclError as exc:
-        print(f"Cannot open the Tk rig window: {exc}", file=sys.stderr)
+    except (tk.TclError, cv2.error) as exc:
+        print(f"Cannot open the rig camera UI: {exc}", file=sys.stderr)
         if frame_pump.stop():
             camera.release()
         rig.close()
         return 1
+    analysis = AnalysisWorker(detect_blocks, max_hz=args.analysis_hz)
+    snapshots = SnapshotWorker(save_detection_snapshot)
+    analysis.start()
     maps = None
     input_size = None
-    fps = 0.0
-    last = time.perf_counter()
+    image_size = None
+    workspace = None
+    calibrated = False
+    map_generation = 0
+    last_sequence = 0
+    last_display = None
+    detections = ()
+    capture_rate, preview_rate = RateMeter(), RateMeter()
+    timings = StageTimings()
+    snapshot_count = 0
     status = 0
+
+    def reject_mutation_if_unsafe():
+        if job.running:
+            raise BuildStateError(BUSY_MESSAGE)
+        if controller.locked:
+            raise BuildStateError(controller.locked_reason)
+
+    def handle_key(key, snapshot, now):
+        if key in (ord("q"), 27):
+            if job.running:
+                ui["message"] = "build in progress; cannot quit until it reports"
+                return True
+            return False
+        if key == ord("i"):
+            ui["overlay"] = OVERLAY_MODES[
+                (OVERLAY_MODES.index(ui["overlay"]) + 1) % len(OVERLAY_MODES)]
+            ui["message"] = f"overlay: {ui['overlay']}"
+        elif key == ord("g"):
+            ui["show_grid"] = not ui["show_grid"]
+        elif key == ord("c"):
+            try:
+                reject_mutation_if_unsafe()
+                if not camera_is_live(snapshot, now):
+                    raise BuildStateError("camera feed is stale; cannot calibrate")
+                controller.clear_selection()
+                ui["calibrating"] = True
+                ui["calibration_points"] = []
+                ui["pending_points"] = None
+                ui["message"] = "click the four prompted envelope corners"
+            except BuildStateError as exc:
+                ui["message"] = str(exc)
+        elif key == ord("x") and ui["calibrating"]:
+            if job.running:
+                ui["message"] = BUSY_MESSAGE
+            else:
+                ui["calibrating"] = False
+                ui["calibration_points"] = []
+                ui["pending_points"] = None
+                ui["message"] = "calibration cancelled; previous map retained"
+        elif key == ord("u") and ui["calibrating"]:
+            if job.running:
+                ui["message"] = BUSY_MESSAGE
+            elif ui["calibration_points"]:
+                ui["calibration_points"].pop()
+                ui["message"] = "removed the most recent calibration corner"
+            else:
+                ui["message"] = "no calibration corner to undo"
+        elif key in (10, 13) and ui["calibrating"]:
+            if job.running:
+                ui["message"] = BUSY_MESSAGE
+            elif len(ui["calibration_points"]) == 4:
+                ui["pending_points"] = list(ui["calibration_points"])
+                ui["message"] = "saving reviewed four-corner calibration"
+            else:
+                ui["message"] = "click all four named corners before saving"
+        elif key in (ord("["), ord("-"), ord("]"), ord("+"), ord("=")):
+            try:
+                reject_mutation_if_unsafe()
+                delta = -1 if key in (ord("["), ord("-")) else 1
+                controller.adjust_level(delta)
+                ui["message"] = f"build level set to {controller.level}"
+            except BuildStateError as exc:
+                ui["message"] = str(exc)
+        elif key == ord("o"):
+            try:
+                reject_mutation_if_unsafe()
+                controller.cycle_rotation()
+                ui["message"] = f"rotation set to {controller.rotation}"
+            except BuildStateError as exc:
+                ui["message"] = str(exc)
+        elif key == ord("d"):
+            try:
+                reject_mutation_if_unsafe()
+                controller.clear_selection()
+                ui["message"] = "selection cleared"
+            except BuildStateError as exc:
+                ui["message"] = str(exc)
+        elif key == ord("s"):
+            if last_display is None:
+                ui["message"] = "no frame is available to save"
+            elif snapshots.submit(last_display.copy(), tuple(detections)):
+                ui["message"] = "saving snapshot in background"
+            else:
+                ui["message"] = "snapshot writer busy; try again shortly"
+        elif key in (ord("b"), 10, 13):
+            try:
+                reject_mutation_if_unsafe()
+                if not camera_is_live(snapshot, now):
+                    raise BuildStateError(
+                        "camera feed is stale; restore live frames before building")
+                if ui["calibrating"]:
+                    raise BuildStateError("finish or cancel (x) calibration first")
+                command = controller.command
+                job.start()
+                ui["message"] = f"BUILDING: {command}"
+                print(f"[build] sending {command}")
+            except BuildStateError as exc:
+                ui["message"] = str(exc)
+        return True
+
+    def status_lines(snapshot, result, now):
+        selected = controller.selected
+        selected_text = (f"[{selected[0]},{selected[1]}] | {controller.command}"
+                         if selected is not None else "none")
+        result_age = result.age_s(now)
+        analysis_text = ("waiting" if result.completed_at is None else
+                         f"{result.duration_s * 1000:.1f} ms / "
+                         f"age {result_age * 1000:.0f} ms")
+        size_text = f"{image_size[0]}x{image_size[1]}" if image_size else "waiting"
+        calibration_text = (
+            ("REVIEW 4/4 — Enter saves" if len(ui["calibration_points"]) == 4 else
+             f"active {len(ui['calibration_points'])}/4 — next: "
+             f"{CORNER_NAMES[len(ui['calibration_points'])]}")
+            if ui["calibrating"] else "inactive")
+        build_state = ("RUNNING" if job.running else
+                       ("LOCKED" if controller.locked else "READY"))
+        return [
+            f"Camera: {camera.name} | {camera_state(snapshot, now)} | capture {capture_rate.rate:5.1f} fps",
+            f"Feed: {size_text} | preview {preview_rate.rate:5.1f} fps | overlay {ui['overlay']}",
+            f"Analysis: {result.rate_hz:4.1f} Hz | seq {result.source_sequence} | "
+            f"{analysis_text} | blocks {len(detections)} | replaced "
+            f"{result.replaced_count} | duplicate {result.duplicate_count}",
+            f"Grid: {grid.cols}x{grid.rows} | {'CALIBRATED' if calibrated else 'APPROXIMATION ONLY'}",
+            f"Rig: {rig.port_name} | level {controller.level} | rotation {controller.rotation}",
+            f"Selected: {selected_text}",
+            block_hover_text(detections, ui["hover"]),
+            f"Build: {build_state} | {ui['message']}",
+            f"Calibration: {calibration_text} | "
+            f"{controller.locked_reason or 'session unlocked'}",
+            f"Stages: remap {timings.ms.get('remap', 0):.1f} ms | "
+            f"overlay {timings.ms.get('overlay', 0):.1f} ms | "
+            f"grid {timings.ms.get('grid', 0):.1f} ms | "
+            f"display {timings.ms.get('display', 0):.1f} ms",
+            "i overlay | c calibrate | g grid | [/] level | o rotate | d deselect",
+            "b/Enter BUILD | s snapshot | q/Esc quit when safe",
+        ]
+
     try:
         while True:
             snapshot = frame_pump.snapshot()
             now = time.monotonic()
-            frame = snapshot.frame
-            if frame is None:
-                # The capture thread may be blocked in its first camera read.
-                # Keep this window alive so the condition is visible and it can
-                # still be closed safely rather than appearing to have hung.
-                w, h = camera.size
-                waiting = np.zeros((h, w, 3), dtype=np.uint8)
-                window.show(waiting, [
-                    f"Camera: {camera.name}",
-                    f"Camera: {camera_state(snapshot, now)}",
-                    f"Error: {snapshot.error or 'waiting for first frame'}",
-                    f"Rig: {rig.port_name} | build: {'running' if job.running else 'idle'}",
-                    "q/Esc quits when no build is running",
-                ])
-                key = window.poll_key()
-                if key in (ord("q"), 27) or window.closed:
-                    if job.running:
-                        ui["message"] = "build in progress; cannot quit until it reports"
-                    else:
-                        break
-                continue
-
             finished = job.poll()
             if finished is not None:
                 ui["message"] = outcome_message(finished, controller)
                 print(f"[build] {'LOCKED: ' if finished.locked else ''}{ui['message']}",
                       file=sys.stderr if finished.locked else sys.stdout)
-            building = job.running
 
-            frame = frame_orientation(frame, capture)
-            if maps is None or frame.shape[1::-1] != input_size:
-                maps = build_maps(profile, frame.shape[1::-1], interpolation,
-                                  mip=mip, roi=roi)
-                input_size = frame.shape[1::-1]
+            result = analysis.snapshot()
+            if result.is_current(map_generation):
+                detections = result.detections
+            saved = snapshots.snapshot()
+            if saved.completed_count != snapshot_count:
+                snapshot_count = saved.completed_count
+                if saved.error:
+                    ui["message"] = saved.error
+                    print(saved.error, file=sys.stderr)
+                elif saved.result:
+                    ui["message"] = f"saved {saved.result[0].name} and {saved.result[1].name}"
+                    print(f"Saved {saved.result[0]} and {saved.result[1]}")
 
-            view = undistort(frame, maps) if enabled else \
-                crop_resize(frame, roi, maps.out_size, interpolation)
-            image_size = view.shape[1::-1]
+            new_frame = snapshot.frame is not None and snapshot.sequence != last_sequence
+            if new_frame:
+                last_sequence = snapshot.sequence
+                capture_rate.tick()
+                frame = frame_orientation(snapshot.frame, capture)
+                if maps is None or frame.shape[1::-1] != input_size:
+                    maps = build_maps(profile, frame.shape[1::-1], interpolation,
+                                      mip=mip, roi=roi)
+                    input_size = frame.shape[1::-1]
+                    map_generation += 1
+                started = time.perf_counter()
+                view = undistort(frame, maps) if enabled else \
+                    crop_resize(frame, roi, maps.out_size, interpolation)
+                timings.observe("remap", time.perf_counter() - started)
+                image_size = view.shape[1::-1]
+                workspace = saved_workspace or approximate_workspace(
+                    grid, image_size, projection)
+                calibrated = saved_workspace is not None
+                view.flags.writeable = False
+                analysis.submit(view, snapshot.sequence, map_generation,
+                                color_threshold=args.color_threshold,
+                                min_area=args.min_area)
 
-            if ui["pending_points"] is not None:
+            if ui["pending_points"] is not None and image_size is not None:
                 try:
+                    reject_mutation_if_unsafe()
                     if not camera_is_live(snapshot, now):
                         raise ValueError("calibration paused: camera feed is stale")
                     candidate = WorkspaceMap.from_grid(
-                        grid, ui["pending_points"], image_size, projection
-                    )
+                        grid, ui["pending_points"], image_size, projection)
                     candidate.save(args.workspace_map)
                     saved_workspace = candidate
+                    workspace = candidate
+                    calibrated = True
                     rejection = None
                     controller.clear_selection()
                     ui["message"] = "calibration saved; click a grid cell"
                     print(f"Saved workspace calibration: {args.workspace_map}")
-                except (OSError, ValueError) as exc:
+                except (BuildStateError, OSError, ValueError) as exc:
                     rejection = f"calibration rejected: {exc}"
                     ui["message"] = rejection
                     print(rejection, file=sys.stderr)
@@ -361,21 +553,14 @@ def main():
                 ui["calibrating"] = False
                 ui["calibration_points"] = []
 
-            workspace = saved_workspace or approximate_workspace(
-                grid, image_size, projection
-            )
-            calibrated = saved_workspace is not None
-
-            if ui["pending_select"] is not None:
+            if ui["pending_select"] is not None and workspace is not None:
                 point = ui["pending_select"]
                 ui["pending_select"] = None
                 try:
-                    if building:
-                        raise BuildStateError(BUSY_MESSAGE)
+                    reject_mutation_if_unsafe()
                     if not camera_is_live(snapshot, now):
                         raise BuildStateError(
-                            "camera feed is stale; wait for live frames before selecting"
-                        )
+                            "camera feed is stale; wait for live frames before selecting")
                     if not ui["show_grid"]:
                         raise BuildStateError("grid is hidden; press g before selecting")
                     cell = workspace.cell_at(point, image_size)
@@ -386,135 +571,36 @@ def main():
                 except BuildStateError as exc:
                     ui["message"] = str(exc)
 
-            fps_now = time.perf_counter()
-            dt, last = fps_now - last, fps_now
-            if dt > 0:
-                instant = 1.0 / dt
-                fps = 0.9 * fps + 0.1 * instant if fps else instant
-            detections = detect_blocks(view, color_threshold=args.color_threshold,
-                                       min_area=args.min_area)
-            display = view.copy() if args.no_enhance else enhance_for_display(view)
-            display = draw_block_overlay(
-                display, detections, ui["hover"], None,
-                "COORDS: corrected pixels + selectable machine grid",
-                show_info=False,
-            )
-            if ui["show_grid"]:
-                draw_machine_grid(display, workspace, grid, ui["hover"], calibrated)
-                draw_selected_cell(display, workspace, controller.selected)
-            if ui["calibrating"]:
-                # Show the actual calibration route and accepted corners on the
-                # image; explanatory state remains in the Tk panel below it.
-                draw_calibration(display, ui["calibration_points"], ui["hover"])
-            # Calibration/build/camera-health feedback is shown in the Tk panel;
-            # only grid, selected-cell, and block geometry remain on the image.
+            if new_frame:
+                display = enhance_for_display(view) if args.enhance else view.copy()
+                started = time.perf_counter()
+                draw_block_overlay(
+                    display, detections, ui["hover"], None,
+                    "COORDS: corrected pixels + selectable machine grid",
+                    show_info=False, mode=ui["overlay"])
+                timings.observe("overlay", time.perf_counter() - started)
+                started = time.perf_counter()
+                if ui["show_grid"] and ui["overlay"] != "off":
+                    draw_machine_grid(
+                        display, workspace, grid, ui["hover"], calibrated,
+                        detail=ui["overlay"] == "detail")
+                    draw_selected_cell(display, workspace, controller.selected)
+                if ui["calibrating"]:
+                    draw_calibration(
+                        display, ui["calibration_points"], ui["hover"],
+                        detail=ui["overlay"] == "detail")
+                timings.observe("grid", time.perf_counter() - started)
+                last_display = display
+                started = time.perf_counter()
+                window.show(display, status_lines(snapshot, result, now))
+                timings.observe("display", time.perf_counter() - started)
+                preview_rate.tick()
+            else:
+                window.pump(status_lines(snapshot, result, now))
 
-            selected = controller.selected
-            selected_text = (
-                f"Selected: [{selected[0]},{selected[1]}] | command: {controller.command}"
-                if selected is not None else "Selected: none")
-            last_result = controller.last_result
-            result_text = f"Last result: {last_result}" if last_result else "Last result: none"
-            lock_text = controller.locked_reason if controller.locked else "unlocked"
-            window.show(display, [
-                f"Camera: {camera.name} | feed {image_size[0]}x{image_size[1]} | {fps:5.1f} fps",
-                f"Camera state: {camera_state(snapshot, now)} | blocks detected: {len(detections)}",
-                f"Grid: {grid.cols}x{grid.rows} | {'CALIBRATED' if calibrated else 'APPROXIMATION ONLY'}",
-                f"Rig: {rig.port_name} | level {controller.level} | rotation {controller.rotation}",
-                selected_text,
-                f"Build state: {'RUNNING' if building else ('LOCKED' if controller.locked else 'READY')} | {ui['message']}",
-                result_text,
-                (f"Calibration: REVIEW 4/4 — press Enter to save"
-                 if ui["calibrating"] and len(ui["calibration_points"]) == 4 else
-                 (f"Calibration: active {len(ui['calibration_points'])}/4; next: "
-                  f"{CORNER_NAMES[len(ui['calibration_points'])]}"
-                  if ui["calibrating"] else "Calibration: inactive")
-                 + f" | {lock_text}"),
-                "c calibrate | Enter save | u undo | x cancel | g grid | [/] level | o rotate | d deselect",
-                "b/Enter BUILD | s snapshot | q/Esc quit when safe",
-            ])
             key = window.poll_key()
-            if key in (ord("q"), 27):
-                if building:
-                    ui["message"] = "build in progress; cannot quit until it reports"
-                else:
-                    break
-            elif key == ord("c"):
-                if building:
-                    ui["message"] = BUSY_MESSAGE
-                elif not camera_is_live(snapshot, now):
-                    ui["message"] = "camera feed is stale; cannot calibrate"
-                elif controller.locked:
-                    ui["message"] = controller.locked_reason
-                else:
-                    controller.clear_selection()
-                    ui["calibrating"] = True
-                    ui["calibration_points"] = []
-                    ui["pending_points"] = None
-                    ui["message"] = "click the four prompted envelope corners"
-            elif key == ord("x") and ui["calibrating"]:
-                ui["calibrating"] = False
-                ui["calibration_points"] = []
-                ui["pending_points"] = None
-                ui["message"] = "calibration cancelled; previous map retained"
-            elif key == ord("u") and ui["calibrating"]:
-                if ui["calibration_points"]:
-                    ui["calibration_points"].pop()
-                    ui["message"] = "removed the most recent calibration corner"
-                else:
-                    ui["message"] = "no calibration corner to undo"
-            elif key in (10, 13) and ui["calibrating"]:
-                if len(ui["calibration_points"]) == 4:
-                    ui["pending_points"] = list(ui["calibration_points"])
-                    ui["message"] = "saving reviewed four-corner calibration"
-                else:
-                    ui["message"] = "click all four named corners before saving"
-            elif key == ord("g"):
-                ui["show_grid"] = not ui["show_grid"]
-            elif key in (ord("["), ord("-")):
-                if building:
-                    ui["message"] = BUSY_MESSAGE
-                else:
-                    controller.adjust_level(-1)
-                    ui["message"] = f"build level set to {controller.level}"
-            elif key in (ord("]"), ord("+"), ord("=")):
-                if building:
-                    ui["message"] = BUSY_MESSAGE
-                else:
-                    controller.adjust_level(1)
-                    ui["message"] = f"build level set to {controller.level}"
-            elif key == ord("o"):
-                if building:
-                    ui["message"] = BUSY_MESSAGE
-                else:
-                    controller.cycle_rotation()
-                    ui["message"] = f"rotation set to {controller.rotation}"
-            elif key == ord("d"):
-                if building:
-                    ui["message"] = BUSY_MESSAGE
-                else:
-                    controller.clear_selection()
-                    ui["message"] = "selection cleared"
-            elif key == ord("s"):
-                image_path, data_path = save_detection_snapshot(display, detections)
-                print(f"Saved {image_path} and {data_path}")
-            elif key in (ord("b"), 10, 13):
-                try:
-                    if building:
-                        raise BuildStateError(BUSY_MESSAGE)
-                    if not camera_is_live(snapshot, now):
-                        raise BuildStateError(
-                            "camera feed is stale; restore live frames before building"
-                        )
-                    if ui["calibrating"]:
-                        raise BuildStateError("finish or cancel (x) calibration first")
-                    command = controller.command
-                    job.start()
-                    ui["message"] = f"BUILDING: {command}"
-                    print(f"[build] sending {command}")
-                except BuildStateError as exc:
-                    ui["message"] = str(exc)
-
+            if key >= 0 and not handle_key(key, snapshot, now):
+                break
             if window.closed:
                 break
     finally:
@@ -524,6 +610,8 @@ def main():
             finished = job.poll()
             if finished is not None:
                 print(f"[build] {outcome_message(finished, controller)}")
+        analysis.stop()
+        snapshots.stop(finish=True)
         if frame_pump.stop():
             camera.release()
         else:

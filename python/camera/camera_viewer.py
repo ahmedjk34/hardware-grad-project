@@ -22,7 +22,8 @@ import cv2
 # without this, `python grid/grid_viewer.py` dies on `import vision`.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from vision.camera_source import DEFAULT_SIZE, open_camera
+from vision.camera_source import DEFAULT_SIZE, LatestFramePump, open_camera
+from vision.performance import RateMeter
 from camera.tk_camera_window import TkCameraWindow
 
 
@@ -34,11 +35,19 @@ def parse_args():
     parser.add_argument("--device", help="V4L2 path, e.g. /dev/video0 (skips the picker)")
     parser.add_argument("--width", type=int, default=DEFAULT_SIZE[0])
     parser.add_argument("--height", type=int, default=DEFAULT_SIZE[1])
+    parser.add_argument("--display-scale", type=float, default=1.0,
+                        help="scale only the OpenCV preview")
+    parser.add_argument("--opencv-threads", type=int, default=2,
+                        help="OpenCV worker threads (default: 2)")
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
+    if args.display_scale <= 0 or args.opencv_threads <= 0:
+        print("--display-scale and --opencv-threads must be positive", file=sys.stderr)
+        return 1
+    cv2.setNumThreads(args.opencv_threads)
 
     try:
         camera = open_camera(args.backend, (args.width, args.height), args.device)
@@ -49,20 +58,35 @@ def main():
     print(f"Camera: {camera.name}")
     print("Streaming... press 'q' or Esc in the window to quit.")
 
+    pump = LatestFramePump(camera)
+    pump.start()
+    rate = RateMeter()
+    last_sequence = 0
     try:
         window = TkCameraWindow(
             f"Camera Preview - {camera.name}", (args.width, args.height),
+            display_scale=args.display_scale,
             buttons=(("Quit (q)", "q"),),
         )
         while True:
-            ok, frame = camera.read()
-            if not ok or frame is None:
-                print("Failed to read frame from camera.")
-                break
+            snapshot = pump.snapshot()
+            if snapshot.frame is None or snapshot.sequence == last_sequence:
+                age = snapshot.age_s()
+                window.pump([
+                    f"Camera: {camera.name} | capture {rate.rate:5.1f} fps",
+                    f"Frame age: {'waiting' if age is None else f'{age * 1000:.0f} ms'}",
+                    f"Status: {snapshot.error or 'raw camera preview'} | q/Esc quits",
+                ])
+                if window.poll_key() in (ord("q"), 27) or window.closed:
+                    break
+                continue
 
+            last_sequence = snapshot.sequence
+            rate.tick()
+            frame = snapshot.frame
             window.show(frame, [
-                f"Camera: {camera.name}",
-                f"Frame: {frame.shape[1]}x{frame.shape[0]}",
+                f"Camera: {camera.name} | capture {rate.rate:5.1f} fps",
+                f"Frame: {frame.shape[1]}x{frame.shape[0]} | age {snapshot.age_s() * 1000:.0f} ms",
                 "Raw camera preview | q/Esc quits",
             ])
             if window.poll_key() in (ord("q"), 27):
@@ -70,7 +94,8 @@ def main():
             if window.closed:
                 break
     finally:
-        camera.release()
+        if pump.stop():
+            camera.release()
         if "window" in locals():
             window.close()
 
