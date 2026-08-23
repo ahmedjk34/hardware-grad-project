@@ -5,8 +5,12 @@ This combines ``gridded_camera_feed.py`` with ``rig.link.Rig``. A left click on
 a grid selects one cell; it does not move the machine. Press Enter or
 ``b`` to send the exact command shown in the build panel, normally
 ``B <col> <row> <level>``. The firmware performs the pick-and-place sequence.
-For motor calibration, ``--build-target 0 5`` skips X and ``--build-target
-17 0`` skips Y; ``--build-target 0 0`` is an inert firmware no-op.
+``0`` on either axis means "do not move that axis", never a real cell — this is
+how the firmware's ``B`` command supports single-axis moves: ``B 0 5`` skips X,
+``B 17 0`` skips Y, and ``B 0 0`` is an inert no-op. ``--build-target`` sets one
+such target at startup; ``x``/``y`` during a session pick one interactively
+(type the column/row, Enter to confirm) without needing the camera grid to
+have a clickable zero cell, since zero is not a real image position.
 
 Safety rules
 ------------
@@ -23,7 +27,11 @@ Keys
   c       calibrate/recalibrate the four machine-envelope corners
   Enter   save the reviewed four-corner calibration
   u       undo the most recent calibration corner
-  x       cancel calibration without deleting the previous map
+  x       cancel calibration (while calibrating); otherwise pick an X-only
+          build target: type a column, Enter confirms B <col> 0, any other
+          key cancels the entry
+  y       pick a Y-only build target: type a row, Enter confirms B 0 <row>,
+          any other key cancels the entry
   g       toggle grid
   v       toggle block detection on/off
   [ / ]   build level down/up
@@ -261,6 +269,8 @@ def main():
         "show_grid": True,
         "overlay": args.overlay,
         "detect_enabled": True,
+        "axis_pick": None,
+        "axis_buffer": "",
         "message": "connected; click a grid cell",
     }
     if args.build_target is not None:
@@ -282,7 +292,7 @@ def main():
         return True
 
     forbidden_during_build = {
-        ord("c"), ord("u"), ord("x"), ord("["), ord("-"),
+        ord("c"), ord("u"), ord("x"), ord("y"), ord("["), ord("-"),
         ord("]"), ord("+"), ord("="), ord("o"), ord("d"),
         ord("b"), ord("q"), 10, 13, 27,
     }
@@ -325,7 +335,8 @@ def main():
                      ("Grid (g)", "g"), ("Detect (v)", "v"),
                      ("Level - ([)", "["),
                      ("Level + (])", "]"), ("Rotate (o)", "o"),
-                     ("Deselect (d)", "d"), ("BUILD (b)", "b"),
+                     ("Deselect (d)", "d"), ("X-only (x)", "x"),
+                     ("Y-only (y)", "y"), ("BUILD (b)", "b"),
                      ("Save (s)", "s"), ("Quit (q)", "q")),
         )
     except (tk.TclError, cv2.error) as exc:
@@ -357,12 +368,41 @@ def main():
         if controller.locked:
             raise BuildStateError(controller.locked_reason)
 
+    DIGIT_KEYS = tuple(ord(d) for d in "0123456789")
+
     def handle_key(key, snapshot, now):
         if key in (ord("q"), 27):
             if job.running:
                 ui["message"] = "build in progress; cannot quit until it reports"
                 return True
             return False
+        if ui["axis_pick"] is not None:
+            if key in DIGIT_KEYS:
+                if len(ui["axis_buffer"]) < 3:
+                    ui["axis_buffer"] += chr(key)
+                return True
+            if key == 8:  # Backspace
+                ui["axis_buffer"] = ui["axis_buffer"][:-1]
+                return True
+            if key in (10, 13):
+                axis = ui["axis_pick"]
+                ui["axis_pick"] = None
+                try:
+                    reject_mutation_if_unsafe()
+                    if not ui["axis_buffer"]:
+                        raise BuildStateError("type a column/row number before Enter")
+                    value = int(ui["axis_buffer"])
+                    cell = (value, 0) if axis == "col" else (0, value)
+                    controller.select(cell)
+                    ui["message"] = f"selected [{cell[0]},{cell[1]}]; confirm shown command"
+                except BuildStateError as exc:
+                    ui["message"] = str(exc)
+                ui["axis_buffer"] = ""
+                return True
+            # Any other key abandons the in-progress entry.
+            ui["axis_pick"] = None
+            ui["axis_buffer"] = ""
+            ui["message"] = "axis entry cancelled"
         if key == ord("i"):
             ui["overlay"] = OVERLAY_MODES[
                 (OVERLAY_MODES.index(ui["overlay"]) + 1) % len(OVERLAY_MODES)]
@@ -408,6 +448,24 @@ def main():
                 ui["message"] = "saving reviewed four-corner calibration"
             else:
                 ui["message"] = "click all four named corners before saving"
+        elif key == ord("x") and not ui["calibrating"]:
+            try:
+                reject_mutation_if_unsafe()
+                ui["axis_pick"] = "col"
+                ui["axis_buffer"] = ""
+                ui["message"] = (f"type X-only column (0..{grid.cols}), Enter "
+                                 "confirms, any other key cancels")
+            except BuildStateError as exc:
+                ui["message"] = str(exc)
+        elif key == ord("y"):
+            try:
+                reject_mutation_if_unsafe()
+                ui["axis_pick"] = "row"
+                ui["axis_buffer"] = ""
+                ui["message"] = (f"type Y-only row (0..{grid.rows}), Enter "
+                                 "confirms, any other key cancels")
+            except BuildStateError as exc:
+                ui["message"] = str(exc)
         elif key in (ord("["), ord("-"), ord("]"), ord("+"), ord("=")):
             try:
                 reject_mutation_if_unsafe()
@@ -469,6 +527,9 @@ def main():
             if ui["calibrating"] else "inactive")
         build_state = ("RUNNING" if job.running else
                        ("LOCKED" if controller.locked else "READY"))
+        axis_text = ("inactive" if ui["axis_pick"] is None else
+                     f"{'X-only col' if ui['axis_pick'] == 'col' else 'Y-only row'} "
+                     f"= {ui['axis_buffer'] or '_'}")
         return [
             f"Camera: {camera.name} | {camera_state(snapshot, now)} | capture {capture_rate.rate:5.1f} fps",
             f"Feed: {size_text} | preview {preview_rate.rate:5.1f} fps | overlay {ui['overlay']}",
@@ -482,12 +543,13 @@ def main():
             f"Build: {build_state} | {ui['message']}",
             f"Calibration: {calibration_text} | "
             f"{controller.locked_reason or 'session unlocked'}",
+            f"Axis-only pick: {axis_text}",
             f"Stages: remap {timings.ms.get('remap', 0):.1f} ms | "
             f"overlay {timings.ms.get('overlay', 0):.1f} ms | "
             f"grid {timings.ms.get('grid', 0):.1f} ms | "
             f"display {timings.ms.get('display', 0):.1f} ms",
             "i overlay | c calibrate | g grid | v detect | [/] level | o rotate | d deselect",
-            "b/Enter BUILD | s snapshot | q/Esc quit when safe",
+            "x X-only | y Y-only | b/Enter BUILD | s snapshot | q/Esc quit when safe",
         ]
 
     try:
