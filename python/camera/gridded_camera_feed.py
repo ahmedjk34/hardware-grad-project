@@ -209,7 +209,36 @@ def _grid_geometry(workspace, grid, image_size):
                 at = (x - tw // 2, y + th // 2)
                 labels.append((label, at))
 
-    cached = (envelope, tuple(lines), tuple(labels), origin_px)
+    # Axis-only lanes: the origin margin between the machine origin and the
+    # packed grid's near edge. [col,0] leaves Y at the origin, [0,row] leaves
+    # X there - exactly what B/G's axis-only convention means. Drawn from the
+    # real margin, however wide or thin it actually is, never invented.
+    lane_polygons = []
+    lane_labels = []
+    if workspace.has_physical_grid:
+        for lane_axis, count, label_fmt, mid_cm in (
+            ("col", grid.cols, "{},0",
+             lambda i: (grid.x_start_cm + (i - 0.5) * grid.cell_width_cm,
+                        grid.y_start_cm / 2)),
+            ("row", grid.rows, "0,{}",
+             lambda i: (grid.x_start_cm / 2,
+                        grid.y_start_cm + (i - 0.5) * grid.cell_height_cm)),
+        ):
+            for index in range(1, count + 1):
+                polygon = np.asarray(
+                    workspace.axis_lane_polygon(lane_axis, index, image_size),
+                    dtype=np.float32).round().astype(np.int32)
+                lane_polygons.append(polygon)
+                if approx_w >= 38 and approx_h >= 24:
+                    x_cm, y_cm = mid_cm(index)
+                    x, y = _pixel(_point(workspace, grid, x_cm, y_cm, image_size))
+                    label = label_fmt.format(index)
+                    (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX,
+                                                  0.32, 1)
+                    lane_labels.append((label, (x - tw // 2, y + th // 2)))
+
+    cached = (envelope, tuple(lines), tuple(labels), origin_px,
+              tuple(lane_polygons), tuple(lane_labels))
     if len(_GRID_GEOMETRY_CACHE) >= 16:
         _GRID_GEOMETRY_CACHE.pop(next(iter(_GRID_GEOMETRY_CACHE)))
     _GRID_GEOMETRY_CACHE[key] = cached
@@ -247,11 +276,14 @@ def axis_target_pixel(workspace, grid, col, row, image_size):
 def draw_machine_grid(frame, workspace, grid, hover_point, calibrated, *, detail=False):
     """Draw cached static grid geometry and the dynamic hovered cell."""
     image_size = frame.shape[1::-1]
-    envelope, lines, labels, origin_px = _grid_geometry(workspace, grid, image_size)
+    envelope, lines, labels, origin_px, lane_polygons, lane_labels = _grid_geometry(
+        workspace, grid, image_size)
     cv2.polylines(frame, [envelope], True, ENVELOPE_COLOR, 2, cv2.LINE_AA)
     color = GRID_COLOR if calibrated else WARN_COLOR
     for p0, p1 in lines:
         cv2.line(frame, p0, p1, color, 1, cv2.LINE_AA)
+    for polygon in lane_polygons:
+        cv2.polylines(frame, [polygon], True, ORIGIN_COLOR, 1, cv2.LINE_AA)
     draw_origin_marker(frame, origin_px)
     if detail:
         for label, at in labels:
@@ -259,12 +291,27 @@ def draw_machine_grid(frame, workspace, grid, hover_point, calibrated, *, detail
                         (0, 0, 0), 3, cv2.LINE_AA)
             cv2.putText(frame, label, at, cv2.FONT_HERSHEY_SIMPLEX, 0.34,
                         LABEL_COLOR, 1, cv2.LINE_AA)
+        for label, at in lane_labels:
+            cv2.putText(frame, label, at, cv2.FONT_HERSHEY_SIMPLEX, 0.32,
+                        (0, 0, 0), 3, cv2.LINE_AA)
+            cv2.putText(frame, label, at, cv2.FONT_HERSHEY_SIMPLEX, 0.32,
+                        ORIGIN_COLOR, 1, cv2.LINE_AA)
 
     cell = workspace.cell_at(hover_point, image_size) if hover_point else None
-    if cell is not None:
-        polygon = np.asarray(workspace.cell_polygon(*cell, image_size),
-                             dtype=np.float32).round().astype(np.int32)
+    if cell is None and hover_point and workspace.has_physical_grid:
+        cell = workspace.axis_lane_at(hover_point, image_size)
+    if cell is not None and cell != (0, 0):
+        if cell[0] > 0 and cell[1] > 0:
+            polygon = np.asarray(workspace.cell_polygon(*cell, image_size),
+                                 dtype=np.float32).round().astype(np.int32)
+        else:
+            axis = "col" if cell[1] == 0 else "row"
+            index = cell[0] if axis == "col" else cell[1]
+            polygon = np.asarray(
+                workspace.axis_lane_polygon(axis, index, image_size),
+                dtype=np.float32).round().astype(np.int32)
         cv2.polylines(frame, [polygon], True, HOVER_COLOR, 3, cv2.LINE_AA)
+    # [0,0] itself is already marked by the always-on origin crosshair above.
     return cell
 
 

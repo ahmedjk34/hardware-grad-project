@@ -205,6 +205,65 @@ class WorkspaceMap:
                   self.rows - 1) + 1
         return col, row
 
+    @property
+    def has_physical_grid(self) -> bool:
+        return self._grid is not None
+
+    def axis_lane_polygon(self, axis, index, image_size):
+        """Image polygon for the axis-only lane cell ``[index,0]`` or ``[0,index]``.
+
+        This is the origin margin - the real gap between the machine origin
+        and the packed grid's near edge, however wide or thin it actually is.
+        ``B``/``G``'s axis-only convention (0 on one axis means "stay at the
+        origin") lands exactly here, so this is what makes that a clickable,
+        drawable target instead of only reachable by typing a number.
+        """
+        if self._grid is None:
+            raise ValueError("axis lanes need a physically scaled grid")
+        g = self._grid
+        if axis == "col":
+            x0_cm = g.x_start_cm + (index - 1) * g.cell_width_cm
+            x1_cm = g.x_start_cm + index * g.cell_width_cm
+            y0_cm, y1_cm = 0.0, g.y_start_cm
+        elif axis == "row":
+            x0_cm, x1_cm = 0.0, g.x_start_cm
+            y0_cm = g.y_start_cm + (index - 1) * g.cell_height_cm
+            y1_cm = g.y_start_cm + index * g.cell_height_cm
+        else:
+            raise ValueError("axis must be 'col' or 'row'")
+        corners_cm = ((x0_cm, y0_cm), (x1_cm, y0_cm), (x1_cm, y1_cm), (x0_cm, y1_cm))
+        return [self.pixel_at(x / g.workspace_width_cm, y / g.workspace_height_cm,
+                              image_size) for x, y in corners_cm]
+
+    def axis_lane_at(self, point, image_size):
+        """Return the axis-only target a pixel falls on, or None.
+
+        ``(col, 0)`` in the near-Y margin, ``(0, row)`` in the near-X margin,
+        or ``(0, 0)`` in the corner where both margins overlap - the machine
+        origin itself. Distinct from :meth:`cell_at`, which only ever returns
+        a real 1-based block cell.
+        """
+        if self._grid is None:
+            return None
+        g = self._grid
+        u, v = self.normalized_at(point, image_size)
+        epsilon = 1e-9
+        if u < -epsilon or v < -epsilon or u > 1 + epsilon or v > 1 + epsilon:
+            return None
+        x_cm = min(max(u, 0.0), 1.0) * g.workspace_width_cm
+        y_cm = min(max(v, 0.0), 1.0) * g.workspace_height_cm
+        in_x_margin = x_cm <= g.x_start_cm + epsilon
+        in_y_margin = y_cm <= g.y_start_cm + epsilon
+        if in_x_margin and in_y_margin:
+            return (0, 0)
+        if in_y_margin and g.x_start_cm - epsilon <= x_cm <= g.x_end_cm + epsilon:
+            col = min(int((x_cm - g.x_start_cm) / g.cell_width_cm), g.cols - 1) + 1
+            return (col, 0)
+        if in_x_margin and g.y_start_cm - epsilon <= y_cm <= g.y_end_cm + epsilon:
+            row = min(int((y_cm - g.y_start_cm) / g.cell_height_cm), g.rows - 1) + 1
+            return (0, row)
+        return None
+
     def pixel_at(self, u, v, image_size):
         """Project normalized machine-envelope coordinates into image pixels."""
         x, y = _project(self._to_image, (u, v))

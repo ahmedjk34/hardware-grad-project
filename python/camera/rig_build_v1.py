@@ -5,15 +5,20 @@ This combines ``gridded_camera_feed.py`` with ``rig.link.Rig``. A left click on
 a grid selects one cell; it does not move the machine. Press Enter or
 ``b`` to send the exact command shown in the build panel, normally
 ``B <col> <row> <level>``. The firmware performs the pick-and-place sequence.
-``0`` on either axis means "do not move that axis", never a real cell — this is
-how the firmware's ``B`` command supports single-axis moves: ``B 0 5`` skips X,
-``B 17 0`` skips Y, and ``B 0 0`` is an inert no-op. ``--build-target`` sets one
-such target at startup; ``x``/``y`` during a session pick one interactively
-(type the column/row, Enter to confirm) without needing the camera grid to
-have a clickable zero cell, since zero is not a real image position. The
-white "HOME 0,0" crosshair on the feed always marks where that axis actually
-lands; an axis-only or origin selection gets its own magenta crosshair there
-too, since it has no cell rectangle to highlight.
+``0`` on either axis means "do not move that axis", never a real block cell —
+this is how the firmware's ``B`` command supports single-axis moves: ``B 0 5``
+skips X, ``B 17 0`` skips Y, and ``B 0 0`` is an inert no-op. That 0-axis is
+drawn too: a thin origin margin between the packed grid and the machine's
+home switches, one cell-lane wide, click it same as any normal cell. The
+white "HOME 0,0" crosshair marks the corner where both margins meet;
+``x``/``y`` type the same targets from the keyboard when the margin is too
+thin to click precisely (its real width depends on your rig's grid trim).
+
+Camera cells inside the packed grid stay 1-based ([1,1] is the first real
+block cell, one full cell-pitch away from the origin on each axis) — the
+0-axis margin is a separate strip around it, not a renumbering of the grid.
+
+
 
 Safety rules
 ------------
@@ -652,8 +657,12 @@ def main():
                     if not ui["show_grid"]:
                         raise BuildStateError("grid is hidden; press g before selecting")
                     cell = workspace.cell_at(point, image_size)
+                    if cell is None and workspace.has_physical_grid:
+                        # The origin margin: [col,0], [0,row] or [0,0] - not a
+                        # block cell, but a real B/G axis-only target.
+                        cell = workspace.axis_lane_at(point, image_size)
                     if cell is None:
-                        raise BuildStateError("click is outside the packed block grid")
+                        raise BuildStateError("click is outside the grid or its origin margin")
                     controller.select(cell)
                     ui["message"] = f"selected [{cell[0]},{cell[1]}]; confirm shown command"
                 except BuildStateError as exc:
