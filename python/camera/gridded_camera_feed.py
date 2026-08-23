@@ -385,6 +385,11 @@ def main():
             )
             if ui["show_grid"]:
                 draw_machine_grid(display, workspace, grid, ui["hover"], calibrated)
+            if ui["calibrating"]:
+                # Calibration geometry is deliberate camera feedback, not a
+                # diagnostic HUD: keep the accepted corner markers, outline,
+                # and live next-edge preview visible while clicking.
+                draw_calibration(display, ui["calibration_points"], ui["hover"])
             cell = workspace.cell_at(ui["hover"], image_size) if ui["hover"] else None
             cell_text = f"Hovered cell: [{cell[0]},{cell[1]}]" if cell else "Hovered cell: none"
             calibration_text = (

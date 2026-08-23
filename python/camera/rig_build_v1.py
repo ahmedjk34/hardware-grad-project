@@ -61,6 +61,7 @@ from camera.camera_feed import (  # noqa: E402
 )
 from camera.gridded_camera_feed import (  # noqa: E402
     approximate_workspace,
+    draw_calibration,
     draw_machine_grid,
     load_workspace,
     projection_metadata,
@@ -401,6 +402,10 @@ def main():
             if ui["show_grid"]:
                 draw_machine_grid(display, workspace, grid, ui["hover"], calibrated)
                 draw_selected_cell(display, workspace, controller.selected)
+            if ui["calibrating"]:
+                # Show the actual calibration route and accepted corners on the
+                # image; explanatory state remains in the Tk panel below it.
+                draw_calibration(display, ui["calibration_points"], ui["hover"])
             # Calibration/build/camera-health feedback is shown in the Tk panel;
             # only grid, selected-cell, and block geometry remain on the image.
 
