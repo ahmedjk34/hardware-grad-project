@@ -17,9 +17,14 @@ The script reads the port, the board FQBN and the sketch path out of
 Board is an Arduino MEGA 2560. Serial is **9600 baud**. Multi-character
 commands need a newline; single digits do not.
 
-The auxiliary 28BYJ-48 stepper uses the four ULN2003 inputs on pins 36–39
-(GREEN, RED, YELLOW, BLUE in IN1–IN4 order). `R` and `RR` rotate it about 90°
-clockwise and counter-clockwise respectively.
+The auxiliary 28BYJ-48 stepper uses these ULN2003 connections:
+
+- IN1 / BLACK -> Mega pin 38
+- IN2 / GREEN -> Mega pin 36
+- IN3 / BLUE -> Mega pin 39
+- IN4 / RED -> Mega pin 37
+
+`R` and `RR` rotate it about 90° clockwise and counter-clockwise respectively.
 
 The command list lives in the comment block at the top of the sketch, and the
 rig prints it on boot and on `?`.

@@ -196,16 +196,16 @@ bool servoIsOpen = false;
 // jogs +/-90 degrees on command (R / RR), no homing, no limits.
 //
 // ULN2003 connections:
-//   IN1 -> pin 36   BLACK
-//   IN2 -> pin 37   GREEN
-//   IN3 -> pin 38   BLUE
-//   IN4 -> pin 39   RED
+//   IN1 / BLACK -> pin 38
+//   IN2 / GREEN -> pin 36
+//   IN3 / BLUE  -> pin 39
+//   IN4 / RED   -> pin 37
 // Power the ULN2003 from a 5V external supply with a shared GND.
 
-const int AUX_STEPPER_IN1 = 36;
-const int AUX_STEPPER_IN2 = 37;
-const int AUX_STEPPER_IN3 = 38;
-const int AUX_STEPPER_IN4 = 39;
+const int AUX_STEPPER_IN1 = 38;
+const int AUX_STEPPER_IN2 = 36;
+const int AUX_STEPPER_IN3 = 39;
+const int AUX_STEPPER_IN4 = 37;
 
 // Approximate number of steps for one output-shaft revolution.
 const int AUX_STEPPER_STEPS_PER_REV = 2048;
