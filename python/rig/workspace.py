@@ -229,6 +229,20 @@ class WorkspaceMap:
     def has_physical_grid(self) -> bool:
         return self._grid is not None
 
+    @property
+    def mapped_grid(self) -> MachineGrid | None:
+        """The MachineGrid actually used for this map's pixel<->cm math.
+
+        Deliberately NOT the same object a caller may have passed to
+        :meth:`from_grid`: this one reserves exactly one cell-pitch of
+        margin at the [0,0] origin (see :meth:`from_grid`), which the
+        caller's own grid does not. Any code drawing or hit-testing against
+        this workspace must use THIS grid, not its own, or positions drift
+        by a cell-pitch - use it instead of recomputing cell/workspace
+        geometry from a separately-loaded MachineGrid.
+        """
+        return self._grid
+
     def axis_lane_polygon(self, axis, index, image_size):
         """Image polygon for the axis-only lane cell ``[index,0]`` or ``[0,index]``.
 
@@ -295,10 +309,9 @@ class WorkspaceMap:
         in the column-0 lane (X held at the origin), or ``(0, 0)`` where both
         lanes overlap - the machine origin itself.
         Distinct from :meth:`cell_at`, which only ever returns a real
-        1-based block cell. Each lane is a full block-sized cell, so it can
-        extend past the calibrated envelope corner when the real trim is
-        smaller than one cell pitch; that is fine for hit-testing here even
-        though :meth:`cell_at` deliberately refuses points outside the quad.
+        1-based block cell - these lanes live in the calibrated margin that
+        exists precisely so [0,0] is a real, block-sized cell (see
+        :meth:`from_grid`), not squeezed against the edge of the image.
         """
         if self._grid is None:
             return None

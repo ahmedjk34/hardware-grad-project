@@ -32,16 +32,13 @@ projection = {"version": 1, "view": "corrected", "test": True}
 image_size = (1296, 972)
 workspace = approximate_workspace(grid, image_size, projection)
 
-first_x, first_y = grid.cell_center_cm(1, 1)
-first_pixel = workspace.pixel_at(first_x / grid.workspace_width_cm,
-                                 first_y / grid.workspace_height_cm,
-                                 image_size)
+first_pixel = tuple(np.mean(workspace.cell_polygon(1, 1, image_size), axis=0))
 frame = np.zeros((image_size[1], image_size[0], 3), dtype=np.uint8)
-hovered = draw_machine_grid(frame, workspace, grid, first_pixel, calibrated=False)
+hovered = draw_machine_grid(frame, workspace, first_pixel, calibrated=False)
 check("overlay maps first physical centre", hovered == (1, 1), str(hovered))
 check("overlay actually draws pixels", bool(np.any(frame)))
 detail_frame = np.zeros_like(frame)
-draw_machine_grid(detail_frame, workspace, grid, first_pixel,
+draw_machine_grid(detail_frame, workspace, first_pixel,
                   calibrated=False, detail=True)
 check("geometry grid omits detail-mode cell labels",
       not np.array_equal(frame, detail_frame))

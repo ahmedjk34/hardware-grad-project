@@ -5,19 +5,25 @@ This uses exactly the same saved camera settings, correction, framing and block
 detection as ``camera_feed.py``. Grid geometry comes from ``config/rig.json``.
 
 The grid opens immediately as an amber, full-frame APPROXIMATION so it is
-visible even before calibration. Press ``c`` and click the four complete
-machine-envelope corners in the prompted order to make it real. The resulting
-four-corner map is saved to ``config/workspace_map.json`` and reloaded on the
-next run. A white crosshair marked "HOME 0,0" always shows where the X/Y
-home switches are - clickable camera cells stay 1-based (zero is never a
-pixel to click), but zero on either axis is a real firmware target meaning
-"leave that axis at the origin", which is what the crosshair points at. A
-changed lens/framing setup or changed grid JSON invalidates the saved map
-instead of silently drawing an old calibration.
+visible even before calibration. Press ``c`` and click, in order, the outer
+corner of the ``[0,0]`` home cell through the outer corner of the
+``[last-col,last-row]`` cell (see ``rig.workspace.CORNER_NAMES``) to make it
+real. The resulting four-corner map is saved to ``config/workspace_map.json``
+and reloaded on the next run.
+
+The drawn and clickable grid is ``(cols+1) x (rows+1)``: ``[0,0]`` is the
+machine's home/origin - a real, block-sized build site, not a point - and
+``[col,0]``/``[0,row]`` are the axis-only lanes either side of it, matching
+what ``B``/``G`` already do with a 0 on one axis (leave that axis at the
+origin; ``G 0 0`` is the home command, ``B 0 0`` is an inert no-op). None of
+this is a renumbering of the packed grid: ``[1,1]`` is still the first real
+block cell, exactly one cell-pitch in from ``[0,0]`` on both axes. A changed
+lens/framing setup or changed grid JSON invalidates the saved map instead of
+silently drawing an old calibration.
 
 Keys
 ----
-  c       calibrate/recalibrate: click four prompted envelope corners
+  c       calibrate/recalibrate: click the four prompted corners
   Enter   save the reviewed four-corner calibration
   u       undo the most recent calibration corner
   x       cancel an in-progress calibration
@@ -148,21 +154,28 @@ def load_workspace(path, grid, projection):
     return workspace, None
 
 
-def _point(workspace, grid, x_cm, y_cm, image_size):
-    return workspace.pixel_at(x_cm / grid.workspace_width_cm,
-                              y_cm / grid.workspace_height_cm, image_size)
+def _point(workspace, g, x_cm, y_cm, image_size):
+    return workspace.pixel_at(x_cm / g.workspace_width_cm,
+                              y_cm / g.workspace_height_cm, image_size)
 
 
 def _pixel(point):
     return tuple(round(value) for value in point)
 
 
-def _grid_geometry(workspace, grid, image_size):
-    """Cache static projected grid geometry; only hover changes per frame."""
+def _grid_geometry(workspace, image_size):
+    """Cache static projected grid geometry; only hover changes per frame.
+
+    Every cm value here MUST come from ``workspace.mapped_grid``, never from
+    a separately-loaded ``MachineGrid`` - that one lacks the one-cell-pitch
+    origin margin :meth:`WorkspaceMap.from_grid` reserves, and mixing the two
+    is exactly what makes the drawn grid drift out of alignment with itself.
+    """
+    g = workspace.mapped_grid
     key = (
-        image_size, tuple(workspace.corners), grid.cols, grid.rows,
-        grid.cell_width_cm, grid.cell_height_cm, grid.workspace_width_cm,
-        grid.workspace_height_cm, grid.trim_x_cm, grid.trim_y_cm,
+        image_size, tuple(workspace.corners), g.cols, g.rows,
+        g.cell_width_cm, g.cell_height_cm, g.workspace_width_cm,
+        g.workspace_height_cm, g.trim_x_cm, g.trim_y_cm,
     )
     cached = _GRID_GEOMETRY_CACHE.get(key)
     if cached is not None:
@@ -176,15 +189,15 @@ def _grid_geometry(workspace, grid, image_size):
     ], dtype=np.float32).round().astype(np.int32)
 
     lines = []
-    for col_edge in range(grid.cols + 1):
-        x_cm = grid.x_start_cm + col_edge * grid.cell_width_cm
-        p0 = _pixel(_point(workspace, grid, x_cm, grid.y_start_cm, image_size))
-        p1 = _pixel(_point(workspace, grid, x_cm, grid.y_end_cm, image_size))
+    for col_edge in range(g.cols + 1):
+        x_cm = g.x_start_cm + col_edge * g.cell_width_cm
+        p0 = _pixel(_point(workspace, g, x_cm, g.y_start_cm, image_size))
+        p1 = _pixel(_point(workspace, g, x_cm, g.y_end_cm, image_size))
         lines.append((p0, p1))
-    for row_edge in range(grid.rows + 1):
-        y_cm = grid.y_start_cm + row_edge * grid.cell_height_cm
-        p0 = _pixel(_point(workspace, grid, grid.x_start_cm, y_cm, image_size))
-        p1 = _pixel(_point(workspace, grid, grid.x_end_cm, y_cm, image_size))
+    for row_edge in range(g.rows + 1):
+        y_cm = g.y_start_cm + row_edge * g.cell_height_cm
+        p0 = _pixel(_point(workspace, g, g.x_start_cm, y_cm, image_size))
+        p1 = _pixel(_point(workspace, g, g.x_end_cm, y_cm, image_size))
         lines.append((p0, p1))
 
     def _add_label(labels, text, x, y):
@@ -197,10 +210,10 @@ def _grid_geometry(workspace, grid, image_size):
     approx_h = np.linalg.norm(np.asarray(first[3]) - np.asarray(first[0]))
     show_labels = approx_w >= 38 and approx_h >= 24
     if show_labels:
-        for row in range(1, grid.rows + 1):
-            for col in range(1, grid.cols + 1):
-                x_cm, y_cm = grid.cell_center_cm(col, row)
-                x, y = _pixel(_point(workspace, grid, x_cm, y_cm, image_size))
+        for row in range(1, g.rows + 1):
+            for col in range(1, g.cols + 1):
+                x_cm, y_cm = g.cell_center_cm(col, row)
+                x, y = _pixel(_point(workspace, g, x_cm, y_cm, image_size))
                 _add_label(labels, f"{col},{row}", x, y)
 
     # Axis-only lanes plus the [0,0] home cell: one block-sized cell-pitch
@@ -209,24 +222,23 @@ def _grid_geometry(workspace, grid, image_size):
     # leaves X there - what B/G's axis-only convention means - and [0,0] is
     # where both lanes meet: home, a real place blocks get picked up from.
     extra_polygons = []
-    if workspace.has_physical_grid:
-        for axis, count, label_fmt in (("col", grid.cols, "{},0"),
-                                       ("row", grid.rows, "0,{}")):
-            for index in range(1, count + 1):
-                polygon = np.asarray(
-                    workspace.axis_lane_polygon(axis, index, image_size),
-                    dtype=np.float32).round().astype(np.int32)
-                extra_polygons.append(polygon)
-                if show_labels:
-                    x, y = polygon.mean(axis=0).astype(int)
-                    _add_label(labels, label_fmt.format(index), x, y)
-        origin_polygon = np.asarray(
-            workspace.origin_polygon(image_size),
-            dtype=np.float32).round().astype(np.int32)
-        extra_polygons.append(origin_polygon)
-        if show_labels:
-            x, y = origin_polygon.mean(axis=0).astype(int)
-            _add_label(labels, "0,0", x, y)
+    for axis, count, label_fmt in (("col", g.cols, "{},0"),
+                                   ("row", g.rows, "0,{}")):
+        for index in range(1, count + 1):
+            polygon = np.asarray(
+                workspace.axis_lane_polygon(axis, index, image_size),
+                dtype=np.float32).round().astype(np.int32)
+            extra_polygons.append(polygon)
+            if show_labels:
+                x, y = polygon.mean(axis=0).astype(int)
+                _add_label(labels, label_fmt.format(index), x, y)
+    origin_polygon = np.asarray(
+        workspace.origin_polygon(image_size),
+        dtype=np.float32).round().astype(np.int32)
+    extra_polygons.append(origin_polygon)
+    if show_labels:
+        x, y = origin_polygon.mean(axis=0).astype(int)
+        _add_label(labels, "0,0", x, y)
 
     cached = (envelope, tuple(lines), tuple(labels), tuple(extra_polygons))
     if len(_GRID_GEOMETRY_CACHE) >= 16:
@@ -235,17 +247,17 @@ def _grid_geometry(workspace, grid, image_size):
     return cached
 
 
-def draw_machine_grid(frame, workspace, grid, hover_point, calibrated, *, detail=False):
+def draw_machine_grid(frame, workspace, hover_point, calibrated, *, detail=False):
     """Draw cached static grid geometry and the dynamic hovered cell.
 
     The drawn grid is (cols+1) x (rows+1): a normal 1-based cell wherever
     both coordinates are positive, plus the axis-only lane cells and the
     [0,0] home cell along the near edge - all the same size, colour and
     label style, since a build site at [0,5] or [0,0] is exactly as real as
-    one at [3,5].
+    one at [3,5]. All geometry comes from ``workspace.mapped_grid``.
     """
     image_size = frame.shape[1::-1]
-    envelope, lines, labels, extra_polygons = _grid_geometry(workspace, grid, image_size)
+    envelope, lines, labels, extra_polygons = _grid_geometry(workspace, image_size)
     cv2.polylines(frame, [envelope], True, ENVELOPE_COLOR, 2, cv2.LINE_AA)
     color = GRID_COLOR if calibrated else WARN_COLOR
     for p0, p1 in lines:
@@ -475,7 +487,7 @@ def main():
             ui["calibrating"] = True
             ui["calibration_points"] = []
             ui["pending_points"] = None
-            ui["message"] = "click the four prompted envelope corners"
+            ui["message"] = "click the four prompted corners"
         elif key == ord("x") and ui["calibrating"]:
             ui["calibrating"] = False
             ui["calibration_points"] = []
@@ -586,7 +598,7 @@ def main():
             started = time.perf_counter()
             if ui["show_grid"] and ui["overlay"] != "off":
                 draw_machine_grid(
-                    display, workspace, grid, ui["hover"], calibrated,
+                    display, workspace, ui["hover"], calibrated,
                     detail=ui["overlay"] == "detail")
             if ui["calibrating"]:
                 draw_calibration(

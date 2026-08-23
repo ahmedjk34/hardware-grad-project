@@ -133,7 +133,7 @@ def main():
 
         def grid_stage():
             output = canonical.copy()
-            draw_machine_grid(output, workspace, grid, None, calibrated=False)
+            draw_machine_grid(output, workspace, None, calibrated=False)
             return output
 
         _, stage_times["grid"] = _measure(grid_stage, args.iterations)

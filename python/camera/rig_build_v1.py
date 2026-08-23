@@ -2,23 +2,17 @@
 """Rig Build V1: camera grid cell selection -> confirmed Arduino B command.
 
 This combines ``gridded_camera_feed.py`` with ``rig.link.Rig``. A left click on
-a grid selects one cell; it does not move the machine. Press Enter or
-``b`` to send the exact command shown in the build panel, normally
+a grid cell selects it; it does not move the machine. Press Enter or ``b`` to
+send the exact command shown in the build panel, normally
 ``B <col> <row> <level>``. The firmware performs the pick-and-place sequence.
-``0`` on either axis means "do not move that axis", never a real block cell —
-this is how the firmware's ``B`` command supports single-axis moves: ``B 0 5``
-skips X, ``B 17 0`` skips Y, and ``B 0 0`` is an inert no-op. That 0-axis is
-drawn too: a thin origin margin between the packed grid and the machine's
-home switches, one cell-lane wide, click it same as any normal cell. The
-white "HOME 0,0" crosshair marks the corner where both margins meet;
-``x``/``y`` type the same targets from the keyboard when the margin is too
-thin to click precisely (its real width depends on your rig's grid trim).
 
-Camera cells inside the packed grid stay 1-based ([1,1] is the first real
-block cell, one full cell-pitch away from the origin on each axis) — the
-0-axis margin is a separate strip around it, not a renumbering of the grid.
-
-
+The grid is ``(cols+1) x (rows+1)``: ``[1,1]`` through ``[cols,rows]`` are
+normal block cells, and ``[0,0]``/``[col,0]``/``[0,row]`` are the machine's
+home cell and its two axis-only lanes, all exactly the same size and just as
+clickable. ``0`` on an axis means "leave that axis at the origin" - the
+firmware's own single-axis move: ``B 0 5`` skips X, ``B 17 0`` skips Y,
+``G 0 0`` is the home command, and ``B 0 0`` is an inert no-op. ``x``/``y``
+type the same targets from the keyboard as an alternative to clicking.
 
 Safety rules
 ------------
@@ -32,7 +26,7 @@ Safety rules
 
 Keys
 ----
-  c       calibrate/recalibrate the four machine-envelope corners
+  c       calibrate/recalibrate: click the four prompted corners
   Enter   save the reviewed four-corner calibration
   u       undo the most recent calibration corner
   x       cancel calibration (while calibrating); otherwise pick an X-only
@@ -435,7 +429,7 @@ def main():
                 ui["calibrating"] = True
                 ui["calibration_points"] = []
                 ui["pending_points"] = None
-                ui["message"] = "click the four prompted envelope corners"
+                ui["message"] = "click the four prompted corners"
             except BuildStateError as exc:
                 ui["message"] = str(exc)
         elif key == ord("x") and ui["calibrating"]:
@@ -671,7 +665,7 @@ def main():
                 started = time.perf_counter()
                 if ui["show_grid"] and ui["overlay"] != "off":
                     draw_machine_grid(
-                        display, workspace, grid, ui["hover"], calibrated,
+                        display, workspace, ui["hover"], calibrated,
                         detail=ui["overlay"] == "detail")
                     draw_selected_cell(display, workspace, controller.selected)
                 if ui["calibrating"]:
