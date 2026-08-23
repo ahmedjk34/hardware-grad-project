@@ -576,13 +576,19 @@ class Rig:
 
         The safe way to check a pixel-to-cell mapping: a wrong answer costs a
         wasted trip, not a dropped block.
+
+        0 on either axis is a real target, not just a camera-cell reject:
+        it means "leave that axis at the origin", so ``G 0 0`` goes home
+        (or does nothing if already there) and e.g. ``G 5 0`` moves X only.
         """
         out = self._send_and_settle(
             f"G {col} {row}",
             timeout=timeout,
-            done=("ARRIVED at cell", "MOVE INCOMPLETE", "ABORTED", "ERROR"),
+            done=("ARRIVED at cell", "ALREADY AT ORIGIN", "MOVE INCOMPLETE",
+                  "ABORTED", "ERROR"),
         )
-        if any("ARRIVED at cell" in text for text in out):
+        if any("ARRIVED at cell" in text or "ALREADY AT ORIGIN" in text
+               for text in out):
             return True
         # gotoCell() can also fail before it prints anything at all, when
         # gridReady() or cellInRange() rejects it — hence "did it say ARRIVED"

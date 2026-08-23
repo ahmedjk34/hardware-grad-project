@@ -166,6 +166,23 @@ GOTO_OK = [
     "  ARRIVED at cell [3,5]  pos X -743 / Y 6563",
 ]
 
+# 0,0 is the origin, not a rejected cell: already there is a real success that
+# never says "ARRIVED at cell", so link.Rig.goto() must recognize it too.
+GOTO_ALREADY_HOME = [
+    "",
+    "=== GOTO CELL [0,0] ===",
+    "  ALREADY AT ORIGIN - no move needed.",
+]
+
+# Axis-only: row 0 means "leave Y at the origin", so only X moves.
+GOTO_AXIS_ONLY = [
+    "",
+    "=== GOTO CELL [5,0] ===",
+    2.0,
+    "  Moving X to -2185 ...",
+    "  ARRIVED at cell [5,0]  pos X -2185 / Y 0",
+]
+
 CFG = {
     "serial": {"port": "/dev/fake", "baud": 9600},
     "grid": {
@@ -285,6 +302,15 @@ elapsed = time.monotonic() - started
 check("silence mid-home is not the end", homed and elapsed > 4.0, f"{elapsed:.1f}s")
 check("goto waits for ARRIVED", rig.goto(3, 5, timeout=30) is True)
 check("no fallback on S/0+/G", rig.prose_fallbacks == 0)
+rig.close()
+
+# 0 on either axis is a real target (origin / axis-only), not a rejected cell.
+rig, fake = fake_rig(replies={"S": GRID_RESIZED, "G 0 0": GOTO_ALREADY_HOME, "G": GOTO_OK})
+check("goto(0,0) already-home counts as success", rig.goto(0, 0, timeout=10) is True)
+rig.close()
+
+rig, fake = fake_rig(replies={"S": GRID_RESIZED, "G 5 0": GOTO_AXIS_ONLY, "G": GOTO_OK})
+check("goto(5,0) axis-only move counts as success", rig.goto(5, 0, timeout=10) is True)
 rig.close()
 
 # A reset under a running command loses the grid and the homing.

@@ -8,11 +8,11 @@ The grid opens immediately as an amber, full-frame APPROXIMATION so it is
 visible even before calibration. Press ``c`` and click the four complete
 machine-envelope corners in the prompted order to make it real. The resulting
 four-corner map is saved to ``config/workspace_map.json`` and reloaded on the
-next run. Camera cells remain strictly 1-based: zero is not an image cell.
-The firmware's separate build-target convention (zero on either axis for
-calibration, including the ``B 0 0`` no-op) is exposed by
-``rig_build_v1.py --build-target COL ROW`` and is never invented by a camera
-click. A changed lens/framing setup or changed grid JSON invalidates that map
+next run. A white crosshair marked "HOME 0,0" always shows where the X/Y
+home switches are - clickable camera cells stay 1-based (zero is never a
+pixel to click), but zero on either axis is a real firmware target meaning
+"leave that axis at the origin", which is what the crosshair points at. A
+changed lens/framing setup or changed grid JSON invalidates the saved map
 instead of silently drawing an old calibration.
 
 Keys
@@ -79,6 +79,7 @@ from camera.tk_camera_window import TkCameraWindow  # noqa: E402
 
 
 ENVELOPE_COLOR = (170, 170, 170)
+ORIGIN_COLOR = (255, 255, 255)          # white: machine (0,0) - the home switches
 CALIBRATION_COLOR = (255, 180, 30)       # orange: diagonal
 CALIBRATION_HORIZONTAL = (255, 255, 0)   # cyan: screen-horizontal
 CALIBRATION_VERTICAL = (255, 0, 255)     # magenta: screen-vertical
@@ -175,6 +176,12 @@ def _grid_geometry(workspace, grid, image_size):
         workspace.pixel_at(0.0, 1.0, image_size),
     ], dtype=np.float32).round().astype(np.int32)
 
+    # Machine (0,0): the X/Y home-switch corner. Every B/G axis-only move
+    # ("0 on this axis") leaves that axis parked exactly here, not at the
+    # edge of the packed cell grid, so it gets its own always-visible mark
+    # rather than being folded into the col/row cell labels below.
+    origin_px = _pixel(workspace.pixel_at(0.0, 0.0, image_size))
+
     lines = []
     for col_edge in range(grid.cols + 1):
         x_cm = grid.x_start_cm + col_edge * grid.cell_width_cm
@@ -202,21 +209,50 @@ def _grid_geometry(workspace, grid, image_size):
                 at = (x - tw // 2, y + th // 2)
                 labels.append((label, at))
 
-    cached = (envelope, tuple(lines), tuple(labels))
+    cached = (envelope, tuple(lines), tuple(labels), origin_px)
     if len(_GRID_GEOMETRY_CACHE) >= 16:
         _GRID_GEOMETRY_CACHE.pop(next(iter(_GRID_GEOMETRY_CACHE)))
     _GRID_GEOMETRY_CACHE[key] = cached
     return cached
 
 
+def draw_origin_marker(frame, origin_px, *, label="HOME 0,0"):
+    """Mark machine (0,0) - the X/Y home-switch corner - on the live frame."""
+    x, y = origin_px
+    size = 10
+    cv2.drawMarker(frame, (x, y), ORIGIN_COLOR, cv2.MARKER_TILTED_CROSS, size, 2,
+                   cv2.LINE_AA)
+    cv2.circle(frame, (x, y), 5, ORIGIN_COLOR, 1, cv2.LINE_AA)
+    at = (x + 8, y - 8)
+    cv2.putText(frame, label, at, cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 0, 0), 3,
+                cv2.LINE_AA)
+    cv2.putText(frame, label, at, cv2.FONT_HERSHEY_SIMPLEX, 0.42, ORIGIN_COLOR, 1,
+                cv2.LINE_AA)
+
+
+def axis_target_pixel(workspace, grid, col, row, image_size):
+    """Image pixel for any valid B/G target, 0 included.
+
+    0 on an axis means the machine leaves it parked at the physical origin
+    (step 0) - not at the near edge of the packed cell grid, which can sit a
+    trim/margin away from the true origin. col and row are otherwise 1-based
+    cell centres, exactly like ``MachineGrid.cell_center_cm``.
+    """
+    x_cm = 0.0 if col == 0 else grid.x_start_cm + (col - 0.5) * grid.cell_width_cm
+    y_cm = 0.0 if row == 0 else grid.y_start_cm + (row - 0.5) * grid.cell_height_cm
+    return workspace.pixel_at(x_cm / grid.workspace_width_cm,
+                              y_cm / grid.workspace_height_cm, image_size)
+
+
 def draw_machine_grid(frame, workspace, grid, hover_point, calibrated, *, detail=False):
     """Draw cached static grid geometry and the dynamic hovered cell."""
     image_size = frame.shape[1::-1]
-    envelope, lines, labels = _grid_geometry(workspace, grid, image_size)
+    envelope, lines, labels, origin_px = _grid_geometry(workspace, grid, image_size)
     cv2.polylines(frame, [envelope], True, ENVELOPE_COLOR, 2, cv2.LINE_AA)
     color = GRID_COLOR if calibrated else WARN_COLOR
     for p0, p1 in lines:
         cv2.line(frame, p0, p1, color, 1, cv2.LINE_AA)
+    draw_origin_marker(frame, origin_px)
     if detail:
         for label, at in labels:
             cv2.putText(frame, label, at, cv2.FONT_HERSHEY_SIMPLEX, 0.34,

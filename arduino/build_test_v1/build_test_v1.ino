@@ -36,7 +36,9 @@
     R  = Aux stepper rotate ~90 deg CW   (28BYJ-48, pins 36-39)
     RR = Aux stepper rotate ~90 deg CCW  (28BYJ-48, pins 36-39)
 
-    G <col> <row>   = go to grid cell (1-based). e.g.  G 3 5   or  G3,5
+    G <col> <row>   = go to grid cell. e.g.  G 3 5   or  G3,5
+      col/row may be 0: 0,0 is the ORIGIN (home; a no-op if already there),
+      and 0 on just one axis moves only the other axis, e.g. G 5 0 = X only.
     S <cols> <rows> = change fixed-pitch grid count live. e.g.  S 20 4
 
     B <col> <row> <level> [R|RR|NR]   = BUILD one block   <<< NEW
@@ -2122,13 +2124,15 @@ bool gridReady()
   return true;
 }
 
+// 0 is a real coordinate here: [0,0] is the ORIGIN, and 0 on one axis alone
+// means "leave that axis at the origin" - see gotoCellForRotation().
 bool cellInRange(long col, long row)
 {
-  if (col < 1 || col > GRID_COLS || row < 1 || row > GRID_ROWS)
+  if (col < 0 || col > GRID_COLS || row < 0 || row > GRID_ROWS)
   {
-    Serial.print(F("  ERROR - out of range. Valid: col 1.."));
+    Serial.print(F("  ERROR - out of range. Valid: col 0.."));
     Serial.print(GRID_COLS);
-    Serial.print(F(", row 1.."));
+    Serial.print(F(", row 0.."));
     Serial.println(GRID_ROWS);
     return false;
   }
@@ -2168,7 +2172,12 @@ void setGridSize(long cols, long rows)
 
 // Homes, then drives Y and X so the selected tool centre lands at the cell.
 // `rotation` is the orientation that will exist when the block is placed.
-// Returns true only if BOTH axes actually arrived.
+// Returns true only if every axis that was asked to move actually arrived.
+//
+// 0 on an axis means "leave it at the origin" rather than a real cell -
+// same convention as gotoBuildTarget(). [0,0] is therefore just "go home":
+// a no-op if the machine is already homed and sitting there, otherwise
+// exactly a home command.
 bool gotoCellForRotation(long col, long row, int8_t rotation)
 {
   Serial.println();
@@ -2188,20 +2197,25 @@ bool gotoCellForRotation(long col, long row, int8_t rotation)
     return false;
   }
 
-  long targetX;
-  long targetY;
-  if (!cellTargetPosition(AXIS_X, col, rotation, &targetX) ||
-      !cellTargetPosition(AXIS_Y, row, rotation, &targetY))
+  if (col == 0 && row == 0)
+  {
+    if (axisHomed[AXIS_X] && axisHomed[AXIS_Y] && curCol == 0 && curRow == 0)
+    {
+      Serial.println(F("  ALREADY AT ORIGIN - no move needed."));
+      return true;
+    }
+    return goToOrigin();
+  }
+
+  long targetX = 0;
+  long targetY = 0;
+  if ((col > 0 && !cellTargetPosition(AXIS_X, col, rotation, &targetX)) ||
+      (row > 0 && !cellTargetPosition(AXIS_Y, row, rotation, &targetY)))
   {
     Serial.println(F("  ERROR - tool offset puts the holder outside the X/Y travel."));
     Serial.println(F("  Refusing to clip the target; check tool offset calibration."));
     return false;
   }
-
-  Serial.print(F("  Target position: X "));
-  Serial.print(targetX);
-  Serial.print(F(" / Y "));
-  Serial.println(targetY);
 
   // STEP 1 - back to a known origin.
   if (!goToOrigin())
@@ -2210,22 +2224,36 @@ bool gotoCellForRotation(long col, long row, int8_t rotation)
     return false;
   }
 
-  // STEP 2 - Y axis.
-  Serial.print(F("  Moving Y to "));
-  Serial.print(targetY);
-  Serial.println(F(" ..."));
-  bool okY = moveAxisTo(AXIS_Y, targetY);
+  // STEP 2 - Y axis (skipped when row is 0: stay at the origin).
+  bool okY = true;
+  if (row > 0)
+  {
+    Serial.print(F("  Moving Y to "));
+    Serial.print(targetY);
+    Serial.println(F(" ..."));
+    okY = moveAxisTo(AXIS_Y, targetY);
+  }
 
-  // STEP 3 - X axis.
-  Serial.print(F("  Moving X to "));
-  Serial.print(targetX);
-  Serial.println(F(" ..."));
-  bool okX = moveAxisTo(AXIS_X, targetX);
+  // STEP 3 - X axis (skipped when col is 0: stay at the origin).
+  bool okX = true;
+  if (col > 0)
+  {
+    Serial.print(F("  Moving X to "));
+    Serial.print(targetX);
+    Serial.println(F(" ..."));
+    okX = moveAxisTo(AXIS_X, targetX);
+  }
 
   if (okX && okY)
   {
-    curCol = col;
-    curRow = row;
+    // Only a real two-axis arrival counts as a tracked "current cell" - an
+    // axis-only move (one side left at the origin) is not one, same as
+    // gotoBuildTarget() never touching curCol/curRow either.
+    if (col > 0 && row > 0)
+    {
+      curCol = col;
+      curRow = row;
+    }
     Serial.print(F("  ARRIVED at cell ["));
     Serial.print(col);
     Serial.print(F(","));
@@ -2250,8 +2278,8 @@ bool gotoCell(long col, long row)
   return gotoCellForRotation(col, row, clawRotation);
 }
 
-// BUILD-only target. Zero means leave that axis at the origin after homing;
-// it is deliberately not accepted by the normal G command.
+// Same zero-means-stay-at-origin convention as gotoCellForRotation(), kept
+// separate because BUILD has its own range/lock checks around this call.
 bool gotoBuildTarget(long col, long row, int8_t rotation)
 {
   if (!gridReady() || col < 0 || col > GRID_COLS || row < 0 || row > GRID_ROWS)
@@ -4406,6 +4434,7 @@ void printInstructions()
   Serial.println(F("RR = Aux stepper ~90 deg CCW  [28BYJ-48, pins 36-39]"));
   Serial.println(F("--------------------------------------"));
   Serial.println(F("G <col> <row>   goto cell, e.g.  G 3 5"));
+  Serial.println(F("    col/row 0 skips that axis (stays at origin); G 0 0 goes home"));
   Serial.println(F("S <cols> <rows> fixed-pitch count, e.g. S 20 4"));
   Serial.println(F("--------------------------------------"));
   Serial.println(F("B <col> <row> <level> [R|RR|NR]   BUILD one block"));

@@ -10,7 +10,10 @@ how the firmware's ``B`` command supports single-axis moves: ``B 0 5`` skips X,
 ``B 17 0`` skips Y, and ``B 0 0`` is an inert no-op. ``--build-target`` sets one
 such target at startup; ``x``/``y`` during a session pick one interactively
 (type the column/row, Enter to confirm) without needing the camera grid to
-have a clickable zero cell, since zero is not a real image position.
+have a clickable zero cell, since zero is not a real image position. The
+white "HOME 0,0" crosshair on the feed always marks where that axis actually
+lands; an axis-only or origin selection gets its own magenta crosshair there
+too, since it has no cell rectangle to highlight.
 
 Safety rules
 ------------
@@ -74,6 +77,7 @@ from camera.camera_feed import (  # noqa: E402
 from camera.snapshot_worker import SnapshotWorker  # noqa: E402
 from camera.gridded_camera_feed import (  # noqa: E402
     approximate_workspace,
+    axis_target_pixel,
     draw_calibration,
     draw_machine_grid,
     load_workspace,
@@ -138,16 +142,29 @@ def parse_args():
     return parser.parse_args()
 
 
-def draw_selected_cell(frame, workspace, selected):
-    # Zero is a valid firmware calibration coordinate, but it is not a camera
-    # cell and therefore has no polygon to draw.
-    if selected is None or 0 in selected:
+def draw_selected_cell(frame, workspace, grid, selected):
+    """Highlight the pending build target - a full cell, or a 0-axis mark."""
+    if selected is None:
         return
-    polygon = np.asarray(
-        workspace.cell_polygon(*selected, frame.shape[1::-1]),
-        dtype=np.float32,
-    ).round().astype(np.int32)
-    cv2.polylines(frame, [polygon], True, SELECTED_COLOR, 4, cv2.LINE_AA)
+    col, row = selected
+    image_size = frame.shape[1::-1]
+    if col > 0 and row > 0:
+        polygon = np.asarray(
+            workspace.cell_polygon(col, row, image_size),
+            dtype=np.float32,
+        ).round().astype(np.int32)
+        cv2.polylines(frame, [polygon], True, SELECTED_COLOR, 4, cv2.LINE_AA)
+        return
+    # 0 on an axis: that axis stays parked at the machine origin, so there is
+    # no cell rectangle to draw - mark the point it will actually land on.
+    x, y = (round(v) for v in axis_target_pixel(workspace, grid, col, row, image_size))
+    cv2.drawMarker(frame, (x, y), SELECTED_COLOR, cv2.MARKER_CROSS, 16, 3, cv2.LINE_AA)
+    label = "HOME 0,0" if col == 0 and row == 0 else f"target [{col},{row}]"
+    at = (x + 10, y + 18)
+    cv2.putText(frame, label, at, cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 0, 0), 3,
+                cv2.LINE_AA)
+    cv2.putText(frame, label, at, cv2.FONT_HERSHEY_SIMPLEX, 0.42, SELECTED_COLOR, 1,
+                cv2.LINE_AA)
 
 
 def camera_state(snapshot, now):
@@ -655,7 +672,7 @@ def main():
                     draw_machine_grid(
                         display, workspace, grid, ui["hover"], calibrated,
                         detail=ui["overlay"] == "detail")
-                    draw_selected_cell(display, workspace, controller.selected)
+                    draw_selected_cell(display, workspace, grid, controller.selected)
                 if ui["calibrating"]:
                     draw_calibration(
                         display, ui["calibration_points"], ui["hover"],
