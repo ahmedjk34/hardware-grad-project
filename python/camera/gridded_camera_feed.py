@@ -67,7 +67,6 @@ from vision.overlays import (  # noqa: E402
     HOVER_COLOR,
     LABEL_COLOR,
     WARN_COLOR,
-    draw_info_box,
 )
 from camera.tk_camera_window import TkCameraWindow  # noqa: E402
 
@@ -197,42 +196,7 @@ def draw_machine_grid(frame, workspace, grid, hover_point, calibrated):
         polygon = np.asarray(workspace.cell_polygon(*cell, image_size),
                              dtype=np.float32).round().astype(np.int32)
         cv2.polylines(frame, [polygon], True, HOVER_COLOR, 3, cv2.LINE_AA)
-        x_cm, y_cm = grid.cell_center_cm(*cell)
-        lines = [
-            f"CELL [{cell[0]},{cell[1]}]",
-            f"centre X {x_cm:.2f} cm  Y {y_cm:.2f} cm",
-            f"camera cell: G {cell[0]} {cell[1]}",
-            f"build cell: B {cell[0]} {cell[1]} <level>",
-        ]
-        width = min(400, frame.shape[1] - 8)
-        # Cell identity and coordinates are reported in the Tk status panel;
-        # the image remains available for the grid and block geometry.
     return cell
-
-
-def draw_grid_status(frame, grid, calibrated, rejection, correction_enabled):
-    if calibrated:
-        first = "MACHINE GRID: CALIBRATED"
-        reason = "four-corner camera -> cm -> cell mapping"
-        highlight = False
-    else:
-        first = "MACHINE GRID: APPROXIMATION ONLY"
-        reason = rejection or "press c and click four envelope corners"
-        highlight = True
-    correction = "correction ON" if correction_enabled else \
-        "WARNING: correction OFF; mapping between corners is approximate"
-    lines = [
-        first,
-        f"{grid.cols}x{grid.rows} | cell {grid.cell_width_cm:g}x"
-        f"{grid.cell_height_cm:g} cm | workspace "
-        f"{grid.workspace_width_cm:g}x{grid.workspace_height_cm:g} cm",
-        reason,
-        correction,
-        "keys: c calibrate | x cancel | g grid | s save | q quit",
-        "build calibration: rig_build_v1.py --build-target COL ROW",
-    ]
-    width = min(470, frame.shape[1] - 8)
-    # Diagnostics belong below the image in TkCameraWindow.
 
 
 def calibration_line_color(start, end):
@@ -285,26 +249,6 @@ def draw_calibration(frame, points, cursor=None):
                     (point[0] + 9, point[1] - 9),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, CALIBRATION_COLOR, 2,
                     cv2.LINE_AA)
-    index = len(points)
-    if index < 4:
-        lines = [
-            f"CALIBRATION ACTIVE — NEXT CLICK {index + 1}/4",
-            f"NEXT: {CORNER_NAMES[index]}",
-            "Order: 1 home/home -> 2 far-X/home-Y",
-            "       3 far-X/far-Y -> 4 home-X/far-Y",
-            "Cyan = horizontal | magenta = vertical | orange = diagonal.",
-            "Solid lines = saved clicks; cursor line = next edge preview.",
-            "Click the physical envelope corner | u undo | x cancel",
-        ]
-    else:
-        lines = [
-            "CALIBRATION REVIEW — 4/4 CORNERS SELECTED",
-            "Verify the closed outline surrounds the complete machine envelope.",
-            "Enter saves this map | u undo last corner | x cancel",
-        ]
-    # Calibration instructions/status are rendered in the Tk panel.
-
-
 def main():
     args = parse_args()
     if args.display_scale <= 0 or args.min_area <= 0:
@@ -444,7 +388,10 @@ def main():
             cell = workspace.cell_at(ui["hover"], image_size) if ui["hover"] else None
             cell_text = f"Hovered cell: [{cell[0]},{cell[1]}]" if cell else "Hovered cell: none"
             calibration_text = (
-                f"Calibration: active ({len(ui['calibration_points'])}/4 corners)"
+                (f"Calibration: REVIEW 4/4 corners — press Enter to save"
+                 if len(ui["calibration_points"]) == 4 else
+                 f"Calibration: active ({len(ui['calibration_points'])}/4); "
+                 f"next: {CORNER_NAMES[len(ui['calibration_points'])]}")
                 if ui["calibrating"] else
                 ("Grid: CALIBRATED" if calibrated else
                  f"Grid: APPROXIMATION ONLY ({rejection or 'press c to calibrate'})"))

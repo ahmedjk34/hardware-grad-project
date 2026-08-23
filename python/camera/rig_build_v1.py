@@ -61,8 +61,6 @@ from camera.camera_feed import (  # noqa: E402
 )
 from camera.gridded_camera_feed import (  # noqa: E402
     approximate_workspace,
-    draw_calibration,
-    draw_grid_status,
     draw_machine_grid,
     load_workspace,
     projection_metadata,
@@ -77,11 +75,10 @@ from rig.build_job import BUSY_MESSAGE, BuildJob  # noqa: E402
 from rig.config import CONFIG_PATH, load as load_rig_config  # noqa: E402
 from rig.grid import MachineGrid  # noqa: E402
 from rig.link import ABORTED, PLACED, REJECTED, Rig, RigError  # noqa: E402
-from rig.workspace import WORKSPACE_MAP_PATH, WorkspaceMap  # noqa: E402
+from rig.workspace import CORNER_NAMES, WORKSPACE_MAP_PATH, WorkspaceMap  # noqa: E402
 from vision.block_detector import detect_blocks  # noqa: E402
 from vision.camera_source import LatestFramePump, open_camera  # noqa: E402
 from vision.fisheye import INTERPOLATIONS, build_maps, undistort  # noqa: E402
-from vision.overlays import draw_info_box  # noqa: E402
 
 
 SELECTED_COLOR = (255, 80, 255)
@@ -132,13 +129,6 @@ def draw_selected_cell(frame, workspace, selected):
     cv2.polylines(frame, [polygon], True, SELECTED_COLOR, 4, cv2.LINE_AA)
 
 
-def draw_build_panel(frame, controller, port_name, message, camera_state,
-                     building=False):
-    # The build state is shown in the Tk status panel.  Keep the image reserved
-    # for camera, grid, detection, and the selected-cell geometry.
-    return frame
-
-
 def camera_state(snapshot, now):
     """Short, operator-facing truth about camera freshness."""
     age = snapshot.age_s(now)
@@ -153,13 +143,6 @@ def camera_is_live(snapshot, now):
     """Whether this image is recent enough to safely choose a machine cell."""
     age = snapshot.age_s(now)
     return age is not None and age < CAMERA_STALE_AFTER_S
-
-
-def draw_camera_warning(frame, snapshot, now):
-    """Make a stuck CSI capture visible while the rest of the UI stays alive."""
-    # A warning is status text, not camera content.  The caller puts the same
-    # detail in the Tk panel below the image.
-    return frame
 
 
 def result_message(result):
@@ -273,6 +256,12 @@ def main():
         ui["message"] = (f"calibration target [{args.build_target[0]},"
                           f"{args.build_target[1]}] selected; confirm command")
 
+    def allow_window_close():
+        if job.running:
+            ui["message"] = "build in progress; cannot quit until it reports"
+            return False
+        return True
+
     def on_mouse(event, point):
         if point is None:
             return
@@ -289,6 +278,7 @@ def main():
         window = TkCameraWindow(
             f"Rig Build V1 - {camera.name} - {rig.port_name}", size,
             display_scale=args.display_scale, mouse_callback=on_mouse,
+            close_request=allow_window_close,
             buttons=(("Calibrate (c)", "c"), ("Undo (u)", "u"),
                      ("Grid (g)", "g"), ("Level - ([)", "["),
                      ("Level + (])", "]"), ("Rotate (o)", "o"),
@@ -317,7 +307,6 @@ def main():
                 # still be closed safely rather than appearing to have hung.
                 w, h = camera.size
                 waiting = np.zeros((h, w, 3), dtype=np.uint8)
-                draw_camera_warning(waiting, snapshot, now)
                 window.show(waiting, [
                     f"Camera: {camera.name}",
                     f"Camera: {camera_state(snapshot, now)}",
@@ -412,7 +401,6 @@ def main():
             if ui["show_grid"]:
                 draw_machine_grid(display, workspace, grid, ui["hover"], calibrated)
                 draw_selected_cell(display, workspace, controller.selected)
-                draw_grid_status(display, grid, calibrated, rejection, enabled)
             # Calibration/build/camera-health feedback is shown in the Tk panel;
             # only grid, selected-cell, and block geometry remain on the image.
 
@@ -431,7 +419,12 @@ def main():
                 selected_text,
                 f"Build state: {'RUNNING' if building else ('LOCKED' if controller.locked else 'READY')} | {ui['message']}",
                 result_text,
-                f"Calibration: {'active ' + str(len(ui['calibration_points'])) + '/4' if ui['calibrating'] else 'inactive'} | {lock_text}",
+                (f"Calibration: REVIEW 4/4 — press Enter to save"
+                 if ui["calibrating"] and len(ui["calibration_points"]) == 4 else
+                 (f"Calibration: active {len(ui['calibration_points'])}/4; next: "
+                  f"{CORNER_NAMES[len(ui['calibration_points'])]}"
+                  if ui["calibrating"] else "Calibration: inactive")
+                 + f" | {lock_text}"),
                 "c calibrate | Enter save | u undo | x cancel | g grid | [/] level | o rotate | d deselect",
                 "b/Enter BUILD | s snapshot | q/Esc quit when safe",
             ])

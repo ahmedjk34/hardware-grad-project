@@ -91,7 +91,7 @@ camera and motor cells match. To calibrate:
 1. Press `c`.
 2. Click the complete 34×40 cm machine-envelope corners in the prompted order:
    X/Y home, far-X/home-Y, far-X/far-Y, home-X/far-Y.
-3. Confirm the banner changes to green `MACHINE GRID: CALIBRATED`.
+3. Confirm the status panel below the camera changes to `Grid: CALIBRATED`.
 4. Hover cells and verify several displayed `G col row` commands with the rig
    before placing a block.
 
@@ -99,6 +99,9 @@ camera and motor cells match. To calibrate:
 the overlay, and `s` saves the annotated frame and detection JSON. Changing the
 lens geometry, orientation, crop, physical workspace, cell size or signed trim
 invalidates the old map and returns to the amber approximation.
+
+The camera image contains only the camera, grid, and block visualization;
+calibration state, cell details, FPS, and controls are in the Tk panel below it.
 
 The JSON deliberately does not duplicate `5050×7500` motor safety limits. The
 Pi maps pixels through centimetres to a logical cell; the Arduino remains the
@@ -121,12 +124,14 @@ Startup opens the configured serial port, waits for the Mega reboot banner and
 pushes the JSON grid count. It then opens the same corrected/detected camera
 pipeline as `camera_feed.py`. The amber approximate grid is selectable and can
 issue a build immediately. A matching `workspace_map.json` refines the mapping
-when present, but it is not required.
+when present, but it is not required. The camera image contains only the camera,
+grid, detections, and selected-cell outline; build, camera, calibration, and
+command feedback live in the Tk panel below it.
 
 Workflow:
 
 1. Left-click a cell on the approximate or calibrated grid.
-2. The magenta outline and build panel show the selection. Press `c` only if
+2. The magenta outline and Tk status panel show the selection. Press `c` only if
    you want to refine the mapping with four envelope corners.
 3. Set the stack level with `[` / `]`; `o` cycles `NR`, `R`, `RR`.
 4. Read the displayed command, such as `B 3 4 0`.
@@ -631,6 +636,9 @@ python camera/undistorted_viewer.py --output-fov 140 --output-scale 1.5
 python camera/undistorted_viewer.py --backend v4l2 --device /dev/video0
 ```
 
+The corrected image is kept clear. Profile state, FPS, sampling information,
+and tuning commands are shown in the Tk status panel below the image.
+
 ### Keys
 
 | Key | Effect |
@@ -665,10 +673,10 @@ python camera/undistorted_viewer.py --backend v4l2 --device /dev/video0
 `b` (side by side) is the fastest way to confirm you have actually improved
 something rather than just changed it.
 
-### The HUD
+### The status panel
 
 ```
-PROFILE: ESTIMATED (uncalibrated)          ← amber until real calibration exists
+PROFILE: ESTIMATED (uncalibrated)          ← shown in the Tk panel
 lens FOV 160deg (diagonal)  model equidistant
 output FOV 120deg  1296x972  scale 1.00
 in 1296x972   28.4 fps  cubic  view CORRECTED
@@ -714,8 +722,8 @@ edges of the output are stretched far harder than the centre. At the default
 | edge | 0.34 | each output pixel interpolated from a third of a source pixel |
 
 That 0.34 is ~3× empty magnification. No interpolation kernel recovers detail
-that was never captured, so the corners will look soft no matter what. The HUD's
-`SAMPLE` line reports both numbers live, so the cost of a parameter change is
+that was never captured, so the corners will look soft no matter what. The Tk
+status panel's `SAMPLE` line reports both numbers live, so the cost of a parameter change is
 visible while making it.
 
 **The one fix that adds real detail is `--hq`.** The default capture mode,

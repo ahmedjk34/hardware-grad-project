@@ -421,10 +421,20 @@ def main():
             display = draw_block_overlay(display, detections, ui["hover"], None,
                                          show_info=False)
             image_size = display.shape[1::-1]
+            hovered = hovered_block(detections, ui["hover"])
+            if hovered is None:
+                hover_text = "Hovered block: none"
+            else:
+                detection = detections[hovered]
+                cx, cy = (round(v) for v in detection.center)
+                hover_text = (f"Hovered block: #{hovered + 1} | center {cx},{cy} px | "
+                              f"size {detection.size[0]:.0f}x{detection.size[1]:.0f} px | "
+                              f"angle {detection.angle:.1f}°")
             window.show(display, [
                 f"Camera: {camera.name} | input {input_size[0]}x{input_size[1]}",
                 f"Feed: {image_size[0]}x{image_size[1]} | {fps:5.1f} fps",
                 f"Blocks detected: {len(detections)}",
+                hover_text,
                 f"Sensor controls: {len(applied)} applied"
                 + (f", {len(skipped)} unavailable" if skipped else ""),
                 "Mouse: hover over blocks for coordinates.  s = save snapshot, q/Esc = quit",

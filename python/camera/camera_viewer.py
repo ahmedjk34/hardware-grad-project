@@ -13,7 +13,6 @@ Press 'q' or Esc in the window to quit.
 
 import argparse
 import sys
-import tkinter as tk
 from pathlib import Path
 
 import cv2

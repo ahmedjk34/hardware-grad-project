@@ -6,7 +6,7 @@ cropping to the workspace, no block detection, no robot coordinates.
 
 The lens parameters are ESTIMATES derived from the vendor's "160 degree" FOV
 spec, not a calibration (see vision/fisheye.py for exactly what is assumed). The
-HUD says ESTIMATED in amber until real calibration data exists. Tune the
+Tk status panel says ESTIMATED until real calibration data exists. Tune the
 estimates by eye with the keys below, then press 'w' to save them.
 
     python undistorted_viewer.py
@@ -26,7 +26,7 @@ Keys
 Tuning rule: if edges still bow OUTWARD press ']'; if they bow INWARD (over-
 corrected) press '['. Get that right before touching 'm'.
 
-Reading the SAMPLE line on the HUD
+Reading the SAMPLE line in the status panel
 ----------------------------------
 It reports source pixels per output pixel: 1.00 is a clean 1:1 transfer, 0.33
 means each output pixel was interpolated from a third of a source pixel — empty
@@ -53,6 +53,7 @@ the lens focus ring and the light level first.
 import argparse
 import sys
 import time
+import tkinter as tk
 from pathlib import Path
 
 import cv2
@@ -80,7 +81,7 @@ from vision.fisheye import (
     sampling_stats,
     undistort,
 )
-from vision.overlays import draw_grid, draw_info_box
+from vision.overlays import draw_grid
 from camera.tk_camera_window import TkCameraWindow
 
 INTERP_NAMES = list(INTERPOLATIONS)
@@ -244,7 +245,7 @@ def handle_param_key(key, profile, state):
 
 
 def describe_sampling(maps):
-    """The HUD's SAMPLE line: where the corrected image loses its sharpness.
+    """The status panel's SAMPLE line: where the corrected image loses its sharpness.
 
     Both numbers are source pixels per output pixel (1.00 = clean 1:1). `edge`
     is the 1st percentile, i.e. the most magnified part of the frame — that is
@@ -288,13 +289,18 @@ def main():
               "visually straight, not metric.")
     print(__doc__.split("Keys\n----")[1].split("Tuning rule")[0])
 
-    window = TkCameraWindow(
-        "Undistorted Preview", maps.out_size,
-        buttons=(("Correction (u)", "u"), ("Raw/Corrected (b)", "b"),
-                 ("Grid (g)", "g"), ("Save (s)", "s"),
-                 ("Reset (r)", "r"), ("Write profile (w)", "w"),
-                 ("Quit (q)", "q")),
-    )
+    try:
+        window = TkCameraWindow(
+            "Undistorted Preview", maps.out_size,
+            buttons=(("Correction (u)", "u"), ("Raw/Corrected (b)", "b"),
+                     ("Grid (g)", "g"), ("Save (s)", "s"),
+                     ("Reset (r)", "r"), ("Write profile (w)", "w"),
+                     ("Quit (q)", "q")),
+        )
+    except tk.TclError as exc:
+        camera.release()
+        print(f"Cannot open the Tk camera window: {exc}")
+        return
 
     show_corrected, show_pair, show_grid = True, False, False
     fps = 0.0
