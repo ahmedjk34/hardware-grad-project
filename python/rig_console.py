@@ -20,6 +20,7 @@ What the firmware understands (build_test_v1)
     0+            full reset: Z down, Z up, then home X/Y
     G <col> <row> go to a grid cell, e.g.  G 3 5
     B <col> <row> <level> [R|RR|NR]        one full pick-and-place cycle
+      col/row may be 0 for calibration; B 0 0 <level> is a no-op
     Z             the Z / block-level calibration table
     U / D         jog Z up / down
     O / C         gripper open / close

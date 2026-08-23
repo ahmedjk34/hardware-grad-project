@@ -5,6 +5,8 @@ This combines ``gridded_camera_feed.py`` with ``rig.link.Rig``. A left click on
 a grid selects one cell; it does not move the machine. Press Enter or
 ``b`` to send the exact command shown in the build panel, normally
 ``B <col> <row> <level>``. The firmware performs the pick-and-place sequence.
+For motor calibration, ``--build-target 0 5`` skips X and ``--build-target
+17 0`` skips Y; ``--build-target 0 0`` is an inert firmware no-op.
 
 Safety rules
 ------------
@@ -98,6 +100,9 @@ def parse_args():
                         help="initial build level Z argument (default: 0/ground)")
     parser.add_argument("--rotation", choices=ROTATIONS, default="NR",
                         help="initial optional rotation (default: NR)")
+    parser.add_argument("--build-target", nargs=2, type=int, metavar=("COL", "ROW"),
+                        help="initial B target; each coordinate allows 0 for "
+                             "calibration (0 0 is a no-op)")
     parser.add_argument("--connect-timeout", type=float, default=25.0,
                         help="seconds to wait for the Mega boot banner")
     parser.add_argument("--build-timeout", type=float, default=300.0,
@@ -114,7 +119,9 @@ def parse_args():
 
 
 def draw_selected_cell(frame, workspace, selected):
-    if selected is None:
+    # Zero is a valid firmware calibration coordinate, but it is not a camera
+    # cell and therefore has no polygon to draw.
+    if selected is None or 0 in selected:
         return
     polygon = np.asarray(
         workspace.cell_polygon(*selected, frame.shape[1::-1]),
@@ -130,7 +137,9 @@ def draw_build_panel(frame, controller, port_name, message, camera_state,
     elif building:
         state = "BUILDING — SERIAL INPUT LOCKED"
     elif controller.selected is not None:
-        state = "SELECTED — PRESS b OR ENTER TO CONFIRM"
+        state = ("CALIBRATION TARGET — PRESS b OR ENTER TO CONFIRM"
+                 if 0 in controller.selected else
+                 "SELECTED — PRESS b OR ENTER TO CONFIRM")
     else:
         state = "READY — CLICK A CALIBRATED CELL"
 
@@ -292,6 +301,15 @@ def main():
         "show_grid": True,
         "message": "connected; click a grid cell",
     }
+    if args.build_target is not None:
+        try:
+            controller.select(tuple(args.build_target))
+        except BuildStateError as exc:
+            print(f"Invalid --build-target: {exc}", file=sys.stderr)
+            rig.close()
+            return 1
+        ui["message"] = (f"calibration target [{args.build_target[0]},"
+                          f"{args.build_target[1]}] selected; confirm command")
 
     def on_mouse(event, x, y, _flags, state):
         point = (x / args.display_scale, y / args.display_scale)

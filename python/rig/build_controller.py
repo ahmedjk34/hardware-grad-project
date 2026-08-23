@@ -17,7 +17,7 @@ class BuildStateError(RuntimeError):
 
 @dataclass
 class BuildController:
-    """Turn a camera-grid cell selection into one explicitly confirmed build.
+    """Turn a camera-grid cell or calibration target into one confirmed build.
 
     The controller deliberately knows nothing about OpenCV. It enforces the
     pieces that must remain true whichever UI calls it: levels cannot be
@@ -53,9 +53,10 @@ class BuildController:
         if self.locked:
             raise BuildStateError(self.locked_reason)
         col, row = (int(value) for value in cell)
-        if not self.rig.grid.contains(col, row):
+        if not self.rig.grid.contains_build_target(col, row):
             raise BuildStateError(
-                f"cell [{col},{row}] is outside {self.rig.grid.cols}x{self.rig.grid.rows}"
+                f"build target [{col},{row}] is outside 0..{self.rig.grid.cols} x "
+                f"0..{self.rig.grid.rows}"
             )
         self.selected = col, row
 

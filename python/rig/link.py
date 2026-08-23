@@ -7,6 +7,7 @@
     rig.connect()               # opens the port, waits out the reboot banner
     rig.send("5")               # fire and forget, like the console does
     rig.build(3, 5, 0)          # blocks, returns 'placed'/'rejected'/'aborted'
+    rig.build(0, 5, 0)          # calibration: target Y only
 
 `rig_console.py` is a thin wrapper around the first three lines. Anything that
 needs to KNOW whether a command worked — the camera viewer, next — uses the
@@ -605,6 +606,18 @@ class Rig:
         timeout therefore means something outside the firmware's model went
         wrong, which is also a go-and-look, not a retry.
         """
+        try:
+            col, row, level = int(col), int(row), int(level)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("build coordinates and level must be integers") from exc
+        if not self.grid.contains_build_target(col, row):
+            raise ValueError(
+                f"build target [{col},{row}] is outside 0..{self.cols} x "
+                f"0..{self.rows}"
+            )
+        if level < 0:
+            raise ValueError("build level cannot be negative")
+
         command = f"B {col} {row} {level}"
         if rotation:
             command += f" {rotation.upper()}"

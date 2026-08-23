@@ -58,6 +58,18 @@ try:
 except BuildStateError:
     check("locked controller refuses retry", True)
 
+calibration_controller = BuildController(FakeRig([]), level=2, rotation="R")
+calibration_controller.select((0, 5))
+check("zero X calibration target is valid",
+      calibration_controller.command == "B 0 5 2 R")
+calibration_controller.set_rotation("NR")
+calibration_controller.select((17, 0))
+check("zero Y calibration target is valid",
+      calibration_controller.command == "B 17 0 2")
+calibration_controller.select((0, 0))
+check("zero-zero no-op target is valid",
+      calibration_controller.command == "B 0 0 2")
+
 rig = FakeRig([RigError("cable lost")])
 controller = BuildController(rig)
 controller.select((1, 1))

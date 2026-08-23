@@ -111,6 +111,14 @@ check("from_config matches rig.json", from_cfg.matches(), from_cfg.describe())
 check("bounds are 1-based, like cellInRange()",
       from_cfg.contains(1, 1) and not from_cfg.contains(0, 1)
       and from_cfg.contains(17, 5) and not from_cfg.contains(18, 5))
+check("build target allows zero on either axis",
+      from_cfg.contains_build_target(0, 5)
+      and from_cfg.contains_build_target(17, 0)
+      and from_cfg.contains_build_target(0, 0))
+check("build target still rejects negative/outside coordinates",
+      not from_cfg.contains_build_target(-1, 1)
+      and not from_cfg.contains_build_target(18, 0)
+      and not from_cfg.contains_build_target(0, 6))
 check("physical grid is 34x37.5 cm",
       (from_cfg.packed_width_cm, from_cfg.packed_height_cm) == (34.0, 37.5))
 check("packed grid is centred in 34x40 cm",

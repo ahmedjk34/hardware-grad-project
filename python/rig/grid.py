@@ -6,6 +6,7 @@
     grid = MachineGrid.from_config()     # 17 cols x 5 rows, from config/rig.json
     grid.cell_at(0, 4)                   # image cell (left, bottom) -> (1, 1)
     grid.image_cell(3, 5)                # (col, row) -> the image cell to draw in
+    grid.contains_build_target(0, 5)     # calibration target: skip X
     print(grid.ascii_map())              # the same picture the rig's '9' prints
 
 Two different grids, and only one of them is real
@@ -221,8 +222,18 @@ class MachineGrid:
         return ix, iy
 
     def contains(self, col: int, row: int) -> bool:
-        """The same bounds check `cellInRange()` does on the board."""
+        """Whether ``[col,row]`` is a real drawable/selectable grid cell."""
         return 1 <= col <= self.cols and 1 <= row <= self.rows
+
+    def contains_build_target(self, col: int, row: int) -> bool:
+        """Whether coordinates are valid for the firmware's ``B`` command.
+
+        ``B`` reserves zero independently on each axis for calibration:
+        ``B 0 5`` skips X, ``B 17 0`` skips Y, and ``B 0 0`` is a no-op.
+        This is deliberately separate from :meth:`contains`, because zero is
+        never a camera cell and must not enter image-cell geometry.
+        """
+        return 0 <= col <= self.cols and 0 <= row <= self.rows
 
     # --- reporting --------------------------------------------------------
 

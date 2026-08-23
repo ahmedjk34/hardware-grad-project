@@ -8,7 +8,11 @@ The grid opens immediately as an amber, full-frame APPROXIMATION so it is
 visible even before calibration. Press ``c`` and click the four complete
 machine-envelope corners in the prompted order to make it real. The resulting
 four-corner map is saved to ``config/workspace_map.json`` and reloaded on the
-next run. A changed lens/framing setup or changed grid JSON invalidates that map
+next run. Camera cells remain strictly 1-based: zero is not an image cell.
+The firmware's separate build-target convention (zero on either axis for
+calibration, including the ``B 0 0`` no-op) is exposed by
+``rig_build_v1.py --build-target COL ROW`` and is never invented by a camera
+click. A changed lens/framing setup or changed grid JSON invalidates that map
 instead of silently drawing an old calibration.
 
 Keys
@@ -195,9 +199,10 @@ def draw_machine_grid(frame, workspace, grid, hover_point, calibrated):
         lines = [
             f"CELL [{cell[0]},{cell[1]}]",
             f"centre X {x_cm:.2f} cm  Y {y_cm:.2f} cm",
-            f"command: G {cell[0]} {cell[1]}",
+            f"camera cell: G {cell[0]} {cell[1]}",
+            f"build cell: B {cell[0]} {cell[1]} <level>",
         ]
-        width = min(270, frame.shape[1] - 8)
+        width = min(400, frame.shape[1] - 8)
         draw_info_box(frame, lines,
                       origin=(max(4, frame.shape[1] - width - 4),
                               max(4, frame.shape[0] - 70)),
@@ -224,6 +229,7 @@ def draw_grid_status(frame, grid, calibrated, rejection, correction_enabled):
         reason,
         correction,
         "keys: c calibrate | x cancel | g grid | s save | q quit",
+        "build calibration: rig_build_v1.py --build-target COL ROW",
     ]
     width = min(470, frame.shape[1] - 8)
     draw_info_box(frame, lines,
