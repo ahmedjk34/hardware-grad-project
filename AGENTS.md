@@ -71,12 +71,13 @@ Current default: **22 columns × 5 rows = 110 cells**.
 | signed placement correction | `rig.json` → `grid.trim_x_cm` / `trim_y_cm` | `GRID_TRIM_X_CM` / `GRID_TRIM_Y_CM` |
 
 The tape-measured physical calibration is **34 cm X = 5050 steps** and **40
-cm Y = 7500 steps**, giving approximately **148.5294 X steps/cm** and
-**187.5 physical Y steps/cm**. The live firmware currently applies a
-**8100-step software cap on Y**, 600 steps above that recorded calibration,
-so verify the extra travel physically before motion testing. Its active Y
-mapping is **8100 / 40 = 202.5 steps/cm**. Cells are **2 cm X × 7.5 cm Y**, in
-that one orientation only.
+cm Y = 7500 steps**, giving approximately **148.5294 physical X steps/cm**
+and **187.5 physical Y steps/cm**. The live firmware currently applies a
+**4750-step software cap on X** and an **8275-step software cap on Y**. Its
+active mappings are **4750 / 34 = 139.7059 X steps/cm** and **8275 / 40 =
+206.875 Y steps/cm**. The Y cap is 775 steps above its recorded calibration,
+so verify the extra travel physically before motion testing. Cells are **2 cm
+X × 7.5 cm Y**, in that one orientation only.
 The 17×5 packed grid is 34×37.5 cm, filling X and leaving 1.25 cm at each Y
 edge before trims.
 
@@ -271,7 +272,7 @@ so a copy in the JSON would be a lie that nobody notices until the rig crashes
 into something.
 
 - physical envelope step counts: `5050 × 7500` steps, and the firmware-only
-  software caps (`X = 5050`, current `Y = 8100`)
+  software caps (`X = 4750`, current `Y = 8275`)
 - `Z_TRAVEL_CM`, `Z_TRAVEL_STEPS`, `BLOCK_HEIGHT_CM`, build ceiling
 - pin assignments, servo angles, motor direction polarity
 

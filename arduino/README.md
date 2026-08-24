@@ -33,12 +33,13 @@ rig prints it on boot and on `?`.
 
 The live sketch keeps the tape-measured `34 cm × 40 cm` physical X/Y span in
 centimetres, then applies the firmware's software caps at runtime. The current
-caps are `5050` X steps and `8100` Y steps. The recorded measured Y span is
-approximately `7500` physical steps, so verify the extra 600 Y steps on the
+caps are `4750` X steps and `8275` Y steps. The recorded measured X span is
+approximately `5050` physical steps, and the recorded measured Y span is
+approximately `7500` physical steps, so verify the extra 775 Y steps on the
 rig before motion testing:
 
-- X: `5050 / 34 = 148.5294 steps/cm`
-- Y: `8100 / 40 = 202.5 active steps/cm`
+- X: `4750 / 34 = 139.7059 active steps/cm`
+- Y: `8275 / 40 = 206.875 active steps/cm`
 
 The supported block orientation is `2 cm` along X and `7.5 cm` along Y. A
 `17 × 5` grid fits: its `34 × 37.5 cm` footprint fills X and is centred along

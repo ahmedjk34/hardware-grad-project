@@ -117,11 +117,11 @@ calibration state, cell details, FPS, and controls are in the separate Tk dashbo
 
 The JSON deliberately does not duplicate the firmware's motor step limits.
 The physical calibration span is `5050×7500` steps, while the live firmware's
-current Y software cap is `8100` steps—600 above the recorded Y calibration.
-Verify that extra travel on the physical rig before motion testing. The Pi
-maps pixels through centimetres to a logical cell; the Arduino remains the
-only authority that converts the selected cell to step pulses and enforces
-that cap.
+software caps are `4750` X steps and `8275` Y steps. The Y cap is 775 above
+the recorded Y calibration; verify that extra travel on the physical rig
+before motion testing. The Pi maps pixels through centimetres to a logical
+cell; the Arduino remains the only authority that converts the selected cell
+to step pulses and enforces those caps.
 
 ---
 

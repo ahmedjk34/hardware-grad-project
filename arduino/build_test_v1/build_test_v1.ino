@@ -62,20 +62,20 @@
   Each axis travels AWAY from its own home switch. The two switches
   sit at OPPOSITE ends now, so the two axes no longer share a sign:
 
-      X switch at the X+ end  ->  X runs   0  ...  -5050   (soft limit)
-      Y switch at the Y- end  ->  Y runs   0  ...  +8100   (soft limit)
+      X switch at the X+ end  ->  X runs   0  ...  -4750   (soft limit)
+      Y switch at the Y- end  ->  Y runs   0  ...  +8275   (soft limit)
       Z switch at the Z- end  ->  Z runs   0  ...  +1350   (TOP SWITCH)
 
-  The current software-safe envelope is 5050 x 8100 steps. The tape-measured
+  The current software-safe envelope is 4750 x 8275 steps. The tape-measured
   physical span is about 34 x 40 cm (5050 x 7500 physical steps), so the Y
   software cap now extends 300 steps beyond that recorded calibration. The
-  active rectangle is X in [-5050, 0], Y in [0, +8100]. Grid
+  active rectangle is X in [-4750, 0], Y in [0, +8275]. Grid
   indices hide this sign mess:
 
       col 1  = nearest the X switch (X = 0 side, the X+ end)
-      col N  = far end of X travel  (X = -5050 side)
+      col N  = far end of X travel  (X = -4750 side)
       row 1  = nearest the Y switch (Y = 0 side)
-      row M  = far end of Y travel  (Y = +8100 side)
+      row M  = far end of Y travel  (Y = +8275 side)
 
   Generalised in code as: each axis extends from 0 in the direction
   travelEndOf(axis), for axisTravelOf(axis) steps - whether that far
@@ -464,12 +464,12 @@ const uint8_t LIMIT_CHECK_EVERY_N_STEPS = 1;
 
 const long SOFT_LIMIT_INFINITE = 0; // sentinel: no cap at all
 
-long SOFT_LIMIT_X_TRAVEL = 5050;                      // X- travel cap, in steps
-long SOFT_LIMIT_Y_TRAVEL = 8100;                      // Y+ travel cap, in steps
+long SOFT_LIMIT_X_TRAVEL = 4750;                      // X- travel cap, in steps
+long SOFT_LIMIT_Y_TRAVEL = 8275;                      // Y+ travel cap, in steps
 const long SOFT_LIMIT_Z_TRAVEL = SOFT_LIMIT_INFINITE; // Z: switch, not a cap
 
 // Tape-measured physical span from each home switch. X currently uses its
-// full measured span; the current Y software cap is 600 steps above the
+// full measured span; the current Y software cap is 775 steps above the
 // recorded 7500-step calibration. The active step/cm ratio derives from the
 // configured cap and this physical span below.
 float X_TRAVEL_CM = 34.0;

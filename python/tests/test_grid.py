@@ -171,8 +171,11 @@ for name, expected in paired_values.items():
 # rig.json, but the desktop check should still make an accidental change
 # of the live Y cap visible before flashing.
 y_soft_limit = firmware_number("SOFT_LIMIT_Y_TRAVEL")
-check("live Y software limit is 8100 steps", y_soft_limit == 8100,
+check("live Y software limit is 8275 steps", y_soft_limit == 8275,
       f"firmware {y_soft_limit}")
+x_soft_limit = firmware_number("SOFT_LIMIT_X_TRAVEL")
+check("live X software limit is 4750 steps", x_soft_limit == 4750,
+      f"firmware {x_soft_limit}")
 
 try:
     MachineGrid(cols=22, rows=5, origin="middle")
