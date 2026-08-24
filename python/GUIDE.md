@@ -115,9 +115,13 @@ invalidates the old map and returns to the amber approximation.
 The camera image contains only the camera, grid, and block visualization;
 calibration state, cell details, FPS, and controls are in the separate Tk dashboard.
 
-The JSON deliberately does not duplicate `5050×7500` motor safety limits. The
-Pi maps pixels through centimetres to a logical cell; the Arduino remains the
-only authority that converts the selected cell to step pulses.
+The JSON deliberately does not duplicate the firmware's motor step limits.
+The physical calibration span is `5050×7500` steps, while the live firmware's
+current Y software cap is `8100` steps—600 above the recorded Y calibration.
+Verify that extra travel on the physical rig before motion testing. The Pi
+maps pixels through centimetres to a logical cell; the Arduino remains the
+only authority that converts the selected cell to step pulses and enforces
+that cap.
 
 ---
 

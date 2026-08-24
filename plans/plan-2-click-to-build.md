@@ -135,10 +135,16 @@ unused edge strips rather than stretching the packed block cells over them.
 
 **Why four clicks instead of arithmetic.** The camera's rotation and mirroring
 relative to the rig is arbitrary, and the machine's axes run in opposite
-directions (`X` from 0 to −5050, `Y` from 0 to +7500). Those spans are
-calibrated as 34 cm × 40 cm; the packed 2 cm × 7.5 cm cells occupy 34 cm ×
+directions (`X` from 0 to −5050, `Y` from 0 to +8100 under the current
+software cap). The physical spans are calibrated as 34 cm × 40 cm, with the
+recorded Y calibration at 7500 steps; verify the extra 600 steps physically.
+The packed 2 cm ×
+7.5 cm cells occupy 34 cm ×
 37.5 cm and are centred along Y. Four clicked corners
-absorb all of that with no sign-juggling. It also means cell accuracy does not
+absorb all of that with no sign-juggling. The live firmware currently applies
+a Y software cap of `8100` steps for safety, so motion verification must stay
+within that cap after the extra travel is physically verified. It also means
+cell accuracy does not
 depend on the lens numbers being correct — and they are still estimates, not a
 calibration.
 

@@ -63,17 +63,19 @@
   sit at OPPOSITE ends now, so the two axes no longer share a sign:
 
       X switch at the X+ end  ->  X runs   0  ...  -5050   (soft limit)
-      Y switch at the Y- end  ->  Y runs   0  ...  +7500   (soft limit)
+      Y switch at the Y- end  ->  Y runs   0  ...  +8100   (soft limit)
       Z switch at the Z- end  ->  Z runs   0  ...  +1350   (TOP SWITCH)
 
-  So the work envelope is 5050 x 7500 steps = about 34 x 40 cm,
-  living in the rectangle X in [-5050, 0], Y in [0, +7500]. Grid
+  The current software-safe envelope is 5050 x 8100 steps. The tape-measured
+  physical span is about 34 x 40 cm (5050 x 7500 physical steps), so the Y
+  software cap now extends 300 steps beyond that recorded calibration. The
+  active rectangle is X in [-5050, 0], Y in [0, +8100]. Grid
   indices hide this sign mess:
 
       col 1  = nearest the X switch (X = 0 side, the X+ end)
       col N  = far end of X travel  (X = -5050 side)
       row 1  = nearest the Y switch (Y = 0 side)
-      row M  = far end of Y travel  (Y = +7500 side)
+      row M  = far end of Y travel  (Y = +8100 side)
 
   Generalised in code as: each axis extends from 0 in the direction
   travelEndOf(axis), for axisTravelOf(axis) steps - whether that far
@@ -442,7 +444,7 @@ const uint8_t LIMIT_CHECK_EVERY_N_STEPS = 1;
 // SECTION 6B - SOFTWARE LIMIT CONFIGURATION
 // ============================================================
 //
-// These numbers define the size of the grid envelope.
+// These numbers define the software-safe size of the grid envelope.
 //
 // ------------------------------------------------------------
 //   Z IS NOT HERE ANY MORE
@@ -463,12 +465,13 @@ const uint8_t LIMIT_CHECK_EVERY_N_STEPS = 1;
 const long SOFT_LIMIT_INFINITE = 0; // sentinel: no cap at all
 
 long SOFT_LIMIT_X_TRAVEL = 5050;                      // X- travel cap, in steps
-long SOFT_LIMIT_Y_TRAVEL = 7500;                      // Y+ travel cap, in steps
+long SOFT_LIMIT_Y_TRAVEL = 8100;                      // Y+ travel cap, in steps
 const long SOFT_LIMIT_Z_TRAVEL = SOFT_LIMIT_INFINITE; // Z: switch, not a cap
 
-// Tape-measured travel from each home switch to its software limit. These
-// pair with the step caps above; their ratio is the X/Y scale used everywhere
-// below. Re-measuring an axis is therefore a one-line calibration change.
+// Tape-measured physical span from each home switch. X currently uses its
+// full measured span; the current Y software cap is 600 steps above the
+// recorded 7500-step calibration. The active step/cm ratio derives from the
+// configured cap and this physical span below.
 float X_TRAVEL_CM = 34.0;
 float Y_TRAVEL_CM = 40.0;
 
@@ -1939,10 +1942,10 @@ bool goToOrigin()
 // GRID MATH
 // ============================================================
 
-// Envelope size and direction of travel for an axis. The grid only
-// ever covers X and Y, whose far ends are software limits, so this is
-// still the soft cap - taken through axisTravelOf so the two can
-// never drift apart.
+// Software-safe envelope size and direction of travel for an axis. The grid
+// only ever covers X and Y, whose far ends are software limits, so this is
+// still the soft cap - taken through axisTravelOf so the two can never drift
+// apart.
 long gridTravelOf(uint8_t axis)
 {
   return axisTravelOf(axis);
@@ -3495,15 +3498,17 @@ void printGridConfig()
 {
   Serial.println();
   Serial.println(F("--- GRID ---"));
-  Serial.print(F("Envelope : "));
+  Serial.print(F("Software cap: "));
   Serial.print(gridTravelOf(AXIS_X));
   Serial.print(F(" x "));
   Serial.print(gridTravelOf(AXIS_Y));
-  Serial.print(F(" steps  =  "));
+  Serial.println(F(" steps"));
+
+  Serial.print(F("Physical span: "));
   Serial.print(X_TRAVEL_CM, 2);
   Serial.print(F(" x "));
   Serial.print(Y_TRAVEL_CM, 2);
-  Serial.println(F(" cm"));
+  Serial.println(F(" cm (tape measured)"));
 
   Serial.print(F("Scale    : X "));
   Serial.print(xyStepsPerCmOf(AXIS_X), 4);

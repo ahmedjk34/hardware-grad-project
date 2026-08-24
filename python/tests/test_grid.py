@@ -167,6 +167,13 @@ for name, expected in paired_values.items():
     check(f"firmware/config pair {name}", actual == expected,
           f"firmware {actual}, JSON {expected}")
 
+# This is a firmware-only safety setting. It must not be copied into
+# rig.json, but the desktop check should still make an accidental change
+# of the live Y cap visible before flashing.
+y_soft_limit = firmware_number("SOFT_LIMIT_Y_TRAVEL")
+check("live Y software limit is 8100 steps", y_soft_limit == 8100,
+      f"firmware {y_soft_limit}")
+
 try:
     MachineGrid(cols=22, rows=5, origin="middle")
     check("bad origin is refused", False)
