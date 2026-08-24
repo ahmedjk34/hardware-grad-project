@@ -5,21 +5,15 @@ This uses exactly the same saved camera settings, correction, framing and block
 detection as ``camera_feed.py``. Grid geometry comes from ``config/rig.json``.
 
 The grid opens immediately as an amber, full-frame APPROXIMATION so it is
-visible even before calibration. Press ``c`` and click, in order, the outer
-corner of the ``[0,0]`` home cell through the outer corner of the
-``[last-col,last-row]`` cell (see ``rig.workspace.CORNER_NAMES``) to make it
-real. The resulting four-corner map is saved to ``config/workspace_map.json``
-and reloaded on the next run.
+visible even before calibration. Press ``c`` and click the four real holder-
+motion corners named by ``rig.workspace.CORNER_NAMES``. The resulting map is
+saved to ``config/workspace_map.json`` and reloaded on the next run.
 
-The drawn and clickable grid is ``(cols+1) x (rows+1)``: ``[0,0]`` is the
-machine's home/origin - a real, block-sized build site, not a point - and
-``[col,0]``/``[0,row]`` are the axis-only lanes either side of it, matching
-what ``B``/``G`` already do with a 0 on one axis (leave that axis at the
-origin; ``G 0 0`` is the home command, ``B 0 0`` is an inert no-op). None of
-this is a renumbering of the packed grid: ``[1,1]`` is still the first real
-block cell, exactly one cell-pitch in from ``[0,0]`` on both axes. A changed
-lens/framing setup or changed grid JSON invalidates the saved map instead of
-silently drawing an old calibration.
+Coordinates span col ``0..9`` and row ``0..5``. ``[0,0]`` is holder home;
+``[col,0]``/``[0,row]`` are axis-only targets. Positive cells are separated
+2.2x7.5 cm block footprints: each starts after a 0.5 cm gap and repeats at
+2.7x8.0 cm pitch. A changed lens/framing setup or changed grid JSON invalidates
+the saved map instead of silently drawing old geometry.
 
 Keys
 ----
@@ -166,16 +160,15 @@ def _pixel(point):
 def _grid_geometry(workspace, image_size):
     """Cache static projected grid geometry; only hover changes per frame.
 
-    Every cm value here MUST come from ``workspace.mapped_grid``, never from
-    a separately-loaded ``MachineGrid`` - that one lacks the one-cell-pitch
-    origin margin :meth:`WorkspaceMap.from_grid` reserves, and mixing the two
-    is exactly what makes the drawn grid drift out of alignment with itself.
+    Every cm value comes from ``workspace.mapped_grid`` so a loaded map uses
+    exactly the geometry embedded when its corners were clicked.
     """
     g = workspace.mapped_grid
     key = (
         image_size, tuple(workspace.corners), g.cols, g.rows,
-        g.cell_width_cm, g.cell_height_cm, g.workspace_width_cm,
-        g.workspace_height_cm, g.trim_x_cm, g.trim_y_cm,
+        g.block_width_cm, g.block_length_cm, g.gap_x_cm, g.gap_y_cm,
+        g.workspace_width_cm, g.workspace_height_cm,
+        g.trim_x_cm, g.trim_y_cm,
     )
     cached = _GRID_GEOMETRY_CACHE.get(key)
     if cached is not None:
@@ -188,17 +181,14 @@ def _grid_geometry(workspace, image_size):
         workspace.pixel_at(0.0, 1.0, image_size),
     ], dtype=np.float32).round().astype(np.int32)
 
+    # Draw the actual block rectangles. The space between them is the physical
+    # 0.5 cm gap; it is intentionally not swallowed into a pitch-sized cell.
     lines = []
-    for col_edge in range(g.cols + 1):
-        x_cm = g.x_start_cm + col_edge * g.cell_width_cm
-        p0 = _pixel(_point(workspace, g, x_cm, g.y_start_cm, image_size))
-        p1 = _pixel(_point(workspace, g, x_cm, g.y_end_cm, image_size))
-        lines.append((p0, p1))
-    for row_edge in range(g.rows + 1):
-        y_cm = g.y_start_cm + row_edge * g.cell_height_cm
-        p0 = _pixel(_point(workspace, g, g.x_start_cm, y_cm, image_size))
-        p1 = _pixel(_point(workspace, g, g.x_end_cm, y_cm, image_size))
-        lines.append((p0, p1))
+    for row in range(1, g.rows + 1):
+        for col in range(1, g.cols + 1):
+            polygon = [_pixel(point) for point in
+                       workspace.cell_polygon(col, row, image_size)]
+            lines.extend(zip(polygon, polygon[1:] + polygon[:1]))
 
     def _add_label(labels, text, x, y):
         (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.34, 1)
@@ -216,11 +206,9 @@ def _grid_geometry(workspace, image_size):
                 x, y = _pixel(_point(workspace, g, x_cm, y_cm, image_size))
                 _add_label(labels, f"{col},{row}", x, y)
 
-    # Axis-only lanes plus the [0,0] home cell: one block-sized cell-pitch
-    # beyond the packed grid's near edge on each axis, drawn and labelled
-    # exactly like every other cell. [col,0] leaves Y at the origin, [0,row]
-    # leaves X there - what B/G's axis-only convention means - and [0,0] is
-    # where both lanes meet: home, a real place blocks get picked up from.
+    # Axis-only targets are centred on the real zero axes. Their polygons may
+    # extend outside the holder-motion envelope rather than being shifted into
+    # a fabricated extra pitch.
     extra_polygons = []
     for axis, count, label_fmt in (("col", g.cols, "{},0"),
                                    ("row", g.rows, "0,{}")):
@@ -250,11 +238,9 @@ def _grid_geometry(workspace, image_size):
 def draw_machine_grid(frame, workspace, hover_point, calibrated, *, detail=False):
     """Draw cached static grid geometry and the dynamic hovered cell.
 
-    The drawn grid is (cols+1) x (rows+1): a normal 1-based cell wherever
-    both coordinates are positive, plus the axis-only lane cells and the
-    [0,0] home cell along the near edge - all the same size, colour and
-    label style, since a build site at [0,5] or [0,0] is exactly as real as
-    one at [3,5]. All geometry comes from ``workspace.mapped_grid``.
+    Positive cells are their actual separated block rectangles. Axis-only
+    target footprints are centred on row/col 0, and [0,0] marks holder home.
+    All geometry comes from ``workspace.mapped_grid``.
     """
     image_size = frame.shape[1::-1]
     envelope, lines, labels, extra_polygons = _grid_geometry(workspace, image_size)

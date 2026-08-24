@@ -12,6 +12,7 @@ check, and holding `map` next to a real `9` is the other half.
 
 import os
 from pathlib import Path
+import math
 import re
 import sys
 
@@ -33,15 +34,16 @@ def check(name, condition, detail=""):
 # The map, transcribed from printGrid() with GRID_COLS=4, GRID_ROWS=3
 # ------------------------------------------------------------------
 
-EXPECTED = """  # = machine   . = empty cell
-  (top row = far Y end, left col = X switch)
+EXPECTED = """  # = machine   . = positive cell   + = axis-only   H = home
+  (row/col 0 are real coordinates; positive cells are 1-based)
 
-  3 | . . . .
-  2 | . . . .
-  1 | . . . .
-    +--------
-     1 2 3 4 
-     ^ origin corner is bottom-left [1,1]"""
+  3 | + . . . .
+  2 | + . . . .
+  1 | + . . . .
+  0 | H + + + +
+    +----------
+     0 1 2 3 4
+     ^ [0,0] home; [col,0]/[0,row] are axis-only"""
 
 small = MachineGrid(cols=4, rows=3)
 check("ascii_map matches printGrid()", small.ascii_map() == EXPECTED)
@@ -51,11 +53,12 @@ if small.ascii_map() != EXPECTED:
 # The '#' marks the machine, and [1,1] is bottom-left — so it lands on the
 # LAST line of cells, not the first.
 marked = small.ascii_map(here=(1, 1)).splitlines()
-check("'#' at [1,1] is bottom-left", marked[5] == "  1 | # . . .", repr(marked[5]))
+check("'#' at [1,1] is bottom-left", marked[5] == "  1 | + # . . .", repr(marked[5]))
+check("home and axis-only row are explicit", marked[6] == "  0 | H + + + +")
 
 # Column numbers are last-digit-only, as the firmware does to keep alignment.
 wide = MachineGrid(cols=12, rows=2).ascii_map().splitlines()
-check("column numbers are c % 10", wide[-2].strip() == "1 2 3 4 5 6 7 8 9 0 1 2",
+check("column numbers are c % 10", wide[-2].strip() == "0 1 2 3 4 5 6 7 8 9 0 1 2",
       repr(wide[-2]))
 
 
@@ -63,7 +66,7 @@ check("column numbers are c % 10", wide[-2].strip() == "1 2 3 4 5 6 7 8 9 0 1 2"
 # The image mapping
 # ------------------------------------------------------------------
 
-g = MachineGrid(cols=22, rows=5)  # the real one
+g = MachineGrid(cols=22, rows=5)  # count-only orientation stress case
 check("divisions across/down", (g.nx, g.ny) == (22, 5), f"{g.nx}x{g.ny}")
 
 # Default orientation is the rig's own picture: [1,1] bottom-left.
@@ -110,21 +113,33 @@ from_cfg = MachineGrid.from_config(config)
 check("from_config matches rig.json", from_cfg.matches(), from_cfg.describe())
 check("bounds are 1-based, like cellInRange()",
       from_cfg.contains(1, 1) and not from_cfg.contains(0, 1)
-      and from_cfg.contains(17, 5) and not from_cfg.contains(18, 5))
+      and from_cfg.contains(9, 5) and not from_cfg.contains(10, 5))
 check("build target allows zero on either axis",
       from_cfg.contains_build_target(0, 5)
-      and from_cfg.contains_build_target(17, 0)
+      and from_cfg.contains_build_target(9, 0)
       and from_cfg.contains_build_target(0, 0))
 check("build target still rejects negative/outside coordinates",
       not from_cfg.contains_build_target(-1, 1)
-      and not from_cfg.contains_build_target(18, 0)
+      and not from_cfg.contains_build_target(10, 0)
       and not from_cfg.contains_build_target(0, 6))
-check("physical grid is 34x37.5 cm",
-      (from_cfg.packed_width_cm, from_cfg.packed_height_cm) == (34.0, 37.5))
-check("packed grid is centred in 34x40 cm",
-      (from_cfg.x_start_cm, from_cfg.y_start_cm) == (0.0, 1.25))
-check("first physical cell centre", from_cfg.cell_center_cm(1, 1) == (1.0, 5.0))
-check("last physical cell centre", from_cfg.cell_center_cm(17, 5) == (33.0, 35.0))
+check("block/internal-gap footprint is 23.8x39.5 cm",
+      math.isclose(from_cfg.packed_width_cm, 23.8)
+      and math.isclose(from_cfg.packed_height_cm, 39.5))
+check("home-to-far allocation is 24.3x40 cm",
+      math.isclose(from_cfg.allocation_width_cm, 24.3)
+      and math.isclose(from_cfg.allocation_height_cm, 40.0))
+check("full allocation starts at home",
+      math.isclose(from_cfg.x_allocation_start_cm, 0.0)
+      and math.isclose(from_cfg.y_allocation_start_cm, 0.0))
+check("first blocks begin after the 0.5 cm gaps",
+      math.isclose(from_cfg.x_start_cm, 0.5)
+      and math.isclose(from_cfg.y_start_cm, 0.5))
+check("first physical cell centre",
+      all(math.isclose(a, b) for a, b in
+          zip(from_cfg.cell_center_cm(1, 1), (1.6, 4.25))))
+check("last physical cell centre",
+      all(math.isclose(a, b) for a, b in
+          zip(from_cfg.cell_center_cm(9, 5), (23.2, 36.25))))
 
 # The Mega cannot read rig.json, so its safe manual-monitor defaults are baked
 # into the sketch. Keep this executable check beside the AGENTS.md pairing rule
@@ -148,8 +163,10 @@ paired_values = {
     "GRID_ROWS": from_cfg.rows,
     "X_TRAVEL_CM": from_cfg.workspace_width_cm,
     "Y_TRAVEL_CM": from_cfg.workspace_height_cm,
-    "GRID_CELL_X_CM": from_cfg.cell_width_cm,
-    "GRID_CELL_Y_CM": from_cfg.cell_height_cm,
+    "GRID_BLOCK_X_CM": from_cfg.block_width_cm,
+    "GRID_BLOCK_Y_CM": from_cfg.block_length_cm,
+    "GRID_GAP_X_CM": from_cfg.gap_x_cm,
+    "GRID_GAP_Y_CM": from_cfg.gap_y_cm,
     "GRID_TRIM_X_CM": from_cfg.trim_x_cm,
     "GRID_TRIM_Y_CM": from_cfg.trim_y_cm,
 }
@@ -202,20 +219,21 @@ check("workspace projective round-trip",
 check("workspace rejects outside click",
       workspace.cell_at((0, 0), (640, 480)) is None)
 
-# Physical mapping uses the four corners of the [0,0] home cell through the
-# last block cell: one cell-pitch of margin at the start (2 cm x, 7.5 cm y
-# for this 2x7.5 cm grid), none left over at the far end - so the mapped
-# workspace is 36x45 cm, not the declared 34x40 cm bed.
+# Physical mapping uses the real 24.3x40 cm holder-motion rectangle. Positive
+# blocks begin after the 0.5 cm home gaps and remain separated in the image.
 physical_workspace = WorkspaceMap.from_grid(from_cfg, corners, (640, 480))
 check("physical workspace matches grid JSON", physical_workspace.matches_grid(from_cfg))
-first_centre = physical_workspace.pixel_at(3.0 / 36.0, 11.25 / 45.0, (640, 480))
-last_centre = physical_workspace.pixel_at(35.0 / 36.0, 41.25 / 45.0, (640, 480))
+first_centre = physical_workspace.pixel_at(1.6 / 24.3, 4.25 / 40.0, (640, 480))
+last_centre = physical_workspace.pixel_at(23.2 / 24.3, 36.25 / 40.0, (640, 480))
 check("physical camera map finds first cell",
       physical_workspace.cell_at(first_centre, (640, 480)) == (1, 1))
 check("physical camera map finds last cell",
-      physical_workspace.cell_at(last_centre, (640, 480)) == (17, 5))
-check("physical camera map preserves unused margins",
+      physical_workspace.cell_at(last_centre, (640, 480)) == (9, 5))
+check("physical camera map preserves home gap",
       physical_workspace.cell_at(corners[0], (640, 480)) is None)
+gap_point = physical_workspace.pixel_at(2.95 / 24.3, 4.25 / 40.0, (640, 480))
+check("physical camera map preserves internal gap",
+      physical_workspace.cell_at(gap_point, (640, 480)) is None)
 
 # Normalized storage makes a simple resolution change harmless.
 double_corners = [(x * 2, y * 2) for x, y in corners]

@@ -250,8 +250,8 @@ class Rig:
         cfg = cfg if cfg is not None else load()
         self.port_name: str = cfg["serial"]["port"]
         self.baud: int = cfg["serial"]["baud"]
-        # One object validates both the logical counts and their physical
-        # 2.0 x 7.5 cm footprint before anything is sent to the machine.
+        # One object validates the 9x5 logical counts, 2.2x7.5 cm block
+        # footprints, 0.5 cm gaps and 24.3x40 cm displacement before S is sent.
         self.grid = MachineGrid.from_config(cfg)
         self.cols: int = self.grid.cols
         self.rows: int = self.grid.rows
@@ -600,7 +600,7 @@ class Rig:
         """`B <col> <row> <level>` — one full pick-and-place. Blocks until done.
 
         For calibration, firmware also accepts zero for either coordinate:
-        ``B 0 5`` skips X and ``B 17 0`` skips Y; ``B 0 0`` is an inert no-op.
+        ``B 0 5`` skips X and ``B 9 0`` skips Y; ``B 0 0`` is an inert no-op.
 
         Returns 'placed', 'rejected' or 'aborted'. **'aborted' means stop.**
         The claw may still be gripping a block somewhere unknown; the firmware

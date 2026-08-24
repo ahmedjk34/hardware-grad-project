@@ -66,10 +66,9 @@
       Y switch at the Y- end  ->  Y runs   0  ...  +8275   (soft limit)
       Z switch at the Z- end  ->  Z runs   0  ...  +1350   (TOP SWITCH)
 
-  The current software-safe envelope is 4750 x 8275 steps. The tape-measured
-  physical span is about 34 x 40 cm (5050 x 7500 physical steps), so the Y
-  software cap now extends 300 steps beyond that recorded calibration. The
-  active rectangle is X in [-4750, 0], Y in [0, +8275]. Grid
+  The current software-safe envelope is 4750 x 8275 steps. The measured
+  HOLDER displacement to those caps is 24.3 x 40 cm. The active rectangle is
+  X in [-4750, 0], Y in [0, +8275]. Grid
   indices hide this sign mess:
 
       col 1  = nearest the X switch (X = 0 side, the X+ end)
@@ -468,11 +467,14 @@ long SOFT_LIMIT_X_TRAVEL = 4750;                      // X- travel cap, in steps
 long SOFT_LIMIT_Y_TRAVEL = 8275;                      // Y+ travel cap, in steps
 const long SOFT_LIMIT_Z_TRAVEL = SOFT_LIMIT_INFINITE; // Z: switch, not a cap
 
-// Tape-measured physical span from each home switch. X currently uses its
-// full measured span; the current Y software cap is 775 steps above the
-// recorded 7500-step calibration. The active step/cm ratio derives from the
-// configured cap and this physical span below.
-float X_TRAVEL_CM = 34.0;
+// Measured HOLDER displacement from each home switch to the active software
+// cap. These are displacements between two holder reference positions, not
+// dimensions of the arm or block. The arm-holder offset is intentionally zero
+// for now, so it does not participate in either scale.
+//
+//   X scale = 4750 / 24.3 = 195.4733 steps/cm
+//   Y scale = 8275 / 40.0 = 206.8750 steps/cm
+float X_TRAVEL_CM = 24.3;
 float Y_TRAVEL_CM = 40.0;
 
 const int8_t SOFT_LIMIT_X_AT_END = DIR_NEG; // guards the X- end
@@ -495,15 +497,20 @@ const bool SOFT_LIMIT_VERBOSE = true;
 // SECTION 6C - GRID CONFIGURATION
 // ============================================================
 //
-// One cell is one block footprint in the only supported orientation:
-// 2.0 cm along X and 7.5 cm along Y. The largest whole-block grid that
-// fits in 34 x 40 cm is therefore 17 cols x 5 rows.
+// A block is 2.2 cm along X and 7.5 cm along Y. Blocks do NOT touch: every
+// positive cell is preceded by a 0.5 cm gap from the previous coordinate,
+// including the gap from coordinate 0 (home) to cell 1:
 //
-// The packed 34 x 37.5 cm grid is centred in the motion envelope. That
-// leaves no unused X edge and 1.25 cm at both Y edges. The signed
-// trims move the entire packed grid away from (+) or toward (-) its home
-// switch. They are deliberately in centimetres: the conversion to steps
-// follows X/Y calibration automatically, like the Z build margins do.
+//   X pitch = 2.2 + 0.5 = 2.7 cm; 9 * 2.7 = 24.3 cm
+//   Y pitch = 7.5 + 0.5 = 8.0 cm; 5 * 8.0 = 40.0 cm
+//
+// There is no trailing outer margin. Coordinate 0 is the home/axis-only
+// reference, not another block footprint inside this 24.3 x 40 cm span.
+// The complete coordinate ranges are therefore col 0..9 and row 0..5,
+// while the normal two-axis block grid is 9 cols x 5 rows.
+//
+// A smaller S-selected grid remains centred. The signed trims then move that
+// complete allocation away from (+) or toward (-) its home switch.
 //
 // Targets are computed as absolute physical cell centres and rounded only
 // once, so sub-step rounding error never accumulates between cells.
@@ -511,19 +518,21 @@ const bool SOFT_LIMIT_VERBOSE = true;
 // ------------------------------------------------------------
 //   HOW MANY CELLS FIT?
 // ------------------------------------------------------------
-//   Counts are limited by physical pitch, not merely by whether one
-//   arithmetic step remains. With zero trim the maxima are 17 x 5.
+//   Counts are limited by block-plus-gap pitch. With zero trim the maxima
+//   are 9 x 5.
 //   A non-zero trim consumes equal safety room at the opposite edge,
 //   so the maximum count may fall. Command S can choose a smaller
 //   centred grid but cannot squeeze cells or change their footprint.
 
-float GRID_CELL_X_CM = 2.0;
-float GRID_CELL_Y_CM = 7.5;
+float GRID_BLOCK_X_CM = 2.2;
+float GRID_BLOCK_Y_CM = 7.5;
+float GRID_GAP_X_CM = 0.5;
+float GRID_GAP_Y_CM = 0.5;
 
 float GRID_TRIM_X_CM = 0.0; // signed whole-grid correction along X
 float GRID_TRIM_Y_CM = 0.0; // signed whole-grid correction along Y
 
-long GRID_COLS = 17;
+long GRID_COLS = 9;
 long GRID_ROWS = 5;
 
 // The X/Y counters describe the GANTRY HOLDER, not necessarily the point where
@@ -1966,9 +1975,19 @@ float xyTravelCmOf(uint8_t axis)
   return (axis == AXIS_X) ? X_TRAVEL_CM : Y_TRAVEL_CM;
 }
 
-float gridCellCmOf(uint8_t axis)
+float gridBlockCmOf(uint8_t axis)
 {
-  return (axis == AXIS_X) ? GRID_CELL_X_CM : GRID_CELL_Y_CM;
+  return (axis == AXIS_X) ? GRID_BLOCK_X_CM : GRID_BLOCK_Y_CM;
+}
+
+float gridGapCmOf(uint8_t axis)
+{
+  return (axis == AXIS_X) ? GRID_GAP_X_CM : GRID_GAP_Y_CM;
+}
+
+float gridPitchCmOf(uint8_t axis)
+{
+  return gridBlockCmOf(axis) + gridGapCmOf(axis);
 }
 
 float gridTrimCmOf(uint8_t axis)
@@ -1982,37 +2001,61 @@ float xyStepsPerCmOf(uint8_t axis)
   return (travelCm > 0.0) ? (float)gridTravelOf(axis) / travelCm : 0.0;
 }
 
-float gridPackedCmOf(uint8_t axis, long count)
+// Complete controlled displacement from coordinate 0 to the far edge of the
+// final block. Every positive cell contributes one gap plus one block:
+//   X: 9 * (0.5 + 2.2) = 24.3 cm
+//   Y: 5 * (0.5 + 7.5) = 40.0 cm
+float gridAllocationCmOf(uint8_t axis, long count)
 {
-  return (float)count * gridCellCmOf(axis);
+  return (float)count * gridPitchCmOf(axis);
 }
 
-// The unused space is split equally, then the signed calibration trim shifts
-// the complete packed grid. Positive means away from the axis home switch.
-float gridStartCmOf(uint8_t axis, long count)
+// The positive-cell footprint excludes only the first home-to-cell-1 gap:
+//   N * block + (N - 1) * gap = N * pitch - gap.
+float gridBlockFootprintCmOf(uint8_t axis, long count)
 {
-  return (xyTravelCmOf(axis) - gridPackedCmOf(axis, count)) * 0.5 + gridTrimCmOf(axis);
+  if (count < 1)
+  {
+    return 0.0;
+  }
+  return (float)count * gridBlockCmOf(axis)
+       + (float)(count - 1) * gridGapCmOf(axis);
 }
 
-float gridEndCmOf(uint8_t axis, long count)
+// A smaller S-selected allocation is centred. Full 9x5 uses the complete
+// 24.3x40 displacement, so its allocation starts exactly at coordinate 0.
+float gridAllocationStartCmOf(uint8_t axis, long count)
 {
-  return gridStartCmOf(axis, count) + gridPackedCmOf(axis, count);
+  return (xyTravelCmOf(axis) - gridAllocationCmOf(axis, count)) * 0.5
+       + gridTrimCmOf(axis);
+}
+
+float gridBlockStartCmOf(uint8_t axis, long count)
+{
+  return gridAllocationStartCmOf(axis, count) + gridGapCmOf(axis);
+}
+
+float gridBlockEndCmOf(uint8_t axis, long count)
+{
+  return gridBlockStartCmOf(axis, count) + gridBlockFootprintCmOf(axis, count);
 }
 
 bool gridGeometryFits(uint8_t axis, long count)
 {
-  if (count < 1 || xyStepsPerCmOf(axis) <= 0.0 || gridCellCmOf(axis) <= 0.0)
+  if (count < 1 || xyStepsPerCmOf(axis) <= 0.0
+      || gridBlockCmOf(axis) <= 0.0 || gridGapCmOf(axis) < 0.0)
   {
     return false;
   }
   const float slack = 0.0001;
-  return gridStartCmOf(axis, count) >= -slack && gridEndCmOf(axis, count) <= xyTravelCmOf(axis) + slack;
+  return gridAllocationStartCmOf(axis, count) >= -slack
+      && gridBlockEndCmOf(axis, count) <= xyTravelCmOf(axis) + slack;
 }
 
 long gridCountMaxOf(uint8_t axis)
 {
   float available = xyTravelCmOf(axis) - 2.0 * fabs(gridTrimCmOf(axis));
-  float pitch = gridCellCmOf(axis);
+  float pitch = gridPitchCmOf(axis);
   if (available <= 0.0 || pitch <= 0.0)
   {
     return 0;
@@ -2020,13 +2063,17 @@ long gridCountMaxOf(uint8_t axis)
   return (long)floor((available + 0.0001) / pitch);
 }
 
-// Centre of fixed-pitch cell `index` (1-based), as a MAGNITUDE from
-// the origin and rounded once to the nearest whole step.
-//   centre_cm = centred_grid_start + (index - 0.5) * cell_pitch_cm
+// Centre of positive cell `index` (1-based), measured from coordinate 0:
+//   centre = allocation_start + gap + block/2 + (index - 1) * pitch
+// Full-grid examples: X1 = 0.5 + 2.2/2 = 1.6 cm;
+//                     Y1 = 0.5 + 7.5/2 = 4.25 cm.
 float cellCentreCmOf(uint8_t axis, long index)
 {
   long count = gridCountOf(axis);
-  return gridStartCmOf(axis, count) + ((float)index - 0.5) * gridCellCmOf(axis);
+  return gridAllocationStartCmOf(axis, count)
+       + gridGapCmOf(axis)
+       + gridBlockCmOf(axis) * 0.5
+       + ((float)index - 1.0) * gridPitchCmOf(axis);
 }
 
 float toolOffsetCmOf(uint8_t axis, int8_t rotation)
@@ -2070,15 +2117,16 @@ bool cellTargetPosition(uint8_t axis, long index, int8_t rotation,
   return true;
 }
 
-// Physical pitch converted through the per-axis calibration.
-float gridCellStepsOf(uint8_t axis)
+// Centre-to-centre pitch converted through the per-axis calibration.
+float gridPitchStepsOf(uint8_t axis)
 {
-  return gridCellCmOf(axis) * xyStepsPerCmOf(axis);
+  return gridPitchCmOf(axis) * xyStepsPerCmOf(axis);
 }
 
-// Which fixed-pitch cell a raw position falls in. The centred leftover strips
-// outside the packed block grid deliberately return 0.
-long positionToIndex(uint8_t axis, long pos)
+// Which physical block footprint the HOLDER/tool position falls in. Gaps and
+// centred leftover strips deliberately return 0. Adding the active tool offset
+// converts the holder counter back into the actual placement-centre frame.
+long positionToIndex(uint8_t axis, long pos, int8_t rotation)
 {
   long count = gridCountOf(axis);
   long mag = pos * (long)gridDirOf(axis); // distance from origin
@@ -2089,23 +2137,28 @@ long positionToIndex(uint8_t axis, long pos)
     return 0;
   }
 
-  float cm = (float)mag / scale;
-  float start = gridStartCmOf(axis, count);
-  float end = gridEndCmOf(axis, count);
+  float cm = (float)mag / scale + toolOffsetCmOf(axis, rotation);
+  float allocationStart = gridAllocationStartCmOf(axis, count);
+  float start = gridBlockStartCmOf(axis, count);
+  float end = gridBlockEndCmOf(axis, count);
   float halfStepCm = 0.5 / scale;
   if (cm < start - halfStepCm || cm > end + halfStepCm)
   {
     return 0;
   }
 
-  long idx = (long)floor((cm - start) / gridCellCmOf(axis)) + 1;
-  if (idx < 1)
+  float relative = cm - allocationStart;
+  float pitch = gridPitchCmOf(axis);
+  long idx = (long)ceil((relative - halfStepCm) / pitch);
+  if (idx < 1 || idx > count)
   {
-    idx = 1;
+    return 0;
   }
-  if (idx > count)
+  float withinSlot = relative - (float)(idx - 1) * pitch;
+  if (withinSlot < gridGapCmOf(axis) - halfStepCm
+      || withinSlot > pitch + halfStepCm)
   {
-    idx = count;
+    return 0;
   }
   return idx;
 }
@@ -2162,8 +2215,8 @@ void setGridSize(long cols, long rows)
   GRID_ROWS = rows;
 
   // Old cell numbers no longer mean the same thing.
-  curCol = positionToIndex(AXIS_X, axisPos[AXIS_X]);
-  curRow = positionToIndex(AXIS_Y, axisPos[AXIS_Y]);
+  curCol = positionToIndex(AXIS_X, axisPos[AXIS_X], clawRotation);
+  curRow = positionToIndex(AXIS_Y, axisPos[AXIS_Y], clawRotation);
 
   Serial.println(F("GRID RESIZED"));
   printGridConfig();
@@ -2268,8 +2321,8 @@ bool gotoCellForRotation(long col, long row, int8_t rotation)
     return true;
   }
 
-  curCol = positionToIndex(AXIS_X, axisPos[AXIS_X]);
-  curRow = positionToIndex(AXIS_Y, axisPos[AXIS_Y]);
+  curCol = positionToIndex(AXIS_X, axisPos[AXIS_X], clawRotation);
+  curRow = positionToIndex(AXIS_Y, axisPos[AXIS_Y], clawRotation);
   Serial.println(F("  MOVE INCOMPLETE - a limit stopped it short."));
   return false;
 }
@@ -3504,11 +3557,11 @@ void printGridConfig()
   Serial.print(gridTravelOf(AXIS_Y));
   Serial.println(F(" steps"));
 
-  Serial.print(F("Physical span: "));
+  Serial.print(F("Holder displacement: "));
   Serial.print(X_TRAVEL_CM, 2);
   Serial.print(F(" x "));
   Serial.print(Y_TRAVEL_CM, 2);
-  Serial.println(F(" cm (tape measured)"));
+  Serial.println(F(" cm (home -> software cap)"));
 
   Serial.print(F("Scale    : X "));
   Serial.print(xyStepsPerCmOf(AXIS_X), 4);
@@ -3516,11 +3569,23 @@ void printGridConfig()
   Serial.print(xyStepsPerCmOf(AXIS_Y), 4);
   Serial.println(F(" steps/cm"));
 
-  Serial.print(F("Block cell: "));
-  Serial.print(GRID_CELL_X_CM, 2);
+  Serial.print(F("Block size: "));
+  Serial.print(GRID_BLOCK_X_CM, 2);
   Serial.print(F(" x "));
-  Serial.print(GRID_CELL_Y_CM, 2);
+  Serial.print(GRID_BLOCK_Y_CM, 2);
   Serial.println(F(" cm  (X x Y, one orientation)"));
+
+  Serial.print(F("Gap       : "));
+  Serial.print(GRID_GAP_X_CM, 2);
+  Serial.print(F(" x "));
+  Serial.print(GRID_GAP_Y_CM, 2);
+  Serial.println(F(" cm  (before every positive cell)"));
+
+  Serial.print(F("Pitch     : "));
+  Serial.print(gridPitchCmOf(AXIS_X), 2);
+  Serial.print(F(" x "));
+  Serial.print(gridPitchCmOf(AXIS_Y), 2);
+  Serial.println(F(" cm  (block + gap)"));
 
   Serial.print(F("Division : "));
   Serial.print(GRID_COLS);
@@ -3528,19 +3593,43 @@ void printGridConfig()
   Serial.print(GRID_ROWS);
   Serial.print(F(" rows  = "));
   Serial.print(GRID_COLS * GRID_ROWS);
-  Serial.println(F(" cells"));
+  Serial.println(F(" positive cells"));
 
-  Serial.print(F("Packed grid: "));
-  Serial.print(gridPackedCmOf(AXIS_X, GRID_COLS), 2);
+  Serial.print(F("Coordinates: col 0.."));
+  Serial.print(GRID_COLS);
+  Serial.print(F(" / row 0.."));
+  Serial.print(GRID_ROWS);
+  Serial.println(F("  (0 = home/axis-only)"));
+
+  Serial.print(F("Block footprint: "));
+  Serial.print(gridBlockFootprintCmOf(AXIS_X, GRID_COLS), 2);
   Serial.print(F(" x "));
-  Serial.print(gridPackedCmOf(AXIS_Y, GRID_ROWS), 2);
-  Serial.println(F(" cm, centred before trim"));
+  Serial.print(gridBlockFootprintCmOf(AXIS_Y, GRID_ROWS), 2);
+  Serial.println(F(" cm  (blocks + internal gaps)"));
 
-  Serial.print(F("Origin edge: X "));
-  Serial.print(gridStartCmOf(AXIS_X, GRID_COLS), 3);
+  Serial.print(F("Home->far edge: "));
+  Serial.print(gridAllocationCmOf(AXIS_X, GRID_COLS), 2);
+  Serial.print(F(" x "));
+  Serial.print(gridAllocationCmOf(AXIS_Y, GRID_ROWS), 2);
+  Serial.println(F(" cm  (includes first 0-to-1 gap)"));
+
+  Serial.print(F("First block edge: X "));
+  Serial.print(gridBlockStartCmOf(AXIS_X, GRID_COLS), 3);
   Serial.print(F(" cm / Y "));
-  Serial.print(gridStartCmOf(AXIS_Y, GRID_ROWS), 3);
+  Serial.print(gridBlockStartCmOf(AXIS_Y, GRID_ROWS), 3);
   Serial.println(F(" cm from home switches"));
+
+  Serial.print(F("First centre: X "));
+  Serial.print(cellCentreCmOf(AXIS_X, 1), 3);
+  Serial.print(F(" cm / Y "));
+  Serial.print(cellCentreCmOf(AXIS_Y, 1), 3);
+  Serial.println(F(" cm"));
+
+  Serial.print(F("Last centre : X "));
+  Serial.print(cellCentreCmOf(AXIS_X, GRID_COLS), 3);
+  Serial.print(F(" cm / Y "));
+  Serial.print(cellCentreCmOf(AXIS_Y, GRID_ROWS), 3);
+  Serial.println(F(" cm"));
 
   Serial.print(F("Grid trims : X "));
   Serial.print(GRID_TRIM_X_CM, 3);
@@ -3548,10 +3637,10 @@ void printGridConfig()
   Serial.print(GRID_TRIM_Y_CM, 3);
   Serial.println(F(" cm  (+ away from home)"));
 
-  Serial.print(F("Cell steps : ~"));
-  Serial.print(gridCellStepsOf(AXIS_X), 2);
+  Serial.print(F("Pitch steps: ~"));
+  Serial.print(gridPitchStepsOf(AXIS_X), 2);
   Serial.print(F(" x "));
-  Serial.print(gridCellStepsOf(AXIS_Y), 2);
+  Serial.print(gridPitchStepsOf(AXIS_Y), 2);
   Serial.println(F(" steps (X x Y)"));
 
   Serial.println(F("col 1 = X switch side, row 1 = Y switch side"));
@@ -3578,8 +3667,12 @@ void printGridConfig()
 // full report, so the two can never disagree.
 void printGridPosition()
 {
-  long liveCol = positionToIndex(AXIS_X, axisPos[AXIS_X]);
-  long liveRow = positionToIndex(AXIS_Y, axisPos[AXIS_Y]);
+  long liveCol = positionToIndex(AXIS_X, axisPos[AXIS_X], clawRotation);
+  long liveRow = positionToIndex(AXIS_Y, axisPos[AXIS_Y], clawRotation);
+  if (axisPos[AXIS_X] != 0 && liveCol == 0)
+    liveCol = -1; // physically in a gap/outside, not on the col-0 axis
+  if (axisPos[AXIS_Y] != 0 && liveRow == 0)
+    liveRow = -1; // physically in a gap/outside, not on the row-0 axis
 
   Serial.print(F("Machine pos : X "));
   Serial.print(axisPos[AXIS_X]);
@@ -3591,9 +3684,13 @@ void printGridPosition()
   {
     Serial.println(F("UNKNOWN - not homed yet (send 0)"));
   }
-  else if (liveCol == 0 || liveRow == 0)
+  else if (liveCol < 0 || liveRow < 0)
   {
-    Serial.println(F("outside the grid envelope"));
+    Serial.println(F("between block footprints / outside positive grid"));
+  }
+  else if (liveCol == 0 && liveRow == 0)
+  {
+    Serial.println(F("[0,0] HOME"));
   }
   else
   {
@@ -3601,7 +3698,12 @@ void printGridPosition()
     Serial.print(liveCol);
     Serial.print(F(","));
     Serial.print(liveRow);
-    Serial.println(F("]"));
+    Serial.print(F("]"));
+    if (liveCol == 0 || liveRow == 0)
+    {
+      Serial.print(F(" axis-only"));
+    }
+    Serial.println();
   }
 
   Serial.print(F("Last commanded cell: "));
@@ -3734,8 +3836,12 @@ void printGrid()
   printGridConfig();
   printGridPosition();
 
-  long liveCol = positionToIndex(AXIS_X, axisPos[AXIS_X]);
-  long liveRow = positionToIndex(AXIS_Y, axisPos[AXIS_Y]);
+  long liveCol = positionToIndex(AXIS_X, axisPos[AXIS_X], clawRotation);
+  long liveRow = positionToIndex(AXIS_Y, axisPos[AXIS_Y], clawRotation);
+  if (axisPos[AXIS_X] != 0 && liveCol == 0)
+    liveCol = -1;
+  if (axisPos[AXIS_Y] != 0 && liveRow == 0)
+    liveRow = -1;
 
   if (GRID_COLS > GRID_MAP_MAX_COLS || GRID_ROWS > GRID_MAP_MAX_ROWS)
   {
@@ -3750,11 +3856,11 @@ void printGrid()
   }
 
   Serial.println();
-  Serial.println(F("  # = machine   . = empty cell"));
-  Serial.println(F("  (top row = far Y end, left col = X switch)"));
+  Serial.println(F("  # = machine   . = positive cell   + = axis-only   H = home"));
+  Serial.println(F("  (row/col 0 are real coordinates; positive cells are 1-based)"));
   Serial.println();
 
-  for (long r = GRID_ROWS; r >= 1; r--)
+  for (long r = GRID_ROWS; r >= 0; r--)
   {
     // Right-aligned row label, 3 wide.
     if (r < 100)
@@ -3764,11 +3870,19 @@ void printGrid()
     Serial.print(r);
     Serial.print(F(" |"));
 
-    for (long c = 1; c <= GRID_COLS; c++)
+    for (long c = 0; c <= GRID_COLS; c++)
     {
       if (c == liveCol && r == liveRow && axisHomed[AXIS_X] && axisHomed[AXIS_Y])
       {
         Serial.print(F(" #"));
+      }
+      else if (c == 0 && r == 0)
+      {
+        Serial.print(F(" H"));
+      }
+      else if (c == 0 || r == 0)
+      {
+        Serial.print(F(" +"));
       }
       else
       {
@@ -3780,7 +3894,7 @@ void printGrid()
 
   // Bottom rule.
   Serial.print(F("    +"));
-  for (long c = 1; c <= GRID_COLS; c++)
+  for (long c = 0; c <= GRID_COLS; c++)
   {
     Serial.print(F("--"));
   }
@@ -3788,13 +3902,14 @@ void printGrid()
 
   // Column numbers, last digit only (keeps the map aligned).
   Serial.print(F("     "));
-  for (long c = 1; c <= GRID_COLS; c++)
+  for (long c = 0; c <= GRID_COLS; c++)
   {
     Serial.print(c % 10);
-    Serial.print(F(" "));
+    if (c < GRID_COLS)
+      Serial.print(F(" "));
   }
   Serial.println();
-  Serial.println(F("     ^ origin corner is bottom-left [1,1]"));
+  Serial.println(F("     ^ [0,0] home; [col,0]/[0,row] are axis-only"));
   Serial.println(F("======================================"));
 }
 

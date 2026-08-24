@@ -112,7 +112,7 @@ instead of you reading the screen to find out.
 **Implemented in `camera/gridded_camera_feed.py`.**
 
 The viewer draws an 8×8 straightness ruler over the image. The rig thinks in a
-17×5 fixed-pitch block grid.
+9×5 positive block grid with explicit coordinate-zero axes and 0.5 cm gaps.
 These are unrelated, which is the core mismatch to fix.
 
 The gridded canonical feed draws the grid from `config/rig.json` and labels the
@@ -127,25 +127,19 @@ cells with the machine col/row.
 **Calibration and hover mapping implemented; sending `G` remains a deliberate
 manual verification step.**
 
-Click the four corners of the complete 34×40 cm machine envelope once, in a
+Click the four corners of the complete 24.3×40 cm holder envelope once, in a
 prompted order. Save them to `config/workspace_map.json`. From those four
-points, compute the mapping from any image pixel through physical centimetres
-to a machine cell. The mapping must preserve the centred 0.5 cm X and 1.25 cm Y
-unused edge strips rather than stretching the packed block cells over them.
+points, compute the mapping from image pixel through physical centimetres to a
+machine cell. It must preserve every 0.5 cm inter-cell gap instead of drawing
+touching pitch-sized rectangles.
 
 **Why four clicks instead of arithmetic.** The camera's rotation and mirroring
 relative to the rig is arbitrary, and the machine's axes run in opposite
-directions (`X` from 0 to −4750, `Y` from 0 to +8275 under the current
-software caps). The physical spans are calibrated as 34 cm × 40 cm, with the
-recorded X calibration at 5050 steps and the
-recorded Y calibration at 7500 steps; verify the extra 775 steps physically.
-The packed 2 cm ×
-7.5 cm cells occupy 34 cm ×
-37.5 cm and are centred along Y. Four clicked corners
-absorb all of that with no sign-juggling. The live firmware currently applies
-a Y software cap of `8275` steps for safety, so motion verification must stay
-within that cap after the extra travel is physically verified. It also means
-cell accuracy does not
+directions (`X` from 0 to `−4750`, `Y` from 0 to `+8275`). The measured holder
+displacements are 24.3 × 40 cm, so scales derive as `4750/24.3` and `8275/40`.
+The grid math is exact: X pitch `2.2 + 0.5 = 2.7`, nine pitches = 24.3 cm;
+Y pitch `7.5 + 0.5 = 8`, five pitches = 40 cm. Four clicked corners absorb
+camera rotation and perspective with no sign-juggling. It also means cell accuracy does not
 depend on the lens numbers being correct — and they are still estimates, not a
 calibration.
 

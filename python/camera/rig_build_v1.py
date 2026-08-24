@@ -6,11 +6,11 @@ a grid cell selects it; it does not move the machine. Press Enter or ``b`` to
 send the exact command shown in the build panel, normally
 ``B <col> <row> <level>``. The firmware performs the pick-and-place sequence.
 
-The grid is ``(cols+1) x (rows+1)``: ``[1,1]`` through ``[cols,rows]`` are
-normal block cells, and ``[0,0]``/``[col,0]``/``[0,row]`` are the machine's
-home cell and its two axis-only lanes, all exactly the same size and just as
-clickable. ``0`` on an axis means "leave that axis at the origin" - the
-firmware's own single-axis move: ``B 0 5`` skips X, ``B 17 0`` skips Y,
+Coordinates span col ``0..9`` and row ``0..5``. ``[1,1]`` through
+``[9,5]`` are separated block footprints; ``[0,0]``/``[col,0]``/``[0,row]``
+are holder home and its two axis-only target families. ``0`` on an axis means
+"leave that axis at the origin" - the firmware's own single-axis move:
+``B 0 5`` skips X, ``B 9 0`` skips Y,
 ``G 0 0`` is the home command, and ``B 0 0`` is an inert no-op. ``x``/``y``
 type the same targets from the keyboard as an alternative to clicking.
 
@@ -143,9 +143,8 @@ def parse_args():
 def draw_selected_cell(frame, workspace, selected):
     """Highlight the pending build target - always one full block-sized cell.
 
-    [0,5], [17,0] and [0,0] get exactly the same rectangle a normal [3,5]
-    would: they are real build sites, not points, via
-    ``WorkspaceMap.target_polygon``.
+    Positive selections use the exact 2.2x7.5 cm block footprint. Axis-only
+    selections are centred on their real zero axis; [0,0] visualizes home.
     """
     if selected is None:
         return

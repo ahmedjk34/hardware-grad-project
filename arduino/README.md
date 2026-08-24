@@ -31,22 +31,63 @@ rig prints it on boot and on `?`.
 
 ## X/Y physical grid
 
-The live sketch keeps the tape-measured `34 cm × 40 cm` physical X/Y span in
-centimetres, then applies the firmware's software caps at runtime. The current
-caps are `4750` X steps and `8275` Y steps. The recorded measured X span is
-approximately `5050` physical steps, and the recorded measured Y span is
-approximately `7500` physical steps, so verify the extra 775 Y steps on the
-rig before motion testing:
+The live sketch calibrates motor scale from holder displacement between home
+and the active software cap. These are displacement measurements, not arm or
+block dimensions:
 
-- X: `4750 / 34 = 139.7059 active steps/cm`
-- Y: `8275 / 40 = 206.875 active steps/cm`
+- X: `24.3 cm = 4750 steps`, so `4750 / 24.3 = 195.4733 steps/cm`
+- Y: `40 cm = 8275 steps`, so `8275 / 40 = 206.875 steps/cm`
 
-The supported block orientation is `2 cm` along X and `7.5 cm` along Y. A
-`17 × 5` grid fits: its `34 × 37.5 cm` footprint fills X and is centred along
-Y, leaving `1.25 cm` at each Y edge. `GRID_TRIM_X_CM` and
-`GRID_TRIM_Y_CM` are signed calibration corrections for shifting that complete
-footprint; positive is away from the relevant home switch. After changing a
-trim, flash and verify corner cells with `G` before using `B`.
+Firmware derives both ratios; neither is hard-coded. The separately observed
+physical build displacement is `24.3 × 43 cm`, but the extra 3 cm on Y belongs
+to the unmodelled arm-holder relationship. Tool offsets remain zero, so the
+controlled grid deliberately uses the trustworthy `24.3 × 40 cm` holder span.
+
+One unrotated block is `2.2 cm` X × `7.5 cm` Y × `1.5 cm` Z. Blocks are
+separated by `0.5 cm` on both axes. The first gap is between coordinate 0/home
+and cell 1; there is no trailing outer margin:
+
+```text
+X pitch = 2.2 + 0.5 = 2.7 cm; 9 × 2.7 = 24.3 cm
+Y pitch = 7.5 + 0.5 = 8.0 cm; 5 × 8.0 = 40.0 cm
+
+positive footprint =
+  X: 9 × 2.2 + 8 × 0.5 = 23.8 cm
+  Y: 5 × 7.5 + 4 × 0.5 = 39.5 cm
+```
+
+The normal grid is `9 × 5 = 45` positive cells. Commands address col `0..9`
+and row `0..5`, so the complete coordinate map is `10 × 6`: `[0,0]` home,
+`[col,0]` X-only, and `[0,row]` Y-only. `GRID_TRIM_X_CM` and
+`GRID_TRIM_Y_CM` shift the complete allocation; after changing one, flash and
+verify first and last cells with `G` before using `B`.
+
+Command `9` draws the complete convention (`H` home, `+` axis-only, `.` a
+positive cell, and `#` the current machine position):
+
+```text
+  5 | + . . . . . . . . .
+  4 | + . . . . . . . . .
+  3 | + . . . . . . . . .
+  2 | + . . . . . . . . .
+  1 | + . . . . . . . . .
+  0 | H + + + + + + + + +
+      0 1 2 3 4 5 6 7 8 9
+```
+
+For the full grid, cell-centre formulas measured from home are:
+
+```text
+X centre(col) = 0.5 + 2.2/2 + (col - 1) × 2.7
+              = 1.6 + (col - 1) × 2.7
+
+Y centre(row) = 0.5 + 7.5/2 + (row - 1) × 8.0
+              = 4.25 + (row - 1) × 8.0
+```
+
+Thus first/last centres are X `1.6..23.2 cm` and Y `4.25..36.25 cm`.
+Firmware converts each absolute centre once with `round(cm × steps/cm)`; it
+does not accumulate rounded pitch steps from one cell to the next.
 
 ## `archive/`
 

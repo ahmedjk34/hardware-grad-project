@@ -61,8 +61,10 @@ Future robot-coordinate code should consume these detections rather than
 opening the camera independently.
 
 `camera/gridded_camera_feed.py` reuses that feed and adds the machine grid from
-the repository-level `config/rig.json`. Press `c`, then click the four prompted
-corners of the complete 34×40 cm motion envelope in this physical order:
+the repository-level `config/rig.json`. Positive block rectangles are
+`2.2 × 7.5 cm`, separated by real `0.5 cm` gaps rather than stretched to fill
+pitch-sized cells. Press `c`, then click the four prompted corners of the
+complete 24.3×40 cm holder-motion envelope in this physical order:
 home/home, far-X/home-Y, far-X/far-Y, home-X/far-Y. During calibration the UI
 shows the next named corner, numbered saved clicks, solid straight edges between
 them, and a live line from the last click to the cursor. After the fourth click,
@@ -73,6 +75,11 @@ screen-horizontal, magenta edges screen-vertical, and orange edges diagonal
 `config/workspace_map.json`; until then the amber full-frame grid is explicitly
 an approximation. Hovering a calibrated cell shows its `[col,row]`, physical
 centre and matching `G` command.
+
+The positive grid is `9 × 5`. Including coordinate zero, commands span col
+`0..9` and row `0..5`: `[0,0]` home, `[col,0]` X-only, and `[0,row]` Y-only.
+The controlled span follows directly from `9 × (2.2 + 0.5) = 24.3 cm` and
+`5 × (7.5 + 0.5) = 40 cm`.
 
 `camera/rig_build_v1.py` adds the serial link and is the first camera UI allowed
 to move hardware. Its approximate grid works immediately; a saved calibration

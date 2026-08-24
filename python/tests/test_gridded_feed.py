@@ -2,6 +2,7 @@
 """Exercise the gridded feed geometry without opening a camera or window."""
 
 from pathlib import Path
+import json
 import sys
 import tempfile
 
@@ -72,6 +73,14 @@ with tempfile.TemporaryDirectory() as directory:
     loaded, reason = load_workspace(path, grid, projection)
     check("matching saved calibration reloads", loaded is not None and reason is None)
 
+    legacy_path = Path(directory) / "workspace_map_v1.json"
+    legacy_data = json.loads(path.read_text())
+    legacy_data["version"] = 1
+    legacy_path.write_text(json.dumps(legacy_data))
+    loaded, reason = load_workspace(legacy_path, grid, projection)
+    check("pre-gap workspace calibration is invalidated",
+          loaded is None and "obsolete" in reason, str(reason))
+
     loaded, reason = load_workspace(path, grid, {"version": 2})
     check("changed camera projection invalidates map",
           loaded is None and "camera" in reason, str(reason))
@@ -79,8 +88,10 @@ with tempfile.TemporaryDirectory() as directory:
     shifted = MachineGrid(
         cols=grid.cols,
         rows=grid.rows,
-        cell_width_cm=1.9,
-        cell_height_cm=grid.cell_height_cm,
+        block_width_cm=2.1,
+        block_length_cm=grid.block_length_cm,
+        gap_x_cm=grid.gap_x_cm,
+        gap_y_cm=grid.gap_y_cm,
         workspace_width_cm=grid.workspace_width_cm,
         workspace_height_cm=grid.workspace_height_cm,
         trim_x_cm=grid.trim_x_cm,

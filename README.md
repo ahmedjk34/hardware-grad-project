@@ -16,8 +16,10 @@ The repository is split by platform:
 - **Motion:** Arduino-driven gantry (X / Y / Z, plus servo)
 - **Camera:** DORHEA Raspberry Pi Camera Module — OV5647 sensor, 5 MP, 160° fisheye lens
 - **Mounting:** camera ~50 cm above the surface, pointing straight down, roughly centred
-- **Calibrated X/Y envelope:** approximately 34 cm × 40 cm
-- **Current block grid:** 17 × 5 cells, each 2 cm X × 7.5 cm Y
+- **Controlled holder displacement:** 24.3 cm X × 40 cm Y
+- **Observed build displacement:** 24.3 cm X × 43 cm Y; extra Y reach is not yet modelled
+- **Current block grid:** 9 × 5 positive cells; coordinates include col 0..9 and row 0..5
+- **Block/gap:** 2.2 cm X × 7.5 cm Y × 1.5 cm Z, with 0.5 cm between cells
 
 ## Getting started
 
@@ -44,9 +46,9 @@ cd python
 ../.venv/bin/python camera/camera_feed.py
 ```
 
-To see the physical 17×5 machine grid on that same feed, run
+To see the physical 9×5 positive-cell grid on that same feed, run
 `camera/gridded_camera_feed.py`. It shows an amber approximation initially;
-press `c` and click the four prompted 34×40 cm machine-envelope corners to save
+press `c` and click the four prompted 24.3×40 cm holder-envelope corners to save
 the calibrated overlay.
 
 `camera/rig_build_v1.py` connects that view to the Mega and can build from the

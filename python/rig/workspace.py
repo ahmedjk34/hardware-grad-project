@@ -5,13 +5,12 @@ The saved points are normalized corrected-image coordinates.  The homography
 therefore survives display scaling and output resolution changes; it does not
 pretend to survive changing the lens projection/FOV after calibration.
 
-New maps use the four corners of the [0,0] home cell through the last block
-cell - i.e. click the OUTER edge of [0,0], not the near edge of [1,1]. [0,0]
-is a real, block-sized build site (see rig.grid and B/G's axis-only 0), so it
-gets exactly one cell-pitch of margin at the start and none left over at the
-far end, regardless of the declared physical bed size in config/rig.json.
-Count-only maps remain readable for compatibility, but stretch their cells
-across the quad.
+New maps use the real holder-motion rectangle: home/home, far-X/home-Y,
+far-X/far-Y, and home-X/far-Y. The mapped dimensions are the 24.3 x 40 cm
+holder displacements in rig.json. Positive cells begin after the explicit
+0.5 cm home-to-cell-1 gaps and then repeat at block-plus-gap pitch. Coordinate
+zero remains the home/axis-only reference; it is not silently converted into
+another positive block inside the measured rectangle.
 """
 
 from __future__ import annotations
@@ -28,10 +27,10 @@ from rig.grid import MachineGrid
 
 WORKSPACE_MAP_PATH = Path(__file__).resolve().parents[2] / "config" / "workspace_map.json"
 CORNER_NAMES = (
-    "outer X/Y corner of the [0,0] home cell",
-    "outer far-X corner of the [last-col,0] cell",
-    "outer far-X/far-Y corner of the [last-col,last-row] cell",
-    "outer far-Y corner of the [0,last-row] cell",
+    "holder home [0,0]",
+    "far-X/home-Y holder limit",
+    "far-X/far-Y holder limit",
+    "home-X/far-Y holder limit",
 )
 
 
@@ -94,31 +93,17 @@ class WorkspaceMap:
         self._grid = None
         if self.physical_grid is not None:
             geometry = self.physical_grid
-            cell_w = float(geometry["cell_width_cm"])
-            cell_h = float(geometry["cell_height_cm"])
-            trim_x = float(geometry.get("trim_x_cm", 0.0))
-            trim_y = float(geometry.get("trim_y_cm", 0.0))
-            # The four clicks bound the [0,0] home cell's outer corner to the
-            # last cell's far corner - one full cell-pitch of margin at the
-            # start (plus any configured fine trim), none left over at the
-            # far end. This is deliberately independent of the declared
-            # workspace_width_cm/height_cm: those size a real physical bed
-            # that may be larger than what anyone calibrates against, and a
-            # centred-in-a-bigger-envelope margin is not what "click the
-            # edge of cell [0,0]" means. See CORNER_NAMES.
-            near_x = cell_w + trim_x
-            near_y = cell_h + trim_y
-            packed_w = self.cols * cell_w
-            packed_h = self.rows * cell_h
             self._grid = MachineGrid(
                 cols=self.cols,
                 rows=self.rows,
-                cell_width_cm=cell_w,
-                cell_height_cm=cell_h,
-                workspace_width_cm=packed_w + near_x,
-                workspace_height_cm=packed_h + near_y,
-                trim_x_cm=near_x / 2,
-                trim_y_cm=near_y / 2,
+                block_width_cm=float(geometry["block_width_cm"]),
+                block_length_cm=float(geometry["block_length_cm"]),
+                gap_x_cm=float(geometry["gap_x_cm"]),
+                gap_y_cm=float(geometry["gap_y_cm"]),
+                workspace_width_cm=float(geometry["workspace_width_cm"]),
+                workspace_height_cm=float(geometry["workspace_height_cm"]),
+                trim_x_cm=float(geometry.get("trim_x_cm", 0.0)),
+                trim_y_cm=float(geometry.get("trim_y_cm", 0.0)),
             )
 
     @classmethod
@@ -130,12 +115,7 @@ class WorkspaceMap:
 
     @classmethod
     def from_grid(cls, grid: MachineGrid, corners, image_size, projection=None):
-        """Map four camera points around the [0,0]-through-[cols,rows] footprint.
-
-        Unlike the legacy count-only constructor, this keeps the [0,0] home
-        cell's own block size and the signed X/Y trims instead of stretching
-        the packed block grid to fill the complete camera quadrilateral.
-        """
+        """Map four camera points around the measured holder-motion rectangle."""
         if not grid.has_physical_scale:
             raise ValueError("workspace mapping needs a physically scaled grid")
         w, h = image_size
@@ -144,8 +124,10 @@ class WorkspaceMap:
         geometry = {
             "workspace_width_cm": grid.workspace_width_cm,
             "workspace_height_cm": grid.workspace_height_cm,
-            "cell_width_cm": grid.cell_width_cm,
-            "cell_height_cm": grid.cell_height_cm,
+            "block_width_cm": grid.block_width_cm,
+            "block_length_cm": grid.block_length_cm,
+            "gap_x_cm": grid.gap_x_cm,
+            "gap_y_cm": grid.gap_y_cm,
             "trim_x_cm": grid.trim_x_cm,
             "trim_y_cm": grid.trim_y_cm,
         }
@@ -156,6 +138,8 @@ class WorkspaceMap:
     def load(cls, path=WORKSPACE_MAP_PATH, cols=None, rows=None):
         path = Path(path)
         data = json.loads(path.read_text())
+        if int(data.get("version", 0)) != 2:
+            raise ValueError("workspace map uses obsolete pre-gap geometry; recalibrate")
         result = cls(int(data["grid"]["cols"]), int(data["grid"]["rows"]),
                      [tuple(p) for p in data["corners_normalized"]],
                      data.get("projection"), data.get("physical_grid"))
@@ -169,7 +153,7 @@ class WorkspaceMap:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
-            "version": 1,
+            "version": 2,
             "view": "corrected",
             "corner_order": list(CORNER_NAMES),
             "grid": {"cols": self.cols, "rows": self.rows},
@@ -190,8 +174,10 @@ class WorkspaceMap:
             (self.cols, self.rows) == (grid.cols, grid.rows)
             and float(geometry["workspace_width_cm"]) == grid.workspace_width_cm
             and float(geometry["workspace_height_cm"]) == grid.workspace_height_cm
-            and float(geometry["cell_width_cm"]) == grid.cell_width_cm
-            and float(geometry["cell_height_cm"]) == grid.cell_height_cm
+            and float(geometry["block_width_cm"]) == grid.block_width_cm
+            and float(geometry["block_length_cm"]) == grid.block_length_cm
+            and float(geometry["gap_x_cm"]) == grid.gap_x_cm
+            and float(geometry["gap_y_cm"]) == grid.gap_y_cm
             and float(geometry.get("trim_x_cm", 0.0)) == grid.trim_x_cm
             and float(geometry.get("trim_y_cm", 0.0)) == grid.trim_y_cm
         )
@@ -211,18 +197,20 @@ class WorkspaceMap:
             return min(int(u * self.cols), self.cols - 1) + 1, \
                    min(int(v * self.rows), self.rows - 1) + 1
 
-        x_cm = u * self._grid.workspace_width_cm
-        y_cm = v * self._grid.workspace_height_cm
+        g = self._grid
+        x_cm = u * g.workspace_width_cm
+        y_cm = v * g.workspace_height_cm
         epsilon = 1e-9
-        if x_cm < self._grid.x_start_cm - epsilon \
-                or x_cm > self._grid.x_end_cm + epsilon \
-                or y_cm < self._grid.y_start_cm - epsilon \
-                or y_cm > self._grid.y_end_cm + epsilon:
+        if x_cm < g.x_start_cm - epsilon or x_cm > g.x_end_cm + epsilon \
+                or y_cm < g.y_start_cm - epsilon or y_cm > g.y_end_cm + epsilon:
             return None
-        col = min(int((x_cm - self._grid.x_start_cm) / self._grid.cell_width_cm),
-                  self.cols - 1) + 1
-        row = min(int((y_cm - self._grid.y_start_cm) / self._grid.cell_height_cm),
-                  self.rows - 1) + 1
+        col = min(int((x_cm - g.x_start_cm) / g.pitch_x_cm), self.cols - 1) + 1
+        row = min(int((y_cm - g.y_start_cm) / g.pitch_y_cm), self.rows - 1) + 1
+        x0, y0, x1, y1 = g.cell_bounds_cm(col, row)
+        if not (x0 - epsilon <= x_cm <= x1 + epsilon
+                and y0 - epsilon <= y_cm <= y1 + epsilon):
+            # The click is in one of the deliberate 0.5 cm gaps.
+            return None
         return col, row
 
     @property
@@ -233,38 +221,33 @@ class WorkspaceMap:
     def mapped_grid(self) -> MachineGrid | None:
         """The MachineGrid actually used for this map's pixel<->cm math.
 
-        Deliberately NOT the same object a caller may have passed to
-        :meth:`from_grid`: this one reserves exactly one cell-pitch of
-        margin at the [0,0] origin (see :meth:`from_grid`), which the
-        caller's own grid does not. Any code drawing or hit-testing against
-        this workspace must use THIS grid, not its own, or positions drift
-        by a cell-pitch - use it instead of recomputing cell/workspace
-        geometry from a separately-loaded MachineGrid.
+        It is reconstructed from the geometry embedded in the generated map,
+        so a saved calibration cannot silently borrow newer block/gap values.
         """
         return self._grid
 
     def axis_lane_polygon(self, axis, index, image_size):
         """Image polygon for the axis-only lane cell ``[index,0]`` or ``[0,index]``.
 
-        Full block size, one cell-pitch beyond the packed grid's near edge -
-        the same size as every other cell, not squeezed into whatever trim
-        the calibration happens to have. ``B``/``G``'s axis-only convention
-        (0 on one axis means "stay at the origin") lands here, so a build
-        site there is exactly as real, and exactly as big, as any other.
+        The zero axis is the actual holder-home coordinate. Consequently half
+        of the block footprint may project outside the measured motion quad;
+        it is not replaced with a fabricated full-pitch lane inside the grid.
         """
         if self._grid is None:
             raise ValueError("axis lanes need a physically scaled grid")
         g = self._grid
         if axis == "col":
-            x0_cm = g.x_start_cm + (index - 1) * g.cell_width_cm
-            x1_cm = g.x_start_cm + index * g.cell_width_cm
-            y1_cm = g.y_start_cm
-            y0_cm = y1_cm - g.cell_height_cm
+            x_center, _ = g.cell_center_cm(index, 1)
+            x0_cm = x_center - g.block_width_cm / 2
+            x1_cm = x_center + g.block_width_cm / 2
+            y0_cm = -g.block_length_cm / 2
+            y1_cm = g.block_length_cm / 2
         elif axis == "row":
-            y0_cm = g.y_start_cm + (index - 1) * g.cell_height_cm
-            y1_cm = g.y_start_cm + index * g.cell_height_cm
-            x1_cm = g.x_start_cm
-            x0_cm = x1_cm - g.cell_width_cm
+            _, y_center = g.cell_center_cm(1, index)
+            y0_cm = y_center - g.block_length_cm / 2
+            y1_cm = y_center + g.block_length_cm / 2
+            x0_cm = -g.block_width_cm / 2
+            x1_cm = g.block_width_cm / 2
         else:
             raise ValueError("axis must be 'col' or 'row'")
         corners_cm = ((x0_cm, y0_cm), (x1_cm, y0_cm), (x1_cm, y1_cm), (x0_cm, y1_cm))
@@ -272,17 +255,12 @@ class WorkspaceMap:
                               image_size) for x, y in corners_cm]
 
     def origin_polygon(self, image_size):
-        """Image polygon for the ``[0,0]`` home cell - block-sized, like any other.
-
-        Home is a real place blocks get picked up from, not just a point: one
-        cell-pitch back from [1,1] on both axes, where the col-0 and row-0
-        lanes overlap.
-        """
+        """Block-sized visualization centred on the real ``[0,0]`` home."""
         if self._grid is None:
             raise ValueError("the origin cell needs a physically scaled grid")
         g = self._grid
-        x0_cm, x1_cm = g.x_start_cm - g.cell_width_cm, g.x_start_cm
-        y0_cm, y1_cm = g.y_start_cm - g.cell_height_cm, g.y_start_cm
+        x0_cm, x1_cm = -g.block_width_cm / 2, g.block_width_cm / 2
+        y0_cm, y1_cm = -g.block_length_cm / 2, g.block_length_cm / 2
         corners_cm = ((x0_cm, y0_cm), (x1_cm, y0_cm), (x1_cm, y1_cm), (x0_cm, y1_cm))
         return [self.pixel_at(x / g.workspace_width_cm, y / g.workspace_height_cm,
                               image_size) for x, y in corners_cm]
@@ -290,9 +268,8 @@ class WorkspaceMap:
     def target_polygon(self, col, row, image_size):
         """Image polygon for any valid B/G target - 0 on either axis included.
 
-        Always one full block-sized cell: a normal ``[col,row]`` polygon, the
-        ``[0,0]`` home cell, or whichever axis-only lane cell the non-zero
-        coordinate picks out.
+        Always one block-sized visualization: a positive ``[col,row]`` block,
+        a footprint centred on ``[0,0]`` home, or an axis-only target.
         """
         if col > 0 and row > 0:
             return self.cell_polygon(col, row, image_size)
@@ -308,10 +285,7 @@ class WorkspaceMap:
         ``(col, 0)`` in the row-0 lane (Y held at the origin), ``(0, row)``
         in the column-0 lane (X held at the origin), or ``(0, 0)`` where both
         lanes overlap - the machine origin itself.
-        Distinct from :meth:`cell_at`, which only ever returns a real
-        1-based block cell - these lanes live in the calibrated margin that
-        exists precisely so [0,0] is a real, block-sized cell (see
-        :meth:`from_grid`), not squeezed against the edge of the image.
+        Distinct from :meth:`cell_at`, which only returns positive cells.
         """
         if self._grid is None:
             return None
@@ -320,18 +294,24 @@ class WorkspaceMap:
         x_cm = u * g.workspace_width_cm
         y_cm = v * g.workspace_height_cm
         epsilon = 1e-9
-        row0_lane_y0 = g.y_start_cm - g.cell_height_cm
-        col0_lane_x0 = g.x_start_cm - g.cell_width_cm
-        in_row0_lane_y = row0_lane_y0 - epsilon <= y_cm <= g.y_start_cm + epsilon
-        in_col0_lane_x = col0_lane_x0 - epsilon <= x_cm <= g.x_start_cm + epsilon
+        row0_lane_y0 = -g.block_length_cm / 2
+        row0_lane_y1 = g.block_length_cm / 2
+        col0_lane_x0 = -g.block_width_cm / 2
+        col0_lane_x1 = g.block_width_cm / 2
+        in_row0_lane_y = row0_lane_y0 - epsilon <= y_cm <= row0_lane_y1 + epsilon
+        in_col0_lane_x = col0_lane_x0 - epsilon <= x_cm <= col0_lane_x1 + epsilon
         if in_col0_lane_x and in_row0_lane_y:
             return (0, 0)
-        if in_row0_lane_y and g.x_start_cm - epsilon <= x_cm <= g.x_end_cm + epsilon:
-            col = min(int((x_cm - g.x_start_cm) / g.cell_width_cm), g.cols - 1) + 1
-            return (col, 0)
-        if in_col0_lane_x and g.y_start_cm - epsilon <= y_cm <= g.y_end_cm + epsilon:
-            row = min(int((y_cm - g.y_start_cm) / g.cell_height_cm), g.rows - 1) + 1
-            return (0, row)
+        if in_row0_lane_y:
+            for col in range(1, g.cols + 1):
+                x0, _y0, x1, _y1 = g.cell_bounds_cm(col, 1)
+                if x0 - epsilon <= x_cm <= x1 + epsilon:
+                    return (col, 0)
+        if in_col0_lane_x:
+            for row in range(1, g.rows + 1):
+                _x0, y0, _x1, y1 = g.cell_bounds_cm(1, row)
+                if y0 - epsilon <= y_cm <= y1 + epsilon:
+                    return (0, row)
         return None
 
     def pixel_at(self, u, v, image_size):
@@ -344,15 +324,8 @@ class WorkspaceMap:
             u0, u1 = (col - 1) / self.cols, col / self.cols
             v0, v1 = (row - 1) / self.rows, row / self.rows
         else:
-            u0 = (self._grid.x_start_cm
-                  + (col - 1) * self._grid.cell_width_cm) \
-                 / self._grid.workspace_width_cm
-            u1 = (self._grid.x_start_cm + col * self._grid.cell_width_cm) \
-                 / self._grid.workspace_width_cm
-            v0 = (self._grid.y_start_cm
-                  + (row - 1) * self._grid.cell_height_cm) \
-                 / self._grid.workspace_height_cm
-            v1 = (self._grid.y_start_cm + row * self._grid.cell_height_cm) \
-                 / self._grid.workspace_height_cm
+            x0, y0, x1, y1 = self._grid.cell_bounds_cm(col, row)
+            u0, u1 = x0 / self._grid.workspace_width_cm, x1 / self._grid.workspace_width_cm
+            v0, v1 = y0 / self._grid.workspace_height_cm, y1 / self._grid.workspace_height_cm
         return [self.pixel_at(u0, v0, image_size), self.pixel_at(u1, v0, image_size),
                 self.pixel_at(u1, v1, image_size), self.pixel_at(u0, v1, image_size)]

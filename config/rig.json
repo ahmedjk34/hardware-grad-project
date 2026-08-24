@@ -8,16 +8,22 @@
     "baud": 9600
   },
   "grid": {
-    "cols": 17,
+    "cols": 9,
     "rows": 5,
-    "cell_width_cm": 2.0,
-    "cell_height_cm": 7.5,
+    "block_width_cm": 2.2,
+    "block_length_cm": 7.5,
+    "gap_x_cm": 0.5,
+    "gap_y_cm": 0.5,
     "trim_x_cm": 0.0,
     "trim_y_cm": 0.0
   },
   "workspace": {
-    "width_cm": 34.0,
+    "width_cm": 24.3,
     "height_cm": 40.0
+  },
+  "observed_build_area": {
+    "width_cm": 24.3,
+    "height_cm": 43.0
   },
   "tool_offsets": {
     "neutral": {"x_cm": 0.0, "y_cm": 0.0},

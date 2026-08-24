@@ -92,16 +92,16 @@ class FakeSerial:
 BANNER = [
     "@0 BOOT fw=build_test_v1",
     "=== GRID ===",
-    "Division : 17 cols x 5 rows  = 85 cells",
+    "Division : 9 cols x 5 rows  = 45 positive cells",
     ">> Position is UNKNOWN until you home. Send 0 to home.",
-    "@0 READY grid=17x5",
+    "@0 READY grid=9x5",
 ]
 
 GRID_RESIZED = [
     "",
     "GRID RESIZED",
     "--- GRID ---",
-    "Division : 17 cols x 5 rows  = 85 cells",
+    "Division : 9 cols x 5 rows  = 45 positive cells",
     "col 1 = X switch side, row 1 = Y switch side",
 ]
 
@@ -186,11 +186,12 @@ GOTO_AXIS_ONLY = [
 CFG = {
     "serial": {"port": "/dev/fake", "baud": 9600},
     "grid": {
-        "cols": 17, "rows": 5,
-        "cell_width_cm": 2.0, "cell_height_cm": 7.5,
+        "cols": 9, "rows": 5,
+        "block_width_cm": 2.2, "block_length_cm": 7.5,
+        "gap_x_cm": 0.5, "gap_y_cm": 0.5,
         "trim_x_cm": 0.0, "trim_y_cm": 0.0,
     },
-    "workspace": {"width_cm": 34.0, "height_cm": 40.0},
+    "workspace": {"width_cm": 24.3, "height_cm": 40.0},
     "frame": {"width_cm": 20.0, "height_cm": 35.0},
 }
 
@@ -222,7 +223,7 @@ def check(name, condition, detail=""):
 
 for raw, kind, seq in [
     ("@0 BOOT fw=build_test_v1", "BOOT", 0),
-    ("@0 READY grid=17x5", "READY", 0),
+    ("@0 READY grid=9x5", "READY", 0),
     ("@1 ERR expected: B <col> <row> <level> [R|RR|NR]", "ERR", 1),
     ("@2 SAFE cell out of range", "SAFE", 2),
     ("@3 OK col=3 row=5 level=0", "OK", 3),
@@ -270,9 +271,9 @@ for acks in (True, False):
 # ------------------------------------------------------------------
 
 rig, fake = fake_rig()
-check("connect pushes the grid", "S 17 5" in fake.written, str(fake.written))
+check("connect pushes the grid", "S 9 5" in fake.written, str(fake.written))
 check("connect does not home", "0+" not in fake.written, str(fake.written))
-check("READY grid captured", rig.ready_grid == "17x5", str(rig.ready_grid))
+check("READY grid captured", rig.ready_grid == "9x5", str(rig.ready_grid))
 check("no fallback with acks", rig.prose_fallbacks == 0)
 rig.close()
 

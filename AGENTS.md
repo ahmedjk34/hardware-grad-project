@@ -44,7 +44,7 @@ Switching boards is then a one-line edit to `rig.json`.
 | Where | What |
 | --- | --- |
 | `config/rig.json` → `grid.cols` / `grid.rows` | **authoritative at runtime** |
-| `build_test_v1.ino:515-516` | `GRID_COLS` / `GRID_ROWS` — the compiled default |
+| `build_test_v1.ino` SECTION 6C | `GRID_COLS` / `GRID_ROWS` — the compiled default |
 | `python/rig/grid.py` | `MachineGrid.from_config()` — what the viewers draw |
 
 The sketch uses no EEPROM, so nothing survives a reset — and opening the USB
@@ -60,29 +60,59 @@ value must edit both the Raspberry Pi JSON/Python side and the live Arduino
 sketch in the same change.** Run `python/tests/test_grid.py`; it parses the live
 sketch constants and fails if any listed pair differs from `rig.json`.
 
-Current default: **22 columns × 5 rows = 110 cells**.
+Current default: **9 positive columns × 5 positive rows = 45 normal cells**.
+Including coordinate zero, commands address col `0..9` and row `0..5`: a
+**10 × 6 coordinate grid** consisting of 45 normal cells, 9 X-only targets,
+5 Y-only targets, and `[0,0]` home.
 
 ### 3a. X/Y physical grid geometry — fixed-pitch block cells
 
 | Meaning | Pi / camera side | Firmware side |
 | --- | --- | --- |
 | physical envelope | `rig.json` → `workspace.width_cm` / `height_cm` | `X_TRAVEL_CM` / `Y_TRAVEL_CM` |
-| one block footprint | `rig.json` → `grid.cell_width_cm` / `cell_height_cm` | `GRID_CELL_X_CM` / `GRID_CELL_Y_CM` |
+| one block footprint | `rig.json` → `grid.block_width_cm` / `block_length_cm` | `GRID_BLOCK_X_CM` / `GRID_BLOCK_Y_CM` |
+| gap before each positive cell | `rig.json` → `grid.gap_x_cm` / `gap_y_cm` | `GRID_GAP_X_CM` / `GRID_GAP_Y_CM` |
 | signed placement correction | `rig.json` → `grid.trim_x_cm` / `trim_y_cm` | `GRID_TRIM_X_CM` / `GRID_TRIM_Y_CM` |
 
-The tape-measured physical calibration is **34 cm X = 5050 steps** and **40
-cm Y = 7500 steps**, giving approximately **148.5294 physical X steps/cm**
-and **187.5 physical Y steps/cm**. The live firmware currently applies a
-**4750-step software cap on X** and an **8275-step software cap on Y**. Its
-active mappings are **4750 / 34 = 139.7059 X steps/cm** and **8275 / 40 =
-206.875 Y steps/cm**. The Y cap is 775 steps above its recorded calibration,
-so verify the extra travel physically before motion testing. Cells are **2 cm
-X × 7.5 cm Y**, in that one orientation only.
-The 17×5 packed grid is 34×37.5 cm, filling X and leaving 1.25 cm at each Y
-edge before trims.
+`rig.json` → `observed_build_area` is a measurement record only. It has no
+firmware partner and no control consumer while the arm-holder offset is being
+ignored; do not substitute its 43 cm Y observation for `Y_TRAVEL_CM`.
+
+These centimetre measurements are **holder displacements**, not pure object
+dimensions: they compare the holder reference at home with that same reference
+at the active software cap. The live calibration is:
+
+- X: **24.3 cm holder displacement = 4750 steps**, so `4750 / 24.3 =
+  195.4733 steps/cm`;
+- Y: **40 cm holder displacement = 8275 steps**, so `8275 / 40 =
+  206.875 steps/cm`.
+
+Never hard-code those ratios; firmware derives them from the cap and measured
+displacement. A separate physical observation found a **24.3 × 43 cm build
+displacement**. The extra observed 3 cm on Y comes from the not-yet-modelled
+arm-versus-holder geometry. It is documented but deliberately does not control
+motion or grid math yet: current tool offsets remain zero and the controlled
+grid uses the trustworthy **24.3 × 40 cm holder displacement**.
+
+Blocks are **2.2 cm X × 7.5 cm Y × 1.5 cm Z** in the supported unrotated
+footprint. Every positive cell is preceded by a **0.5 cm gap**, including the
+gap from coordinate 0 to cell 1. There is no additional trailing outer margin:
+
+```text
+X pitch = 2.2 + 0.5 = 2.7 cm; 9 × 2.7 = 24.3 cm
+Y pitch = 7.5 + 0.5 = 8.0 cm; 5 × 8.0 = 40.0 cm
+
+positive-block footprint X = 9 × 2.2 + 8 × 0.5 = 23.8 cm
+positive-block footprint Y = 5 × 7.5 + 4 × 0.5 = 39.5 cm
+```
+
+The difference between each footprint and controlled displacement is the first
+0-to-1 gap, not outer padding. First centres are X `0.5 + 2.2/2 = 1.6 cm`
+and Y `0.5 + 7.5/2 = 4.25 cm`; pitch then repeats to last centres X `23.2`
+and Y `36.25 cm`. The final block edges land exactly at `24.3 × 40 cm`.
 
 The firmware owns the step counts and derives both steps/cm ratios at runtime;
-never hard-code either ratio and do not copy the `5050 × 7500` safety envelope
+never hard-code either ratio and do not copy the `4750 × 8275` safety envelope
 into JSON. The Pi does not need motor steps to draw or select a cell: it maps
 camera pixel → physical cm → `[col,row]`, and the Arduino alone maps that cell
 to safe step targets. The Pi needs the centimetre geometry to interpret camera
@@ -99,10 +129,11 @@ from that axis's home switch; negative trim moves it toward the switch.
 | `python/rig/grid.py` | `cell_at()` / `image_cell()` / `ascii_map()` |
 | `python/tests/test_grid.py` | holds the two to the same map |
 
-**1-based. Col 1 is the X switch side, row 1 is the Y switch side, and `[1,1]`
-is drawn bottom-left** — rows increase upward, columns rightward. The firmware
-says so in its own footer: `^ origin corner is bottom-left [1,1]`. Cells are
-written `[col,row]`, the same order as the arguments to `G` and `B`.
+Positive block cells are **1-based**. Col 1 is the X switch side, row 1 is the
+Y switch side, and `[1,1]` is drawn above/right of home. The complete map also
+draws col 0 and row 0: `[0,0]` is home, `[col,0]` is X-only, and `[0,row]` is
+Y-only. Rows increase upward and columns rightward. Cells are written
+`[col,row]`, the same order as the arguments to `G` and `B`.
 
 `ascii_map()` reproduces `printGrid()` byte for byte on purpose, so a change to
 either can be caught by diffing them rather than by noticing that the claw went
@@ -271,8 +302,7 @@ These are physical facts about the machine. Nothing can push them over serial,
 so a copy in the JSON would be a lie that nobody notices until the rig crashes
 into something.
 
-- physical envelope step counts: `5050 × 7500` steps, and the firmware-only
-  software caps (`X = 4750`, current `Y = 8275`)
+- firmware-only X/Y software caps (`X = 4750`, `Y = 8275`)
 - `Z_TRAVEL_CM`, `Z_TRAVEL_STEPS`, `BLOCK_HEIGHT_CM`, build ceiling
 - pin assignments, servo angles, motor direction polarity
 

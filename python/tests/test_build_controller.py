@@ -46,10 +46,10 @@ check("placed build requires fresh selection", controller.selected is None)
 rig = FakeRig([BuildResult(REJECTED, "bad level"),
                BuildResult(ABORTED, "Z switch not reached")])
 controller = BuildController(rig, level=2, rotation="R")
-controller.select((17, 5))
-check("rotation appears only when requested", controller.command == "B 17 5 2 R")
+controller.select((9, 5))
+check("rotation appears only when requested", controller.command == "B 9 5 2 R")
 result = controller.build()
-check("safe rejection keeps selection", result == REJECTED and controller.selected == (17, 5))
+check("safe rejection keeps selection", result == REJECTED and controller.selected == (9, 5))
 result = controller.build()
 check("aborted result locks controller", result == ABORTED and controller.locked)
 try:
@@ -63,9 +63,9 @@ calibration_controller.select((0, 5))
 check("zero X calibration target is valid",
       calibration_controller.command == "B 0 5 2 R")
 calibration_controller.set_rotation("NR")
-calibration_controller.select((17, 0))
+calibration_controller.select((9, 0))
 check("zero Y calibration target is valid",
-      calibration_controller.command == "B 17 0 2")
+      calibration_controller.command == "B 9 0 2")
 calibration_controller.select((0, 0))
 check("zero-zero no-op target is valid",
       calibration_controller.command == "B 0 0 2")

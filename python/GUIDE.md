@@ -96,11 +96,11 @@ python camera/gridded_camera_feed.py --display-scale 1.5
 ```
 
 It opens with an amber **APPROXIMATION ONLY** grid so you can see the configured
-17×5 layout immediately. That guess fills the image and is not evidence that
+9×5 positive-cell layout immediately. That guess fills the image and is not evidence that
 camera and motor cells match. To calibrate:
 
 1. Press `c`.
-2. Click the complete 34×40 cm machine-envelope corners in the prompted order:
+2. Click the complete 24.3×40 cm holder-envelope corners in the prompted order:
    X/Y home, far-X/home-Y, far-X/far-Y, home-X/far-Y.
 3. Confirm the Tk dashboard changes to `Grid: CALIBRATED`.
 4. Hover cells and verify several displayed `G col row` commands with the rig
@@ -109,19 +109,25 @@ camera and motor cells match. To calibrate:
 `x` cancels calibration without destroying the previous saved map, `g` toggles
 the grid, `o` cycles block/geometry overlay detail, and `s` saves the annotated
 frame and detection JSON. Changing the
-lens geometry, orientation, crop, physical workspace, cell size or signed trim
+lens geometry, orientation, crop, physical workspace, block size, gap or signed trim
 invalidates the old map and returns to the amber approximation.
 
 The camera image contains only the camera, grid, and block visualization;
 calibration state, cell details, FPS, and controls are in the separate Tk dashboard.
 
 The JSON deliberately does not duplicate the firmware's motor step limits.
-The physical calibration span is `5050×7500` steps, while the live firmware's
-software caps are `4750` X steps and `8275` Y steps. The Y cap is 775 above
-the recorded Y calibration; verify that extra travel on the physical rig
-before motion testing. The Pi maps pixels through centimetres to a logical
-cell; the Arduino remains the only authority that converts the selected cell
-to step pulses and enforces those caps.
+The live caps are `4750` X and `8275` Y steps; paired with the measured holder
+displacements, firmware derives `4750 / 24.3 = 195.4733` X steps/cm and
+`8275 / 40 = 206.875` Y steps/cm. The separately observed build displacement
+is 43 cm on Y, but its extra 3 cm belongs to the currently ignored arm-holder
+offset and does not control this grid. The Pi maps pixels through centimetres
+to a logical cell; Arduino alone converts the selected centre to step pulses.
+
+Grid pitch is not block size. X pitch is `2.2 + 0.5 = 2.7 cm`; Y pitch is
+`7.5 + 0.5 = 8 cm`. The gap from coordinate 0 to cell 1 counts, so nine X
+pitches fill 24.3 cm and five Y pitches fill 40 cm exactly. Positive block
+footprints themselves occupy `23.8 × 39.5 cm`; the missing `0.5 cm` on each
+axis is that first 0-to-1 gap, not outer padding.
 
 ---
 

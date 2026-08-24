@@ -3,7 +3,7 @@
 
     from rig.grid import MachineGrid
 
-    grid = MachineGrid.from_config()     # 17 cols x 5 rows, from config/rig.json
+    grid = MachineGrid.from_config()     # 9 positive cols x 5 rows
     grid.cell_at(0, 4)                   # image cell (left, bottom) -> (1, 1)
     grid.image_cell(3, 5)                # (col, row) -> the image cell to draw in
     grid.contains_build_target(0, 5)     # calibration target: skip X
@@ -24,22 +24,10 @@ which is very unlikely to be where the build area actually is. Say so on screen.
 
 The numbering, and where it comes from
 --------------------------------------
-Straight out of `printGrid()` in build_test_v1.ino, which draws this:
-
-      # = machine   . = empty cell
-      (top row = far Y end, left col = X switch)
-
-     20 | . . . . . . . . . .
-      ...
-      1 | . . . . . . . . . .
-        +--------------------
-         1 2 3 4 5 6 7 8 9 0
-         ^ origin corner is bottom-left [1,1]
-
-So: **1-based**, col 1 is the X switch side, row 1 is the Y switch side, and the
-machine's own drawing puts [1,1] bottom-left with rows increasing upward. That
-is the default here, because a default that matches the rig's picture is the one
-you can check by holding the two side by side.
+Straight out of `printGrid()` in build_test_v1.ino: positive block cells are
+1-based, while row/col 0 are drawn explicitly as the home and axis-only
+coordinates. Col 1 is nearest the X switch and row 1 is nearest the Y switch;
+rows increase upward in the machine's own drawing.
 
 Why the orientation is a setting at all
 ---------------------------------------
@@ -77,8 +65,10 @@ class MachineGrid:
     rows: int
     origin: str = DEFAULT_ORIGIN
     swap_axes: bool = False
-    cell_width_cm: float | None = None
-    cell_height_cm: float | None = None
+    block_width_cm: float | None = None
+    block_length_cm: float | None = None
+    gap_x_cm: float = 0.0
+    gap_y_cm: float = 0.0
     workspace_width_cm: float | None = None
     workspace_height_cm: float | None = None
     trim_x_cm: float = 0.0
@@ -98,8 +88,10 @@ class MachineGrid:
         return cls(
             cols=int(grid["cols"]),
             rows=int(grid["rows"]),
-            cell_width_cm=float(grid["cell_width_cm"]),
-            cell_height_cm=float(grid["cell_height_cm"]),
+            block_width_cm=float(grid["block_width_cm"]),
+            block_length_cm=float(grid["block_length_cm"]),
+            gap_x_cm=float(grid["gap_x_cm"]),
+            gap_y_cm=float(grid["gap_y_cm"]),
             workspace_width_cm=float(workspace["width_cm"]),
             workspace_height_cm=float(workspace["height_cm"]),
             trim_x_cm=float(grid.get("trim_x_cm", 0.0)),
@@ -115,18 +107,21 @@ class MachineGrid:
         if self.cols < 1 or self.rows < 1:
             raise ValueError(f"grid must be at least 1x1, got {self.cols}x{self.rows}")
         physical = (
-            self.cell_width_cm,
-            self.cell_height_cm,
+            self.block_width_cm,
+            self.block_length_cm,
             self.workspace_width_cm,
             self.workspace_height_cm,
         )
         if any(value is not None for value in physical):
             if not all(value is not None and math.isfinite(value) and value > 0
                        for value in physical):
-                raise ValueError("cell and workspace dimensions must all be positive")
+                raise ValueError("block and workspace dimensions must all be positive")
+            if not all(math.isfinite(value) and value >= 0
+                       for value in (self.gap_x_cm, self.gap_y_cm)):
+                raise ValueError("grid gaps must be finite and non-negative")
             if not math.isfinite(self.trim_x_cm) or not math.isfinite(self.trim_y_cm):
                 raise ValueError("grid trims must be finite")
-            if self.x_start_cm < 0 or self.y_start_cm < 0 \
+            if self.x_allocation_start_cm < 0 or self.y_allocation_start_cm < 0 \
                     or self.x_end_cm > self.workspace_width_cm \
                     or self.y_end_cm > self.workspace_height_cm:
                 raise ValueError(
@@ -136,25 +131,55 @@ class MachineGrid:
 
     @property
     def has_physical_scale(self) -> bool:
-        return self.cell_width_cm is not None
+        return self.block_width_cm is not None
+
+    @property
+    def pitch_x_cm(self) -> float:
+        """Centre-to-centre X pitch: 2.2 cm block + 0.5 cm gap = 2.7 cm."""
+        return self.block_width_cm + self.gap_x_cm
+
+    @property
+    def pitch_y_cm(self) -> float:
+        """Centre-to-centre Y pitch: 7.5 cm block + 0.5 cm gap = 8.0 cm."""
+        return self.block_length_cm + self.gap_y_cm
 
     @property
     def packed_width_cm(self) -> float:
-        return self.cols * self.cell_width_cm
+        """Positive blocks plus only their eight internal X gaps: 23.8 cm."""
+        return self.cols * self.block_width_cm + (self.cols - 1) * self.gap_x_cm
 
     @property
     def packed_height_cm(self) -> float:
-        return self.rows * self.cell_height_cm
+        """Positive blocks plus only their four internal Y gaps: 39.5 cm."""
+        return self.rows * self.block_length_cm + (self.rows - 1) * self.gap_y_cm
+
+    @property
+    def allocation_width_cm(self) -> float:
+        """Home coordinate to the far block edge: 9 * 2.7 = 24.3 cm."""
+        return self.cols * self.pitch_x_cm
+
+    @property
+    def allocation_height_cm(self) -> float:
+        """Home coordinate to the far block edge: 5 * 8.0 = 40.0 cm."""
+        return self.rows * self.pitch_y_cm
+
+    @property
+    def x_allocation_start_cm(self) -> float:
+        return (self.workspace_width_cm - self.allocation_width_cm) / 2 + self.trim_x_cm
+
+    @property
+    def y_allocation_start_cm(self) -> float:
+        return (self.workspace_height_cm - self.allocation_height_cm) / 2 + self.trim_y_cm
 
     @property
     def x_start_cm(self) -> float:
-        """Near-X edge of the centred packed grid, including signed trim."""
-        return (self.workspace_width_cm - self.packed_width_cm) / 2 + self.trim_x_cm
+        """Near edge of block 1, after the 0-to-1 X gap."""
+        return self.x_allocation_start_cm + self.gap_x_cm
 
     @property
     def y_start_cm(self) -> float:
-        """Near-Y edge of the centred packed grid, including signed trim."""
-        return (self.workspace_height_cm - self.packed_height_cm) / 2 + self.trim_y_cm
+        """Near edge of row 1, after the 0-to-1 Y gap."""
+        return self.y_allocation_start_cm + self.gap_y_cm
 
     @property
     def x_end_cm(self) -> float:
@@ -171,8 +196,18 @@ class MachineGrid:
         if not self.contains(col, row):
             raise ValueError(f"cell [{col},{row}] is outside {self.cols}x{self.rows}")
         return (
-            self.x_start_cm + (col - 0.5) * self.cell_width_cm,
-            self.y_start_cm + (row - 0.5) * self.cell_height_cm,
+            self.x_start_cm + self.block_width_cm / 2 + (col - 1) * self.pitch_x_cm,
+            self.y_start_cm + self.block_length_cm / 2 + (row - 1) * self.pitch_y_cm,
+        )
+
+    def cell_bounds_cm(self, col: int, row: int) -> tuple[float, float, float, float]:
+        """Physical block edges, excluding the visible 0.5 cm gaps."""
+        cx, cy = self.cell_center_cm(col, row)
+        return (
+            cx - self.block_width_cm / 2,
+            cy - self.block_length_cm / 2,
+            cx + self.block_width_cm / 2,
+            cy + self.block_length_cm / 2,
         )
 
     # --- how many cells the image is divided into ------------------------
@@ -229,7 +264,7 @@ class MachineGrid:
         """Whether coordinates are valid for the firmware's ``B`` command.
 
         ``B`` reserves zero independently on each axis for calibration:
-        ``B 0 5`` skips X, ``B 17 0`` skips Y, and ``B 0 0`` is a no-op.
+        ``B 0 5`` skips X, ``B 9 0`` skips Y, and ``B 0 0`` is a no-op.
         This is deliberately separate from :meth:`contains`, because zero is
         never a camera cell and must not enter image-cell geometry.
         """
@@ -243,8 +278,10 @@ class MachineGrid:
         return (
             self.cols == other.cols
             and self.rows == other.rows
-            and self.cell_width_cm == other.cell_width_cm
-            and self.cell_height_cm == other.cell_height_cm
+            and self.block_width_cm == other.block_width_cm
+            and self.block_length_cm == other.block_length_cm
+            and self.gap_x_cm == other.gap_x_cm
+            and self.gap_y_cm == other.gap_y_cm
             and self.workspace_width_cm == other.workspace_width_cm
             and self.workspace_height_cm == other.workspace_height_cm
             and self.trim_x_cm == other.trim_x_cm
@@ -256,8 +293,10 @@ class MachineGrid:
         physical = ""
         if self.has_physical_scale:
             physical = (
-                f", {self.cell_width_cm:g}x{self.cell_height_cm:g} cm cells"
-                f", packed {self.packed_width_cm:g}x{self.packed_height_cm:g} cm"
+                f", {self.block_width_cm:g}x{self.block_length_cm:g} cm blocks"
+                f", {self.gap_x_cm:g}x{self.gap_y_cm:g} cm gaps"
+                f", pitch {self.pitch_x_cm:g}x{self.pitch_y_cm:g} cm"
+                f", footprint {self.packed_width_cm:g}x{self.packed_height_cm:g} cm"
             )
         return f"{self.cols}x{self.rows} cells{physical}, [1,1] at {self.origin}{turned}"
 
@@ -273,17 +312,24 @@ class MachineGrid:
         numbers, which the firmware does to keep the map aligned.
         """
         lines = [
-            "  # = machine   . = empty cell",
-            "  (top row = far Y end, left col = X switch)",
+            "  # = machine   . = positive cell   + = axis-only   H = home",
+            "  (row/col 0 are real coordinates; positive cells are 1-based)",
             "",
         ]
-        for r in range(self.rows, 0, -1):
-            cells = "".join(
-                " #" if here == (c, r) else " ."
-                for c in range(1, self.cols + 1)
-            )
+        for r in range(self.rows, -1, -1):
+            cells = ""
+            for c in range(0, self.cols + 1):
+                if here == (c, r):
+                    marker = "#"
+                elif c == 0 and r == 0:
+                    marker = "H"
+                elif c == 0 or r == 0:
+                    marker = "+"
+                else:
+                    marker = "."
+                cells += f" {marker}"
             lines.append(f"{r:>3} |{cells}")
-        lines.append("    +" + "--" * self.cols)
-        lines.append("     " + " ".join(str(c % 10) for c in range(1, self.cols + 1)) + " ")
-        lines.append("     ^ origin corner is bottom-left [1,1]")
+        lines.append("    +" + "--" * (self.cols + 1))
+        lines.append("     " + " ".join(str(c % 10) for c in range(0, self.cols + 1)))
+        lines.append("     ^ [0,0] home; [col,0]/[0,row] are axis-only")
         return "\n".join(lines)
