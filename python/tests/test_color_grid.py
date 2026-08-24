@@ -37,7 +37,9 @@ from rig.workspace import WorkspaceMap
 from vision.color_grid import (
     ColorGridError,
     ColorGridSpec,
+    color_masks,
     detect_color_grid,
+    white_balance,
 )
 
 
@@ -57,7 +59,8 @@ def check(name, ok, detail=""):
 
 
 def render_sheet(spec, cols, rows, *, px_per_cm=14.0, margin_cm=1.6,
-                 clip_cm=(0.0, 0.0), warp=None, size=None):
+                 clip_cm=(0.0, 0.0), warp=None, size=None,
+                 green=GREEN_BGR, magenta=MAGENTA_BGR, paper=PAPER_BGR):
     """Draw a printed sheet, optionally clipped at two edges and warped.
 
     ``clip_cm`` shifts the paper so that the first column/row is cut in half,
@@ -69,7 +72,7 @@ def render_sheet(spec, cols, rows, *, px_per_cm=14.0, margin_cm=1.6,
     height_cm = rows * spec.pitch_y_cm - spec.gap_y_cm + 2 * margin_cm
     width = round(width_cm * px_per_cm)
     height = round(height_cm * px_per_cm)
-    paper = np.full((height, width, 3), PAPER_BGR, np.uint8)
+    sheet = np.full((height, width, 3), paper, np.uint8)
 
     centers = {}
     for row in range(rows):
@@ -77,21 +80,21 @@ def render_sheet(spec, cols, rows, *, px_per_cm=14.0, margin_cm=1.6,
             x0 = margin_cm - clip_cm[0] + col * spec.pitch_x_cm
             y0 = margin_cm - clip_cm[1] + row * spec.pitch_y_cm
             x1, y1 = x0 + spec.block_x_cm, y0 + spec.block_y_cm
-            colour = GREEN_BGR if (col + row) % 2 == 0 else MAGENTA_BGR
+            colour = green if (col + row) % 2 == 0 else magenta
             # Paper y grows upward; image y grows down.
             top = height - y1 * px_per_cm
             bottom = height - y0 * px_per_cm
-            cv2.rectangle(paper, (round(x0 * px_per_cm), round(top)),
+            cv2.rectangle(sheet, (round(x0 * px_per_cm), round(top)),
                           (round(x1 * px_per_cm) - 1, round(bottom) - 1),
                           colour, -1)
             centers[(col, row)] = ((x0 + x1) / 2 * px_per_cm,
                                    height - (y0 + y1) / 2 * px_per_cm)
 
     if warp is None:
-        return paper, centers
+        return sheet, centers
     out_size = size or (width, height)
     scene = np.full((out_size[1], out_size[0], 3), TABLE_BGR, np.uint8)
-    warped = cv2.warpPerspective(paper, warp, out_size, borderMode=cv2.BORDER_TRANSPARENT,
+    warped = cv2.warpPerspective(sheet, warp, out_size, borderMode=cv2.BORDER_TRANSPARENT,
                                  dst=scene)
     moved = {}
     for key, point in centers.items():
@@ -225,7 +228,8 @@ try:
     detect_color_grid(image, spec, process_width=0)
     check("a sheet with too few rows is refused", False, "it was accepted")
 except ColorGridError as exc:
-    check("a sheet with too few rows is refused", "cannot hold" in str(exc),
+    check("a sheet with too few rows is refused",
+          "4 whole cells along the 7.5 cm side where 6 are needed" in str(exc),
           str(exc)[:80])
 
 blank = np.full((400, 600, 3), TABLE_BGR, np.uint8)
@@ -283,6 +287,55 @@ expected_cm = float(np.hypot(spec.block_x_cm / 2, spec.block_y_cm / 2))
 check("the 'printed' convention differs by half a block on each axis",
       abs(offset_cm - expected_cm) < 0.15,
       f"{offset_cm:.2f} cm, expected {expected_cm:.2f} cm")
+
+
+# --- 6b. a camera colour cast, which is what broke this on the real rig ------
+#
+# A live frame from the rig arrived with a magenta cast strong enough to move
+# the green ink to hue 120 / saturation 49 — outside the green window and under
+# the saturation floor — so half of every sheet vanished and nothing detected
+# at all. This reproduces that kind of cast and holds the white balance to
+# fixing it.
+
+def cast(image, gains):
+    """Push a frame's channels around the way a bad camera white balance does."""
+    return np.clip(image.astype(np.float32) * np.float32(gains), 0, 255).astype(np.uint8)
+
+
+image, _ = render_sheet(spec, 13, 8, clip_cm=(1.2, 4.0))
+for name, gains in (("magenta cast", (1.18, 0.72, 1.24)),
+                    ("blue cast", (1.35, 0.95, 0.72)),
+                    ("warm cast", (0.70, 0.95, 1.30))):
+    tinted = cast(image, gains)
+    try:
+        found = detect_color_grid(tinted, spec, process_width=0)
+        check(f"detection survives a {name}", len(found.found_cells) == 60,
+              found.describe())
+    except ColorGridError as exc:
+        check(f"detection survives a {name}", False, str(exc)[:70])
+
+# The synthetic inks above are more saturated than real print under the rig's
+# own lighting, so they survive a cast on the widened hue windows alone. Repeat
+# the check with the colours actually measured off the live rig frame - green
+# ink BGR (168,136,136), magenta (153,99,160), paper (195,167,183) - which is
+# where the balance stops being a nicety.
+faded = render_sheet(spec, 13, 8, clip_cm=(1.2, 4.0), green=(168, 136, 136),
+                     magenta=(153, 99, 160), paper=(195, 167, 183))[0]
+unbalanced, _ = color_masks(faded, balance=False)
+balanced, _ = color_masks(faded, balance=True)
+check("without balancing, real rig ink colours lose the green cells",
+      unbalanced.sum() < balanced.sum() / 4,
+      f"{int(unbalanced.sum())} px unbalanced vs {int(balanced.sum())} balanced")
+try:
+    found = detect_color_grid(faded, spec, process_width=0)
+    check("with balancing, real rig ink colours still fit the grid",
+          len(found.found_cells) == 60, found.describe())
+except ColorGridError as exc:
+    check("with balancing, real rig ink colours still fit the grid", False,
+          str(exc)[:70])
+
+check("a neutral frame is left alone by the balance",
+      np.array_equal(white_balance(image), image))
 
 
 # --- 7. the feed helpers, without a camera or a window ----------------------

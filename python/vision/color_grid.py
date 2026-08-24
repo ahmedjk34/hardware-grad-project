@@ -30,6 +30,8 @@ measured — it is simply whatever lies beyond the last full cell.
 
 How the lattice is found
 ------------------------
+0. The frame is white balanced. This is not cosmetic — see :func:`white_balance`
+   for the live frame where skipping it made every green cell invisible.
 1. Two hue windows segment green and magenta. Their union is "some cell".
 2. Each connected component becomes a rotated rectangle. The median long-axis
    direction (circular, mod 180 degrees) fixes a global sense for "along the
@@ -77,14 +79,27 @@ from rig.config import load as load_rig_config
 # any camera distance without a scale calibration.
 SUPPORTED_LAYOUT = "y-along-block-length"
 
-# Hue windows, in OpenCV's 0..179 space. Measured off the supplied captures:
-# the green ink clusters at 80-88 and the magenta at 150-162, with nothing in
-# between, so these windows are wide enough to survive a white-balance shift
-# without touching each other.
-GREEN_HUE = (65, 100)
-MAGENTA_HUE = (135, 175)
-MIN_SATURATION = 50
-MIN_VALUE = 45
+# Hue windows, in OpenCV's 0..179 space, applied AFTER the white balance below.
+# The training captures put green at 80-88 and magenta at 150-162. A live rig
+# frame under a heavy magenta cast puts the same inks at 101 and 155 once
+# balanced, and at 120 and 153 if it is not — which is how a green cell ends up
+# looking cyan and vanishing. The windows are sized for the balanced range with
+# room to spare, and the two never touch.
+GREEN_HUE = (58, 115)
+MAGENTA_HUE = (130, 178)
+
+# Saturation floor. The rig's own lighting can leave the green ink at 48 while
+# white paper sits at 15, so the floor lives between those rather than at the
+# 50 the studio captures allowed. Anything below it is paper, not ink.
+MIN_SATURATION = 32
+MIN_VALUE = 40
+
+# The bright quantile that :func:`white_balance` drives to neutral. High enough
+# to land on the sheet's white paper, low enough not to chase one specular
+# highlight. Estimated on a subsampled frame; the scaling is applied to all of it.
+WHITE_PATCH_QUANTILE = 0.92
+_BALANCE_STRIDE = 8
+_BALANCE_DEADBAND = 0.02        # below this the cast is not worth a pass over the frame
 
 # A block whose observed area is at least this fraction of the area the lattice
 # predicts for it is whole. The captures put real cells at 0.93-1.03 and every
@@ -111,7 +126,20 @@ _OPEN_KERNEL = np.ones((3, 3), np.uint8)
 
 
 class ColorGridError(Exception):
-    """The sheet could not be turned into a usable grid."""
+    """The sheet could not be turned into a usable grid.
+
+    Carries whatever geometry the failed attempt did produce. A tool that shows
+    nothing at all when detection fails is the hardest possible thing to debug —
+    "no overlay" looks identical whether the sheet is out of frame, the colours
+    are wrong, or the code never ran. ``candidates`` lets the checker draw the
+    colour blobs it did find, and ``stage`` says how far it got.
+    """
+
+    def __init__(self, message, *, stage="detect", candidates=(), lattice=()):
+        super().__init__(message)
+        self.stage = stage
+        self.candidates = tuple(candidates)   # Nx4x2 boxes, input-frame pixels
+        self.lattice = tuple(lattice)         # the subset that joined a lattice
 
 
 @dataclass(frozen=True)
@@ -403,14 +431,49 @@ class ColorGridCalibration:
 # ---------------------------------------------------------------------------
 
 
+def white_balance(frame: np.ndarray,
+                  quantile: float = WHITE_PATCH_QUANTILE) -> np.ndarray:
+    """Scale each channel so the frame's bright quantile is neutral.
+
+    Absolute hue windows cannot survive an arbitrary camera white balance, and
+    the rig's camera does not have a good one: on a live frame the whole scene
+    carried a magenta cast strong enough to move the green ink to hue 120 with
+    saturation 49 — outside the green window *and* under the saturation floor,
+    so half of every sheet disappeared and no lattice could form.
+
+    White-patch rather than grey-world on purpose. The sheet's white paper is
+    the brightest large thing in a frame that is mostly sheet, which makes the
+    bright quantile a real white reference; grey-world would instead be dragged
+    around by how much of the frame the pink inks happen to cover.
+    """
+    sample = frame[::_BALANCE_STRIDE, ::_BALANCE_STRIDE].reshape(-1, 3)
+    references = np.percentile(sample, quantile * 100.0, axis=0)
+    target = float(references.mean())
+    if target <= 0:
+        return frame
+    scale = target / np.maximum(references, 1e-6)
+    if np.allclose(scale, 1.0, atol=_BALANCE_DEADBAND):
+        return frame
+    # A lookup table, not a float multiply over the whole frame: this runs on
+    # every analysed frame on a Pi, and the float round trip costs more than
+    # the rest of the detector put together.
+    ramp = np.arange(256, dtype=np.float32)
+    table = np.clip(ramp[None, :] * scale[:, None], 0, 255).astype(np.uint8)
+    return cv2.LUT(frame, np.ascontiguousarray(table.T.reshape(1, 256, 3)))
+
+
 def color_masks(frame: np.ndarray, *, min_saturation: int = MIN_SATURATION,
-                min_value: int = MIN_VALUE) -> tuple[np.ndarray, np.ndarray]:
+                min_value: int = MIN_VALUE,
+                balance: bool = True) -> tuple[np.ndarray, np.ndarray]:
     """Return the (green, magenta) boolean masks for one BGR frame.
 
-    Hue plus a saturation floor, not brightness: the sheet is photographed
-    under whatever light the rig has, and the two inks stay a long way apart in
-    hue while their brightness does not.
+    Hue plus a saturation floor, not brightness: the two inks stay a long way
+    apart in hue under any light, while their brightness does not. ``balance``
+    neutralises the camera's colour cast first — see :func:`white_balance` for
+    why that is not optional in practice.
     """
+    if balance:
+        frame = white_balance(frame)
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     hue, sat, val = cv2.split(hsv)
     strong = (sat >= min_saturation) & (val >= min_value)
@@ -564,6 +627,37 @@ def _score_fullness(coords, found, matrix, spec):
         rect["full"] = rect["fill"] >= FULL_CELL_FILL and not rect["clipped"]
 
 
+def _largest_solid_block(full):
+    """Biggest all-full axis-aligned rectangle in the lattice, as (di, dj).
+
+    The bounding box of the whole cells is not the useful number: a cable lying
+    across the sheet, or a frame edge clipping one row, leaves a bounding box
+    that looks big enough and a solid block that is not. Reporting both is what
+    turns "cannot hold the grid" into something an operator can act on.
+    """
+    if not full:
+        return (0, 0)
+    i_values = sorted({key[0] for key in full})
+    j_values = sorted({key[1] for key in full})
+    best = (0, 0)
+    # Heights of the run of full cells ending at each (i, j), then the standard
+    # largest-rectangle-in-histogram scan across each row.
+    heights = {}
+    for i in i_values:
+        for j in j_values:
+            heights[(i, j)] = (heights.get((i - 1, j), 0) + 1) if (i, j) in full else 0
+        stack = []
+        for index, j in enumerate(j_values + [None]):
+            height = 0 if j is None else heights[(i, j)]
+            start = index
+            while stack and stack[-1][1] >= height:
+                start, tall = stack.pop()
+                if tall * (index - start) > best[0] * best[1]:
+                    best = (tall, index - start)
+            stack.append((start, height))
+    return best
+
+
 def _choose_window(coords, found, need_i, need_j, image_size):
     """Pick the need_i x need_j block of full cells nearest the image's bottom-left.
 
@@ -625,7 +719,8 @@ def detect_color_grid(frame: np.ndarray, spec: ColorGridSpec | None = None, *,
                       process_width: int = DEFAULT_PROCESS_WIDTH,
                       min_area: int = MIN_COMPONENT_AREA,
                       min_saturation: int = MIN_SATURATION,
-                      min_value: int = MIN_VALUE) -> ColorGridCalibration:
+                      min_value: int = MIN_VALUE,
+                      balance: bool = True) -> ColorGridCalibration:
     """Find the printed sheet in ``frame`` and fit a grid to it.
 
     Raises :class:`ColorGridError` with a sentence an operator can act on when
@@ -650,26 +745,43 @@ def detect_color_grid(frame: np.ndarray, spec: ColorGridSpec | None = None, *,
     metrics.processing_size = work_size
 
     green, magenta = color_masks(working, min_saturation=min_saturation,
-                                 min_value=min_value)
+                                 min_value=min_value, balance=balance)
     found = _components(green, magenta, min_area * scale * scale, work_size)
     metrics.components = len(found)
+
+    def boxes(subset=None):
+        source = found if subset is None else [found[i] for i in subset]
+        return [np.asarray(rect["box"], dtype=np.float32) / scale for rect in source]
+
     if len(found) < spec.cols * spec.rows:
         raise ColorGridError(
             f"only {len(found)} coloured blocks visible; the "
-            f"{spec.cols}x{spec.rows} grid needs at least {spec.cols * spec.rows}")
+            f"{spec.cols}x{spec.rows} grid needs at least {spec.cols * spec.rows}"
+            + (". Is the sheet in frame, and is the camera's white balance sane?"
+               if len(found) < 8 else ""),
+            stage="segment", candidates=boxes())
 
     coords = _walk_lattice(found, spec)
     metrics.assigned = len(coords)
     if len(coords) < 4:
-        raise ColorGridError("the coloured blocks do not form a regular lattice")
+        raise ColorGridError(
+            f"{len(found)} coloured blocks found but they do not form a regular "
+            f"lattice; the sheet may be folded, or something else in view is the "
+            f"same colour as the ink",
+            stage="lattice", candidates=boxes())
 
     matrix, mean_error, max_error = _fit(coords, found, lambda i: found[i]["seed"])
     if matrix is None:
-        raise ColorGridError("not enough whole blocks to fit the sheet")
+        raise ColorGridError("not enough whole blocks to fit the sheet",
+                             stage="fit", candidates=boxes(),
+                             lattice=boxes(coords))
     _score_fullness(coords, found, matrix, spec)
     matrix, mean_error, max_error = _fit(coords, found, lambda i: found[i]["full"])
     if matrix is None:
-        raise ColorGridError("not enough whole blocks to fit the sheet")
+        raise ColorGridError(
+            "no whole cells: every block in view is clipped by the paper edge, "
+            "the frame edge, or something lying across the sheet",
+            stage="fit", candidates=boxes(), lattice=boxes(coords))
     _score_fullness(coords, found, matrix, spec)
 
     metrics.residual_px = mean_error / scale
@@ -697,10 +809,29 @@ def detect_color_grid(frame: np.ndarray, spec: ColorGridSpec | None = None, *,
                       else (spec.rows, spec.cols))
     window = _choose_window(coords, found, need_i, need_j, work_size)
     if window is None:
+        # Say which of the two failures this is. "Not enough cells in view" and
+        # "enough cells but something punched holes in them" need opposite
+        # responses from the operator, and the counts alone do not distinguish
+        # them: the bounding spread can look ample while no solid block exists.
+        solid = _largest_solid_block({coords[i] for i in coords if found[i]["full"]})
+        short_side, long_side = ((spec.block_x_cm, spec.block_y_cm) if spec.short_is_x
+                                 else (spec.block_y_cm, spec.block_x_cm))
+        axes = (
+            (solid[0], need_i, metrics.lattice_shape[0], f"{short_side:g} cm"),
+            (solid[1], need_j, metrics.lattice_shape[1], f"{long_side:g} cm"),
+        )
+        lacking = [f"{have} whole cells along the {name} side where {want} are needed"
+                   for have, want, _spread, name in axes if have < want]
+        occluded = all(spread >= want for _have, want, spread, _name in axes)
+        message = "; and ".join(lacking) or "the whole cells do not form a block"
+        if occluded:
+            message += (". The sheet is big enough in view, so the gaps are "
+                        "holes: something is lying across it, or a row is clipped")
+        else:
+            message += ". Move the sheet or the camera so more of it is in view"
         raise ColorGridError(
-            f"found a {metrics.lattice_shape[0]}x{metrics.lattice_shape[1]} block of "
-            f"whole cells, which cannot hold the {need_i}x{need_j} grid; move the "
-            f"sheet or the camera so more whole cells are in view")
+            message, stage="window", candidates=boxes(),
+            lattice=boxes(i for i in coords if found[i]["full"]))
     origin, corner = window
     transform = _window_transform(origin, corner, need_i, need_j, spec)
 

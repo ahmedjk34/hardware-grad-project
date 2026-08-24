@@ -104,6 +104,33 @@ def draw_color_grid(frame: np.ndarray, calibration: ColorGridCalibration, *,
     return hovered
 
 
+def draw_candidates(frame: np.ndarray, error, *, labels=True):
+    """Draw what a *failed* detection did find, so the failure is diagnosable.
+
+    A blank frame is the least informative thing a checker can show: "no
+    overlay" looks identical whether the sheet is out of shot, the camera's
+    white balance has swallowed one of the inks, or the code never ran at all.
+    :class:`ColorGridError` carries its candidate blobs for exactly this, and
+    the difference between "hundreds of blobs, none on a lattice" and "four
+    blobs" tells you which problem you have without touching the code.
+    """
+    candidates = getattr(error, "candidates", ())
+    lattice = getattr(error, "lattice", ())
+    if not candidates:
+        return 0
+    on_lattice = {tuple(np.round(box.mean(axis=0), 1)) for box in lattice}
+    for box in candidates:
+        key = tuple(np.round(np.asarray(box).mean(axis=0), 1))
+        colour = MAPPED_COLOR if key in on_lattice else PARTIAL_COLOR
+        cv2.polylines(frame, [_quad(box)], True, colour, 1, cv2.LINE_AA)
+    if labels:
+        _stamp(frame, f"{len(candidates)} colour blobs, {len(lattice)} on a lattice",
+               (8, 22), PARTIAL_COLOR, 0.5)
+        _stamp(frame, f"stage: {getattr(error, 'stage', '?')}", (8, 44),
+               PARTIAL_COLOR, 0.5)
+    return len(candidates)
+
+
 def draw_workspace_corners(frame: np.ndarray, corners, color=OUTLINE_COLOR):
     """Mark the four holder-envelope corners a detection would save.
 

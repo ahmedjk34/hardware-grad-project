@@ -82,6 +82,7 @@ from vision.color_grid import (  # noqa: E402
     detect_color_grid,
 )
 from vision.color_grid_overlay import (  # noqa: E402
+    draw_candidates,
     draw_color_grid,
     draw_workspace_corners,
     status_text as paper_status_text,
@@ -124,7 +125,7 @@ def analyze_paper_grid(frame, spec, process_width=PAPER_OVERLAY_WIDTH):
     try:
         return ((detect_color_grid(frame, spec, process_width=process_width), None),)
     except ColorGridError as exc:
-        return ((None, str(exc)),)
+        return ((None, exc),)
 
 
 class PaperGridTracker:
@@ -143,6 +144,7 @@ class PaperGridTracker:
                                       name="paper-grid")
         self._calibration = None
         self._error = "overlay off"
+        self._failure = None
 
     def start(self):
         self._worker.start()
@@ -153,7 +155,7 @@ class PaperGridTracker:
     def toggle(self):
         self.enabled = not self.enabled
         if not self.enabled:
-            self._calibration, self._error = None, "overlay off"
+            self._calibration, self._error, self._failure = None, "overlay off", None
         else:
             self._error = "looking for the sheet"
         return self.enabled
@@ -171,8 +173,12 @@ class PaperGridTracker:
         if not snapshot.is_current(generation) or not snapshot.detections:
             if snapshot.error:
                 self._calibration, self._error = None, snapshot.error
+                self._failure = None
             return
-        self._calibration, self._error = snapshot.detections[0]
+        calibration, failure = snapshot.detections[0]
+        self._calibration = calibration
+        self._failure = None if calibration is not None else failure
+        self._error = None if failure is None else str(failure)
 
     @property
     def calibration(self):
@@ -181,6 +187,11 @@ class PaperGridTracker:
     @property
     def error(self):
         return self._error
+
+    @property
+    def failure(self):
+        """The last :class:`ColorGridError`, for drawing what it did find."""
+        return self._failure
 
     def status(self):
         return paper_status_text(self._calibration, self._error)
@@ -205,6 +216,10 @@ def draw_paper_grid(frame, tracker, hover, grid, convention, *, detail=False):
     """Draw the printed-sheet overlay, plus the envelope it would calibrate to."""
     calibration = tracker.calibration
     if calibration is None:
+        # A refusal still draws its blobs. Pressing p and seeing nothing change
+        # is indistinguishable from p not working.
+        if tracker.failure is not None:
+            draw_candidates(frame, tracker.failure, labels=detail)
         return None
     hovered = draw_color_grid(frame, calibration, hover=hover, labels=detail,
                               shade=0.30)

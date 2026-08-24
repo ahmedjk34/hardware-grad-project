@@ -44,10 +44,12 @@ the problem.
 
 ## How the fit works
 
+0. **The frame is white balanced first**, driving its bright quantile to
+   neutral. See [Colour, and why this is not optional](#colour-and-why-this-is-not-optional).
 1. **Two hue windows** segment the inks. Hue plus a saturation floor rather
-   than brightness: the two inks stay far apart in hue (green clusters at 80-88
-   in OpenCV's 0-179 scale, magenta at 150-162, nothing in between) under
-   whatever light the rig has.
+   than brightness: the two inks stay far apart in hue (green at 80-88 in
+   OpenCV's 0-179 scale in a clean capture, 101 in a balanced rig frame;
+   magenta at 150-162; nothing in between).
 2. **Each blob becomes a rotated rectangle.** Their long-axis directions are
    averaged as doubled angles, which is insensitive to a 180° flip, giving one
    global sense for "along the 7.5 cm side". Without this, neighbouring cells
@@ -79,6 +81,51 @@ rotated machine, not a rotated camera. `SUPPORTED_LAYOUT` names the one
 supported layout and detection refuses anything else rather than guessing.
 Adding it means deciding what the firmware's `B <col> <row>` should mean in
 that orientation, which is a rig decision and not a vision one.
+
+---
+
+## Colour, and why this is not optional
+
+The first live frame from the rig detected **nothing at all**, and it is worth
+recording why, because the failure was invisible from the outside.
+
+The camera's white balance had put a heavy magenta cast over the whole scene.
+Measured off that frame:
+
+| what | HSV, raw | HSV, white balanced |
+| --- | --- | --- |
+| green ink | **(120, 49, 168)** | (101, 48, 160) |
+| magenta ink | (153, 97, 160) | (155, 75, 153) |
+| white paper | (137, 37, 195) | (98, 15, 186) |
+| the wall behind the rig | (139, 78, 176) | (135, 53, 168) |
+
+The green ink had moved to hue **120 — cyan, not green** — with saturation 49.
+It missed the green hue window *and* fell under the saturation floor, so half
+of every sheet was simply not there. Worse, the pink **wall** landed inside the
+magenta window with saturation 78, so the frame had plenty of "ink" in it, none
+of it on the sheet.
+
+Absolute hue windows cannot survive an arbitrary camera white balance, so the
+detector now normalises first. `white_balance()` scales each channel so the
+frame's 92nd-percentile brightness is neutral — white-patch rather than
+grey-world, because the sheet's white paper is the brightest large thing in
+frame and therefore a real white reference, whereas grey-world would be dragged
+around by how much of the frame the pink ink happens to cover. It costs ~3 ms
+on a 1296 × 972 frame (a lookup table, not a float pass), and it no-ops on a
+frame that is already neutral.
+
+The thresholds moved with it: green `(58, 115)`, magenta `(130, 178)`,
+saturation floor `32`. The floor sits between the rig's green ink at 48 and its
+white paper at 15.
+
+The wall and the aluminium rails still register as "magenta" under that cast.
+That is left alone deliberately — they are not a lattice of 2.2 × 7.5 cm
+blocks, so the lattice walk discards them, and an over-inclusive mask costs
+nothing while an under-inclusive one costs everything.
+
+**This is worth fixing at the camera too.** A cast that severe also degrades
+`block_detector.py`, which keys on red-minus-blue. `camera_studio.py` is where
+the white balance and gains are tuned and saved.
 
 ---
 
@@ -134,6 +181,13 @@ rather than in a test's expected output.
 | `original_image_VERTICAL.jpeg` (2048 × 1466) | 128 blobs, 111 on the lattice, **15 × 7 whole cells**, 10 × 6 grid fitted, mean residual **1.13 px** (max 5.67), colour parity **100 %** |
 | `original_image_HORZONTIAL.jpeg` (1920 × 1061) | 132 blobs, **22 × 5 whole cells** — refused: 5 whole cells along the 7.5 cm axis cannot hold 6 rows |
 
+A first live frame from the rig (1296 × 972, corrected feed) found 89 blobs
+with 53 on the lattice, spread over 11 × 6 — but with holes from a cable lying
+diagonally across the sheet and from the frame clipping the outer columns, so
+the largest unbroken block was only 6 × 3. Refused, correctly. The sheet needs
+to be moved into full view with the cable off it; the detector cannot invent
+cells that are covered up.
+
 The refusal is correct, not a limitation: that photo genuinely does not contain
 six whole rows. The sheet is the same A2 print in both, just laid down the other
 way, and only one of the two orientations has room for the grid. A live camera
@@ -167,10 +221,19 @@ wrong, and the tint can.
 
 ### Reading a bad result
 
+**A refusal always still draws what it found** — the blobs that joined a
+lattice in green, the ones that did not in red, with the count and the stage in
+the corner. A blank window would make "the sheet is out of shot", "the colours
+are wrong" and "the code never ran" look identical, which is precisely how the
+first live attempt was reported as *no detection, no overlay, nothing*.
+
 | what you see | what it means |
 | --- | --- |
-| `cannot hold the 10x6 grid` | not enough whole cells in view. Move the sheet or the camera; the count in the message says which axis is short. |
-| `only N coloured blocks visible` | the sheet is not in frame, or the light has pushed the inks below the saturation floor. |
+| `N whole cells along the 2.2 cm side where 10 are needed … Move the sheet or the camera` | genuinely not enough sheet in view. The named side says which way to move. |
+| `… The sheet is big enough in view, so the gaps are holes` | enough cells, but something punched holes in them — a cable lying across the sheet, or an edge clipping a row. Clear the sheet rather than moving it. |
+| `only N coloured blocks visible` | the sheet is not in frame, or the colours are being lost. Look at the drawn blobs: many blobs means a colour problem, almost none means a framing one. |
+| `they do not form a regular lattice` | blobs found, but not in a grid. Usually something else in view is ink-coloured and the sheet is mostly out of shot. |
+| red blobs all over the walls and rails | normal under a colour cast; the lattice discards them. Only a problem if they outnumber the sheet. |
 | parity below 100 % | the lattice indices are inconsistent. Distrust the fit even if the residual looks fine. |
 | tint drifting off the ink at one corner | residual lens distortion, or the sheet is not flat. |
 | `normalized workspace corners must lie inside the image` | the envelope the sheet implies runs off the frame. The sheet is too close to an edge to calibrate from. |

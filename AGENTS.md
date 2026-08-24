@@ -84,8 +84,8 @@ at the active software cap. The live calibration is:
 
 - X: **24.3 cm holder displacement = 4750 steps**, so `4750 / 24.3 =
   195.4733 steps/cm`;
-- Y: **40 cm holder displacement = 8275 steps**, so `8275 / 40 =
-  206.875 steps/cm`.
+- Y: **40 cm holder displacement = 7975 steps**, so `7975 / 40 =
+  199.375 steps/cm`.
 
 Never hard-code those ratios; firmware derives them from the cap and measured
 displacement. A separate physical observation found a **24.3 × 43 cm build
@@ -112,7 +112,7 @@ and Y `0.5 + 7.5/2 = 4.25 cm`; pitch then repeats to last centres X `23.2`
 and Y `36.25 cm`. The final block edges land exactly at `24.3 × 40 cm`.
 
 The firmware owns the step counts and derives both steps/cm ratios at runtime;
-never hard-code either ratio and do not copy the `4750 × 8275` safety envelope
+never hard-code either ratio and do not copy the `4750 × 7975` safety envelope
 into JSON. The Pi does not need motor steps to draw or select a cell: it maps
 camera pixel → physical cm → `[col,row]`, and the Arduino alone maps that cell
 to safe step targets. The Pi needs the centimetre geometry to interpret camera
@@ -352,7 +352,7 @@ These are physical facts about the machine. Nothing can push them over serial,
 so a copy in the JSON would be a lie that nobody notices until the rig crashes
 into something.
 
-- firmware-only X/Y software caps (`X = 4750`, `Y = 8275`)
+- firmware-only X/Y software caps (`X = 4750`, `Y = 7975`)
 - `Z_TRAVEL_CM`, `Z_TRAVEL_STEPS`, `BLOCK_HEIGHT_CM`, build ceiling
 - pin assignments, servo angles, motor direction polarity
 

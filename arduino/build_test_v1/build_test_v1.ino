@@ -63,18 +63,18 @@
   sit at OPPOSITE ends now, so the two axes no longer share a sign:
 
       X switch at the X+ end  ->  X runs   0  ...  -4750   (soft limit)
-      Y switch at the Y- end  ->  Y runs   0  ...  +8275   (soft limit)
+      Y switch at the Y- end  ->  Y runs   0  ...  +7975   (soft limit)
       Z switch at the Z- end  ->  Z runs   0  ...  +1350   (TOP SWITCH)
 
-  The current software-safe envelope is 4750 x 8275 steps. The measured
+  The current software-safe envelope is 4750 x 7975 steps. The measured
   HOLDER displacement to those caps is 24.3 x 40 cm. The active rectangle is
-  X in [-4750, 0], Y in [0, +8275]. Grid
+  X in [-4750, 0], Y in [0, +7975]. Grid
   indices hide this sign mess:
 
       col 1  = nearest the X switch (X = 0 side, the X+ end)
       col N  = far end of X travel  (X = -4750 side)
       row 1  = nearest the Y switch (Y = 0 side)
-      row M  = far end of Y travel  (Y = +8275 side)
+      row M  = far end of Y travel  (Y = +7975 side)
 
   Generalised in code as: each axis extends from 0 in the direction
   travelEndOf(axis), for axisTravelOf(axis) steps - whether that far
@@ -464,7 +464,7 @@ const uint8_t LIMIT_CHECK_EVERY_N_STEPS = 1;
 const long SOFT_LIMIT_INFINITE = 0; // sentinel: no cap at all
 
 long SOFT_LIMIT_X_TRAVEL = 4750;                      // X- travel cap, in steps
-long SOFT_LIMIT_Y_TRAVEL = 8275;                      // Y+ travel cap, in steps
+long SOFT_LIMIT_Y_TRAVEL = 7975;                      // Y+ travel cap, in steps
 const long SOFT_LIMIT_Z_TRAVEL = SOFT_LIMIT_INFINITE; // Z: switch, not a cap
 
 // Measured HOLDER displacement from each home switch to the active software
@@ -473,7 +473,7 @@ const long SOFT_LIMIT_Z_TRAVEL = SOFT_LIMIT_INFINITE; // Z: switch, not a cap
 // for now, so it does not participate in either scale.
 //
 //   X scale = 4750 / 24.3 = 195.4733 steps/cm
-//   Y scale = 8275 / 40.0 = 206.8750 steps/cm
+//   Y scale = 7975 / 40.0 = 199.3750 steps/cm
 float X_TRAVEL_CM = 24.3;
 float Y_TRAVEL_CM = 40.0;
 

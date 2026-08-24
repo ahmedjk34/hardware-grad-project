@@ -36,7 +36,7 @@ and the active software cap. These are displacement measurements, not arm or
 block dimensions:
 
 - X: `24.3 cm = 4750 steps`, so `4750 / 24.3 = 195.4733 steps/cm`
-- Y: `40 cm = 8275 steps`, so `8275 / 40 = 206.875 steps/cm`
+- Y: `40 cm = 7975 steps`, so `7975 / 40 = 199.375 steps/cm`
 
 Firmware derives both ratios; neither is hard-coded. The separately observed
 physical build displacement is `24.3 × 43 cm`, but the extra 3 cm on Y belongs

@@ -67,6 +67,7 @@ from vision.color_grid import (  # noqa: E402
     detect_color_grid,
 )
 from vision.color_grid_overlay import (  # noqa: E402
+    draw_candidates,
     draw_color_grid,
     draw_workspace_corners,
     status_text,
@@ -146,16 +147,27 @@ def run_still(args, spec, grid):
     if frame is None:
         print(f"Cannot read {args.image}", file=sys.stderr)
         return 1
+    print(f"{args.image.name}: {frame.shape[1]}x{frame.shape[0]}")
+    ui = {"labels": True, "rejected": True, "tint": 0, "envelope": True,
+          "convention": args.home_convention}
     try:
         calibration = detect_color_grid(frame, spec, process_width=args.process_width)
     except ColorGridError as exc:
-        print(f"{args.image.name}: {exc}", file=sys.stderr)
+        # Still render. A refusal with the blobs drawn says which of "no sheet",
+        # "wrong colours" and "not enough whole cells" happened; a bare error
+        # line and a blank window do not.
+        print(f"REFUSED at the {exc.stage} stage: {exc}", file=sys.stderr)
+        display = frame.copy()
+        draw_candidates(display, exc)
+        if args.save:
+            args.save.parent.mkdir(parents=True, exist_ok=True)
+            cv2.imwrite(str(args.save), display)
+            print(f"Saved the failed detection to {args.save}")
+        else:
+            _show(display)
         return 1
-    print(f"{args.image.name}: {frame.shape[1]}x{frame.shape[0]}")
     report(calibration, grid, args.home_convention)
 
-    ui = {"labels": True, "rejected": True, "tint": 0, "envelope": True,
-          "convention": args.home_convention}
     display, _ = annotate(frame, calibration, grid, ui)
     if args.save:
         args.save.parent.mkdir(parents=True, exist_ok=True)
@@ -163,7 +175,11 @@ def run_still(args, spec, grid):
         print(f"Saved {args.save}")
         return 0
 
-    window = "Printed grid check"
+    _show(display)
+    return 0
+
+
+def _show(display, window="Printed grid check"):
     cv2.imshow(window, display)
     while True:
         key = cv2.waitKey(50) & 0xFF
@@ -172,7 +188,6 @@ def run_still(args, spec, grid):
         if cv2.getWindowProperty(window, cv2.WND_PROP_VISIBLE) < 1:
             break
     cv2.destroyAllWindows()
-    return 0
 
 
 def run_camera(args, spec, grid):
@@ -233,6 +248,7 @@ def run_camera(args, spec, grid):
     input_size = None
     last_sequence = 0
     calibration = None
+    failure = None
     error = "waiting for a frame"
     last_detect = 0.0
     interval = 1.0 / max(args.detect_hz, 0.1)
@@ -275,9 +291,13 @@ def run_camera(args, spec, grid):
                 CAPTURE_DIR.mkdir(parents=True, exist_ok=True)
                 stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
                 path = CAPTURE_DIR / f"{stamp}_paper_grid.png"
-                cv2.imwrite(str(path), last_display)
-                ui["message"] = f"saved {path.name}"
-                print(f"Saved {path}")
+                if not cv2.imwrite(str(path), last_display):
+                    ui["message"] = f"save failed: {path}"
+                    print(f"Could not save {path}", file=sys.stderr)
+                else:
+                    path = path.resolve()
+                    ui["message"] = f"saved: {path}"
+                    print(f"Saved {path}")
         return True
 
     try:
@@ -305,16 +325,20 @@ def run_camera(args, spec, grid):
                 try:
                     calibration = detect_color_grid(view, spec,
                                                     process_width=process_width)
-                    error = None
+                    error, failure = None, None
                 except ColorGridError as exc:
-                    calibration = None
+                    calibration, failure = None, exc
                     error = str(exc)
 
             hovered = None
             if calibration is not None:
                 display, hovered = annotate(view, calibration, grid, ui, ui["hover"])
             else:
+                # Never show a bare frame. Whatever the detector did find is
+                # drawn, so "nothing happens" can never be the whole report.
                 display = view.copy()
+                if failure is not None:
+                    draw_candidates(display, failure, labels=ui["labels"])
             last_display = display
             window.show(display, status_lines(hovered))
             rate.tick()

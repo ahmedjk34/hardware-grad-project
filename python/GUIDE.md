@@ -125,9 +125,9 @@ The camera image contains only the camera, grid, and block visualization;
 calibration state, cell details, FPS, and controls are in the separate Tk dashboard.
 
 The JSON deliberately does not duplicate the firmware's motor step limits.
-The live caps are `4750` X and `8275` Y steps; paired with the measured holder
+The live caps are `4750` X and `7975` Y steps; paired with the measured holder
 displacements, firmware derives `4750 / 24.3 = 195.4733` X steps/cm and
-`8275 / 40 = 206.875` Y steps/cm. The separately observed build displacement
+`7975 / 40 = 199.375` Y steps/cm. The separately observed build displacement
 is 43 cm on Y, but its extra 3 cm belongs to the currently ignored arm-holder
 offset and does not control this grid. The Pi maps pixels through centimetres
 to a logical cell; Arduino alone converts the selected centre to step pulses.
@@ -249,6 +249,19 @@ you how good the fit is on average, not *where* it went wrong.
 
 `l` toggles labels, `r` the rejected outlines, `t` cycles the tint, `w` the
 envelope, `h` switches the home convention, `s` saves the annotated frame.
+
+**A refusal still draws something.** Blobs that joined a lattice are outlined
+green, the rest red, with the count and the failing stage in the corner — so
+"the sheet is out of shot", "the colours are wrong" and "the code never ran"
+never look the same. Many red blobs on the walls under a colour cast is normal;
+the lattice discards them.
+
+Frames are white balanced before segmentation, which is load-bearing rather
+than cosmetic: an uncorrected magenta cast from the rig's camera moved the
+green ink to hue 120 and made every green cell invisible. If the whole preview
+looks strongly tinted, fix the camera's white balance in `camera_studio.py`
+too — `block_detector.py` keys on red-minus-blue and is degraded by the same
+cast.
 
 The status line reports the whole-cell count, the lattice size found, the mean
 residual in pixels and the colour-parity agreement. Parity below 100 % means

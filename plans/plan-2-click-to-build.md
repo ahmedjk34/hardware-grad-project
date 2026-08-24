@@ -135,8 +135,8 @@ touching pitch-sized rectangles.
 
 **Why four clicks instead of arithmetic.** The camera's rotation and mirroring
 relative to the rig is arbitrary, and the machine's axes run in opposite
-directions (`X` from 0 to `−4750`, `Y` from 0 to `+8275`). The measured holder
-displacements are 24.3 × 40 cm, so scales derive as `4750/24.3` and `8275/40`.
+directions (`X` from 0 to `−4750`, `Y` from 0 to `+7975`). The measured holder
+displacements are 24.3 × 40 cm, so scales derive as `4750/24.3` and `7975/40`.
 The grid math is exact: X pitch `2.2 + 0.5 = 2.7`, nine pitches = 24.3 cm;
 Y pitch `7.5 + 0.5 = 8`, five pitches = 40 cm. Four clicked corners absorb
 camera rotation and perspective with no sign-juggling. It also means cell accuracy does not
