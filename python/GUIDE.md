@@ -14,6 +14,7 @@ below assume you are in the `python/` directory with the venv active.
 | **Run the configured camera feed for the vision pipeline** | [`camera_feed.py`](#camera_feedpy) |
 | **See/calibrate the Arduino block grid on the camera** | [`gridded_camera_feed.py`](#gridded_camera_feedpy) |
 | **Select a camera cell and build there** | [`rig_build_v1.py`](#rig_build_v1py) |
+| **Check the printed colour calibration sheet is detected** | [`color_grid_check.py`](#color_grid_checkpy) |
 | **Correct the fisheye with a straightness grid** | [`undistorted_grid_viewer.py`](#undistorted_grid_viewerpy) |
 | **Tune every camera setting and save them to JSON** | [`camera_studio.py`](#camera_studiopy) |
 | Check the camera is connected and working | [`camera_viewer.py`](#camera_viewerpy) |
@@ -106,6 +107,14 @@ camera and motor cells match. To calibrate:
 4. Hover cells and verify several displayed `G col row` commands with the rig
    before placing a block.
 
+There is a second, faster route. Lay the printed green/magenta calibration
+sheet in the work area, press `p` to see it detected, and press `k` to derive
+the same four corners from it and save them. It measures a hundred printed cell
+edges instead of asking you to aim at an invisible rectangle, and it writes the
+same `config/workspace_map.json`. See
+[plans/printed-color-grid.md](../plans/printed-color-grid.md), and check the
+detection first with `color_grid_check.py`.
+
 `x` cancels calibration without destroying the previous saved map, `g` toggles
 the grid, `o` cycles block/geometry overlay detail, and `s` saves the annotated
 frame and detection JSON. Changing the
@@ -154,7 +163,9 @@ Workflow:
 
 1. Left-click a cell on the approximate or calibrated grid.
 2. The magenta outline and Tk status panel show the selection. Press `c` only if
-   you want to refine the mapping with four envelope corners.
+   you want to refine the mapping with four envelope corners, or `k` to refine
+   it from the printed calibration sheet (`p` shows what the sheet detector
+   sees). Both are refused during a build and both clear the selection.
 3. Set the stack level with `[` / `]`; `o` cycles `NR`, `R`, `RR`.
 4. Read the displayed command, such as `B 3 4 0`.
 5. Press `b` or Enter to confirm and send it.
@@ -210,6 +221,44 @@ acceptance check for five minutes on local HDMI: preview should normally remain
 24–30 FPS, analysis at least 8 Hz with results under 300 ms old, and the Pi must
 report no undervoltage or thermal throttling. VNC and `ssh -X` add display-copy
 latency and are useful for control, not for validating camera FPS.
+
+---
+
+## `color_grid_check.py`
+
+**Use it for:** proving the printed colour calibration sheet is being detected
+correctly, before trusting a calibration made from it. It does nothing else —
+it never writes `config/workspace_map.json`.
+
+```bash
+python camera/color_grid_check.py                       # live camera
+python camera/color_grid_check.py --image captures/grid_training/original_image_VERTICAL.jpeg
+python camera/color_grid_check.py --image IN.jpeg --save OUT.png
+```
+
+The sheet is 7.5 × 2.2 cm cells with 0.5 cm inner margins — the rig's own block
+footprint and gap — in alternating green and magenta. It is printed larger than
+the grid on purpose, so the tool picks a 10 × 6 window of **whole** cells
+anchored at the bottom-left of the image and ignores everything else.
+
+Every mapped cell is tinted and stamped with its `col,row`; whole cells outside
+the chosen window are outlined dull yellow, and cells clipped by the paper edge
+or the frame edge red. The blue quadrilateral is the holder envelope a
+calibration would save. Watch the tint against the ink: a residual number tells
+you how good the fit is on average, not *where* it went wrong.
+
+`l` toggles labels, `r` the rejected outlines, `t` cycles the tint, `w` the
+envelope, `h` switches the home convention, `s` saves the annotated frame.
+
+The status line reports the whole-cell count, the lattice size found, the mean
+residual in pixels and the colour-parity agreement. Parity below 100 % means
+the lattice indices are inconsistent — distrust the fit even if the residual
+looks fine. Refusals are sentences you can act on, such as
+`found a 22x5 block of whole cells, which cannot hold the 10x6 grid`.
+
+Full detail, including the one place the sheet's layout disagrees with the
+firmware's, is in
+[plans/printed-color-grid.md](../plans/printed-color-grid.md).
 
 ---
 

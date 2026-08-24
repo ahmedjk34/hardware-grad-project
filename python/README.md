@@ -20,6 +20,7 @@ python/
 │   ├── camera_feed.py              config-driven runtime feed ← the main camera script
 │   ├── gridded_camera_feed.py      same feed + calibrated physical machine grid
 │   ├── rig_build_v1.py             select camera-grid cell + confirm Arduino build
+│   ├── color_grid_check.py         prove the printed calibration sheet is detected
 │   ├── camera_studio.py            tune EVERY setting, save them to JSON
 │   ├── camera_viewer.py            raw preview — "is the camera alive?"
 │   └── undistorted_viewer.py       live fisheye-corrected preview
@@ -37,6 +38,7 @@ python/
 │   ├── test_build_controller.py camera-build confirmation and lockout rules
 │   ├── test_build_job.py       the build worker thread and its one-at-a-time rule
 │   ├── test_camera_frame_pump.py stale-camera UI isolation without a camera
+│   ├── test_color_grid.py      the printed sheet, on synthetic and real captures
 │   ├── test_grid.py            the cell numbering, against the firmware's own map
 │   └── test_link.py            link.py against a fake board — no rig needed
 └── vision/                     importable library — no windows, no argv, no prints
@@ -45,6 +47,8 @@ python/
     ├── commands.py             the typed-command engine the viewers share
     ├── devices.py              /dev/video* enumeration and picker
     ├── fisheye.py              the fisheye → rectilinear correction
+    ├── color_grid.py           find the printed calibration sheet, fit a grid to it
+    ├── color_grid_overlay.py   draw that fitted sheet and the envelope it implies
     └── overlays.py             shared OpenCV drawing helpers
 ```
 

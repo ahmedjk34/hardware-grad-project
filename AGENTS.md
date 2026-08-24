@@ -166,7 +166,44 @@ camera grid or changing `grid.trim_*`: those define the block grid itself, not
 the holder-to-tool geometry. Targets that would put the holder outside its safe
 X/Y envelope are refused, never silently clipped.
 
-### 4. Frame span in centimetres
+#### 3d. The printed colour calibration sheet — geometry it must be reprinted for
+
+| Where | What |
+| --- | --- |
+| `config/rig.json` -> `grid.block_width_cm` / `block_length_cm` / `gap_x_cm` / `gap_y_cm` | what `ColorGridSpec.from_config()` expects to see on the paper |
+| the physical printed sheet | 7.5 x 2.2 cm cells with 0.5 cm inner margins |
+| `python/vision/color_grid.py` | detects it; refuses a sheet whose measured geometry disagrees |
+| `plans/printed-color-grid.md` | the full treatment, including the layout disagreement below |
+
+The sheet is a **physical artefact carrying a copy of the block geometry**, so
+it belongs on this list even though nothing can push a number onto paper. If
+`grid.block_*_cm` or `grid.gap_*_cm` changes, the sheet is wrong and must be
+reprinted; `ColorGridCalibration._check_geometry_matches` refuses rather than
+calibrating against stale paper.
+
+`ColorGridSpec.from_config()` reads `grid.cols + 1` and `grid.rows + 1`: the
+sheet prints a real block at **every** coordinate, coordinate zero included, so
+its layout is the complete 10 x 6 map, not the 9 x 5 positive one.
+
+**The sheet and the firmware do not lay coordinate zero out the same way.** The
+sheet puts a whole 2.2 x 7.5 cm block there; the firmware puts a bare point with
+only the 0.5 cm gap before cell 1. The printed grid is therefore one block wider
+on X and one block taller on Y than the machine's grid, and aligning them is an
+explicit decision, not an assumption:
+
+```text
+sheet  X = 10 x 2.2 + 9 x 0.5 = 26.5 cm      rig X = 9 x 2.7 = 24.3 cm
+sheet  Y =  6 x 7.5 + 5 x 0.5 = 47.5 cm      rig Y = 5 x 8.0 = 40.0 cm
+```
+
+`ColorGridCalibration.workspace_corners()` takes a `convention`. The default
+`"firmware"` puts the machine origin at the far corner of printed `[0,0]`, which
+makes printed `[c,r]` coincide exactly with the firmware's `[c,r]` for all 45
+positive cells. `"printed"` takes the paper at face value and lands every
+positive cell 1.1 cm (X) and 3.75 cm (Y) further from home. Do not add a third
+convention without a row here and a note in the plan.
+
+## 4. Frame span in centimetres
 
 | Where | What |
 | --- | --- |
@@ -214,6 +251,7 @@ ack and is safe from rewording, but `S`, `G`, `0` and `0+` do not — for those,
 | `camera/camera_feed.py` | the canonical runtime feed that consumes the saved settings |
 | `camera/gridded_camera_feed.py` | the same runtime feed plus machine-grid calibration/overlay |
 | `camera/rig_build_v1.py` | camera-grid cell selection plus confirmed serial build |
+| `camera/color_grid_check.py` | the printed-sheet detector on its own, live or on a still |
 | `rig/build_job.py` | the worker thread that keeps that camera live during a build |
 | `camera/undistorted_viewer.py` | the standalone lens-tuning viewer |
 
@@ -261,6 +299,18 @@ of these rules when editing it:
   inspects the claw/rig and restarts.
 - The UI's `level` is the firmware's block-stack level (the fourth `B` token),
   not raw Z steps or centimetres. Firmware remains authoritative for its range.
+
+The printed-sheet calibration (`p` overlay, `k` calibrate) is a **second route
+to the same artefact**, not a second artefact. Both feeds must keep writing the
+identical `config/workspace_map.json` through `WorkspaceMap.from_grid`, with the
+same projection identity and the same invalidation rules — nothing downstream
+of the map is allowed to learn that the sheet exists. `PaperGridTracker`,
+`paper_workspace_map` and `draw_paper_grid` live in `gridded_camera_feed.py` and
+are imported by `rig_build_v1.py`; keep them shared rather than letting the two
+drift, the same way `draw_machine_grid` already is. In `rig_build_v1.py` the
+`k` key carries every guard `c` carries: refused during a build (it is in
+`forbidden_during_build`), refused on a stale camera, and it clears the current
+selection.
 
 `vision/block_detector.py` must not assume one connected colour component is
 one block. Touching standard blocks produce L, U, cross, side-by-side and

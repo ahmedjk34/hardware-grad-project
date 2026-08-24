@@ -15,12 +15,20 @@ Coordinates span col ``0..9`` and row ``0..5``. ``[0,0]`` is holder home;
 2.7x8.0 cm pitch. A changed lens/framing setup or changed grid JSON invalidates
 the saved map instead of silently drawing old geometry.
 
+There is a second way to calibrate. Press ``p`` to overlay the printed
+two-colour sheet (``vision/color_grid.py``) and ``k`` to derive the same four
+corners from it and save them. The sheet measures a hundred printed cell edges
+instead of asking anyone to aim at an invisible rectangle, so prefer it when
+the sheet is in frame; the four clicks remain for when it is not.
+
 Keys
 ----
   c       calibrate/recalibrate: click the four prompted corners
   Enter   save the reviewed four-corner calibration
   u       undo the most recent calibration corner
   x       cancel an in-progress calibration
+  p       toggle the printed colour-grid overlay
+  k       calibrate from the printed colour grid and save
   g       toggle grid overlay
   v       toggle block detection on/off
   s       save annotated frame and block detection JSON
@@ -66,6 +74,18 @@ from rig.grid import MachineGrid  # noqa: E402
 from rig.workspace import CORNER_NAMES, WORKSPACE_MAP_PATH, WorkspaceMap  # noqa: E402
 from vision.block_detector import detect_blocks  # noqa: E402
 from vision.analysis_worker import AnalysisWorker  # noqa: E402
+from vision.color_grid import (  # noqa: E402
+    DEFAULT_HOME_CONVENTION,
+    HOME_CONVENTIONS,
+    ColorGridError,
+    ColorGridSpec,
+    detect_color_grid,
+)
+from vision.color_grid_overlay import (  # noqa: E402
+    draw_color_grid,
+    draw_workspace_corners,
+    status_text as paper_status_text,
+)
 from vision.camera_source import LatestFramePump, open_camera  # noqa: E402
 from vision.fisheye import INTERPOLATIONS, build_maps, undistort  # noqa: E402
 from vision.overlays import (  # noqa: E402
@@ -84,6 +104,115 @@ CALIBRATION_HORIZONTAL = (255, 255, 0)   # cyan: screen-horizontal
 CALIBRATION_VERTICAL = (255, 0, 255)     # magenta: screen-vertical
 CALIBRATION_AXIS_TOLERANCE_PX = 2
 _GRID_GEOMETRY_CACHE = {}
+
+# The printed sheet is re-found on a worker thread while its overlay is on.
+# 3 Hz is far more than an operator sliding a sheet around needs, and it keeps
+# the cost off the preview even on the Pi. The overlay runs at a reduced width
+# for that reason; the calibration itself does not.
+PAPER_GRID_HZ = 3.0
+PAPER_OVERLAY_WIDTH = 1024
+
+
+def analyze_paper_grid(frame, spec, process_width=PAPER_OVERLAY_WIDTH):
+    """AnalysisWorker adapter for the printed sheet.
+
+    Returns one ``(calibration, error)`` pair. AnalysisWorker turns whatever an
+    analyzer returns into a tuple of detections, and it swallows exceptions into
+    a generic message — so the specific "move the sheet" sentence is returned as
+    a value instead of raised, and survives the trip back to the UI intact.
+    """
+    try:
+        return ((detect_color_grid(frame, spec, process_width=process_width), None),)
+    except ColorGridError as exc:
+        return ((None, str(exc)),)
+
+
+class PaperGridTracker:
+    """Latest printed-sheet detection, found off the preview thread.
+
+    The worker is always running but is only fed while the overlay is on, so a
+    session that never presses ``p`` pays nothing but an idle thread.
+    """
+
+    def __init__(self, spec, *, max_hz=PAPER_GRID_HZ,
+                 process_width=PAPER_OVERLAY_WIDTH):
+        self.spec = spec
+        self.enabled = False
+        self.process_width = process_width
+        self._worker = AnalysisWorker(analyze_paper_grid, max_hz=max_hz,
+                                      name="paper-grid")
+        self._calibration = None
+        self._error = "overlay off"
+
+    def start(self):
+        self._worker.start()
+
+    def stop(self):
+        self._worker.stop()
+
+    def toggle(self):
+        self.enabled = not self.enabled
+        if not self.enabled:
+            self._calibration, self._error = None, "overlay off"
+        else:
+            self._error = "looking for the sheet"
+        return self.enabled
+
+    def submit(self, frame, sequence, generation):
+        if self.enabled:
+            self._worker.submit(frame, sequence, generation, spec=self.spec,
+                                process_width=self.process_width)
+
+    def poll(self, generation):
+        """Adopt the newest result that belongs to the current map geometry."""
+        if not self.enabled:
+            return
+        snapshot = self._worker.snapshot()
+        if not snapshot.is_current(generation) or not snapshot.detections:
+            if snapshot.error:
+                self._calibration, self._error = None, snapshot.error
+            return
+        self._calibration, self._error = snapshot.detections[0]
+
+    @property
+    def calibration(self):
+        return self._calibration
+
+    @property
+    def error(self):
+        return self._error
+
+    def status(self):
+        return paper_status_text(self._calibration, self._error)
+
+
+def paper_workspace_map(view, spec, grid, projection, convention):
+    """Turn the printed sheet in ``view`` into a saveable :class:`WorkspaceMap`.
+
+    Detection runs at full resolution here: a calibration is written once and
+    then lived with, so the extra tens of milliseconds cost nothing and the
+    extra precision is the whole point. Raises ``ColorGridError`` when the sheet
+    is not usable and ``ValueError`` when the corners it implies fall outside
+    the frame — both are sentences worth showing an operator verbatim.
+    """
+    calibration = detect_color_grid(view, spec, process_width=0)
+    corners = calibration.workspace_corners(grid, convention)
+    workspace = WorkspaceMap.from_grid(grid, corners, view.shape[1::-1], projection)
+    return workspace, calibration
+
+
+def draw_paper_grid(frame, tracker, hover, grid, convention, *, detail=False):
+    """Draw the printed-sheet overlay, plus the envelope it would calibrate to."""
+    calibration = tracker.calibration
+    if calibration is None:
+        return None
+    hovered = draw_color_grid(frame, calibration, hover=hover, labels=detail,
+                              shade=0.30)
+    try:
+        draw_workspace_corners(frame, calibration.workspace_corners(grid, convention))
+    except (ColorGridError, ValueError):
+        pass
+    return hovered
 
 
 def parse_args():
@@ -107,6 +236,12 @@ def parse_args():
     parser.add_argument("--no-enhance", action="store_false", dest="enhance",
                         help=argparse.SUPPRESS)
     parser.add_argument("--overlay", choices=OVERLAY_MODES, default="geometry")
+    parser.add_argument("--home-convention", choices=HOME_CONVENTIONS,
+                        default=DEFAULT_HOME_CONVENTION,
+                        help="where the machine origin sits on the printed sheet "
+                             f"(default: {DEFAULT_HOME_CONVENTION})")
+    parser.add_argument("--paper-hz", type=float, default=PAPER_GRID_HZ,
+                        help=f"printed-sheet detection rate (default: {PAPER_GRID_HZ})")
     parser.add_argument("--analysis-hz", type=float, default=10.0)
     parser.add_argument("--opencv-threads", type=int, default=2)
     return parser.parse_args()
@@ -322,9 +457,9 @@ def draw_calibration(frame, points, cursor=None, *, detail=False):
 def main():
     args = parse_args()
     if (args.display_scale <= 0 or args.min_area <= 0 or args.analysis_hz <= 0
-            or args.opencv_threads <= 0):
-        print("display/min-area/analysis-hz/opencv-threads values must be positive",
-              file=sys.stderr)
+            or args.opencv_threads <= 0 or args.paper_hz <= 0):
+        print("display/min-area/analysis-hz/paper-hz/opencv-threads values must "
+              "be positive", file=sys.stderr)
         return 1
     cv2.setNumThreads(args.opencv_threads)
 
@@ -332,6 +467,7 @@ def main():
         camera_data = load_settings(args.settings)
         rig_data = load_rig_config(args.rig_config, reload=True)
         grid = MachineGrid.from_config(rig_data)
+        paper_spec = ColorGridSpec.from_config(rig_data)
         backend, device, size = capture_settings(camera_data)
         profile = profile_from_settings(camera_data)
         sensor = sensor_from_settings(camera_data)
@@ -380,8 +516,10 @@ def main():
         "show_grid": True,
         "overlay": args.overlay,
         "detect_enabled": True,
+        "paper_calibrate": False,
         "message": "ready",
     }
+    paper = PaperGridTracker(paper_spec, max_hz=args.paper_hz)
 
     def on_mouse(event, point):
         if point is None:
@@ -400,6 +538,7 @@ def main():
                      ("Undo (u)", "u"),
                      ("Save (s)", "s"), ("Grid (g)", "g"),
                      ("Detect (v)", "v"),
+                     ("Paper grid (p)", "p"), ("Paper calib (k)", "k"),
                      ("Quit (q)", "q")),
         )
     except (tk.TclError, cv2.error) as exc:
@@ -412,6 +551,7 @@ def main():
     snapshots = SnapshotWorker(save_detection_snapshot)
     frame_pump.start()
     analysis.start()
+    paper.start()
     maps = None
     input_size = None
     map_generation = 0
@@ -453,13 +593,15 @@ def main():
             f"replaced {result.replaced_count} | duplicate {result.duplicate_count}",
             f"Grid: {grid.cols}x{grid.rows} | {calibration_text} | "
             f"hover {f'[{cell[0]},{cell[1]}]' if cell else 'none'}",
+            f"{paper.status()} | home {args.home_convention} | k calibrates from it",
             block_hover_text(detections, ui["hover"]),
             f"Stages: remap {timings.ms.get('remap', 0):.1f} ms | "
             f"overlay {timings.ms.get('overlay', 0):.1f} ms | "
             f"grid {timings.ms.get('grid', 0):.1f} ms | "
             f"display {timings.ms.get('display', 0):.1f} ms",
             f"Status: {result.error or snapshot.error or ui['message']}",
-            "o overlay | c calibrate | Enter save | u undo | x cancel | g grid | v detect | s snapshot | q quit",
+            "o overlay | c calibrate | Enter save | u undo | x cancel | g grid | v detect",
+            "p paper overlay | k paper calibrate | s snapshot | q quit",
         ]
 
     def handle_key(key):
@@ -491,6 +633,14 @@ def main():
                 ui["message"] = "saving reviewed calibration"
             else:
                 ui["message"] = "click all four corners before saving"
+        elif key == ord("p"):
+            ui["message"] = ("printed-sheet overlay on" if paper.toggle()
+                             else "printed-sheet overlay off")
+        elif key == ord("k"):
+            # Deferred to the frame loop, which is the only place that holds a
+            # corrected view; the key handler runs between frames.
+            ui["paper_calibrate"] = True
+            ui["message"] = "calibrating from the printed sheet"
         elif key == ord("g"):
             ui["show_grid"] = not ui["show_grid"]
         elif key == ord("v"):
@@ -546,6 +696,24 @@ def main():
             timings.observe("remap", time.perf_counter() - started)
             image_size = view.shape[1::-1]
 
+            if ui["paper_calibrate"]:
+                ui["paper_calibrate"] = False
+                try:
+                    candidate, found = paper_workspace_map(
+                        view, paper_spec, grid, projection, args.home_convention)
+                    candidate.save(args.workspace_map)
+                    saved_workspace = candidate
+                    rejection = None
+                    ui["message"] = f"calibrated from the sheet: {found.describe()}"
+                    print(f"Saved workspace calibration from the printed sheet: "
+                          f"{args.workspace_map}")
+                    print(f"  {found.describe()} "
+                          f"({args.home_convention} home convention)")
+                except (ColorGridError, OSError, ValueError) as exc:
+                    rejection = f"sheet calibration rejected: {exc}"
+                    ui["message"] = rejection
+                    print(rejection, file=sys.stderr)
+
             if ui["pending_points"] is not None:
                 try:
                     candidate = WorkspaceMap.from_grid(
@@ -573,6 +741,8 @@ def main():
                 analysis.submit(view, snapshot.sequence, map_generation,
                                 color_threshold=args.color_threshold,
                                 min_area=args.min_area)
+            paper.submit(view, snapshot.sequence, map_generation)
+            paper.poll(map_generation)
             display = enhance_for_display(view) if args.enhance else view.copy()
             started = time.perf_counter()
             draw_block_overlay(
@@ -586,6 +756,10 @@ def main():
                 draw_machine_grid(
                     display, workspace, ui["hover"], calibrated,
                     detail=ui["overlay"] == "detail")
+            if paper.enabled:
+                draw_paper_grid(display, paper, ui["hover"], grid,
+                                args.home_convention,
+                                detail=ui["overlay"] == "detail")
             if ui["calibrating"]:
                 draw_calibration(
                     display, ui["calibration_points"], ui["hover"],
@@ -601,6 +775,7 @@ def main():
                 return 0
     finally:
         analysis.stop()
+        paper.stop()
         snapshots.stop(finish=True)
         if frame_pump.stop():
             camera.release()

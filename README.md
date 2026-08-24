@@ -51,6 +51,13 @@ To see the physical 9×5 positive-cell grid on that same feed, run
 press `c` and click the four prompted 24.3×40 cm holder-envelope corners to save
 the calibrated overlay.
 
+Calibrating by eye is optional. A printed green/magenta sheet at the rig's own
+cell geometry (7.5 × 2.2 cm cells, 0.5 cm inner margins) can be measured
+instead: press `p` to overlay it and `k` to calibrate from it, in either
+`gridded_camera_feed.py` or `rig_build_v1.py`, and check the detection first
+with `camera/color_grid_check.py`. See
+[plans/printed-color-grid.md](plans/printed-color-grid.md).
+
 `camera/rig_build_v1.py` connects that view to the Mega and can build from the
 initial approximate grid without calibration. Click a cell, choose the
 block-stack level, then press `b` or Enter to confirm the displayed Arduino

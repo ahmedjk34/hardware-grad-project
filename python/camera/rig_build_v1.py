@@ -17,6 +17,9 @@ type the same targets from the keyboard as an alternative to clicking.
 Safety rules
 ------------
 * The built-in approximate grid is immediately selectable; ``c`` is optional.
+* Either calibration route may refine it: ``c`` with four clicks, or ``k`` from
+  the printed two-colour sheet. Both write the same ``config/workspace_map.json``
+  and both are refused while a build is running.
 * Click selects; Enter/``b`` is the separate confirmation that moves hardware.
 * The build runs on its own worker thread so the camera keeps streaming, but the
   UI refuses every state change until that build reports back: clicks and
@@ -34,6 +37,8 @@ Keys
           key cancels the entry
   y       pick a Y-only build target: type a row, Enter confirms B 0 <row>,
           any other key cancels the entry
+  p       toggle the printed colour-grid overlay
+  k       calibrate from the printed colour grid and save
   g       toggle grid
   v       toggle block detection on/off
   [ / ]   build level down/up
@@ -75,10 +80,14 @@ from camera.camera_feed import (  # noqa: E402
 )
 from camera.snapshot_worker import SnapshotWorker  # noqa: E402
 from camera.gridded_camera_feed import (  # noqa: E402
+    PAPER_GRID_HZ,
+    PaperGridTracker,
     approximate_workspace,
     draw_calibration,
     draw_machine_grid,
+    draw_paper_grid,
     load_workspace,
+    paper_workspace_map,
     projection_metadata,
 )
 from camera.tk_camera_window import TkCameraWindow  # noqa: E402
@@ -95,6 +104,12 @@ from rig.workspace import CORNER_NAMES, WORKSPACE_MAP_PATH, WorkspaceMap  # noqa
 from vision.analysis_worker import AnalysisWorker  # noqa: E402
 from vision.block_detector import detect_blocks  # noqa: E402
 from vision.camera_source import LatestFramePump, open_camera  # noqa: E402
+from vision.color_grid import (  # noqa: E402
+    DEFAULT_HOME_CONVENTION,
+    HOME_CONVENTIONS,
+    ColorGridError,
+    ColorGridSpec,
+)
 from vision.fisheye import INTERPOLATIONS, build_maps, undistort  # noqa: E402
 from vision.performance import RateMeter, StageTimings  # noqa: E402
 
@@ -135,6 +150,12 @@ def parse_args():
     parser.add_argument("--no-enhance", action="store_false", dest="enhance",
                         help=argparse.SUPPRESS)
     parser.add_argument("--overlay", choices=OVERLAY_MODES, default="geometry")
+    parser.add_argument("--home-convention", choices=HOME_CONVENTIONS,
+                        default=DEFAULT_HOME_CONVENTION,
+                        help="where the machine origin sits on the printed sheet "
+                             f"(default: {DEFAULT_HOME_CONVENTION})")
+    parser.add_argument("--paper-hz", type=float, default=PAPER_GRID_HZ,
+                        help=f"printed-sheet detection rate (default: {PAPER_GRID_HZ})")
     parser.add_argument("--analysis-hz", type=float, default=10.0)
     parser.add_argument("--opencv-threads", type=int, default=2)
     return parser.parse_args()
@@ -194,9 +215,10 @@ def main():
     args = parse_args()
     if (args.level < 0 or args.display_scale <= 0 or args.min_area <= 0
             or args.connect_timeout <= 0 or args.build_timeout <= 0
-            or args.analysis_hz <= 0 or args.opencv_threads <= 0):
-        print("level must be >= 0 and timeout/display/min-area values must be positive",
-              file=sys.stderr)
+            or args.analysis_hz <= 0 or args.opencv_threads <= 0
+            or args.paper_hz <= 0):
+        print("level must be >= 0 and timeout/display/min-area/rate values must "
+              "be positive", file=sys.stderr)
         return 1
     cv2.setNumThreads(args.opencv_threads)
 
@@ -204,6 +226,7 @@ def main():
         camera_data = load_settings(args.settings)
         rig_data = load_rig_config(args.rig_config, reload=True)
         grid = MachineGrid.from_config(rig_data)
+        paper_spec = ColorGridSpec.from_config(rig_data)
         backend, device, size = capture_settings(camera_data)
         profile = profile_from_settings(camera_data)
         sensor = sensor_from_settings(camera_data)
@@ -278,8 +301,10 @@ def main():
         "detect_enabled": True,
         "axis_pick": None,
         "axis_buffer": "",
+        "paper_calibrate": False,
         "message": "connected; click a grid cell",
     }
+    paper = PaperGridTracker(paper_spec, max_hz=args.paper_hz)
     if args.build_target is not None:
         try:
             controller.select(tuple(args.build_target))
@@ -299,7 +324,7 @@ def main():
         return True
 
     forbidden_during_build = {
-        ord("c"), ord("u"), ord("x"), ord("y"), ord("["), ord("-"),
+        ord("c"), ord("k"), ord("u"), ord("x"), ord("y"), ord("["), ord("-"),
         ord("]"), ord("+"), ord("="), ord("o"), ord("d"),
         ord("b"), ord("q"), 10, 13, 27,
     }
@@ -343,7 +368,9 @@ def main():
                      ("Level - ([)", "["),
                      ("Level + (])", "]"), ("Rotate (o)", "o"),
                      ("Deselect (d)", "d"), ("X-only (x)", "x"),
-                     ("Y-only (y)", "y"), ("BUILD (b)", "b"),
+                     ("Y-only (y)", "y"),
+                     ("Paper grid (p)", "p"), ("Paper calib (k)", "k"),
+                     ("BUILD (b)", "b"),
                      ("Save (s)", "s"), ("Quit (q)", "q")),
         )
     except (tk.TclError, cv2.error) as exc:
@@ -355,6 +382,7 @@ def main():
     analysis = AnalysisWorker(detect_blocks, max_hz=args.analysis_hz)
     snapshots = SnapshotWorker(save_detection_snapshot)
     analysis.start()
+    paper.start()
     maps = None
     input_size = None
     image_size = None
@@ -419,6 +447,24 @@ def main():
         elif key == ord("v"):
             ui["detect_enabled"] = not ui["detect_enabled"]
             ui["message"] = f"block detection {'on' if ui['detect_enabled'] else 'off'}"
+        elif key == ord("p"):
+            ui["message"] = ("printed-sheet overlay on" if paper.toggle()
+                             else "printed-sheet overlay off")
+        elif key == ord("k"):
+            # Same guards as the four-click route: it replaces the very map the
+            # operator is about to select build targets on.
+            try:
+                reject_mutation_if_unsafe()
+                if not camera_is_live(snapshot, now):
+                    raise BuildStateError("camera feed is stale; cannot calibrate")
+                if ui["calibrating"]:
+                    raise BuildStateError("finish or cancel (x) the click "
+                                          "calibration first")
+                controller.clear_selection()
+                ui["paper_calibrate"] = True
+                ui["message"] = "calibrating from the printed sheet"
+            except BuildStateError as exc:
+                ui["message"] = str(exc)
         elif key == ord("c"):
             try:
                 reject_mutation_if_unsafe()
@@ -544,6 +590,7 @@ def main():
             f"seq {result.source_sequence} | {analysis_text} | blocks {len(detections)} | "
             f"replaced {result.replaced_count} | duplicate {result.duplicate_count}",
             f"Grid: {grid.cols}x{grid.rows} | {'CALIBRATED' if calibrated else 'APPROXIMATION ONLY'}",
+            f"{paper.status()} | home {args.home_convention}",
             f"Rig: {rig.port_name} | level {controller.level} | rotation {controller.rotation}",
             f"Selected: {selected_text}",
             block_hover_text(detections, ui["hover"]),
@@ -556,7 +603,8 @@ def main():
             f"grid {timings.ms.get('grid', 0):.1f} ms | "
             f"display {timings.ms.get('display', 0):.1f} ms",
             "i overlay | c calibrate | g grid | v detect | [/] level | o rotate | d deselect",
-            "x X-only | y Y-only | b/Enter BUILD | s snapshot | q/Esc quit when safe",
+            "p paper overlay | k paper calibrate | x X-only | y Y-only",
+            "b/Enter BUILD | s snapshot | q/Esc quit when safe",
         ]
 
     try:
@@ -607,6 +655,32 @@ def main():
                     analysis.submit(view, snapshot.sequence, map_generation,
                                     color_threshold=args.color_threshold,
                                     min_area=args.min_area)
+                paper.submit(view, snapshot.sequence, map_generation)
+            paper.poll(map_generation)
+
+            if ui["paper_calibrate"]:
+                ui["paper_calibrate"] = False
+                try:
+                    reject_mutation_if_unsafe()
+                    if image_size is None or not camera_is_live(snapshot, now):
+                        raise ValueError("calibration paused: camera feed is stale")
+                    candidate, found = paper_workspace_map(
+                        view, paper_spec, grid, projection, args.home_convention)
+                    candidate.save(args.workspace_map)
+                    saved_workspace = candidate
+                    workspace = candidate
+                    calibrated = True
+                    rejection = None
+                    controller.clear_selection()
+                    ui["message"] = f"sheet calibration saved: {found.describe()}"
+                    print(f"Saved workspace calibration from the printed sheet: "
+                          f"{args.workspace_map}")
+                    print(f"  {found.describe()} "
+                          f"({args.home_convention} home convention)")
+                except (BuildStateError, ColorGridError, OSError, ValueError) as exc:
+                    rejection = f"sheet calibration rejected: {exc}"
+                    ui["message"] = rejection
+                    print(rejection, file=sys.stderr)
 
             if ui["pending_points"] is not None and image_size is not None:
                 try:
@@ -667,6 +741,10 @@ def main():
                         display, workspace, ui["hover"], calibrated,
                         detail=ui["overlay"] == "detail")
                     draw_selected_cell(display, workspace, controller.selected)
+                if paper.enabled:
+                    draw_paper_grid(display, paper, ui["hover"], grid,
+                                    args.home_convention,
+                                    detail=ui["overlay"] == "detail")
                 if ui["calibrating"]:
                     draw_calibration(
                         display, ui["calibration_points"], ui["hover"],
@@ -693,6 +771,7 @@ def main():
             if finished is not None:
                 print(f"[build] {outcome_message(finished, controller)}")
         analysis.stop()
+        paper.stop()
         snapshots.stop(finish=True)
         if frame_pump.stop():
             camera.release()
