@@ -15,7 +15,7 @@
     "gap_x_cm": 0.5,
     "gap_y_cm": 0.5,
     "trim_x_cm": 0.0,
-    "trim_y_cm": 0.0
+    "trim_y_cm": 3.75
   },
   "workspace": {
     "width_cm": 24.3,

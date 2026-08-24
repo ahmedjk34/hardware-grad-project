@@ -121,6 +121,11 @@ NEIGHBOUR_TOLERANCE = 0.40
 # affordable on the Pi. Pass ``process_width=0`` to work at full resolution.
 DEFAULT_PROCESS_WIDTH = 1024
 
+# How far a blob's long/short ratio may sit from the printed 3.41 and still be
+# treated as a cell. Only used when sampling colour, where there is no lattice
+# to fall back on and a mis-sampled wall would silently poison a calibration.
+SHEET_ASPECT_RANGE = (2.2, 5.2)
+
 MIN_COMPONENT_AREA = 250
 _OPEN_KERNEL = np.ones((3, 3), np.uint8)
 
@@ -424,6 +429,100 @@ class ColorGridCalibration:
                 f"{m.full_cells} full cells of {m.components} found, residual "
                 f"{m.residual_px:.2f} px (max {m.max_residual_px:.2f}), "
                 f"parity {m.parity_agreement * 100:.0f}%")
+
+
+# ---------------------------------------------------------------------------
+# measuring the sheet's colours
+# ---------------------------------------------------------------------------
+
+
+def sample_ink_colors(frame: np.ndarray, *, min_saturation: int = MIN_SATURATION,
+                      min_value: int = MIN_VALUE, min_pixels: int = 200):
+    """Mean colour of the green ink, the magenta ink and the sheet's white paper.
+
+    Returned as a :class:`vision.color_correction.ColorSamples`, which is what a
+    colour calibration is fitted from.
+
+    Deliberately independent of :func:`detect_color_grid`. Colour needs three
+    materials measured, not a grid solved, and demanding a complete 10x6 fit
+    first would refuse exactly the badly-framed, badly-tinted frames a colour
+    calibration exists to fix. Any view with some of the sheet in it is enough.
+
+    The masks are found on a white-balanced frame, because a cast bad enough to
+    need correcting is bad enough to hide the ink from a fixed hue window; the
+    *colours* are then read from the original, because the whole point is to
+    measure the cast rather than to remove it twice.
+
+    Paper is read from the ring immediately around the ink — the printed inner
+    margins. That ring is the one white surface guaranteed to be lit exactly
+    like the ink beside it, which a sheet corner, the bench or the wall behind
+    the rig emphatically are not.
+    """
+    from vision.color_correction import ColorSamples
+
+    if frame is None or frame.ndim != 3 or frame.shape[2] != 3:
+        raise ColorGridError("a three-channel BGR frame is required")
+    height, width = frame.shape[:2]
+    balanced = white_balance(frame)
+    green, magenta = color_masks(balanced, min_saturation=min_saturation,
+                                 min_value=min_value, balance=False)
+
+    # Only sample things shaped like a printed cell. Under a bad enough cast the
+    # wall behind the rig lands inside the magenta window, and it is far larger
+    # than every real cell put together — averaging it in would measure the wall
+    # and call it ink. Shape is what tells them apart.
+    found = _components(green, magenta, MIN_COMPONENT_AREA, (width, height))
+    keep = [rect for rect in found
+            if SHEET_ASPECT_RANGE[0]
+            <= rect["long_len"] / max(rect["short_len"], 1e-6)
+            <= SHEET_ASPECT_RANGE[1]]
+    if keep:
+        areas = np.array([rect["area"] for rect in keep])
+        median = float(np.median(areas))
+        keep = [rect for rect, area in zip(keep, areas)
+                if 0.5 * median <= area <= 1.8 * median]
+    if not keep:
+        raise ColorGridError(
+            "nothing on the sheet is shaped like a printed cell; is the sheet "
+            "in frame, and is it roughly in focus?")
+
+    cores = {}
+    for name in ("green", "magenta"):
+        mask = np.zeros((height, width), np.uint8)
+        boxes = [rect["box"] for rect in keep if rect["color"] == name]
+        if boxes:
+            cv2.fillPoly(mask, [box.astype(np.int32) for box in boxes], 255)
+        # Erode well inside the blocks: the ink's printed edge is soft and the
+        # lens leaves a halo on it, and both drag the mean toward the paper.
+        cores[name] = cv2.erode(mask, np.ones((5, 5), np.uint8),
+                                iterations=2).astype(bool)
+
+    ink = np.zeros((height, width), np.uint8)
+    cv2.fillPoly(ink, [rect["box"].astype(np.int32) for rect in keep], 255)
+    # The margins: a ring around the ink that is itself not ink, and that looks
+    # like paper rather than like whatever the sheet is lying on.
+    ring = cv2.dilate(ink, np.ones((9, 9), np.uint8), iterations=1).astype(bool)
+    hsv = cv2.cvtColor(balanced, cv2.COLOR_BGR2HSV)
+    pale = (hsv[:, :, 1] < min_saturation) & (hsv[:, :, 2] >= min_value)
+    paper_core = ring & ~ink.astype(bool) & pale
+    green_core, magenta_core = cores["green"], cores["magenta"]
+
+    colors, counts, spread = {}, {}, {}
+    for name, mask in (("green", green_core), ("magenta", magenta_core),
+                       ("paper", paper_core)):
+        pixels = frame[mask]
+        if len(pixels) < min_pixels:
+            continue
+        values = pixels.astype(np.float64)
+        mean = values.mean(axis=0)
+        colors[name] = tuple(float(v) for v in mean)
+        counts[name] = int(len(values))
+        spread[name] = float(np.sqrt(np.mean(np.sum((values - mean) ** 2, axis=1))))
+    if len(colors) < 2:
+        raise ColorGridError(
+            f"only found {', '.join(colors) or 'nothing'} on the sheet; at least "
+            f"two of green ink, magenta ink and paper have to be visible")
+    return ColorSamples(colors=colors, counts=counts, spread=spread)
 
 
 # ---------------------------------------------------------------------------

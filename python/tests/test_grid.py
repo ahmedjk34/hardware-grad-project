@@ -125,21 +125,27 @@ check("build target still rejects negative/outside coordinates",
 check("block/internal-gap footprint is 23.8x39.5 cm",
       math.isclose(from_cfg.packed_width_cm, 23.8)
       and math.isclose(from_cfg.packed_height_cm, 39.5))
-check("home-to-far allocation is 24.3x40 cm",
+check("one-grid-span allocation is 24.3x40 cm",
       math.isclose(from_cfg.allocation_width_cm, 24.3)
       and math.isclose(from_cfg.allocation_height_cm, 40.0))
-check("full allocation starts at home",
+check("full allocation has the measured feeder-to-grid Y shift",
       math.isclose(from_cfg.x_allocation_start_cm, 0.0)
-      and math.isclose(from_cfg.y_allocation_start_cm, 0.0))
-check("first blocks begin after the 0.5 cm gaps",
+      and math.isclose(from_cfg.y_allocation_start_cm, 3.75))
+check("first blocks begin after feeder half-length plus the 0.5 cm gap",
       math.isclose(from_cfg.x_start_cm, 0.5)
-      and math.isclose(from_cfg.y_start_cm, 0.5))
+      and math.isclose(from_cfg.y_start_cm, 4.25))
 check("first physical cell centre",
       all(math.isclose(a, b) for a, b in
-          zip(from_cfg.cell_center_cm(1, 1), (1.6, 4.25))))
+          zip(from_cfg.cell_center_cm(1, 1), (1.6, 8.0))))
 check("last physical cell centre",
       all(math.isclose(a, b) for a, b in
-          zip(from_cfg.cell_center_cm(9, 5), (23.2, 36.25))))
+          zip(from_cfg.cell_center_cm(9, 5), (23.2, 40.0))))
+check("all placement centres remain inside holder travel",
+      from_cfg.x_first_center_cm >= 0 and from_cfg.y_first_center_cm >= 0
+      and from_cfg.x_last_center_cm <= from_cfg.workspace_width_cm
+      and from_cfg.y_last_center_cm <= from_cfg.workspace_height_cm)
+check("Y block footprint reaches past the last holder centre",
+      math.isclose(from_cfg.y_end_cm, 43.75))
 
 # The Mega cannot read rig.json, so its safe manual-monitor defaults are baked
 # into the sketch. Keep this executable check beside the AGENTS.md pairing rule
@@ -219,19 +225,19 @@ check("workspace projective round-trip",
 check("workspace rejects outside click",
       workspace.cell_at((0, 0), (640, 480)) is None)
 
-# Physical mapping uses the real 24.3x40 cm holder-motion rectangle. Positive
-# blocks begin after the 0.5 cm home gaps and remain separated in the image.
+# Physical mapping uses the 24.3x40 cm holder-motion rectangle. The feeder
+# centre is home; the Y grid begins after half a feeder block plus the gap.
 physical_workspace = WorkspaceMap.from_grid(from_cfg, corners, (640, 480))
 check("physical workspace matches grid JSON", physical_workspace.matches_grid(from_cfg))
-first_centre = physical_workspace.pixel_at(1.6 / 24.3, 4.25 / 40.0, (640, 480))
-last_centre = physical_workspace.pixel_at(23.2 / 24.3, 36.25 / 40.0, (640, 480))
+first_centre = physical_workspace.pixel_at(1.6 / 24.3, 8.0 / 40.0, (640, 480))
+last_centre = physical_workspace.pixel_at(23.2 / 24.3, 40.0 / 40.0, (640, 480))
 check("physical camera map finds first cell",
       physical_workspace.cell_at(first_centre, (640, 480)) == (1, 1))
 check("physical camera map finds last cell",
       physical_workspace.cell_at(last_centre, (640, 480)) == (9, 5))
 check("physical camera map preserves home gap",
       physical_workspace.cell_at(corners[0], (640, 480)) is None)
-gap_point = physical_workspace.pixel_at(2.95 / 24.3, 4.25 / 40.0, (640, 480))
+gap_point = physical_workspace.pixel_at(2.95 / 24.3, 8.0 / 40.0, (640, 480))
 check("physical camera map preserves internal gap",
       physical_workspace.cell_at(gap_point, (640, 480)) is None)
 

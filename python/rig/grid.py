@@ -121,12 +121,13 @@ class MachineGrid:
                 raise ValueError("grid gaps must be finite and non-negative")
             if not math.isfinite(self.trim_x_cm) or not math.isfinite(self.trim_y_cm):
                 raise ValueError("grid trims must be finite")
-            if self.x_allocation_start_cm < 0 or self.y_allocation_start_cm < 0 \
-                    or self.x_end_cm > self.workspace_width_cm \
-                    or self.y_end_cm > self.workspace_height_cm:
+            if self.x_first_center_cm < 0 or self.y_first_center_cm < 0 \
+                    or self.x_last_center_cm > self.workspace_width_cm \
+                    or self.y_last_center_cm > self.workspace_height_cm:
                 raise ValueError(
-                    f"{self.cols}x{self.rows} physical grid does not fit inside "
-                    f"{self.workspace_width_cm:g}x{self.workspace_height_cm:g} cm"
+                    f"{self.cols}x{self.rows} block centres do not fit inside "
+                    f"the {self.workspace_width_cm:g}x{self.workspace_height_cm:g} cm "
+                    "holder-travel envelope"
                 )
 
     @property
@@ -189,6 +190,22 @@ class MachineGrid:
     def y_end_cm(self) -> float:
         return self.y_start_cm + self.packed_height_cm
 
+    @property
+    def x_first_center_cm(self) -> float:
+        return self.x_start_cm + self.block_width_cm / 2
+
+    @property
+    def y_first_center_cm(self) -> float:
+        return self.y_start_cm + self.block_length_cm / 2
+
+    @property
+    def x_last_center_cm(self) -> float:
+        return self.x_first_center_cm + (self.cols - 1) * self.pitch_x_cm
+
+    @property
+    def y_last_center_cm(self) -> float:
+        return self.y_first_center_cm + (self.rows - 1) * self.pitch_y_cm
+
     def cell_center_cm(self, col: int, row: int) -> tuple[float, float]:
         """Physical centre measured away from the X/Y home-switch corner."""
         if not self.has_physical_scale:
@@ -196,8 +213,8 @@ class MachineGrid:
         if not self.contains(col, row):
             raise ValueError(f"cell [{col},{row}] is outside {self.cols}x{self.rows}")
         return (
-            self.x_start_cm + self.block_width_cm / 2 + (col - 1) * self.pitch_x_cm,
-            self.y_start_cm + self.block_length_cm / 2 + (row - 1) * self.pitch_y_cm,
+            self.x_first_center_cm + (col - 1) * self.pitch_x_cm,
+            self.y_first_center_cm + (row - 1) * self.pitch_y_cm,
         )
 
     def cell_bounds_cm(self, col: int, row: int) -> tuple[float, float, float, float]:

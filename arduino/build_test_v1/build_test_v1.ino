@@ -504,13 +504,18 @@ const bool SOFT_LIMIT_VERBOSE = true;
 //   X pitch = 2.2 + 0.5 = 2.7 cm; 9 * 2.7 = 24.3 cm
 //   Y pitch = 7.5 + 0.5 = 8.0 cm; 5 * 8.0 = 40.0 cm
 //
-// There is no trailing outer margin. Coordinate 0 is the home/axis-only
-// reference, not another block footprint inside this 24.3 x 40 cm span.
+// There is no trailing outer margin inside one 24.3 x 40 cm grid span.
+// Coordinate 0 is the feeder-block centre / home reference. The measured Y
+// feeder-centre-to-grid shift is +3.75 cm (one half block length), so row 1
+// centres at 8 cm, row 2 at 16 cm, ... and row 5 at the 40 cm holder cap.
+// The final physical block edge is consequently 43.75 cm from the feeder
+// centre; only the HOLDER centre is constrained by the 40 cm travel cap.
 // The complete coordinate ranges are therefore col 0..9 and row 0..5,
 // while the normal two-axis block grid is 9 cols x 5 rows.
 //
 // A smaller S-selected grid remains centred. The signed trims then move that
-// complete allocation away from (+) or toward (-) its home switch.
+// complete allocation away from (+) or toward (-) its home switch. Y's +3.75
+// cm trim records the feeder-centre-to-build-grid shift, not a tool offset.
 //
 // Targets are computed as absolute physical cell centres and rounded only
 // once, so sub-step rounding error never accumulates between cells.
@@ -530,7 +535,7 @@ float GRID_GAP_X_CM = 0.5;
 float GRID_GAP_Y_CM = 0.5;
 
 float GRID_TRIM_X_CM = 0.0; // signed whole-grid correction along X
-float GRID_TRIM_Y_CM = 0.0; // signed whole-grid correction along Y
+float GRID_TRIM_Y_CM = 3.75; // feeder centre -> build-grid shift along Y
 
 long GRID_COLS = 9;
 long GRID_ROWS = 5;
@@ -2022,8 +2027,9 @@ float gridBlockFootprintCmOf(uint8_t axis, long count)
        + (float)(count - 1) * gridGapCmOf(axis);
 }
 
-// A smaller S-selected allocation is centred. Full 9x5 uses the complete
-// 24.3x40 displacement, so its allocation starts exactly at coordinate 0.
+// A smaller S-selected allocation is centred inside the holder-travel span.
+// The signed trim then shifts it from the feeder/home reference. With the
+// full 9x5 grid, Y's +3.75 cm feeder shift makes centres 8,16,...,40 cm.
 float gridAllocationStartCmOf(uint8_t axis, long count)
 {
   return (xyTravelCmOf(axis) - gridAllocationCmOf(axis, count)) * 0.5
@@ -2048,25 +2054,38 @@ bool gridGeometryFits(uint8_t axis, long count)
     return false;
   }
   const float slack = 0.0001;
-  return gridAllocationStartCmOf(axis, count) >= -slack
-      && gridBlockEndCmOf(axis, count) <= xyTravelCmOf(axis) + slack;
+  float firstCentre = gridAllocationStartCmOf(axis, count)
+                    + gridGapCmOf(axis) + gridBlockCmOf(axis) * 0.5;
+  float lastCentre = firstCentre
+                   + (float)(count - 1) * gridPitchCmOf(axis);
+  // The holder must be able to reach every placement centre. A held block may
+  // naturally extend beyond the holder-centre envelope at the far edge.
+  return firstCentre >= -slack && lastCentre <= xyTravelCmOf(axis) + slack;
 }
 
 long gridCountMaxOf(uint8_t axis)
 {
-  float available = xyTravelCmOf(axis) - 2.0 * fabs(gridTrimCmOf(axis));
   float pitch = gridPitchCmOf(axis);
-  if (available <= 0.0 || pitch <= 0.0)
+  if (xyTravelCmOf(axis) <= 0.0 || pitch <= 0.0)
   {
     return 0;
   }
-  return (long)floor((available + 0.0001) / pitch);
+  long plausible = (long)ceil((xyTravelCmOf(axis)
+                              + 2.0 * fabs(gridTrimCmOf(axis))
+                              + 2.0 * pitch) / pitch);
+  long maximum = 0;
+  for (long count = 1; count <= plausible; count++)
+  {
+    if (gridGeometryFits(axis, count))
+      maximum = count;
+  }
+  return maximum;
 }
 
 // Centre of positive cell `index` (1-based), measured from coordinate 0:
 //   centre = allocation_start + gap + block/2 + (index - 1) * pitch
 // Full-grid examples: X1 = 0.5 + 2.2/2 = 1.6 cm;
-//                     Y1 = 0.5 + 7.5/2 = 4.25 cm.
+//                     Y1 = 3.75 + 0.5 + 7.5/2 = 8.0 cm.
 float cellCentreCmOf(uint8_t axis, long index)
 {
   long count = gridCountOf(axis);
@@ -2173,7 +2192,7 @@ bool gridReady()
   }
   if (!gridGeometryFits(AXIS_X, GRID_COLS) || !gridGeometryFits(AXIS_Y, GRID_ROWS))
   {
-    Serial.println(F("  ERROR - physical grid/pitch/trim does not fit the X/Y envelope."));
+    Serial.println(F("  ERROR - grid placement centres/trim do not fit the X/Y holder travel."));
     Serial.println(F("  Check SECTION 6B/6C and send 5 for the calculated geometry."));
     return false;
   }
