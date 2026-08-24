@@ -38,6 +38,7 @@ python/
 │   ├── test_build_controller.py camera-build confirmation and lockout rules
 │   ├── test_build_job.py       the build worker thread and its one-at-a-time rule
 │   ├── test_camera_frame_pump.py stale-camera UI isolation without a camera
+│   ├── test_color_correction.py the colour transform and Studio's COLOUR section
 │   ├── test_color_grid.py      the printed sheet, on synthetic and real captures
 │   ├── test_grid.py            the cell numbering, against the firmware's own map
 │   └── test_link.py            link.py against a fake board — no rig needed
@@ -47,6 +48,7 @@ python/
     ├── commands.py             the typed-command engine the viewers share
     ├── devices.py              /dev/video* enumeration and picker
     ├── fisheye.py              the fisheye → rectilinear correction
+    ├── color_correction.py     the saved colour transform, and how to solve one
     ├── color_grid.py           find the printed calibration sheet, fit a grid to it
     ├── color_grid_overlay.py   draw that fitted sheet and the envelope it implies
     └── overlays.py             shared OpenCV drawing helpers

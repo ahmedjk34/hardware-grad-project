@@ -85,6 +85,10 @@ Keys
   v  fit / native sizing                    r  reset everything
   s  save the JSON                          p  snapshot PNGs
 
+Colour commands: `colour` on/off, `wb`, `colourcal`, `colourmode`, `rgain`,
+`ggain`, `bgain`, `roff`, `goff`, `boff`, `gamma`, `csat`, `nomix`,
+`colourinfo`, `colourreset`. See "Fixing the colour" below.
+
 While an entry or dropdown has focus it takes the keyboard instead. That focus
 guard is load-bearing: without it, digits typed into a field would also fire the
 numeric lens shortcuts.
@@ -96,6 +100,47 @@ or a signed step, so `fov 158` and `fov +2` both work; the choice ones take any
 unambiguous prefix, so `interp lan` is enough; and every sensor control also
 takes `auto` to hand it back to the camera's own loop. Every field, dropdown
 entry and button is one of these commands, so the ways in cannot drift apart.
+
+Fixing the colour
+-----------------
+The rig's camera does not agree with anyone's eyes. Its cast has been strong
+enough to turn the printed sheet's green ink cyan, which makes half of that
+sheet invisible to `vision/color_grid.py` and degrades `block_detector.py` too.
+The COLOUR section fixes it once, here, and every tool that reads
+`camera_settings.json` inherits the fix.
+
+Two ways, both needing the printed calibration sheet in shot:
+
+  1. `wb` — one press. Neutralises the cast against the sheet's own white
+     paper. No reference photograph, nothing to line up. Start here.
+  2. `colourcal <image>` — match this camera to a photograph of the SAME sheet
+     taken with something you trust, typically a phone. Both images are reduced
+     to three measured colours (green ink, magenta ink, white paper) and the
+     transform between them is solved. The two shots need not be framed alike.
+
+`colourmode` picks what the fit solves. `gain` is the default and is almost
+always the answer:
+
+  gain    per-channel gain through the origin. Cannot crush blacks.
+  affine  gain plus offset. Also corrects brightness, but the sheet is all
+          mid-to-bright so the line down to black is extrapolated.
+  matrix  full linear 3x3. Nine numbers from three colours: exactly determined,
+          so it fits them perfectly whether or not it is right anywhere else.
+
+**Read the warnings, not the residual.** On real rig data the residual ranks
+these backwards — `matrix` scored a perfect 0.00 while turning the wall behind
+the rig bright pink, and `gain` scored the worst 19.7 and was the only one that
+looked right. `colourinfo` prints the matrix and everything implausible about
+it; `nomix` walks a matrix fit back to its white balance.
+
+Every fit also reports the `redgain`/`bluegain` that would do the same job in
+the SENSOR section. Prefer those when the backend has them: they act before the
+camera has thrown away headroom in the channel it under-exposed. The software
+correction is the fallback, and what the V4L2 path usually has to use.
+
+The COLOUR fields are the full manual control over whatever a fit produced:
+per-channel gain and offset, gamma, and a software saturation that is separate
+from the sensor's own.
 
 Fixing the fisheye, in order
 ---------------------------

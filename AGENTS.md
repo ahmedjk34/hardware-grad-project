@@ -209,6 +209,43 @@ positive cells. `"printed"` takes the paper at face value and lands every
 positive cell 1.1 cm (X) and 3.75 cm (Y) further from home. Do not add a third
 convention without a row here and a note in the plan.
 
+### 3e. Camera colour correction — one transform, applied in four places
+
+| Where | What |
+| --- | --- |
+| `python/config/camera_settings.json` -> `colour` | the saved transform; the only copy |
+| `python/vision/color_correction.py` | the model, the fit, and what is wrong with a fit |
+| `camera_studio.py` COLOUR section | the only thing that writes it |
+| `camera_feed.py` `colour_from_settings()` | how every consumer reads it |
+
+The rig's camera has a colour cast strong enough to turn the printed sheet's
+green ink cyan. That breaks `vision/color_grid.py` outright and degrades
+`vision/block_detector.py`, which keys on red-minus-blue. The correction is
+therefore applied **once, at the captured frame**, immediately after
+`frame_orientation()` — not inside each detector.
+
+Four tools apply it: `camera_feed.py`, `gridded_camera_feed.py`,
+`rig_build_v1.py` and `color_grid_check.py`. **A new tool that reads
+`camera_settings.json` must apply it too**, or it will silently see different
+pixels from every other tool. The one line is:
+
+```python
+frame = colour.apply(frame_orientation(snapshot.frame, capture))
+```
+
+It is deliberately **not** part of `projection_metadata()`. Colour changes no
+geometry, so recolouring must not invalidate a saved `workspace_map.json`.
+
+`vision/color_grid.py` keeps its own internal `white_balance()` regardless.
+That is not a duplicate: it defends the sheet detector on a camera nobody has
+calibrated yet, which is exactly the state someone is in when they first go
+looking for the COLOUR section.
+
+**Do not name a new constant `FIT_MODES` in `camera_studio.py`.** That name is
+already the crop sizing tuple `("fit", "native")`, and the colour fit modes are
+imported as `COLOUR_FIT_MODES` because the module-level assignment silently
+shadowed them once already.
+
 ## 4. Frame span in centimetres
 
 | Where | What |
@@ -258,6 +295,7 @@ ack and is safe from rewording, but `S`, `G`, `0` and `0+` do not — for those,
 | `camera/gridded_camera_feed.py` | the same runtime feed plus machine-grid calibration/overlay |
 | `camera/rig_build_v1.py` | camera-grid cell selection plus confirmed serial build |
 | `camera/color_grid_check.py` | the printed-sheet detector on its own, live or on a still |
+| `python/config/camera_settings.json` -> `colour` | the software colour correction all of the above apply |
 | `rig/build_job.py` | the worker thread that keeps that camera live during a build |
 | `camera/undistorted_viewer.py` | the standalone lens-tuning viewer |
 

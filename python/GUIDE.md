@@ -15,6 +15,7 @@ below assume you are in the `python/` directory with the venv active.
 | **See/calibrate the Arduino block grid on the camera** | [`gridded_camera_feed.py`](#gridded_camera_feedpy) |
 | **Select a camera cell and build there** | [`rig_build_v1.py`](#rig_build_v1py) |
 | **Check the printed colour calibration sheet is detected** | [`color_grid_check.py`](#color_grid_checkpy) |
+| **Fix the camera's colour cast** | [`camera_studio.py` → COLOUR](#colour-correction) |
 | **Correct the fisheye with a straightness grid** | [`undistorted_grid_viewer.py`](#undistorted_grid_viewerpy) |
 | **Tune every camera setting and save them to JSON** | [`camera_studio.py`](#camera_studiopy) |
 | Check the camera is connected and working | [`camera_viewer.py`](#camera_viewerpy) |
@@ -546,6 +547,7 @@ lens        the full LensProfile — fov, model, k1, k2, centre offsets, output
 correction  enabled, interpolation kernel, mip filtering
 framing     the crop stack, zoom, pan, fit mode, view box
 sensor      all twelve controls, each a number or "auto"
+colour      the software colour correction: matrix, gamma, saturation, source
 derived     roi, output size, focal length, output camera matrix, sampling stats
 ```
 
@@ -561,6 +563,58 @@ instead.
 
 `lens` (the command) writes the lens half to `config/lens_profile.json` as well,
 which is what the *other* tools read.
+
+### Colour correction
+
+The rig's camera has a magenta cast strong enough to turn the printed sheet's
+green ink cyan — which makes half of it invisible to the grid detector and
+degrades block detection, since that keys on red-minus-blue. The **COLOUR**
+section of the panel fixes it once. The result is saved in
+`python/config/camera_settings.json` and applied by `camera_feed.py`,
+`gridded_camera_feed.py`, `rig_build_v1.py` and `color_grid_check.py`, so every
+tool sees the same pixels.
+
+Put the printed calibration sheet in shot, then either:
+
+1. **WHITE BAL** (`wb`) — one press. Neutralises the cast against the sheet's
+   own white paper. No reference photograph needed. Start here.
+2. **COLOUR CAL** (`colourcal <image>`) — match the camera to a photo of the
+   *same sheet* taken with something you trust, usually a phone. Both images are
+   reduced to three measured colours (green ink, magenta ink, white paper) and
+   the transform between them is solved. The two shots do not need to be framed
+   alike or show the same part of the sheet: green is green in both.
+
+`colourmode` picks what a calibration fits:
+
+| mode | fits | when |
+| --- | --- | --- |
+| `gain` *(default)* | one gain per channel, through the origin | almost always |
+| `affine` | gain plus offset per channel | when brightness is off too — but the sheet is all mid-to-bright, so the line down to black is extrapolated |
+| `matrix` | full linear 3×3 | when the diagonal visibly cannot get there |
+
+**Read the warnings, not the residual.** Measured on a real rig frame:
+
+| mode | residual | warnings | how it actually looked |
+| --- | --- | --- | --- |
+| `gain` | 19.7 | 0 | correct |
+| `affine` | 4.1 | 1 | sheet right, brick wall turned olive |
+| `matrix` | **0.00** | 3 | sheet right, wall turned bright pink |
+
+The residual only measures the three colours the fit was given, so the richer
+fits drive it to zero by contorting themselves everywhere else. `colourinfo`
+prints the matrix and everything implausible about it; `nomix` walks a matrix
+fit back to its white balance.
+
+Every fit also reports the **`redgain`/`bluegain` that would do the same job in
+the SENSOR section**. Prefer those where the backend has them — they act before
+the camera throws away headroom in the channel it under-exposed. The software
+correction is the fallback, and what the V4L2 path usually has to use.
+
+The COLOUR fields are full manual control over whatever a fit produced: per
+channel gain and offset, `gamma`, and `csat` (a software saturation, separate
+from the sensor's own). `colourreset` returns to a disabled identity, and so
+does the global `reset`.
+
 
 ---
 

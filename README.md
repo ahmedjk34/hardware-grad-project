@@ -51,6 +51,12 @@ To see the physical 9×5 positive-cell grid on that same feed, run
 press `c` and click the four prompted 24.3×40 cm holder-envelope corners to save
 the calibrated overlay.
 
+`camera/camera_studio.py` also owns the camera's **colour**. Its COLOUR section
+white-balances the feed against the printed sheet's paper (`wb`), or matches the
+camera to a phone photograph of the same sheet (`colourcal`), and saves the
+result so every other tool inherits it. That matters: the rig's cast has been
+strong enough to make the sheet's green ink invisible to the grid detector.
+
 Calibrating by eye is optional. A printed green/magenta sheet at the rig's own
 cell geometry (7.5 × 2.2 cm cells, 0.5 cm inner margins) can be measured
 instead: press `p` to overlay it and `k` to calibrate from it, in either
