@@ -283,10 +283,17 @@ px_per_cm = np.linalg.norm(
     np.array(calibration.point_at(1, 0)) - np.array(calibration.point_at(0, 0))
 ) / spec.pitch_x_cm
 offset_cm = np.linalg.norm(shifted - printed) / px_per_cm
-expected_cm = float(np.hypot(spec.block_x_cm / 2, spec.block_y_cm / 2))
-check("the 'printed' convention differs by half a block on each axis",
+# Derived, not hard-coded: the two conventions place the machine origin at
+# `pitch - start` and at `block / 2` in printed centimetres, so the gap between
+# them moves with grid.trim_*. Pinning a number here would just re-fail every
+# time a trim is measured on the rig.
+expected_cm = float(np.hypot(
+    spec.pitch_x_cm - grid.x_start_cm - spec.block_x_cm / 2,
+    spec.pitch_y_cm - grid.y_start_cm - spec.block_y_cm / 2))
+check("the two home conventions differ by exactly what the geometry says",
       abs(offset_cm - expected_cm) < 0.15,
-      f"{offset_cm:.2f} cm, expected {expected_cm:.2f} cm")
+      f"{offset_cm:.2f} cm, expected {expected_cm:.2f} cm "
+      f"(trim {grid.trim_x_cm:g},{grid.trim_y_cm:g})")
 
 
 # --- 6b. a camera colour cast, which is what broke this on the real rig ------

@@ -125,6 +125,7 @@ automatically.
 
 import argparse
 import json
+import math
 import sys
 import threading
 import time
@@ -151,6 +152,18 @@ from vision.camera_source import (
     describe_sensor_modes,
     open_camera,
 )
+from vision.color_correction import (
+    CHANNELS,
+    DEFAULT_FIT_MODE,
+    FIT_MODES,
+    ColorCorrection,
+    ColorCorrectionError,
+    equivalent_sensor_gains,
+    neutral_matrix,
+    pair_samples,
+    solve_matrix,
+)
+from vision.color_grid import ColorGridError, sample_ink_colors
 from vision.latest_worker import LatestValueWorker
 from vision.performance import RateMeter
 from vision.commands import (
@@ -186,6 +199,10 @@ VIEWS = ("corrected", "raw", "both")
 FIT_MODES = ("fit", "native")
 FLIPS = ("none", "h", "v", "both")
 ROTATIONS = (0, 90, 180, 270)
+
+# Where `colourcal` looks for a reference photograph when given no path. The
+# same printed sheet the grid calibration uses, shot with something trusted.
+REFERENCE_DIR = CAPTURE_DIR / "grid_training"
 
 LOG_LINES = 4
 
@@ -247,6 +264,14 @@ class Studio:
         self.flip = "none"
         self.rotate = 0
         self.swap_rb = False
+
+        # Software colour correction. Starts as a disabled identity: a fresh
+        # studio must render exactly what camera_feed.py renders, and that means
+        # touching nothing until someone asks for it. See the COLOUR section.
+        self.colour = ColorCorrection()
+        self.colour_mode = DEFAULT_FIT_MODE
+        self.colour_status = "not calibrated"
+        self.last_capture = None       # newest frame BEFORE colour correction
 
         self.view = "corrected"
         self.show_grid = False
@@ -520,6 +545,142 @@ class Studio:
                 self.log.add(False, f"sensor: {note}")
         return self.sensor_status
 
+    # --- colour ------------------------------------------------------------
+    #
+    # A software correction, separate from the sensor's own redgain/bluegain
+    # above. The sensor controls are better when the backend has them, because
+    # they act before the camera has already lost headroom in the channel it
+    # under-exposed — so every calibration here also reports the sensor gains
+    # that would do the same job, and `colourinfo` prints them. This exists
+    # because the V4L2 path often has no such control, and because a solved
+    # matrix can do things a pair of gains cannot.
+
+    def _need_capture(self):
+        if self.last_capture is None:
+            raise CommandError("no camera frame yet; wait for the preview")
+        return self.last_capture
+
+    def _sample_sheet(self, frame, what):
+        try:
+            return sample_ink_colors(frame)
+        except ColorGridError as exc:
+            raise CommandError(f"{what}: {exc}")
+
+    def set_colour_enabled(self, on: bool):
+        self.colour.enabled = bool(on)
+        return f"colour correction {'on' if self.colour.enabled else 'off'}"
+
+    def set_colour_gain(self, channel: int, value: float):
+        applied = self.colour.set_gain(channel, value)
+        return f"{CHANNELS[channel]} gain {applied:.3f}"
+
+    def set_colour_offset(self, channel: int, value: float):
+        applied = self.colour.set_offset(channel, value)
+        return f"{CHANNELS[channel]} offset {applied:+.1f}"
+
+    def set_colour_gamma(self, value: float):
+        return f"gamma {self.colour.set_gamma(value):.3f}"
+
+    def set_colour_saturation(self, value: float):
+        return f"colour saturation {self.colour.set_saturation(value):.3f}"
+
+    def set_colour_mode(self, mode: str):
+        self.colour_mode = mode
+        return f"colour fit mode {mode}"
+
+    def white_balance_now(self):
+        """Neutralise the cast using the printed sheet's own white paper.
+
+        The zero-effort calibration: no reference photograph, nothing to line
+        up, just the sheet in shot. The paper is the right white reference
+        because it is lit by exactly the same light as everything else on the
+        bench — unlike a wall, a bench top, or the brightest pixel in frame.
+        """
+        frame = self._need_capture()
+        samples = self._sample_sheet(frame, "white balance")
+        if "paper" not in samples.colors:
+            raise CommandError(
+                "found the ink but not the sheet's white margins; move the "
+                "sheet fully into view")
+        try:
+            self.colour.set_matrix(neutral_matrix(samples.colors["paper"]),
+                                   "white balance from the sheet's paper")
+        except ColorCorrectionError as exc:
+            raise CommandError(str(exc))
+        self.colour.enabled = True
+        red, blue = equivalent_sensor_gains(self.colour.matrix,
+                                            samples.colors["paper"])
+        self.colour_status = (f"paper white balance | equivalent sensor "
+                              f"redgain {red:.2f} bluegain {blue:.2f}")
+        return f"{self.colour.describe()} — {self.colour_status}"
+
+    def calibrate_colour(self, reference_path, mode=None):
+        """Match this camera to a reference photograph of the same printed sheet.
+
+        Both images are reduced to three measured colours — green ink, magenta
+        ink, white paper — and the transform between those pairs is what gets
+        solved. The two photographs do not have to be framed alike, or even show
+        the same part of the sheet: green is green in both.
+
+        Every warning the fit produces is surfaced rather than logged quietly.
+        On real rig data the residual ranks the fits backwards — see
+        :func:`vision.color_correction.solve_matrix` — so the warnings are the
+        part worth reading.
+        """
+        mode = mode or self.colour_mode
+        path = Path(reference_path)
+        if not path.exists() and not path.is_absolute():
+            path = REFERENCE_DIR / path
+        reference = cv2.imread(str(path))
+        if reference is None:
+            raise CommandError(f"cannot read a reference image at {path}")
+
+        frame = self._need_capture()
+        camera_samples = self._sample_sheet(frame, "this camera")
+        reference_samples = self._sample_sheet(reference, str(path.name))
+        try:
+            camera_colors, reference_colors, names = pair_samples(
+                camera_samples, reference_samples)
+            matrix, residual, notes = solve_matrix(camera_colors, reference_colors,
+                                                   mode=mode)
+        except ColorCorrectionError as exc:
+            raise CommandError(str(exc))
+
+        self.colour.set_matrix(matrix, f"{mode} fit against {path.name}")
+        self.colour.enabled = True
+        self.colour_mode = mode
+        red, blue = equivalent_sensor_gains(matrix, camera_samples.colors["paper"]) \
+            if "paper" in camera_samples.colors else (float("nan"), float("nan"))
+        self.colour_status = (f"{mode} fit vs {path.name}: residual "
+                              f"{residual:.1f} levels over {', '.join(names)}")
+        if math.isfinite(red):
+            self.colour_status += (f" | equivalent sensor redgain {red:.2f} "
+                                   f"bluegain {blue:.2f}")
+        for note in notes:
+            self.log.add(False, f"colour: {note}")
+        if notes:
+            self.colour_status += f" | {len(notes)} warning(s), see the log"
+        return f"{self.colour.describe()} — {self.colour_status}"
+
+    def colour_report(self):
+        lines = [self.colour.describe(), f"  {self.colour_status}"]
+        if self.colour.source:
+            lines.append(f"  from: {self.colour.source}")
+        lines.append("  matrix (BGR affine, row = output channel):")
+        for index, row in enumerate(self.colour.matrix):
+            lines.append(f"    {CHANNELS[index]:>5}  " +
+                         "  ".join(f"{v:8.4f}" for v in row))
+        for problem in self.colour.implausibilities():
+            lines.append(f"  WARNING: {problem}")
+        return "\n".join(lines)
+
+    def reset_colour(self):
+        self.colour.reset()
+        self.colour.enabled = False
+        self.colour_mode = DEFAULT_FIT_MODE
+        self.colour_status = "not calibrated"
+        return "colour correction reset to identity and switched off"
+
     # --- frame orientation -------------------------------------------------
 
     def orient(self, frame):
@@ -656,6 +817,44 @@ class Studio:
         cmds.add("grid", self._cmd_grid, "[on|off]",
                  "8x8 overlay — the ruler you judge straightness against")
 
+        # --- colour: the software correction, separate from the sensor's own ---
+        cmds.add("colour", self._cmd_colour, "[on|off]",
+                 "the software colour correction itself", aliases=("color",))
+        cmds.add("wb", self._cmd_wb, "",
+                 "WHITE BALANCE NOW from the printed sheet's white paper")
+        cmds.add("colourcal", self._cmd_colourcal, "[image] [gain|affine|matrix]",
+                 "match this camera to a reference photo of the same sheet",
+                 aliases=("colorcal", "ccal"))
+        cmds.add("colourmode", choice(self.set_colour_mode, FIT_MODES,
+                                      "colourmode <gain|affine|matrix>"),
+                 "<gain|affine|matrix>",
+                 f"what a calibration fits: {', '.join(FIT_MODES)}")
+        for index, name in enumerate(CHANNELS):
+            cmds.add(f"{name[0]}gain",
+                     numeric(lambda v, i=index: self.set_colour_gain(i, v),
+                             lambda i=index: self.colour.gain[i],
+                             f"{name[0]}gain <v|+v|-v>"),
+                     "<v|+v|-v>", f"colour {name} gain (0.05..8)")
+            cmds.add(f"{name[0]}off",
+                     numeric(lambda v, i=index: self.set_colour_offset(i, v),
+                             lambda i=index: self.colour.offset[i],
+                             f"{name[0]}off <v|+v|-v>"),
+                     "<v|+v|-v>", f"colour {name} offset (-128..128)")
+        cmds.add("gamma", numeric(self.set_colour_gamma,
+                                  lambda: self.colour.gamma, "gamma <v|+v|-v>"),
+                 "<v|+v|-v>", "colour gamma (0.2..5)")
+        cmds.add("csat", numeric(self.set_colour_saturation,
+                                 lambda: self.colour.saturation, "csat <v|+v|-v>"),
+                 "<v|+v|-v>", "SOFTWARE saturation (0..3) — not the sensor's")
+        cmds.add("nomix", self._cmd_nomix, "",
+                 "drop a fit's cross-channel terms, keeping its white balance")
+        cmds.add("colourinfo", lambda a: self.colour_report(), "",
+                 "print the colour matrix and what is wrong with it",
+                 aliases=("colorinfo",))
+        cmds.add("colourreset", lambda a: self.reset_colour(), "",
+                 "colour correction back to identity, and off",
+                 aliases=("colorreset",))
+
         # --- sensor: one command per control, generated from the table ---
         for name, spec in SENSOR_CONTROLS.items():
             cmds.add(name, self._sensor_handler(name), f"<{spec.range_text}>",
@@ -698,6 +897,39 @@ class Studio:
         if not args:
             return not current
         return parse_choice(args[0], ("on", "off")) == "on"
+
+    def _cmd_colour(self, args):
+        return self.set_colour_enabled(self._flag(args, self.colour.enabled))
+
+    def _cmd_wb(self, args):
+        return self.white_balance_now()
+
+    def _cmd_colourcal(self, args):
+        reference, mode = None, None
+        for token in args:
+            if token.lower() in FIT_MODES:
+                mode = token.lower()
+            else:
+                reference = token
+        if reference is None:
+            candidates = sorted(REFERENCE_DIR.glob("*.jpeg")) + \
+                sorted(REFERENCE_DIR.glob("*.jpg")) + \
+                sorted(REFERENCE_DIR.glob("*.png"))
+            if not candidates:
+                raise CommandError(
+                    f"give a reference image; none found in {REFERENCE_DIR}")
+            if len(candidates) > 1:
+                raise CommandError(
+                    f"{len(candidates)} reference images in {REFERENCE_DIR}; "
+                    f"name one: {', '.join(c.name for c in candidates[:4])}")
+            reference = candidates[0]
+        return self.calibrate_colour(reference, mode)
+
+    def _cmd_nomix(self, args):
+        removed = self.colour.drop_mix()
+        if removed <= 0:
+            return "the colour matrix was already diagonal"
+        return f"dropped {removed:.3f} of cross-channel mixing; {self.colour.describe()}"
 
     def _cmd_undistort(self, args):
         self.correct = self._flag(args, self.correct)
@@ -863,6 +1095,7 @@ class Studio:
         self.view_size = None          # rebuild() uses the canonical natural ROI
         self.fit_mode = "fit"
         self.flip, self.rotate, self.swap_rb = "none", 0, False
+        self.reset_colour()
         self.all_auto()
         apply_overrides(self, self.args)
         return ("back to the undistorted_viewer.py defaults"
@@ -924,6 +1157,7 @@ class Studio:
                 "view_size": list(self.view_size) if self.view_size else None,
             },
             "sensor": dict(self.sensor),
+            "colour": self.colour.to_settings(),
             "derived": {
                 "roi": [round(v, 6) for v in self.roi()],
                 "output_size": list(self.maps.out_size) if self.maps else None,
@@ -993,6 +1227,13 @@ class Studio:
             if name in SENSOR_CONTROLS:
                 self.sensor[name] = value
 
+        try:
+            self.colour = ColorCorrection.from_settings(data)
+        except RuntimeError as exc:
+            raise CommandError(str(exc))
+        self.colour_status = self.colour.source or (
+            "loaded" if not self.colour.is_identity else "not calibrated")
+
         self.settings_path = path
         self.dirty = self.sensor_dirty = True
 
@@ -1045,6 +1286,10 @@ class Studio:
             f"  mip x{stats.get('mip_levels', 1)}",
         ]
 
+    def colour_line(self):
+        state = "ON " if self.colour.enabled else "off"
+        return f"COLOUR {state} {self.colour.describe()[7:]} | {self.colour_status}"
+
     def sensor_lines(self):
         """One line per sensor control, three to a row to fit the panel."""
         cells = [f"{n} {self.sensor[n]}" for n in SENSOR_CONTROLS]
@@ -1065,6 +1310,11 @@ def next_view(studio):
 BUTTONS = [
     ("SAVE JSON", "save"),
     ("SNAP PNG", "snap"),
+    ("WHITE BAL", "wb"),
+    ("COLOUR CAL", "colourcal"),
+    ("COLOUR ON/OFF", "colour"),
+    ("COLOUR INFO", "colourinfo"),
+    ("COLOUR RESET", "colourreset"),
     ("ZOOM +", "zoom +0.25"),
     ("ZOOM -", "zoom -0.25"),
     ("CROP", "crop"),
@@ -1199,6 +1449,20 @@ def build_fields():
         Field("flip", "flip", lambda s: s.flip, FLIPS, 5),
         Field("rotate", "rotate", lambda s: str(s.rotate),
               tuple(str(r) for r in ROTATIONS), 4),
+    ]
+
+    fields += [
+        Field("correct", "colour", lambda s: _onoff(s.colour.enabled),
+              ("on", "off"), 4, "COLOUR"),
+        Field("fit", "colourmode", lambda s: s.colour_mode, tuple(FIT_MODES), 7),
+        Field("R gain", "rgain", lambda s: f"{s.colour.gain[2]:.3f}", 0.02, 6),
+        Field("G gain", "ggain", lambda s: f"{s.colour.gain[1]:.3f}", 0.02, 6),
+        Field("B gain", "bgain", lambda s: f"{s.colour.gain[0]:.3f}", 0.02, 6),
+        Field("R off", "roff", lambda s: f"{s.colour.offset[2]:+.1f}", 2.0, 6),
+        Field("G off", "goff", lambda s: f"{s.colour.offset[1]:+.1f}", 2.0, 6),
+        Field("B off", "boff", lambda s: f"{s.colour.offset[0]:+.1f}", 2.0, 6),
+        Field("gamma", "gamma", lambda s: f"{s.colour.gamma:.2f}", 0.05, 5),
+        Field("sat", "csat", lambda s: f"{s.colour.saturation:.2f}", 0.05, 5),
     ]
 
     for i, (name, spec) in enumerate(SENSOR_CONTROLS.items()):

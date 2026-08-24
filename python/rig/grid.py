@@ -156,12 +156,12 @@ class MachineGrid:
 
     @property
     def allocation_width_cm(self) -> float:
-        """Home coordinate to the far block edge: 9 * 2.7 = 24.3 cm."""
+        """One X grid span: 9 * 2.7 = 24.3 cm."""
         return self.cols * self.pitch_x_cm
 
     @property
     def allocation_height_cm(self) -> float:
-        """Home coordinate to the far block edge: 5 * 8.0 = 40.0 cm."""
+        """One Y grid span: 5 * 8.0 = 40.0 cm."""
         return self.rows * self.pitch_y_cm
 
     @property
@@ -179,7 +179,7 @@ class MachineGrid:
 
     @property
     def y_start_cm(self) -> float:
-        """Near edge of row 1, after the 0-to-1 Y gap."""
+        """Near edge of row 1, after the feeder half-length and Y gap."""
         return self.y_allocation_start_cm + self.gap_y_cm
 
     @property

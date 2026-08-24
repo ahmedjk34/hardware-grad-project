@@ -230,6 +230,41 @@ class ColorCorrection:
                                   1.0 - self.saturation, 0.0)
         return out
 
+    def implausibilities(self) -> list[str]:
+        """Ways this transform does not look like a camera correction.
+
+        The residual only measures the three colours the fit was given, and on
+        real data it ranks the fits *backwards*: the full 3x3 scores a perfect
+        zero while turning the wall behind the rig bright pink, because nothing
+        in the samples constrains it out there. So the check has to be on the
+        coefficients rather than on the fit error.
+
+        (A mid-grey probe was tried first and is not usable: correcting a real
+        cast is *supposed* to move grey, so it flags the good fit and passes the
+        bad one. What actually separates them is negative gains, offsets that
+        only an extrapolation would choose, and cross-channel terms as large as
+        the channels themselves.)
+        """
+        problems = []
+        diagonal = np.diag(self.matrix[:, :3])
+        if diagonal.min() <= 0:
+            problems.append(
+                f"the {CHANNELS[int(np.argmin(diagonal))]} gain is "
+                f"{diagonal.min():+.2f} — a negative gain inverts that channel "
+                f"and is never a real camera correction")
+        worst_offset = float(np.abs(self.matrix[:, 3]).max())
+        if worst_offset > SUSPICIOUS_OFFSET:
+            problems.append(
+                f"an offset reaches {worst_offset:.0f} levels, far outside the "
+                f"brightness range the sheet could measure")
+        scale = float(np.abs(diagonal).max())
+        if scale > 1e-6 and self.mix > 0.5 * scale:
+            problems.append(
+                f"cross-channel mixing ({self.mix:.2f}) is comparable to the "
+                f"gains themselves ({scale:.2f}); hues far from the sheet's own "
+                f"will be moved arbitrarily")
+        return problems
+
     # --- persistence -------------------------------------------------------
 
     @classmethod
@@ -325,6 +360,7 @@ DEFAULT_FIT_MODE = "gain"
 SUSPICIOUS_OFFSET = 40.0
 
 
+
 def solve_matrix(camera_colors, reference_colors, *, mode=DEFAULT_FIT_MODE):
     """Least-squares BGR transform taking camera colours to reference ones.
 
@@ -382,15 +418,10 @@ def solve_matrix(camera_colors, reference_colors, *, mode=DEFAULT_FIT_MODE):
                         f"sample; there is nothing to scale")
                 matrix[index, index] = float(column @ reference[:, index]) / denominator
 
-    if mode == "affine":
-        worst = float(np.abs(matrix[:, 3]).max())
-        if worst > SUSPICIOUS_OFFSET:
-            notes.append(f"offset reaches {worst:.0f} levels — the sheet is all "
-                         f"mid-to-bright, so this is extrapolated toward black "
-                         f"and may crush shadows; try the gain fit")
-
     predicted = camera @ matrix[:, :3].T + matrix[:, 3]
     residual = float(np.sqrt(np.mean((predicted - reference) ** 2)))
+
+    notes.extend(ColorCorrection(matrix=matrix).implausibilities())
     return matrix, residual, notes
 
 

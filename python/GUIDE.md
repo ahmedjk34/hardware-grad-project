@@ -101,7 +101,7 @@ It opens with an amber **APPROXIMATION ONLY** grid so you can see the configured
 camera and motor cells match. To calibrate:
 
 1. Press `c`.
-2. Click the complete 24.3×40 cm holder-envelope corners in the prompted order:
+2. Click the complete 24.3×40 cm holder-centre envelope corners in the prompted order:
    X/Y home, far-X/home-Y, far-X/far-Y, home-X/far-Y.
 3. Confirm the Tk dashboard changes to `Grid: CALIBRATED`.
 4. Hover cells and verify several displayed `G col row` commands with the rig
@@ -125,18 +125,20 @@ The camera image contains only the camera, grid, and block visualization;
 calibration state, cell details, FPS, and controls are in the separate Tk dashboard.
 
 The JSON deliberately does not duplicate the firmware's motor step limits.
-The live caps are `4750` X and `7975` Y steps; paired with the measured holder
+The live caps are `4750` X and `8250` Y steps; paired with the measured holder
 displacements, firmware derives `4750 / 24.3 = 195.4733` X steps/cm and
-`7975 / 40 = 199.375` Y steps/cm. The separately observed build displacement
-is 43 cm on Y, but its extra 3 cm belongs to the currently ignored arm-holder
-offset and does not control this grid. The Pi maps pixels through centimetres
+`8250 / 40 = 206.25` Y steps/cm. The separately observed build displacement
+is 43 cm on Y. The current feeder-centre Y shift makes the calculated physical
+block footprint 43.75 cm high while holder centres remain limited to 40 cm.
+The Pi maps pixels through centimetres
 to a logical cell; Arduino alone converts the selected centre to step pulses.
 
 Grid pitch is not block size. X pitch is `2.2 + 0.5 = 2.7 cm`; Y pitch is
-`7.5 + 0.5 = 8 cm`. The gap from coordinate 0 to cell 1 counts, so nine X
-pitches fill 24.3 cm and five Y pitches fill 40 cm exactly. Positive block
-footprints themselves occupy `23.8 × 39.5 cm`; the missing `0.5 cm` on each
-axis is that first 0-to-1 gap, not outer padding.
+`7.5 + 0.5 = 8 cm`. `[0,0]` is the feeder-block centre. The Y grid is shifted
+by half a feeder block, `3.75 cm`, so row centres are `8, 16, 24, 32, 40 cm`
+from the feeder centre. Positive block footprints occupy `23.8 × 39.5 cm`;
+the shifted Y footprint runs from `4.25` to `43.75 cm`. The 40 cm cap limits
+the holder centre at row 5, not the far edge of the held block.
 
 ---
 

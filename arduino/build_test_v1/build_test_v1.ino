@@ -63,18 +63,18 @@
   sit at OPPOSITE ends now, so the two axes no longer share a sign:
 
       X switch at the X+ end  ->  X runs   0  ...  -4750   (soft limit)
-      Y switch at the Y- end  ->  Y runs   0  ...  +7975   (soft limit)
+      Y switch at the Y- end  ->  Y runs   0  ...  +8250   (soft limit)
       Z switch at the Z- end  ->  Z runs   0  ...  +1350   (TOP SWITCH)
 
-  The current software-safe envelope is 4750 x 7975 steps. The measured
+  The current software-safe envelope is 4750 x 8250 steps. The measured
   HOLDER displacement to those caps is 24.3 x 40 cm. The active rectangle is
-  X in [-4750, 0], Y in [0, +7975]. Grid
+  X in [-4750, 0], Y in [0, +8250]. Grid
   indices hide this sign mess:
 
       col 1  = nearest the X switch (X = 0 side, the X+ end)
       col N  = far end of X travel  (X = -4750 side)
       row 1  = nearest the Y switch (Y = 0 side)
-      row M  = far end of Y travel  (Y = +7975 side)
+      row M  = far end of Y travel  (Y = +8250 side)
 
   Generalised in code as: each axis extends from 0 in the direction
   travelEndOf(axis), for axisTravelOf(axis) steps - whether that far
@@ -464,7 +464,7 @@ const uint8_t LIMIT_CHECK_EVERY_N_STEPS = 1;
 const long SOFT_LIMIT_INFINITE = 0; // sentinel: no cap at all
 
 long SOFT_LIMIT_X_TRAVEL = 4750;                      // X- travel cap, in steps
-long SOFT_LIMIT_Y_TRAVEL = 7975;                      // Y+ travel cap, in steps
+long SOFT_LIMIT_Y_TRAVEL = 8250;                      // Y+ travel cap, in steps
 const long SOFT_LIMIT_Z_TRAVEL = SOFT_LIMIT_INFINITE; // Z: switch, not a cap
 
 // Measured HOLDER displacement from each home switch to the active software
@@ -473,7 +473,7 @@ const long SOFT_LIMIT_Z_TRAVEL = SOFT_LIMIT_INFINITE; // Z: switch, not a cap
 // for now, so it does not participate in either scale.
 //
 //   X scale = 4750 / 24.3 = 195.4733 steps/cm
-//   Y scale = 7975 / 40.0 = 199.3750 steps/cm
+//   Y scale = 8250 / 40.0 = 206.2500 steps/cm
 float X_TRAVEL_CM = 24.3;
 float Y_TRAVEL_CM = 40.0;
 
@@ -497,9 +497,9 @@ const bool SOFT_LIMIT_VERBOSE = true;
 // SECTION 6C - GRID CONFIGURATION
 // ============================================================
 //
-// A block is 2.2 cm along X and 7.5 cm along Y. Blocks do NOT touch: every
-// positive cell is preceded by a 0.5 cm gap from the previous coordinate,
-// including the gap from coordinate 0 (home) to cell 1:
+// A block is 2.2 cm along X and 7.5 cm along Y. Blocks do NOT touch: adjacent
+// positive cells have a 0.5 cm edge-to-edge gap. On Y the same gap separates
+// the feeder block's far edge from row 1's near edge:
 //
 //   X pitch = 2.2 + 0.5 = 2.7 cm; 9 * 2.7 = 24.3 cm
 //   Y pitch = 7.5 + 0.5 = 8.0 cm; 5 * 8.0 = 40.0 cm
@@ -523,11 +523,10 @@ const bool SOFT_LIMIT_VERBOSE = true;
 // ------------------------------------------------------------
 //   HOW MANY CELLS FIT?
 // ------------------------------------------------------------
-//   Counts are limited by block-plus-gap pitch. With zero trim the maxima
-//   are 9 x 5.
-//   A non-zero trim consumes equal safety room at the opposite edge,
-//   so the maximum count may fall. Command S can choose a smaller
-//   centred grid but cannot squeeze cells or change their footprint.
+//   Counts are limited by block-plus-gap pitch and by reachable HOLDER
+//   centres. The shipped feeder-to-grid Y trim gives a maximum of 9 x 5.
+//   Command S can choose a smaller centred grid but cannot squeeze cells or
+//   change their footprint.
 
 float GRID_BLOCK_X_CM = 2.2;
 float GRID_BLOCK_Y_CM = 7.5;
@@ -3626,11 +3625,17 @@ void printGridConfig()
   Serial.print(gridBlockFootprintCmOf(AXIS_Y, GRID_ROWS), 2);
   Serial.println(F(" cm  (blocks + internal gaps)"));
 
-  Serial.print(F("Home->far edge: "));
+  Serial.print(F("One grid span: "));
   Serial.print(gridAllocationCmOf(AXIS_X, GRID_COLS), 2);
   Serial.print(F(" x "));
   Serial.print(gridAllocationCmOf(AXIS_Y, GRID_ROWS), 2);
-  Serial.println(F(" cm  (includes first 0-to-1 gap)"));
+  Serial.println(F(" cm  (gap + blocks, measured from grid origin)"));
+
+  Serial.print(F("Home->far block edge: X "));
+  Serial.print(gridBlockEndCmOf(AXIS_X, GRID_COLS), 2);
+  Serial.print(F(" cm / Y "));
+  Serial.print(gridBlockEndCmOf(AXIS_Y, GRID_ROWS), 2);
+  Serial.println(F(" cm  (block may extend past holder-centre travel)"));
 
   Serial.print(F("First block edge: X "));
   Serial.print(gridBlockStartCmOf(AXIS_X, GRID_COLS), 3);

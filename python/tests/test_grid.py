@@ -194,8 +194,14 @@ for name, expected in paired_values.items():
 # rig.json, but the desktop check should still make an accidental change
 # of the live Y cap visible before flashing.
 y_soft_limit = firmware_number("SOFT_LIMIT_Y_TRAVEL")
-check("live Y software limit is 7975 steps", y_soft_limit == 7975,
+check("live Y software limit is 8250 steps", y_soft_limit == 8250,
       f"firmware {y_soft_limit}")
+y_steps_per_cm = y_soft_limit / from_cfg.workspace_height_cm
+y_row_targets = [round(from_cfg.cell_center_cm(1, row)[1] * y_steps_per_cm)
+                 for row in range(1, from_cfg.rows + 1)]
+check("Y feeder-centre row targets are 8 cm apart",
+      y_row_targets == [1650, 3300, 4950, 6600, 8250],
+      f"targets {y_row_targets}")
 x_soft_limit = firmware_number("SOFT_LIMIT_X_TRAVEL")
 check("live X software limit is 4750 steps", x_soft_limit == 4750,
       f"firmware {x_soft_limit}")

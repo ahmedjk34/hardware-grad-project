@@ -135,13 +135,18 @@ touching pitch-sized rectangles.
 
 **Why four clicks instead of arithmetic.** The camera's rotation and mirroring
 relative to the rig is arbitrary, and the machine's axes run in opposite
-directions (`X` from 0 to `−4750`, `Y` from 0 to `+7975`). The measured holder
-displacements are 24.3 × 40 cm, so scales derive as `4750/24.3` and `7975/40`.
+directions (`X` from 0 to `−4750`, `Y` from 0 to `+8250`). The measured holder
+displacements are 24.3 × 40 cm, so scales derive as `4750/24.3` and `8250/40`.
 The grid math is exact: X pitch `2.2 + 0.5 = 2.7`, nine pitches = 24.3 cm;
 Y pitch `7.5 + 0.5 = 8`, five pitches = 40 cm. Four clicked corners absorb
 camera rotation and perspective with no sign-juggling. It also means cell accuracy does not
 depend on the lens numbers being correct — and they are still estimates, not a
 calibration.
+
+`[0,0]` is the feeder-block centre. The active Y trim is `+3.75 cm` (half a
+feeder block), so positive row centres are `8, 16, 24, 32, 40 cm` from that
+centre. The last held block reaches a 43.75 cm far edge, but its holder centre
+remains at the 40 cm software-travel cap.
 
 **Done when:** clicking a cell prints the right col/row, and sending that cell
 with `G <col> <row>` drives the claw to the spot you clicked.

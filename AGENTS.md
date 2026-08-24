@@ -72,11 +72,10 @@ Including coordinate zero, commands address col `0..9` and row `0..5`: a
 | physical envelope | `rig.json` → `workspace.width_cm` / `height_cm` | `X_TRAVEL_CM` / `Y_TRAVEL_CM` |
 | one block footprint | `rig.json` → `grid.block_width_cm` / `block_length_cm` | `GRID_BLOCK_X_CM` / `GRID_BLOCK_Y_CM` |
 | gap before each positive cell | `rig.json` → `grid.gap_x_cm` / `gap_y_cm` | `GRID_GAP_X_CM` / `GRID_GAP_Y_CM` |
-| signed placement correction | `rig.json` → `grid.trim_x_cm` / `trim_y_cm` | `GRID_TRIM_X_CM` / `GRID_TRIM_Y_CM` |
+| signed complete-grid shift | `rig.json` → `grid.trim_x_cm` / `trim_y_cm` | `GRID_TRIM_X_CM` / `GRID_TRIM_Y_CM` |
 
 `rig.json` → `observed_build_area` is a measurement record only. It has no
-firmware partner and no control consumer while the arm-holder offset is being
-ignored; do not substitute its 43 cm Y observation for `Y_TRAVEL_CM`.
+firmware partner and never replaces the holder travel cap in `workspace`.
 
 These centimetre measurements are **holder displacements**, not pure object
 dimensions: they compare the holder reference at home with that same reference
@@ -84,19 +83,20 @@ at the active software cap. The live calibration is:
 
 - X: **24.3 cm holder displacement = 4750 steps**, so `4750 / 24.3 =
   195.4733 steps/cm`;
-- Y: **40 cm holder displacement = 7975 steps**, so `7975 / 40 =
-  199.375 steps/cm`.
+- Y: **40 cm holder displacement = 8250 steps**, so `8250 / 40 =
+  206.25 steps/cm`.
 
 Never hard-code those ratios; firmware derives them from the cap and measured
 displacement. A separate physical observation found a **24.3 × 43 cm build
-displacement**. The extra observed 3 cm on Y comes from the not-yet-modelled
-arm-versus-holder geometry. It is documented but deliberately does not control
-motion or grid math yet: current tool offsets remain zero and the controlled
-grid uses the trustworthy **24.3 × 40 cm holder displacement**.
+footprint**. It is close to the 43.75 cm Y footprint derived below; it never
+changes the 40 cm holder-centre motion cap. Current tool offsets remain zero.
 
 Blocks are **2.2 cm X × 7.5 cm Y × 1.5 cm Z** in the supported unrotated
-footprint. Every positive cell is preceded by a **0.5 cm gap**, including the
-gap from coordinate 0 to cell 1. There is no additional trailing outer margin:
+footprint. `[0,0]` is the feeder-block centre where the claw picks up. Every
+positive cell has a **0.5 cm gap** before it. On Y the build grid begins
+**3.75 cm** (half a feeder-block length) away from `[0,0]`; this makes the
+centre-to-centre distance from the feeder to row 1 exactly `3.75 + 0.5 +
+3.75 = 8.0 cm`. There is no additional trailing outer margin inside the grid:
 
 ```text
 X pitch = 2.2 + 0.5 = 2.7 cm; 9 × 2.7 = 24.3 cm
@@ -106,20 +106,24 @@ positive-block footprint X = 9 × 2.2 + 8 × 0.5 = 23.8 cm
 positive-block footprint Y = 5 × 7.5 + 4 × 0.5 = 39.5 cm
 ```
 
-The difference between each footprint and controlled displacement is the first
-0-to-1 gap, not outer padding. First centres are X `0.5 + 2.2/2 = 1.6 cm`
-and Y `0.5 + 7.5/2 = 4.25 cm`; pitch then repeats to last centres X `23.2`
-and Y `36.25 cm`. The final block edges land exactly at `24.3 × 40 cm`.
+The X span starts from home; Y's span starts 3.75 cm from the feeder centre.
+First centres are X `0.5 + 2.2/2 = 1.6 cm` and Y `3.75 + 0.5 + 7.5/2 =
+8.0 cm`; pitch then repeats to last centres X `23.2` and Y `40.0 cm`.
+The last Y block therefore ends at `43.75 cm` from the feeder centre. This is
+safe only because the holder needs to reach its **centre** at 40 cm; the held
+block itself extends past that holder coordinate.
 
 The firmware owns the step counts and derives both steps/cm ratios at runtime;
-never hard-code either ratio and do not copy the `4750 × 7975` safety envelope
+never hard-code either ratio and do not copy the `4750 × 8250` safety envelope
 into JSON. The Pi does not need motor steps to draw or select a cell: it maps
 camera pixel → physical cm → `[col,row]`, and the Arduino alone maps that cell
 to safe step targets. The Pi needs the centimetre geometry to interpret camera
 scale, while the firmware needs it to turn cell centres into steps, so those
 centimetre values genuinely have partners on both machines. Change both
-partners in the same commit. Positive trim moves the entire packed grid away
-from that axis's home switch; negative trim moves it toward the switch.
+partners in the same commit. Positive trim moves the entire grid away from its
+home/feeder reference; negative trim moves it toward that reference. The
+shipped Y trim is `+3.75 cm`, the measured feeder-centre-to-build-grid shift;
+it is not a holder-to-tool offset.
 
 ### 3b. Grid NUMBERING — the convention, not the count
 
@@ -352,7 +356,7 @@ These are physical facts about the machine. Nothing can push them over serial,
 so a copy in the JSON would be a lie that nobody notices until the rig crashes
 into something.
 
-- firmware-only X/Y software caps (`X = 4750`, `Y = 7975`)
+- firmware-only X/Y software caps (`X = 4750`, `Y = 8250`)
 - `Z_TRAVEL_CM`, `Z_TRAVEL_STEPS`, `BLOCK_HEIGHT_CM`, build ceiling
 - pin assignments, servo angles, motor direction polarity
 
