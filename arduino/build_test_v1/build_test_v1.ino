@@ -505,17 +505,18 @@ const bool SOFT_LIMIT_VERBOSE = true;
 //   Y pitch = 7.5 + 0.5 = 8.0 cm; 5 * 8.0 = 40.0 cm
 //
 // There is no trailing outer margin inside one 24.3 x 40 cm grid span.
-// Coordinate 0 is the feeder-block centre / home reference. The measured Y
-// feeder-centre-to-grid shift is +3.75 cm (one half block length), so row 1
-// centres at 8 cm, row 2 at 16 cm, ... and row 5 at the 40 cm holder cap.
-// The final physical block edge is consequently 43.75 cm from the feeder
-// centre; only the HOLDER centre is constrained by the 40 cm travel cap.
+// Coordinate 0 is the feeder-block centre / home reference. The measured
+// feeder-centre-to-grid shifts are +1.1 cm X (half width) and +3.75 cm Y
+// (half length), so column centres are 2.7,5.4,...,24.3 cm and row centres
+// are 8,16,...,40 cm. Final physical block edges are 25.4 x 43.75 cm from
+// the feeder centre; only the HOLDER centres are constrained by travel caps.
 // The complete coordinate ranges are therefore col 0..9 and row 0..5,
 // while the normal two-axis block grid is 9 cols x 5 rows.
 //
 // A smaller S-selected grid remains centred. The signed trims then move that
-// complete allocation away from (+) or toward (-) its home switch. Y's +3.75
-// cm trim records the feeder-centre-to-build-grid shift, not a tool offset.
+// complete allocation away from (+) or toward (-) its home switch. The +1.1
+// X / +3.75 cm Y trims record feeder-centre-to-build-grid shifts, not tool
+// offsets.
 //
 // Targets are computed as absolute physical cell centres and rounded only
 // once, so sub-step rounding error never accumulates between cells.
@@ -533,7 +534,7 @@ float GRID_BLOCK_Y_CM = 7.5;
 float GRID_GAP_X_CM = 0.5;
 float GRID_GAP_Y_CM = 0.5;
 
-float GRID_TRIM_X_CM = 0.0; // signed whole-grid correction along X
+float GRID_TRIM_X_CM = 1.1; // feeder centre -> build-grid shift along X
 float GRID_TRIM_Y_CM = 3.75; // feeder centre -> build-grid shift along Y
 
 long GRID_COLS = 9;
@@ -2083,7 +2084,7 @@ long gridCountMaxOf(uint8_t axis)
 
 // Centre of positive cell `index` (1-based), measured from coordinate 0:
 //   centre = allocation_start + gap + block/2 + (index - 1) * pitch
-// Full-grid examples: X1 = 0.5 + 2.2/2 = 1.6 cm;
+// Full-grid examples: X1 = 1.1 + 0.5 + 2.2/2 = 2.7 cm;
 //                     Y1 = 3.75 + 0.5 + 7.5/2 = 8.0 cm.
 float cellCentreCmOf(uint8_t axis, long index)
 {

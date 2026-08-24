@@ -134,11 +134,12 @@ The Pi maps pixels through centimetres
 to a logical cell; Arduino alone converts the selected centre to step pulses.
 
 Grid pitch is not block size. X pitch is `2.2 + 0.5 = 2.7 cm`; Y pitch is
-`7.5 + 0.5 = 8 cm`. `[0,0]` is the feeder-block centre. The Y grid is shifted
-by half a feeder block, `3.75 cm`, so row centres are `8, 16, 24, 32, 40 cm`
-from the feeder centre. Positive block footprints occupy `23.8 × 39.5 cm`;
-the shifted Y footprint runs from `4.25` to `43.75 cm`. The 40 cm cap limits
-the holder centre at row 5, not the far edge of the held block.
+`7.5 + 0.5 = 8 cm`. `[0,0]` is the feeder-block centre. The X/Y grid shifts
+are half a feeder block: `1.1 cm` X and `3.75 cm` Y. Column centres are
+`2.7..24.3 cm`; row centres are `8, 16, 24, 32, 40 cm` from the feeder centre.
+Positive block footprints occupy `23.8 × 39.5 cm`; their shifted envelope runs
+from `1.6..25.4 cm` X and `4.25..43.75 cm` Y. Holder caps limit placement
+centres, not the far edge of a held block.
 
 ---
 

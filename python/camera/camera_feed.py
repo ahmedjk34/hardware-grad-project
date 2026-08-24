@@ -114,6 +114,20 @@ def sensor_from_settings(data: dict) -> dict:
     return {name: sensor.get(name, AUTO) for name in SENSOR_CONTROLS}
 
 
+def colour_from_settings(data: dict):
+    """Build the saved software colour correction, or a disabled identity.
+
+    Applied before the lens correction, next to the orientation, because it is a
+    property of the captured picture rather than of the geometry. Every tool
+    built on this feed inherits it by calling this and applying the result — the
+    rig's camera has a strong enough colour cast to break block detection and
+    the printed-grid detector alike, and fixing it once here is what stops each
+    of those having to defend itself separately.
+    """
+    from vision.color_correction import ColorCorrection
+    return ColorCorrection.from_settings(data)
+
+
 def frame_orientation(frame, capture: dict):
     """Apply the saved flip/rotation before correction sees the frame."""
     if capture.get("swap_rb", False):
@@ -396,6 +410,7 @@ def main():
         profile = profile_from_settings(data)
         sensor = sensor_from_settings(data)
         capture = data.get("capture") or {}
+        colour = colour_from_settings(data)
         correction = data.get("correction") or {}
         enabled = bool(correction.get("enabled", True))
         interpolation = correction.get("interp", "cubic")
@@ -537,7 +552,7 @@ def main():
             last_sequence = snapshot.sequence
             capture_rate.tick()
             frame = snapshot.frame
-            frame = frame_orientation(frame, capture)
+            frame = colour.apply(frame_orientation(frame, capture))
             if maps is None or frame.shape[1::-1] != input_size:
                 maps = build_maps(profile, frame.shape[1::-1], interpolation, mip=mip,
                                   roi=roi)

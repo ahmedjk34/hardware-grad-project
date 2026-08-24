@@ -154,8 +154,8 @@ from vision.camera_source import (
 )
 from vision.color_correction import (
     CHANNELS,
-    DEFAULT_FIT_MODE,
-    FIT_MODES,
+    DEFAULT_FIT_MODE as DEFAULT_COLOUR_FIT,
+    FIT_MODES as COLOUR_FIT_MODES,
     ColorCorrection,
     ColorCorrectionError,
     equivalent_sensor_gains,
@@ -196,7 +196,8 @@ SETTINGS_PATH = Path(__file__).resolve().parents[1] / "config" / "camera_setting
 
 INTERP_NAMES = list(INTERPOLATIONS)
 VIEWS = ("corrected", "raw", "both")
-FIT_MODES = ("fit", "native")
+FIT_MODES = ("fit", "native")     # crop sizing; the COLOUR section's fit modes
+                                  # are COLOUR_FIT_MODES, imported above
 FLIPS = ("none", "h", "v", "both")
 ROTATIONS = (0, 90, 180, 270)
 
@@ -269,7 +270,7 @@ class Studio:
         # studio must render exactly what camera_feed.py renders, and that means
         # touching nothing until someone asks for it. See the COLOUR section.
         self.colour = ColorCorrection()
-        self.colour_mode = DEFAULT_FIT_MODE
+        self.colour_mode = DEFAULT_COLOUR_FIT
         self.colour_status = "not calibrated"
         self.last_capture = None       # newest frame BEFORE colour correction
 
@@ -677,7 +678,7 @@ class Studio:
     def reset_colour(self):
         self.colour.reset()
         self.colour.enabled = False
-        self.colour_mode = DEFAULT_FIT_MODE
+        self.colour_mode = DEFAULT_COLOUR_FIT
         self.colour_status = "not calibrated"
         return "colour correction reset to identity and switched off"
 
@@ -825,10 +826,10 @@ class Studio:
         cmds.add("colourcal", self._cmd_colourcal, "[image] [gain|affine|matrix]",
                  "match this camera to a reference photo of the same sheet",
                  aliases=("colorcal", "ccal"))
-        cmds.add("colourmode", choice(self.set_colour_mode, FIT_MODES,
+        cmds.add("colourmode", choice(self.set_colour_mode, COLOUR_FIT_MODES,
                                       "colourmode <gain|affine|matrix>"),
                  "<gain|affine|matrix>",
-                 f"what a calibration fits: {', '.join(FIT_MODES)}")
+                 f"what a calibration fits: {', '.join(COLOUR_FIT_MODES)}")
         for index, name in enumerate(CHANNELS):
             cmds.add(f"{name[0]}gain",
                      numeric(lambda v, i=index: self.set_colour_gain(i, v),
@@ -848,7 +849,7 @@ class Studio:
                  "<v|+v|-v>", "SOFTWARE saturation (0..3) — not the sensor's")
         cmds.add("nomix", self._cmd_nomix, "",
                  "drop a fit's cross-channel terms, keeping its white balance")
-        cmds.add("colourinfo", lambda a: self.colour_report(), "",
+        cmds.add("colourinfo", self._cmd_colourinfo, "",
                  "print the colour matrix and what is wrong with it",
                  aliases=("colorinfo",))
         cmds.add("colourreset", lambda a: self.reset_colour(), "",
@@ -907,7 +908,7 @@ class Studio:
     def _cmd_colourcal(self, args):
         reference, mode = None, None
         for token in args:
-            if token.lower() in FIT_MODES:
+            if token.lower() in COLOUR_FIT_MODES:
                 mode = token.lower()
             else:
                 reference = token
@@ -924,6 +925,12 @@ class Studio:
                     f"name one: {', '.join(c.name for c in candidates[:4])}")
             reference = candidates[0]
         return self.calibrate_colour(reference, mode)
+
+    def _cmd_colourinfo(self, args):
+        for line in self.colour_report().splitlines():
+            self.log.add(True, line)
+            print(line)
+        return self.colour.describe()
 
     def _cmd_nomix(self, args):
         removed = self.colour.drop_mix()
@@ -1077,6 +1084,9 @@ class Studio:
     def _cmd_params(self, args):
         for line in self.status_lines() + self.sensor_lines():
             self.log.add(True, line)
+        for line in self.colour_report().splitlines():
+            self.log.add(True, line)
+            print(line)
         return "current settings above"
 
     def _cmd_reset(self, args):
@@ -1454,7 +1464,8 @@ def build_fields():
     fields += [
         Field("correct", "colour", lambda s: _onoff(s.colour.enabled),
               ("on", "off"), 4, "COLOUR"),
-        Field("fit", "colourmode", lambda s: s.colour_mode, tuple(FIT_MODES), 7),
+        Field("fit", "colourmode", lambda s: s.colour_mode,
+              tuple(COLOUR_FIT_MODES), 7),
         Field("R gain", "rgain", lambda s: f"{s.colour.gain[2]:.3f}", 0.02, 6),
         Field("G gain", "ggain", lambda s: f"{s.colour.gain[1]:.3f}", 0.02, 6),
         Field("B gain", "bgain", lambda s: f"{s.colour.gain[0]:.3f}", 0.02, 6),
@@ -1703,6 +1714,12 @@ class StudioWindow:
         self.camera_label = ttk.Label(controls, anchor="w",
                                       style="Studio.Status.TLabel")
         self.camera_label.pack(fill="x")
+        # Standing state, not an event: whether a colour correction is applied
+        # changes what every downstream tool sees, so it must not scroll away
+        # with the log.
+        self.colour_label = ttk.Label(controls, anchor="w",
+                                      style="Studio.Status.TLabel")
+        self.colour_label.pack(fill="x")
         for _ in range(LOG_LINES):
             label = ttk.Label(controls, anchor="w", style="Studio.LogOk.TLabel")
             label.pack(fill="x")
@@ -1880,6 +1897,10 @@ class StudioWindow:
             text=(f"camera: {self.studio.sensor_status} | capture "
                   f"{self._capture_rate.rate:5.1f} fps | preview "
                   f"{self._preview_rate.rate:5.1f} fps | {age}"))
+        self.colour_label.configure(
+            text=self.studio.colour_line(),
+            style=("Studio.Calibrated.TLabel" if self.studio.colour.enabled
+                   else "Studio.Status.TLabel"))
         recent = self.studio.log.recent(count=LOG_LINES, max_age=12.0)
         padded = [(True, "")] * (LOG_LINES - len(recent)) + recent
         for label, (ok, message) in zip(self.log_labels, padded):
@@ -2227,6 +2248,12 @@ class StudioWindow:
                 if self.studio.swap_rb:
                     frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
                 frame = self.studio.orient(frame)
+                # Keep the uncorrected frame: `wb` and `colourcal` measure the
+                # camera's cast, and measuring it through a correction that is
+                # already removing it would fold the correction into itself a
+                # second time every press.
+                self.studio.last_capture = frame
+                frame = self.studio.colour.apply(frame)
                 target_input = frame.shape[1::-1]
 
             if self.studio.dirty:

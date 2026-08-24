@@ -88,8 +88,9 @@ at the active software cap. The live calibration is:
 
 Never hard-code those ratios; firmware derives them from the cap and measured
 displacement. A separate physical observation found a **24.3 × 43 cm build
-footprint**. It is close to the 43.75 cm Y footprint derived below; it never
-changes the 40 cm holder-centre motion cap. Current tool offsets remain zero.
+footprint**. The feeder-centre model currently predicts physical outer block
+edges at **25.4 × 43.75 cm**, which needs physical verification; neither record
+changes the 24.3 × 40 cm holder-centre motion cap. Tool offsets remain zero.
 
 Blocks are **2.2 cm X × 7.5 cm Y × 1.5 cm Z** in the supported unrotated
 footprint. `[0,0]` is the feeder-block centre where the claw picks up. Every
@@ -106,11 +107,12 @@ positive-block footprint X = 9 × 2.2 + 8 × 0.5 = 23.8 cm
 positive-block footprint Y = 5 × 7.5 + 4 × 0.5 = 39.5 cm
 ```
 
-The X span starts from home; Y's span starts 3.75 cm from the feeder centre.
-First centres are X `0.5 + 2.2/2 = 1.6 cm` and Y `3.75 + 0.5 + 7.5/2 =
-8.0 cm`; pitch then repeats to last centres X `23.2` and Y `40.0 cm`.
-The last Y block therefore ends at `43.75 cm` from the feeder centre. This is
-safe only because the holder needs to reach its **centre** at 40 cm; the held
+The X/Y spans start one half feeder block away from the feeder centre: X
+`+1.1 cm`, Y `+3.75 cm`. First centres are X `1.1 + 0.5 + 2.2/2 = 2.7 cm`
+and Y `3.75 + 0.5 + 7.5/2 = 8.0 cm`; pitch then repeats to last centres X
+`24.3` and Y `40.0 cm`. The final physical block edges are `25.4 × 43.75 cm`
+from the feeder centre. This is safe only because the holder needs to reach
+each block's **centre** inside its 24.3 × 40 cm travel envelope; the held
 block itself extends past that holder coordinate.
 
 The firmware owns the step counts and derives both steps/cm ratios at runtime;
@@ -122,8 +124,8 @@ scale, while the firmware needs it to turn cell centres into steps, so those
 centimetre values genuinely have partners on both machines. Change both
 partners in the same commit. Positive trim moves the entire grid away from its
 home/feeder reference; negative trim moves it toward that reference. The
-shipped Y trim is `+3.75 cm`, the measured feeder-centre-to-build-grid shift;
-it is not a holder-to-tool offset.
+shipped trims are X `+1.1 cm` and Y `+3.75 cm`, the measured
+feeder-centre-to-build-grid shifts; they are not holder-to-tool offsets.
 
 ### 3b. Grid NUMBERING — the convention, not the count
 

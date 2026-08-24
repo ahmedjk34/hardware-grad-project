@@ -143,10 +143,11 @@ camera rotation and perspective with no sign-juggling. It also means cell accura
 depend on the lens numbers being correct — and they are still estimates, not a
 calibration.
 
-`[0,0]` is the feeder-block centre. The active Y trim is `+3.75 cm` (half a
-feeder block), so positive row centres are `8, 16, 24, 32, 40 cm` from that
-centre. The last held block reaches a 43.75 cm far edge, but its holder centre
-remains at the 40 cm software-travel cap.
+`[0,0]` is the feeder-block centre. Active trims are `+1.1 cm` X (half a
+feeder width) and `+3.75 cm` Y (half a feeder length), so positive column
+centres are `2.7..24.3 cm` and row centres are `8, 16, 24, 32, 40 cm` from
+that centre. The last held block reaches `25.4 × 43.75 cm` far edges, but its
+holder centre remains inside the `24.3 × 40 cm` software-travel cap.
 
 **Done when:** clicking a cell prints the right col/row, and sending that cell
 with `G <col> <row>` drives the claw to the spot you clicked.

@@ -49,6 +49,7 @@ from camera.camera_feed import (  # noqa: E402
     SETTINGS_PATH,
     capture_settings,
     crop_resize,
+    colour_from_settings,
     frame_orientation,
     framing_roi,
     load_settings,
@@ -197,6 +198,7 @@ def run_camera(args, spec, grid):
         profile = profile_from_settings(camera_data)
         sensor = sensor_from_settings(camera_data)
         capture = camera_data.get("capture") or {}
+        colour = colour_from_settings(camera_data)
         correction = camera_data.get("correction") or {}
         enabled = bool(correction.get("enabled", True))
         interpolation = correction.get("interp", "cubic")
@@ -311,7 +313,7 @@ def run_camera(args, spec, grid):
                 continue
             last_sequence = snapshot.sequence
 
-            frame = frame_orientation(snapshot.frame, capture)
+            frame = colour.apply(frame_orientation(snapshot.frame, capture))
             if maps is None or frame.shape[1::-1] != input_size:
                 maps = build_maps(profile, frame.shape[1::-1], interpolation,
                                   mip=mip, roi=roi)

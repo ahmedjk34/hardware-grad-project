@@ -39,15 +39,16 @@ block dimensions:
 - Y: `40 cm = 8250 steps`, so `8250 / 40 = 206.25 steps/cm`
 
 Firmware derives both ratios; neither is hard-coded. The separately observed
-physical build displacement is `24.3 × 43 cm`, but the extra 3 cm on Y belongs
-to the unmodelled arm-holder relationship. Tool offsets remain zero, so the
-controlled grid deliberately uses the trustworthy `24.3 × 40 cm` holder span.
+physical build footprint is `24.3 × 43 cm`. The feeder-centre model currently
+predicts outer block edges at `25.4 × 43.75 cm`, which needs physical
+verification; neither measurement changes the `24.3 × 40 cm` holder span.
+Tool offsets remain zero.
 
 One unrotated block is `2.2 cm` X × `7.5 cm` Y × `1.5 cm` Z. Blocks are
 separated by `0.5 cm` on both axes. `[0,0]` is the feeder-block centre where
-the claw picks up. Y's build grid begins `3.75 cm` (half a feeder length) from
-that feeder centre, then its first `0.5 cm` gap begins; there is no trailing
-outer margin inside the grid span:
+the claw picks up. The build grid begins `1.1 cm` on X (half feeder width) and
+`3.75 cm` on Y (half feeder length) from that feeder centre, then its first
+`0.5 cm` gap begins; there is no trailing outer margin inside the grid span:
 
 ```text
 X pitch = 2.2 + 0.5 = 2.7 cm; 9 × 2.7 = 24.3 cm
@@ -81,16 +82,16 @@ For the full grid, cell-centre formulas measured from the feeder/home centre
 are:
 
 ```text
-X centre(col) = 0.5 + 2.2/2 + (col - 1) × 2.7
-              = 1.6 + (col - 1) × 2.7
+X centre(col) = 1.1 + 0.5 + 2.2/2 + (col - 1) × 2.7
+              = 2.7 + (col - 1) × 2.7
 
 Y centre(row) = 3.75 + 0.5 + 7.5/2 + (row - 1) × 8.0
               = 8.0 + (row - 1) × 8.0
 ```
 
-Thus first/last centres are X `1.6..23.2 cm` and Y `8.0..40.0 cm`. The final
-Y block edge is `43.75 cm` from the feeder centre; the 40 cm holder cap applies
-to the placement centre, not to the held block's far edge.
+Thus first/last centres are X `2.7..24.3 cm` and Y `8.0..40.0 cm`. Final block
+edges are X `25.4 cm` and Y `43.75 cm` from the feeder centre; holder caps
+apply to placement centres, not to the held block's far edge.
 Firmware converts each absolute centre once with `round(cm × steps/cm)`; it
 does not accumulate rounded pitch steps from one cell to the next.
 
