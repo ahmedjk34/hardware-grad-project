@@ -110,11 +110,21 @@ camera and motor cells match. To calibrate:
 
 There is a second, faster route. Lay the printed green/magenta calibration
 sheet in the work area, press `p` to see it detected, and press `k` to derive
-the same four corners from it and save them. It measures a hundred printed cell
-edges instead of asking you to aim at an invisible rectangle, and it writes the
-same `config/workspace_map.json`. See
-[plans/printed-color-grid.md](../plans/printed-color-grid.md), and check the
-detection first with `color_grid_check.py`.
+the same four corners from one complete frame and save them. It measures a
+hundred printed cell edges instead of asking you to aim at an invisible
+rectangle, and it writes the same `config/workspace_map.json`.
+
+If the gantry hides interior cells, use **Evidence-Assisted Printed-Grid
+Calibration** instead: press `e`, press `Space` once for each useful safe
+gantry position, wait for `Evidence: ... READY TO SAVE`, then press `k`. The
+preview draws accepted physical cells solid green and inferred-only interior
+cells amber/dashed. It refuses to save unless the physical evidence covers all
+four corners and outer edges, so it never invents a workspace boundary. `x`
+cancels without changing an existing map. The full procedure, quality gates and
+camera/crop order are in
+[Evidence-Assisted Printed-Grid Calibration](../plans/evidence-assisted-printed-grid-calibration.md).
+See [printed-color-grid.md](../plans/printed-color-grid.md), and check strict
+single-frame detection first with `color_grid_check.py`.
 
 `x` cancels calibration without destroying the previous saved map, `g` toggles
 the grid, `o` cycles block/geometry overlay detail, and `s` saves the annotated

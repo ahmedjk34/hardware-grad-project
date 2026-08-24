@@ -4,11 +4,19 @@ A sheet of alternating green and magenta blocks, printed at the rig's own cell
 geometry, that the camera can measure instead of an operator having to aim at
 an invisible rectangle.
 
+**The required behaviour is specified in
+[printed-grid-spec.md](printed-grid-spec.md)** — read that to decide whether a
+change is still correct. This document is how it works and what was measured.
+
 Implemented by `python/vision/color_grid.py` (geometry),
 `python/vision/color_grid_overlay.py` (drawing),
 `python/camera/color_grid_check.py` (a tool that does nothing but prove it
-works), and the `p`/`k` keys in `camera/gridded_camera_feed.py` and
-`camera/rig_build_v1.py`.
+works), the strict `p`/`k` routes in `camera/gridded_camera_feed.py` and
+`camera/rig_build_v1.py`, and the evidence collector
+`python/vision/grid_evidence.py`. The latter lives only in the non-moving
+gridded feed: `e` starts it, Space accepts a frame and `k` saves once its
+coverage gates pass. See
+[Evidence-Assisted Printed-Grid Calibration](evidence-assisted-printed-grid-calibration.md).
 
 ---
 
@@ -184,9 +192,11 @@ rather than in a test's expected output.
 A first live frame from the rig (1296 × 972, corrected feed) found 89 blobs
 with 53 on the lattice, spread over 11 × 6 — but with holes from a cable lying
 diagonally across the sheet and from the frame clipping the outer columns, so
-the largest unbroken block was only 6 × 3. Refused, correctly. The sheet needs
-to be moved into full view with the cable off it; the detector cannot invent
-cells that are covered up.
+the largest unbroken block was only 6 × 3. The strict one-frame route refuses
+that correctly. Evidence-Assisted Printed-Grid Calibration can use the whole
+cells it sees across several gantry positions, but only if those frames expose
+every outer edge and corner region; it still cannot invent a permanently hidden
+workspace boundary.
 
 The refusal is correct, not a limitation: that photo genuinely does not contain
 six whole rows. The sheet is the same A2 print in both, just laid down the other
@@ -219,6 +229,13 @@ outside the chosen window are outlined dull yellow and clipped ones red. Watch
 the tint against the ink — a residual number cannot tell you *where* a fit went
 wrong, and the tint can.
 
+If the gantry hides an interior strip, use Evidence-Assisted Printed-Grid
+Calibration in `gridded_camera_feed.py`: `e`, then Space for each useful safe
+gantry position, then `k` only at **READY TO SAVE**. It keeps physical evidence
+green and inferred-only interior cells amber/dashed; it never allows a virtual
+outer boundary. The full procedure and gates are in
+[evidence-assisted-printed-grid-calibration.md](evidence-assisted-printed-grid-calibration.md).
+
 ### Reading a bad result
 
 **A refusal always still draws what it found** — the blobs that joined a
@@ -230,7 +247,7 @@ first live attempt was reported as *no detection, no overlay, nothing*.
 | what you see | what it means |
 | --- | --- |
 | `N whole cells along the 2.2 cm side where 10 are needed … Move the sheet or the camera` | genuinely not enough sheet in view. The named side says which way to move. |
-| `… The sheet is big enough in view, so the gaps are holes` | enough cells, but something punched holes in them — a cable lying across the sheet, or an edge clipping a row. Clear the sheet rather than moving it. |
+| `… The sheet is big enough in view, so the gaps are holes` | enough cells, but something punched holes in them — a cable lying across the sheet, or an edge clipping a row. The strict route refuses; Evidence-Assisted calibration can cover an interior hole from other safe gantry positions. |
 | `only N coloured blocks visible` | the sheet is not in frame, or the colours are being lost. Look at the drawn blobs: many blobs means a colour problem, almost none means a framing one. |
 | `they do not form a regular lattice` | blobs found, but not in a grid. Usually something else in view is ink-coloured and the sheet is mostly out of shot. |
 | red blobs all over the walls and rails | normal under a colour cast; the lattice discards them. Only a problem if they outnumber the sheet. |

@@ -121,6 +121,13 @@ NEIGHBOUR_TOLERANCE = 0.40
 # affordable on the Pi. Pass ``process_width=0`` to work at full resolution.
 DEFAULT_PROCESS_WIDTH = 1024
 
+# A single evidence frame is allowed to have gantry-shaped holes.  Twelve
+# cells is enough to establish both lattice axes and reject scene clutter; it
+# is deliberately *not* enough to save a workspace map on its own.  That
+# decision belongs to PaperGridEvidence, which combines accepted frames and
+# applies coverage gates before a map can be written.
+MIN_EVIDENCE_FRAME_CELLS = 12
+
 # How far a blob's long/short ratio may sit from the printed 3.41 and still be
 # treated as a cell. Only used when sampling colour, where there is no lattice
 # to fall back on and a mis-sampled wall would silently poison a calibration.
@@ -791,6 +798,53 @@ def _choose_window(coords, found, need_i, need_j, image_size):
     return origin, corner
 
 
+def _choose_evidence_window(coords, found, need_i, need_j, image_size, matrix):
+    """Choose a 10x6 window despite holes caused by a known occluder.
+
+    This is intentionally only for the evidence collector.  Unlike
+    :func:`_choose_window`, it does not claim that every cell in the selected
+    window was measured; it merely establishes a stable ``[0,0]`` convention
+    so individually verified cells from several frames can be pooled.  The
+    collector later requires broad edge/corner coverage before it can save.
+    """
+    full = {coords[i]: i for i in coords if found[i]["full"]}
+    if len(full) < MIN_EVIDENCE_FRAME_CELLS:
+        return None
+    i_values = [key[0] for key in full]
+    j_values = [key[1] for key in full]
+    width, height = image_size
+    bottom_left = np.array([0.0, height], dtype=float)
+    best = None
+    # A single gantry position can leave only the upper or lower part of the
+    # selected grid connected.  Let this *temporary* window extend around that
+    # component so its cells still acquire stable image-bottom-left indices.
+    # It is not a calibration permission: PaperGridEvidence rejects saving
+    # until later accepted frames physically observe every boundary.
+    for i0 in range(min(i_values) - need_i + 1, max(i_values) + 1):
+        for j0 in range(min(j_values) - need_j + 1, max(j_values) + 1):
+            inside = [key for key in full
+                      if i0 <= key[0] < i0 + need_i and j0 <= key[1] < j0 + need_j]
+            if len(inside) < MIN_EVIDENCE_FRAME_CELLS:
+                continue
+            corners = ((i0, j0), (i0 + need_i - 1, j0),
+                       (i0, j0 + need_j - 1), (i0 + need_i - 1, j0 + need_j - 1))
+            projected = cv2.perspectiveTransform(
+                np.float32(corners).reshape(-1, 1, 2), matrix
+            ).reshape(-1, 2)
+            corner = corners[int(np.argmin(np.linalg.norm(projected - bottom_left,
+                                                            axis=1)))]
+            distance = float(np.min(np.linalg.norm(projected - bottom_left, axis=1)))
+            # Keep as many physical observations as possible; this is the
+            # point of evidence mode.  Bottom-left breaks ties, retaining R4's
+            # deterministic origin convention for an oversized sheet.
+            score = (-len(inside), distance, i0, j0)
+            if best is None or score < best[0]:
+                best = (score, (i0, j0), corner)
+    if best is None:
+        return None
+    return best[1], best[2]
+
+
 def _window_transform(origin, corner, need_i, need_j, spec):
     """Matrix taking ``[col,row,1]`` to lattice ``[i,j,1]``.
 
@@ -819,7 +873,8 @@ def detect_color_grid(frame: np.ndarray, spec: ColorGridSpec | None = None, *,
                       min_area: int = MIN_COMPONENT_AREA,
                       min_saturation: int = MIN_SATURATION,
                       min_value: int = MIN_VALUE,
-                      balance: bool = True) -> ColorGridCalibration:
+                      balance: bool = True,
+                      evidence: bool = False) -> ColorGridCalibration:
     """Find the printed sheet in ``frame`` and fit a grid to it.
 
     Raises :class:`ColorGridError` with a sentence an operator can act on when
@@ -852,10 +907,14 @@ def detect_color_grid(frame: np.ndarray, spec: ColorGridSpec | None = None, *,
         source = found if subset is None else [found[i] for i in subset]
         return [np.asarray(rect["box"], dtype=np.float32) / scale for rect in source]
 
-    if len(found) < spec.cols * spec.rows:
+    required_components = (MIN_EVIDENCE_FRAME_CELLS if evidence
+                           else spec.cols * spec.rows)
+    if len(found) < required_components:
+        needed = (f"evidence frame needs at least {required_components}"
+                  if evidence else
+                  f"{spec.cols}x{spec.rows} grid needs at least {spec.cols * spec.rows}")
         raise ColorGridError(
-            f"only {len(found)} coloured blocks visible; the "
-            f"{spec.cols}x{spec.rows} grid needs at least {spec.cols * spec.rows}"
+            f"only {len(found)} coloured blocks visible; the {needed}"
             + (". Is the sheet in frame, and is the camera's white balance sane?"
                if len(found) < 8 else ""),
             stage="segment", candidates=boxes())
@@ -907,6 +966,9 @@ def detect_color_grid(frame: np.ndarray, spec: ColorGridSpec | None = None, *,
     need_i, need_j = ((spec.cols, spec.rows) if spec.short_is_x
                       else (spec.rows, spec.cols))
     window = _choose_window(coords, found, need_i, need_j, work_size)
+    if window is None and evidence:
+        window = _choose_evidence_window(coords, found, need_i, need_j,
+                                         work_size, matrix)
     if window is None:
         # Say which of the two failures this is. "Not enough cells in view" and
         # "enough cells but something punched holes in them" need opposite

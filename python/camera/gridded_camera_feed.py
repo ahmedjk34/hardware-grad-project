@@ -15,11 +15,13 @@ Coordinates span col ``0..9`` and row ``0..5``. ``[0,0]`` is holder home;
 2.7x8.0 cm pitch. A changed lens/framing setup or changed grid JSON invalidates
 the saved map instead of silently drawing old geometry.
 
-There is a second way to calibrate. Press ``p`` to overlay the printed
-two-colour sheet (``vision/color_grid.py``) and ``k`` to derive the same four
-corners from it and save them. The sheet measures a hundred printed cell edges
-instead of asking anyone to aim at an invisible rectangle, so prefer it when
-the sheet is in frame; the four clicks remain for when it is not.
+There are two printed-sheet routes.  Press ``p`` to overlay the two-colour
+sheet (``vision/color_grid.py``) and ``k`` to calibrate from one complete
+frame.  When the gantry hides cells, press ``e`` to start **Evidence-Assisted
+Printed-Grid Calibration**, accept several unobstructed portions with Space,
+then press ``k`` only once its coverage report says READY TO SAVE.  The latter
+uses only whole physical cells and virtualises missing *interior* cells after
+the multi-frame fit has passed its edge/corner safety gates.
 
 Keys
 ----
@@ -28,7 +30,9 @@ Keys
   u       undo the most recent calibration corner
   x       cancel an in-progress calibration
   p       toggle the printed colour-grid overlay
-  k       calibrate from the printed colour grid and save
+  k       save a complete-sheet calibration, or a ready evidence session
+  e       start/replace an evidence session for gantry-occluded sheets
+  Space   accept the current frame as evidence
   g       toggle grid overlay
   v       toggle block detection on/off
   s       save annotated frame and block detection JSON
@@ -88,6 +92,7 @@ from vision.color_grid_overlay import (  # noqa: E402
     draw_workspace_corners,
     status_text as paper_status_text,
 )
+from vision.grid_evidence import PaperGridEvidence  # noqa: E402
 from vision.camera_source import LatestFramePump, open_camera  # noqa: E402
 from vision.fisheye import INTERPOLATIONS, build_maps, undistort  # noqa: E402
 from vision.overlays import (  # noqa: E402
@@ -229,6 +234,54 @@ def draw_paper_grid(frame, tracker, hover, grid, convention, *, detail=False):
     except (ColorGridError, ValueError):
         pass
     return hovered
+
+
+def _dashed_polyline(frame, quad, color, *, dash=8, thickness=1):
+    """Draw a virtual cell distinctly from a physically observed one."""
+    points = np.asarray(quad, dtype=np.float32).round().astype(np.int32)
+    for start, end in zip(points, np.roll(points, -1, axis=0)):
+        vector = end.astype(float) - start
+        length = float(np.linalg.norm(vector))
+        if length < 1:
+            continue
+        direction = vector / length
+        for offset in np.arange(0, length, dash * 2):
+            a = start + direction * offset
+            b = start + direction * min(offset + dash, length)
+            cv2.line(frame, tuple(np.round(a).astype(int)), tuple(np.round(b).astype(int)),
+                     color, thickness, cv2.LINE_AA)
+
+
+def draw_paper_evidence(frame, evidence, *, detail=False):
+    """Show measured cells green and inferred-only cells amber/dashed."""
+    calibration = evidence.calibration
+    if calibration is None:
+        return
+    observed = evidence.observed_cells
+    tinted = frame.copy()
+    for row in range(calibration.spec.rows):
+        for col in range(calibration.spec.cols):
+            quad = calibration.cell_quad(col, row).round().astype(np.int32)
+            if (col, row) in observed:
+                cv2.fillPoly(tinted, [quad], (100, 235, 100))
+    cv2.addWeighted(tinted, 0.25, frame, 0.75, 0, frame)
+    for row in range(calibration.spec.rows):
+        for col in range(calibration.spec.cols):
+            quad = calibration.cell_quad(col, row)
+            if (col, row) in observed:
+                cv2.polylines(frame, [quad.round().astype(np.int32)], True,
+                              (100, 255, 100), 1, cv2.LINE_AA)
+            else:
+                _dashed_polyline(frame, quad, WARN_COLOR)
+            if detail:
+                centre = tuple(round(value) for value in calibration.cell_center(col, row))
+                cv2.putText(frame, f"{col},{row}", centre,
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.32,
+                            (20, 20, 20), 3, cv2.LINE_AA)
+                cv2.putText(frame, f"{col},{row}", centre,
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.32,
+                            (100, 255, 100) if (col, row) in observed else WARN_COLOR,
+                            1, cv2.LINE_AA)
 
 
 def parse_args():
@@ -534,9 +587,12 @@ def main():
         "overlay": args.overlay,
         "detect_enabled": True,
         "paper_calibrate": False,
+        "evidence_active": False,
+        "evidence_capture": False,
         "message": "ready",
     }
     paper = PaperGridTracker(paper_spec, max_hz=args.paper_hz)
+    evidence = PaperGridEvidence(paper_spec)
 
     def on_mouse(event, point):
         if point is None:
@@ -556,6 +612,7 @@ def main():
                      ("Save (s)", "s"), ("Grid (g)", "g"),
                      ("Detect (v)", "v"),
                      ("Paper grid (p)", "p"), ("Paper calib (k)", "k"),
+                     ("Evidence (e)", "e"), ("Accept frame (Space)", " "),
                      ("Quit (q)", "q")),
         )
     except (tk.TclError, cv2.error) as exc:
@@ -611,6 +668,9 @@ def main():
             f"Grid: {grid.cols}x{grid.rows} | {calibration_text} | "
             f"hover {f'[{cell[0]},{cell[1]}]' if cell else 'none'}",
             f"{paper.status()} | home {args.home_convention} | k calibrates from it",
+            (f"Evidence: {evidence.status.describe()}"
+             if ui["evidence_active"] else
+             "Evidence: off | e starts a gantry-occlusion session"),
             block_hover_text(detections, ui["hover"]),
             f"Stages: remap {timings.ms.get('remap', 0):.1f} ms | "
             f"overlay {timings.ms.get('overlay', 0):.1f} ms | "
@@ -618,7 +678,7 @@ def main():
             f"display {timings.ms.get('display', 0):.1f} ms",
             f"Status: {result.error or snapshot.error or ui['message']}",
             "o overlay | c calibrate | Enter save | u undo | x cancel | g grid | v detect",
-            "p paper overlay | k paper calibrate | s snapshot | q quit",
+            "p paper overlay | e evidence | Space accept frame | k save paper map | s snapshot | q quit",
         ]
 
     def handle_key(key):
@@ -629,15 +689,24 @@ def main():
                 (OVERLAY_MODES.index(ui["overlay"]) + 1) % len(OVERLAY_MODES)]
             ui["message"] = f"overlay: {ui['overlay']}"
         elif key == ord("c"):
+            if ui["evidence_active"]:
+                ui["evidence_active"] = False
+                evidence.clear()
             ui["calibrating"] = True
             ui["calibration_points"] = []
             ui["pending_points"] = None
             ui["message"] = "click the four prompted corners"
-        elif key == ord("x") and ui["calibrating"]:
-            ui["calibrating"] = False
-            ui["calibration_points"] = []
-            ui["pending_points"] = None
-            ui["message"] = "calibration cancelled; previous map kept"
+        elif key == ord("x"):
+            if ui["evidence_active"]:
+                ui["evidence_active"] = False
+                ui["evidence_capture"] = False
+                evidence.clear()
+                ui["message"] = "evidence session cancelled; previous map kept"
+            elif ui["calibrating"]:
+                ui["calibrating"] = False
+                ui["calibration_points"] = []
+                ui["pending_points"] = None
+                ui["message"] = "calibration cancelled; previous map kept"
         elif key == ord("u") and ui["calibrating"]:
             if ui["calibration_points"]:
                 ui["calibration_points"].pop()
@@ -651,13 +720,36 @@ def main():
             else:
                 ui["message"] = "click all four corners before saving"
         elif key == ord("p"):
-            ui["message"] = ("printed-sheet overlay on" if paper.toggle()
-                             else "printed-sheet overlay off")
+            if ui["evidence_active"]:
+                ui["message"] = "the paper overlay stays on during evidence collection"
+            else:
+                ui["message"] = ("printed-sheet overlay on" if paper.toggle()
+                                 else "printed-sheet overlay off")
+        elif key == ord("e"):
+            if ui["calibrating"]:
+                ui["message"] = "finish or cancel the four-corner calibration first"
+            else:
+                evidence.clear()
+                ui["evidence_active"] = True
+                if not paper.enabled:
+                    paper.toggle()
+                ui["message"] = ("evidence session started: keep camera and sheet fixed; "
+                                 "Space accepts a clear gantry position")
+        elif key == ord(" "):
+            if not ui["evidence_active"]:
+                ui["message"] = "press e to start an evidence session first"
+            else:
+                # Deferred to the corrected-view loop, just like k.  A single
+                # accepted snapshot is intentional; continuous frames in one
+                # gantry position add no independent evidence.
+                ui["evidence_capture"] = True
+                ui["message"] = "checking this evidence frame"
         elif key == ord("k"):
             # Deferred to the frame loop, which is the only place that holds a
             # corrected view; the key handler runs between frames.
             ui["paper_calibrate"] = True
-            ui["message"] = "calibrating from the printed sheet"
+            ui["message"] = ("saving evidence calibration" if ui["evidence_active"]
+                             else "calibrating from the printed sheet")
         elif key == ord("g"):
             ui["show_grid"] = not ui["show_grid"]
         elif key == ord("v"):
@@ -713,15 +805,40 @@ def main():
             timings.observe("remap", time.perf_counter() - started)
             image_size = view.shape[1::-1]
 
+            if ui["evidence_capture"]:
+                ui["evidence_capture"] = False
+                try:
+                    found = detect_color_grid(view, paper_spec, process_width=0,
+                                              evidence=True)
+                    status = evidence.add(found)
+                    ui["message"] = ("evidence accepted: " + status.describe())
+                    print("Evidence frame accepted: " + status.describe())
+                except ColorGridError as exc:
+                    ui["message"] = f"evidence frame rejected: {exc}"
+                    print(ui["message"], file=sys.stderr)
+
             if ui["paper_calibrate"]:
                 ui["paper_calibrate"] = False
                 try:
-                    candidate, found = paper_workspace_map(
-                        view, paper_spec, grid, projection, args.home_convention)
+                    if ui["evidence_active"]:
+                        status = evidence.status
+                        if not status.ready or evidence.calibration is None:
+                            raise ColorGridError("evidence is not ready: " +
+                                                 "; ".join(status.reasons))
+                        found = evidence.calibration
+                        corners = found.workspace_corners(grid, args.home_convention)
+                        candidate = WorkspaceMap.from_grid(
+                            grid, corners, view.shape[1::-1], projection)
+                    else:
+                        candidate, found = paper_workspace_map(
+                            view, paper_spec, grid, projection, args.home_convention)
                     candidate.save(args.workspace_map)
                     saved_workspace = candidate
                     rejection = None
-                    ui["message"] = f"calibrated from the sheet: {found.describe()}"
+                    ui["message"] = ("calibrated from evidence: " + evidence.status.describe()
+                                     if ui["evidence_active"] else
+                                     f"calibrated from the sheet: {found.describe()}")
+                    ui["evidence_active"] = False
                     print(f"Saved workspace calibration from the printed sheet: "
                           f"{args.workspace_map}")
                     print(f"  {found.describe()} "
@@ -774,9 +891,20 @@ def main():
                     display, workspace, ui["hover"], calibrated,
                     detail=ui["overlay"] == "detail")
             if paper.enabled:
-                draw_paper_grid(display, paper, ui["hover"], grid,
-                                args.home_convention,
-                                detail=ui["overlay"] == "detail")
+                if ui["evidence_active"]:
+                    if evidence.calibration is not None:
+                        draw_paper_evidence(display, evidence,
+                                            detail=ui["overlay"] == "detail")
+                    else:
+                        # Before the first accepted frame, keep the usual
+                        # candidate/error drawing visible for diagnosis.
+                        draw_paper_grid(display, paper, ui["hover"], grid,
+                                        args.home_convention,
+                                        detail=ui["overlay"] == "detail")
+                else:
+                    draw_paper_grid(display, paper, ui["hover"], grid,
+                                    args.home_convention,
+                                    detail=ui["overlay"] == "detail")
             if ui["calibrating"]:
                 draw_calibration(
                     display, ui["calibration_points"], ui["hover"],

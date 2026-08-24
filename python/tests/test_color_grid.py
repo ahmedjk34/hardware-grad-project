@@ -353,9 +353,11 @@ check("a neutral frame is left alone by the balance",
 
 from camera.gridded_camera_feed import (  # noqa: E402
     PaperGridTracker,
+    draw_paper_evidence,
     draw_paper_grid,
     paper_workspace_map,
 )
+from vision.grid_evidence import PaperGridEvidence  # noqa: E402
 
 image, _ = render_sheet(spec, 13, 8, clip_cm=(1.2, 4.0))
 size = image.shape[1::-1]
@@ -393,6 +395,55 @@ with tempfile.TemporaryDirectory() as directory:
     check("the reloaded map agrees with the sheet it came from",
           reloaded.cell_at(printed, size) == (4, 3),
           str(reloaded.cell_at(printed, size)))
+
+
+# --- 7b. gantry-occluded frames can be pooled, never blindly completed ------
+
+image, centres = render_sheet(spec, 13, 8)
+
+def hide_cells(source, row, columns):
+    """Hide an interior gantry-shaped band without touching sheet boundaries."""
+    result = source.copy()
+    y = round(centres[(6, row)][1])
+    left = round(centres[(min(columns), row)][0] - 18)
+    right = round(centres[(max(columns), row)][0] + 18)
+    cv2.rectangle(result, (left, y - 54), (right, y + 54), PAPER_BGR, -1)
+    return result
+
+
+first = hide_cells(image, 3, range(3, 9))
+second = hide_cells(image, 3, range(3, 9))
+try:
+    detect_color_grid(first, spec, process_width=0)
+    check("a gantry-split frame stays refused in strict mode", False)
+except ColorGridError:
+    check("a gantry-split frame stays refused in strict mode", True)
+
+try:
+    first_sparse = detect_color_grid(first, spec, process_width=0, evidence=True)
+    second_sparse = detect_color_grid(second, spec, process_width=0, evidence=True)
+    evidence = PaperGridEvidence(spec)
+    first_status = evidence.add(first_sparse)
+    final_status = evidence.add(second_sparse)
+    check("one sparse frame cannot save a map", not first_status.ready,
+          first_status.describe())
+    check("two consistent gantry frames produce ready evidence", final_status.ready,
+          final_status.describe())
+    check("evidence preserves physical/virtual distinction",
+          final_status.verified_cells < spec.cols * spec.rows,
+          f"{final_status.verified_cells} physical")
+    evidence_workspace = WorkspaceMap.from_grid(
+        grid, evidence.calibration.workspace_corners(grid, "firmware"),
+        image.shape[1::-1], {"test": "evidence"})
+    check("ready evidence produces a normal workspace map",
+          evidence_workspace.cell_at(evidence.calibration.cell_center(4, 3),
+                                    image.shape[1::-1]) == (4, 3))
+    evidence_view = image.copy()
+    draw_paper_evidence(evidence_view, evidence, detail=True)
+    check("evidence overlay draws measured and virtual cells",
+          not np.array_equal(evidence_view, image))
+except ColorGridError as exc:
+    check("complementary gantry evidence is accepted", False, str(exc))
 
 
 # --- 8. the training captures, when they are there --------------------------

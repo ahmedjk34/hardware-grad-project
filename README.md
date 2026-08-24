@@ -64,6 +64,13 @@ instead: press `p` to overlay it and `k` to calibrate from it, in either
 with `camera/color_grid_check.py`. See
 [plans/printed-color-grid.md](plans/printed-color-grid.md).
 
+When the gantry hides only interior sheet cells, use the non-moving gridded
+feed's **Evidence-Assisted Printed-Grid Calibration**: `e` starts a session,
+Space accepts each useful safe gantry position, and `k` saves only after the
+dashboard reports `READY TO SAVE`. It requires physical evidence around every
+workspace boundary and only virtualises missing interior cells. See
+[the operator guide](plans/evidence-assisted-printed-grid-calibration.md).
+
 `camera/rig_build_v1.py` connects that view to the Mega and can build from the
 initial approximate grid without calibration. Click a cell, choose the
 block-stack level, then press `b` or Enter to confirm the displayed Arduino
