@@ -33,17 +33,17 @@ How the lattice is found
 0. The frame is white balanced. This is not cosmetic — see :func:`white_balance`
    for the live frame where skipping it made every green cell invisible.
 1. Two hue windows segment green and magenta. Their union is "some cell".
-2. Each connected component becomes a rotated rectangle. The median long-axis
-   direction (circular, mod 180 degrees) fixes a global sense for "along the
-   7.5 cm side", so neighbouring cells cannot disagree about which way is up.
-3. A breadth-first walk hops from cell to cell using *that cell's own* measured
-   size times the known pitch/block ratio, and hands out integer lattice
-   indices. Only near-median cells are allowed to propagate the walk, so a
-   clipped block cannot steer it. Local hops are what makes this survive
-   perspective: nothing ever compares a cell at one edge of the frame with a
-   cell at the other.
+2. Each connected component becomes a rotated rectangle. Plausible cell shapes
+   establish the median size and long-axis direction; scene-coloured rails and
+   walls remain visible diagnostics but cannot steer the geometry.
+3. Breadth-first walks are tried from every plausible seed. Each walk uses the
+   current cell's own measured size and the known pitch/block ratio, then a
+   provisional homography recovers physical cells beyond missed local hops.
+   Hypotheses are ranked by coverage, colour parity and residual.
 4. A homography is fitted from integer lattice indices to cell centres, every
    cell is re-scored against it, and the fit is repeated on the survivors.
+   Parity, aspect and normalized residual gates refuse a plausible-looking but
+   unsafe result.
 
 Steps 3 and 4 are the whole trick. Residuals on the two supplied captures are
 around one pixel at 2048 px wide, including the badly tilted one.
@@ -105,16 +105,42 @@ _BALANCE_DEADBAND = 0.02        # below this the cast is not worth a pass over t
 # predicts for it is whole. The captures put real cells at 0.93-1.03 and every
 # clipped one below 0.7, so the cutoff is nowhere near either population.
 FULL_CELL_FILL = 0.80
+MAX_FULL_CELL_FILL = 1.35
 
 # Seeds for the lattice walk must be this close to the median cell size. Only
 # used to pick cells that are allowed to *propagate*; the real full/partial
 # decision is made later against the fitted lattice.
-SEED_SIZE_TOLERANCE = 0.20
+SEED_SIZE_TOLERANCE = 0.28
+
+# Raw hue masks on the live rig also contain rails, cables and parts of the
+# wall.  They remain useful diagnostics, but they must not vote on the grid's
+# dominant direction or median cell size.  These deliberately broad limits are
+# only a pre-lattice plausibility filter; perspective-aware footprint scoring
+# below makes the final whole/partial decision.
+LATTICE_ASPECT_RANGE = (1.65, 7.0)
+LATTICE_AREA_RANGE = (0.35, 2.8)
+MIN_COLOR_PURITY = 0.65
 
 # How far from the predicted position a neighbour may sit, as a fraction of the
 # smaller pitch. Generous enough for a tilted sheet, far below half a pitch so
 # it can never grab the cell after next.
 NEIGHBOUR_TOLERANCE = 0.40
+
+# Once one connected patch establishes a homography, project every other
+# plausible component back into lattice space.  This reconnects real cells
+# beyond a locally missed hop without inventing covered cells: only physical
+# colour components close to an integer site are admitted.
+RECOVERY_TOLERANCE = 0.34
+RECOVERY_FILL_RANGE = (0.55, 1.45)
+RECOVERY_PASSES = 3
+
+# A complete rectangle is necessary but not sufficient for a calibration.
+# These gates keep a regular-looking collection of scene clutter, a badly bowed
+# lens fit, or a broken chessboard parity from becoming a workspace map.
+MIN_PARITY_AGREEMENT = 0.95
+VALID_ASPECT_FACTOR = (0.58, 1.75)
+MAX_MEAN_RESIDUAL_SHORT_SIDE = 0.12
+MAX_RESIDUAL_SHORT_SIDE = 0.45
 
 # Working width for detection. The homography is fitted over ~100 cells, so
 # sub-pixel loss from the downscale averages out, and this keeps a live overlay
@@ -609,12 +635,22 @@ def _components(green, magenta, min_area, size):
         else:
             long_axis, long_len, short_axis, short_len = edge_b / len_b, len_b, edge_a / len_a, len_a
         center = box.mean(axis=0)
-        x, y = int(np.clip(center[0], 0, width - 1)), int(np.clip(center[1], 0, height - 1))
+        x0, y0, box_width, box_height = cv2.boundingRect(contour)
+        local = np.zeros((box_height, box_width), np.uint8)
+        shifted = contour - np.array([[[x0, y0]]], dtype=contour.dtype)
+        cv2.drawContours(local, [shifted], -1, 1, cv2.FILLED)
+        green_count = int(np.count_nonzero(green[y0:y0 + box_height,
+                                                x0:x0 + box_width] & local.astype(bool)))
+        magenta_count = int(np.count_nonzero(magenta[y0:y0 + box_height,
+                                                    x0:x0 + box_width] & local.astype(bool)))
+        color_total = green_count + magenta_count
         found.append({
             "center": center, "box": box, "area": area,
             "long_axis": long_axis, "long_len": long_len,
             "short_axis": short_axis, "short_len": short_len,
-            "color": "green" if green[y, x] else "magenta",
+            "color": "green" if green_count >= magenta_count else "magenta",
+            "color_purity": (max(green_count, magenta_count) / color_total
+                             if color_total else 0.0),
             "clipped": bool(box[:, 0].min() < 2 or box[:, 1].min() < 2
                             or box[:, 0].max() > width - 3
                             or box[:, 1].max() > height - 3),
@@ -639,36 +675,75 @@ def _components(green, magenta, min_area, size):
     return found
 
 
-def _walk_lattice(found, spec):
-    """Hand out integer lattice indices by hopping between neighbours.
+def _prepare_lattice_candidates(found):
+    """Mark cell-like components and give their axes one robust global sense.
 
-    Index ``i`` counts along the short cell side, ``j`` along the long one. Only
-    near-median rectangles propagate the walk, and each hop is predicted from
-    the size of the cell it starts at, so a tilted or mildly barrelled sheet
-    never accumulates error across the frame.
+    The colour mask intentionally over-detects.  The live scene can contain a
+    magenta wall and long aluminium rails, so using every blob to establish the
+    median dimensions and direction lets background geometry steer the walk.
+    Keep those blobs for the failure overlay, but exclude implausible shapes
+    from lattice voting.
     """
-    long_med = float(np.median([r["long_len"] for r in found]))
-    short_med = float(np.median([r["short_len"] for r in found]))
+    plausible = []
+    for index, rect in enumerate(found):
+        aspect = rect["long_len"] / max(rect["short_len"], 1e-6)
+        rect["plausible"] = (
+            LATTICE_ASPECT_RANGE[0] <= aspect <= LATTICE_ASPECT_RANGE[1]
+            and rect.get("color_purity", 1.0) >= MIN_COLOR_PURITY
+        )
+        if rect["plausible"] and not rect["clipped"]:
+            plausible.append(index)
+    if not plausible:
+        for rect in found:
+            rect["seed"] = False
+        return []
+
+    areas = np.array([found[index]["area"] for index in plausible], dtype=float)
+    area_med = float(np.median(areas))
+    size_like = [index for index in plausible
+                 if LATTICE_AREA_RANGE[0] * area_med <= found[index]["area"]
+                 <= LATTICE_AREA_RANGE[1] * area_med]
+    if not size_like:
+        size_like = plausible
+
+    # Recompute the shared direction from cell-like components only.  The axes
+    # returned by minAreaRect are mod 180 degrees, hence the doubled angles.
+    angles = np.array([
+        math.atan2(found[index]["long_axis"][1], found[index]["long_axis"][0])
+        for index in size_like
+    ])
+    mean = 0.5 * math.atan2(float(np.mean(np.sin(2 * angles))),
+                            float(np.mean(np.cos(2 * angles))))
+    ref_long = np.array([math.cos(mean), math.sin(mean)])
+    ref_short = np.array([-ref_long[1], ref_long[0]])
     for rect in found:
-        rect["seed"] = (
-            abs(rect["long_len"] - long_med) < SEED_SIZE_TOLERANCE * long_med
+        if rect["long_axis"] @ ref_long < 0:
+            rect["long_axis"] = -rect["long_axis"]
+        if rect["short_axis"] @ ref_short < 0:
+            rect["short_axis"] = -rect["short_axis"]
+
+    long_med = float(np.median([found[index]["long_len"] for index in size_like]))
+    short_med = float(np.median([found[index]["short_len"] for index in size_like]))
+    eligible = []
+    for index, rect in enumerate(found):
+        area_ok = (LATTICE_AREA_RANGE[0] * area_med <= rect["area"]
+                   <= LATTICE_AREA_RANGE[1] * area_med)
+        rect["eligible"] = bool(rect["plausible"] and area_ok)
+        rect["seed"] = bool(
+            rect["eligible"]
+            and abs(rect["long_len"] - long_med) < SEED_SIZE_TOLERANCE * long_med
             and abs(rect["short_len"] - short_med) < SEED_SIZE_TOLERANCE * short_med
             and not rect["clipped"]
         )
-    if not any(r["seed"] for r in found):
-        return {}
+        if rect["eligible"]:
+            eligible.append(index)
+    return eligible
 
-    # Pitch as a multiple of the observed block, per axis.
-    if spec.short_is_x:
-        short_ratio, long_ratio = 1 / spec.fill_x, 1 / spec.fill_y
-    else:
-        short_ratio, long_ratio = 1 / spec.fill_y, 1 / spec.fill_x
 
-    centers = np.array([r["center"] for r in found])
-    middle = centers.mean(axis=0)
-    start = min((i for i, r in enumerate(found) if r["seed"]),
-                key=lambda i: float(np.linalg.norm(centers[i] - middle)))
-
+def _walk_from(start, found, eligible, short_ratio, long_ratio, centers):
+    """One local neighbour walk, rooted at a particular plausible cell."""
+    allowed = np.zeros(len(found), dtype=bool)
+    allowed[eligible] = True
     coords = {start: (0, 0)}
     taken = {(0, 0): start}
     queue = [start]
@@ -687,15 +762,132 @@ def _walk_lattice(found, spec):
             if target in taken:
                 continue
             distance = np.linalg.norm(centers - (rect["center"] + offset), axis=1)
+            distance[~allowed] = np.inf
             distance[list(coords)] = np.inf
             best = int(np.argmin(distance))
-            if distance[best] > NEIGHBOUR_TOLERANCE * min(step_short, step_long):
+            if (not math.isfinite(float(distance[best]))
+                    or distance[best] > NEIGHBOUR_TOLERANCE * min(step_short, step_long)):
                 continue
             coords[best] = target
             taken[target] = best
             if found[best]["seed"]:
                 queue.append(best)
     return coords
+
+
+def _parity_agreement(coords, found):
+    if not coords:
+        return 0.0
+    votes = [((i + j) % 2 == 0) == (found[index]["color"] == "green")
+             for index, (i, j) in coords.items()]
+    agreement = sum(votes)
+    return max(agreement, len(votes) - agreement) / len(votes)
+
+
+def _predicted_cell_area(matrix, key, spec):
+    i, j = key
+    half = np.float32([[-spec.fill_x / 2, -spec.fill_y / 2],
+                       [spec.fill_x / 2, -spec.fill_y / 2],
+                       [spec.fill_x / 2, spec.fill_y / 2],
+                       [-spec.fill_x / 2, spec.fill_y / 2]])
+    if not spec.short_is_x:
+        half = half[:, ::-1].copy()
+    quad = cv2.perspectiveTransform(
+        (half + np.float32([i, j])).reshape(-1, 1, 2), matrix).reshape(-1, 2)
+    return abs(cv2.contourArea(quad.astype(np.float32)))
+
+
+def _recover_lattice(coords, found, eligible, spec):
+    """Attach physical cells missed by the local walk using grid-space residuals."""
+    coords = dict(coords)
+    for _ in range(RECOVERY_PASSES):
+        matrix, _mean, _maximum = _fit(coords, found, lambda _index: True)
+        if matrix is None:
+            break
+        try:
+            inverse = np.linalg.inv(matrix)
+        except np.linalg.LinAlgError:
+            break
+
+        # Establish whether even lattice parity is green or magenta from the
+        # current physical observations; the repeating colours then reject many
+        # scene blobs for free.
+        even_green = sum(
+            (((i + j) % 2 == 0) == (found[index]["color"] == "green"))
+            for index, (i, j) in coords.items()
+        ) >= len(coords) / 2
+
+        proposals = []
+        for index in eligible:
+            point = inverse @ np.array([*found[index]["center"], 1.0])
+            if abs(point[2]) < 1e-12:
+                continue
+            lattice = point[:2] / point[2]
+            key = tuple(int(round(value)) for value in lattice)
+            error = float(np.linalg.norm(lattice - np.asarray(key)))
+            if error > RECOVERY_TOLERANCE:
+                continue
+            expected_green = (((key[0] + key[1]) % 2 == 0) == even_green)
+            if (found[index]["color"] == "green") != expected_green:
+                continue
+            predicted = _predicted_cell_area(matrix, key, spec)
+            fill = found[index]["area"] / predicted if predicted > 0 else 0.0
+            if not (RECOVERY_FILL_RANGE[0] <= fill <= RECOVERY_FILL_RANGE[1]):
+                continue
+            proposals.append((error + abs(fill - 1.0) * 0.08, index, key))
+
+        # One physical component per lattice site.  Resolve collisions by the
+        # best normalized centre/area agreement, not contour discovery order.
+        # Never erase observations that established the hypothesis merely
+        # because parity is poor; the quality gate must see and reject that
+        # disagreement.  Parity is used only to stop new scene clutter joining.
+        claimed = {key: (-1.0, index) for index, key in coords.items()}
+        for score, index, key in sorted(proposals):
+            if key not in claimed:
+                claimed[key] = (score, index)
+        recovered = {index: key for key, (_score, index) in claimed.items()}
+        if recovered == coords:
+            break
+        coords = recovered
+    return coords
+
+
+def _walk_lattice(found, spec):
+    """Fit the strongest lattice hypothesis, then recover disconnected cells.
+
+    Index ``i`` counts along the short cell side and ``j`` along the long one.
+    Starting from every plausible seed avoids committing to whichever blob lies
+    nearest the mean of a cluttered frame.  Equivalent walks are deduplicated,
+    expanded through the fitted homography, and ranked by physical coverage,
+    chessboard parity and fit quality.
+    """
+    eligible = _prepare_lattice_candidates(found)
+    seeds = [index for index in eligible if found[index]["seed"]]
+    if not seeds:
+        return {}
+    if spec.short_is_x:
+        short_ratio, long_ratio = 1 / spec.fill_x, 1 / spec.fill_y
+    else:
+        short_ratio, long_ratio = 1 / spec.fill_y, 1 / spec.fill_x
+    centers = np.array([rect["center"] for rect in found])
+
+    hypotheses = []
+    seen = set()
+    for start in seeds:
+        walked = _walk_from(start, found, eligible, short_ratio, long_ratio, centers)
+        identity = frozenset(walked)
+        if len(walked) < 4 or identity in seen:
+            continue
+        seen.add(identity)
+        recovered = _recover_lattice(walked, found, eligible, spec)
+        matrix, mean_error, _max_error = _fit(recovered, found, lambda _index: True)
+        if matrix is None:
+            continue
+        seed_count = sum(found[index]["seed"] for index in recovered)
+        score = (len(recovered), _parity_agreement(recovered, found),
+                 seed_count, -mean_error)
+        hypotheses.append((score, recovered))
+    return max(hypotheses, key=lambda item: item[0])[1] if hypotheses else {}
 
 
 def _fit(coords, found, keep):
@@ -730,7 +922,8 @@ def _score_fullness(coords, found, matrix, spec):
         predicted = abs(cv2.contourArea(quad.astype(np.float32)))
         rect = found[index]
         rect["fill"] = rect["area"] / predicted if predicted > 0 else 0.0
-        rect["full"] = rect["fill"] >= FULL_CELL_FILL and not rect["clipped"]
+        rect["full"] = (FULL_CELL_FILL <= rect["fill"] <= MAX_FULL_CELL_FILL
+                        and not rect["clipped"])
 
 
 def _largest_solid_block(full):
@@ -951,8 +1144,10 @@ def detect_color_grid(frame: np.ndarray, spec: ColorGridSpec | None = None, *,
         j_values = [c[1] for c in full_coords]
         metrics.lattice_shape = (max(i_values) - min(i_values) + 1,
                                  max(j_values) - min(j_values) + 1)
-    long_med = float(np.median([r["long_len"] for r in found]))
-    short_med = float(np.median([r["short_len"] for r in found]))
+    full_indices = [i for i in coords if found[i]["full"]]
+    measured = [found[i] for i in full_indices] or [found[i] for i in coords]
+    long_med = float(np.median([r["long_len"] for r in measured]))
+    short_med = float(np.median([r["short_len"] for r in measured]))
     metrics.measured_aspect = long_med / short_med if short_med else 0.0
 
     # Printed cells alternate colour, so (i + j) parity is a free check that the
@@ -962,6 +1157,31 @@ def detect_color_grid(frame: np.ndarray, spec: ColorGridSpec | None = None, *,
                     for i in coords if found[i]["full"]]
         agree = sum(1 for p, c in parities if (p == 0) == (c == "green"))
         metrics.parity_agreement = max(agree, len(parities) - agree) / len(parities)
+
+    expected_aspect = max(spec.block_x_cm, spec.block_y_cm) / min(
+        spec.block_x_cm, spec.block_y_cm)
+    aspect_low = expected_aspect * VALID_ASPECT_FACTOR[0]
+    aspect_high = expected_aspect * VALID_ASPECT_FACTOR[1]
+    quality_errors = []
+    if metrics.parity_agreement < MIN_PARITY_AGREEMENT:
+        quality_errors.append(
+            f"colour parity is {metrics.parity_agreement:.0%}, below the "
+            f"{MIN_PARITY_AGREEMENT:.0%} safety threshold")
+    if not (aspect_low <= metrics.measured_aspect <= aspect_high):
+        quality_errors.append(
+            f"measured cell aspect {metrics.measured_aspect:.2f} does not match "
+            f"the printed {expected_aspect:.2f}")
+    if short_med > 0:
+        if mean_error > MAX_MEAN_RESIDUAL_SHORT_SIDE * short_med:
+            quality_errors.append(
+                f"mean lattice residual {mean_error / scale:.2f} px is too large")
+        if max_error > MAX_RESIDUAL_SHORT_SIDE * short_med:
+            quality_errors.append(
+                f"maximum lattice residual {max_error / scale:.2f} px is too large")
+    if quality_errors:
+        raise ColorGridError(
+            "; ".join(quality_errors), stage="quality", candidates=boxes(),
+            lattice=boxes(full_indices))
 
     need_i, need_j = ((spec.cols, spec.rows) if spec.short_is_x
                       else (spec.rows, spec.cols))

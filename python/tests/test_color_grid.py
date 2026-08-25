@@ -201,6 +201,42 @@ for (col, row) in mapped:
 check("every fitted centre lands on a drawn cell", worst < 2.0, f"{worst:.2f} px")
 
 
+# --- 2b. scene-coloured clutter must not steer the lattice -----------------
+
+sheet, _ = render_sheet(spec, 13, 8, clip_cm=(1.2, 4.0))
+cluttered = np.full((sheet.shape[0], sheet.shape[1] + 360, 3), TABLE_BGR, np.uint8)
+cluttered[:, 180:180 + sheet.shape[1]] = sheet
+# Rails/walls in the live capture occupy the same hue windows as the ink. They
+# are deliberately numerous here so a global direction/size vote over every
+# colour component would follow the scene instead of the paper.
+for y in range(18, cluttered.shape[0] - 40, 70):
+    cv2.rectangle(cluttered, (8, y), (160, y + 18), MAGENTA_BGR, -1)
+for y in range(42, cluttered.shape[0] - 40, 82):
+    cv2.rectangle(cluttered,
+                  (cluttered.shape[1] - 160, y),
+                  (cluttered.shape[1] - 8, y + 16), GREEN_BGR, -1)
+try:
+    found = detect_color_grid(cluttered, spec, process_width=0)
+    check("rail-shaped colour clutter cannot steer the sheet lattice",
+          len(found.found_cells) == 60 and found.metrics.parity_agreement == 1.0,
+          found.describe())
+except ColorGridError as exc:
+    check("rail-shaped colour clutter cannot steer the sheet lattice", False,
+          str(exc)[:90])
+
+
+# A geometrically perfect but single-colour array is not the printed target.
+# Parity is an acceptance gate, not merely a number in the status bar.
+monochrome, _ = render_sheet(spec, 13, 8, clip_cm=(1.2, 4.0),
+                             green=GREEN_BGR, magenta=GREEN_BGR)
+try:
+    detect_color_grid(monochrome, spec, process_width=0)
+    check("a lattice with broken colour parity is refused", False, "it was accepted")
+except ColorGridError as exc:
+    check("a lattice with broken colour parity is refused",
+          exc.stage == "quality" and "parity" in str(exc), str(exc)[:90])
+
+
 # --- 3. the sheet turned a quarter turn -------------------------------------
 
 image, _ = render_sheet(spec, 13, 8, clip_cm=(1.2, 4.0))

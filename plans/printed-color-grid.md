@@ -58,20 +58,20 @@ the problem.
    than brightness: the two inks stay far apart in hue (green at 80-88 in
    OpenCV's 0-179 scale in a clean capture, 101 in a balanced rig frame;
    magenta at 150-162; nothing in between).
-2. **Each blob becomes a rotated rectangle.** Their long-axis directions are
-   averaged as doubled angles, which is insensitive to a 180° flip, giving one
-   global sense for "along the 7.5 cm side". Without this, neighbouring cells
-   disagree about which way is up and the walk below breaks.
-3. **A breadth-first walk** hands out integer lattice indices, hopping from
-   cell to cell using *that cell's own* measured size times the known
-   pitch/block ratio. Only near-median cells propagate the walk, so a clipped
-   block cannot steer it. Everything is local, which is why perspective does
-   not accumulate across the frame.
+2. **Each blob becomes a rotated rectangle.** Broad aspect, area and colour-
+   purity checks decide which rectangles may vote on the median size and
+   long-axis direction. Rejected scene blobs are still drawn for diagnosis.
+3. **Multiple breadth-first walks** hand out integer lattice indices, hopping
+   from cell to cell using *that cell's own* measured size times the known
+   pitch/block ratio. Each connected hypothesis is fitted provisionally, then
+   other physical blobs close to its integer grid sites are recovered. This
+   bridges a missed local hop without inventing an occluded cell. Hypotheses
+   are ranked by coverage, chessboard parity and residual.
 4. **A homography is fitted** from integer indices to cell centres; every cell
    is re-scored against the footprint the fit predicts *for it*; the fit is
-   repeated on the survivors. A local prediction is what lets one fullness
-   threshold work across a tilted sheet where cells at one edge are genuinely
-   smaller than at the other.
+   repeated on the survivors. Both an upper and lower fill bound reject clipped
+   and merged cells. Colour parity, measured aspect, mean residual and maximum
+   residual are hard acceptance gates rather than status-only measurements.
 5. **A 10 × 6 window of whole cells is chosen**, anchored at the corner nearest
    the bottom-left of the image. That corner becomes `[0,0]`.
 
@@ -126,10 +126,11 @@ The thresholds moved with it: green `(58, 115)`, magenta `(130, 178)`,
 saturation floor `32`. The floor sits between the rig's green ink at 48 and its
 white paper at 15.
 
-The wall and the aluminium rails still register as "magenta" under that cast.
-That is left alone deliberately — they are not a lattice of 2.2 × 7.5 cm
-blocks, so the lattice walk discards them, and an over-inclusive mask costs
-nothing while an under-inclusive one costs everything.
+The wall and the aluminium rails can still register as "magenta" under that
+cast. They remain in the failure overlay, but broad shape/area/purity filters
+exclude them from the direction and size vote before the lattice hypotheses
+are built. An over-inclusive hue mask is useful, but its clutter is not allowed
+to influence the fitted grid.
 
 **This is worth fixing at the camera too.** A cast that severe also degrades
 `block_detector.py`, which keys on red-minus-blue. `camera_studio.py` is where
@@ -186,8 +187,8 @@ rather than in a test's expected output.
 
 | capture | result |
 | --- | --- |
-| `original_image_VERTICAL.jpeg` (2048 × 1466) | 128 blobs, 111 on the lattice, **15 × 7 whole cells**, 10 × 6 grid fitted, mean residual **1.13 px** (max 5.67), colour parity **100 %** |
-| `original_image_HORZONTIAL.jpeg` (1920 × 1061) | 132 blobs, **22 × 5 whole cells** — refused: 5 whole cells along the 7.5 cm axis cannot hold 6 rows |
+| `original_image_VERTICAL.jpeg` (2048 × 1466) | 130 blobs, 111 on the lattice, **15 × 7 whole cells**, 10 × 6 grid fitted, mean residual **1.13 px** (max 5.59), colour parity **100 %** |
+| `original_image_HORZONTIAL.jpeg` (1920 × 1061) | 133 blobs, 110 on the lattice, **22 × 5 whole cells** — refused: 5 whole cells along the 7.5 cm axis cannot hold 6 rows |
 
 A first live frame from the rig (1296 × 972, corrected feed) found 89 blobs
 with 53 on the lattice, spread over 11 × 6 — but with holes from a cable lying
