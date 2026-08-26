@@ -13,7 +13,7 @@ import time
 
 import serial
 
-from rig.config import load
+from rig.config import load, serial_port_candidates
 
 
 def read_available(port) -> list[str]:
@@ -36,9 +36,21 @@ def main() -> int:
                         help=f"baud rate (default: {serial_cfg['baud']})")
     args = parser.parse_args()
 
-    print(f"Opening {args.port} at {args.baud} baud; the Mega will reset.")
+    candidates = serial_port_candidates(args.port)
+    print(f"Trying {', '.join(candidates)} at {args.baud} baud; the Mega will reset.")
     try:
-        with serial.Serial(args.port, args.baud, timeout=0.1, write_timeout=1) as port:
+        port = None
+        last_error = None
+        for candidate in candidates:
+            try:
+                port = serial.Serial(candidate, args.baud, timeout=0.1, write_timeout=1)
+                print(f"Connected on {candidate}.")
+                break
+            except serial.SerialException as exc:
+                last_error = exc
+        if port is None:
+            raise last_error
+        with port:
             time.sleep(2.0)
             for line in read_available(port):
                 print(line)

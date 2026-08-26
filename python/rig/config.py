@@ -44,6 +44,15 @@ CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "rig.json"
 _cache: dict | None = None
 
 
+def serial_port_candidates(preferred: str) -> tuple[str, ...]:
+    """Return the preferred Mega port, with ACM0/ACM1 fallback support."""
+    if preferred == "/dev/ttyACM0":
+        return ("/dev/ttyACM0", "/dev/ttyACM1")
+    if preferred == "/dev/ttyACM1":
+        return ("/dev/ttyACM0", "/dev/ttyACM1")
+    return (preferred,)
+
+
 def load(path: Path = CONFIG_PATH, reload: bool = False) -> dict:
     """Read config/rig.json. Cached, because every caller wants the same one.
 

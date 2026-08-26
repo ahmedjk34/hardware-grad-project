@@ -61,7 +61,7 @@ from dataclasses import dataclass, field
 
 import serial
 
-from rig.config import load
+from rig.config import load, serial_port_candidates
 from rig.grid import MachineGrid
 
 # ------------------------------------------------------------------
@@ -304,18 +304,24 @@ class Rig:
         if self.connected:
             raise RigError("already connected")
 
-        try:
-            # timeout= is the per-readline timeout, not a connect timeout: the
-            # reader thread needs to wake up regularly to notice _stopping.
-            self._port = serial.Serial(self.port_name, self.baud, timeout=0.2)
-        except serial.SerialException as exc:
+        last_error = None
+        for candidate in serial_port_candidates(self.port_name):
+            try:
+                # timeout= is the per-readline timeout, not a connect timeout:
+                # the reader thread needs to wake up regularly to notice stop.
+                self._port = serial.Serial(candidate, self.baud, timeout=0.2)
+                self.port_name = candidate
+                break
+            except serial.SerialException as exc:
+                last_error = exc
+        if self._port is None:
             raise RigError(
-                f"Cannot open {self.port_name} at {self.baud}: {exc}\n"
+                f"Cannot open /dev/ttyACM0 or /dev/ttyACM1 at {self.baud}: {last_error}\n"
                 "  - board plugged in?    ./scripts/flash.sh boards\n"
                 "  - permission denied?   sudo usermod -aG dialout $USER, then log out\n"
                 "  - wrong port?          a CH340 clone is /dev/ttyUSB0, set it in "
                 "config/rig.json"
-            ) from exc
+            ) from last_error
 
         self._stopping.clear()
         self._booted.clear()
