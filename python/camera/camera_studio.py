@@ -154,13 +154,20 @@ EDGE (the centre is nearly straight whatever you do), and turn on the grid with
      as close as it gets.
   2. `model` second, with 'm'. Four ideal curves; one of them will sit closer
      than the others. Cheap to try, so try all four.
-  3. `k1` / `k2` third — the residual. If the edge is straight in the middle of
-     the frame but still bends in the last fifth, that is what these fix: they
-     do nothing on the optical axis and grow toward the edge, which is exactly
-     the shape `fov` cannot make. Start with k1 in steps of 0.01.
-  4. `cx` / `cy` last, and only if the bowing is ASYMMETRIC — straight along the
+  3. `k1` then `k2` — the broad residual. If the edge is straight in the middle
+     but bends near the edge, these fix the shape `fov` cannot. Use `k3` and
+     `k4` only for distortion confined to the extreme edge/corners; fitting a
+     high-order coefficient too early makes a wavy correction that only looks
+     right on one line.
+  4. `cx` / `cy` next, and only if the bowing is ASYMMETRIC — straight along the
      left edge but curved along the right. That means the sensor is not centred
      behind the lens, and no amount of k1 will fix it.
+  5. `fx scale` / `fy scale` only if horizontal and vertical lines need different
+     correction strengths. Keep one at 1.000 while adjusting the other.
+  6. `p1` / `p2` last for diagonal, one-sided decentring residuals. `skew` is a
+     final shear correction and should almost always remain zero. Use TUNE VIEW
+     to compare raw/corrected at full frame, and TUNE RESET to zero only these
+     manual trims without losing sensor, colour, crop or output settings.
 
 None of this is a calibration. It is straight to the eye, not metric, and the
 panel says ESTIMATED in amber to keep that in view. A real ChArUco calibration
@@ -235,6 +242,13 @@ from vision.overlays import (
     draw_grid,
 )
 from camera.snapshot_worker import SnapshotWorker
+
+MANUAL_TUNING_DEFAULTS = {
+    "k1": 0.0, "k2": 0.0, "k3": 0.0, "k4": 0.0,
+    "centre_dx": 0.0, "centre_dy": 0.0,
+    "focal_x_scale": 1.0, "focal_y_scale": 1.0,
+    "skew": 0.0, "p1": 0.0, "p2": 0.0,
+}
 
 CAPTURE_DIR = Path(__file__).resolve().parents[1] / "captures"
 SETTINGS_PATH = Path(__file__).resolve().parents[1] / "config" / "camera_settings.json"
@@ -375,11 +389,32 @@ class Studio:
     def set_k2(self, v):
         return self._lens("k2", v, "k2 radial trim", fmt="{:+.3f}")
 
+    def set_k3(self, v):
+        return self._lens("k3", v, "k3 radial trim", fmt="{:+.3f}")
+
+    def set_k4(self, v):
+        return self._lens("k4", v, "k4 radial trim", fmt="{:+.3f}")
+
     def set_centre_dx(self, v):
         return self._lens("centre_dx", v, "optical centre X", fmt="{:+.1f}", unit=" px")
 
     def set_centre_dy(self, v):
         return self._lens("centre_dy", v, "optical centre Y", fmt="{:+.1f}", unit=" px")
+
+    def set_focal_x_scale(self, v):
+        return self._lens("focal_x_scale", v, "source focal X scale", fmt="{:.3f}")
+
+    def set_focal_y_scale(self, v):
+        return self._lens("focal_y_scale", v, "source focal Y scale", fmt="{:.3f}")
+
+    def set_skew(self, v):
+        return self._lens("skew", v, "source skew", fmt="{:+.4f}")
+
+    def set_p1(self, v):
+        return self._lens("p1", v, "p1 tangential trim", fmt="{:+.4f}")
+
+    def set_p2(self, v):
+        return self._lens("p2", v, "p2 tangential trim", fmt="{:+.4f}")
 
     def set_model(self, name):
         self.profile.model = name
@@ -808,12 +843,33 @@ class Studio:
                  "<v|+v|-v>", "radial trim, edge-weighted (-0.5..0.5, try 0.01 steps)")
         cmds.add("k2", numeric(self.set_k2, lambda: self.profile.k2, "k2 <v|+v|-v>"),
                  "<v|+v|-v>", "radial trim, corner-weighted (-0.5..0.5)")
+        cmds.add("k3", numeric(self.set_k3, lambda: self.profile.k3, "k3 <v|+v|-v>"),
+                 "<v|+v|-v>", "radial trim, extreme-edge weighted (-0.5..0.5)")
+        cmds.add("k4", numeric(self.set_k4, lambda: self.profile.k4, "k4 <v|+v|-v>"),
+                 "<v|+v|-v>", "radial trim, extreme-corner weighted (-0.5..0.5)")
         cmds.add("cx", numeric(self.set_centre_dx,
                                lambda: self.profile.centre_dx, "cx <px|+px|-px>"),
                  "<px|+px|-px>", "optical axis offset X — for ASYMMETRIC bowing")
         cmds.add("cy", numeric(self.set_centre_dy,
                                lambda: self.profile.centre_dy, "cy <px|+px|-px>"),
                  "<px|+px|-px>", "optical axis offset Y")
+        cmds.add("fxscale", numeric(self.set_focal_x_scale,
+                                     lambda: self.profile.focal_x_scale,
+                                     "fxscale <v|+v|-v>"),
+                 "<v|+v|-v>", "source X focal multiplier (0.5..1.5; identity 1)")
+        cmds.add("fyscale", numeric(self.set_focal_y_scale,
+                                     lambda: self.profile.focal_y_scale,
+                                     "fyscale <v|+v|-v>"),
+                 "<v|+v|-v>", "source Y focal multiplier (0.5..1.5; identity 1)")
+        cmds.add("skew", numeric(self.set_skew, lambda: self.profile.skew,
+                                  "skew <v|+v|-v>"),
+                 "<v|+v|-v>", "source X shear (-0.25..0.25; normally zero)")
+        cmds.add("p1", numeric(self.set_p1, lambda: self.profile.p1,
+                                "p1 <v|+v|-v>"),
+                 "<v|+v|-v>", "tangential/decentring trim (-0.25..0.25)")
+        cmds.add("p2", numeric(self.set_p2, lambda: self.profile.p2,
+                                "p2 <v|+v|-v>"),
+                 "<v|+v|-v>", "tangential/decentring trim (-0.25..0.25)")
         cmds.add("out", numeric(self.set_output_fov,
                                 lambda: self.profile.output_fov_deg, "out <deg|+N|-N>"),
                  "<deg|+N|-N>", "how much of the lens cone to render (10..170)",
@@ -827,6 +883,10 @@ class Studio:
                  "pyramid filtering of the regions the correction shrinks")
         cmds.add("straight", self._cmd_straight, "",
                  "print the recipe for straightening edges")
+        cmds.add("tuneview", self._cmd_tuneview, "",
+                 "full-frame raw/corrected comparison with grid enabled")
+        cmds.add("tunereset", self._cmd_tunereset, "",
+                 "reset manual lens trims only; preserve every other setting")
 
         # --- zoom and crop ---
         cmds.add("zoom", self._cmd_zoom, "<x|+x|-x>", "digital zoom, 1..40x",
@@ -1099,6 +1159,27 @@ class Studio:
             print(line)
         return "recipe above (and in the terminal)"
 
+    def _cmd_tuneview(self, args):
+        """Put the preview in a reproducible geometry-tuning state."""
+        self.correct = True
+        self.show_grid = True
+        self.view = "both"
+        self.crops, self.zoom, self.pan = [], 1.0, (0.5, 0.5)
+        self.view_size = None
+        self.fit_mode = "fit"
+        self.dirty = True
+        return ("TUNING VIEW: full-frame raw + corrected, grid on, crop/zoom cleared; "
+                "sensor and colour settings preserved")
+
+    def _cmd_tunereset(self, args):
+        """Reset only manual estimated-model trims, not the whole camera setup."""
+        for name, value in MANUAL_TUNING_DEFAULTS.items():
+            setattr(self.profile, name, value)
+        self.profile.clamp()
+        self.dirty = True
+        return ("manual fisheye trims reset (k1-k4, centre, X/Y focal scale, "
+                "skew, p1/p2); FOV/model/output/framing/colour preserved")
+
     def _cmd_sensor(self, args):
         for line in self.sensor_lines():
             self.log.add(True, line)
@@ -1328,7 +1409,10 @@ class Studio:
         out = self.maps.out_size if self.maps else (0, 0)
         return [
             f"LENS   fov {p.lens_fov_deg:.0f} deg ({p.fov_reference})  model {p.model}"
-            f"  k1 {p.k1:+.3f}  k2 {p.k2:+.3f}  centre {p.centre_dx:+.0f},{p.centre_dy:+.0f} px",
+            f"  centre {p.centre_dx:+.0f},{p.centre_dy:+.0f} px",
+            f"TUNE   radial {p.k1:+.3f} {p.k2:+.3f} {p.k3:+.3f} {p.k4:+.3f}"
+            f"  focal XY {p.focal_x_scale:.3f},{p.focal_y_scale:.3f}"
+            f"  skew {p.skew:+.4f}  tangent {p.p1:+.4f},{p.p2:+.4f}",
             f"OUT    fov {p.output_fov_deg:.0f} deg  scale {p.output_scale:.2f}"
             f"  {self.interp}  mip {'on' if self.mip else 'off'}"
             f"  correction {'ON' if self.correct else 'OFF'}",
@@ -1378,6 +1462,9 @@ BUTTONS = [
     ("REFIT", "refit"),
     ("RAW/CORR", "view"),
     ("GRID", "grid"),
+    ("TUNE VIEW", "tuneview"),
+    ("TUNE RESET", "tunereset"),
+    ("TUNE GUIDE", "straight"),
     ("RESET", "reset"),
     ("HELP", "help"),
     ("QUIT", "quit"),
@@ -1482,12 +1569,23 @@ def build_fields():
         Field("ref", "ref", lambda s: s.profile.fov_reference,
               ("diagonal", "horizontal"), 10),
         Field("model", "model", lambda s: s.profile.model, tuple(MODEL_NAMES), 13),
-        Field("k1", "k1", lambda s: f"{s.profile.k1:+.3f}", 0.01, 6),
-        Field("k2", "k2", lambda s: f"{s.profile.k2:+.3f}", 0.01, 6),
-        Field("centre x", "cx", lambda s: f"{s.profile.centre_dx:+.0f}", 2.0, 5),
-        Field("centre y", "cy", lambda s: f"{s.profile.centre_dy:+.0f}", 2.0, 5),
         Field("correction", "undistort", lambda s: _onoff(s.correct),
               ("on", "off"), 4),
+
+        Field("k1 broad", "k1", lambda s: f"{s.profile.k1:+.3f}",
+              0.01, 6, "TUNING"),
+        Field("k2 edge", "k2", lambda s: f"{s.profile.k2:+.3f}", 0.01, 6),
+        Field("k3 outer", "k3", lambda s: f"{s.profile.k3:+.3f}", 0.005, 6),
+        Field("k4 corner", "k4", lambda s: f"{s.profile.k4:+.3f}", 0.005, 6),
+        Field("centre x px", "cx", lambda s: f"{s.profile.centre_dx:+.0f}", 2.0, 5),
+        Field("centre y px", "cy", lambda s: f"{s.profile.centre_dy:+.0f}", 2.0, 5),
+        Field("fx scale", "fxscale", lambda s: f"{s.profile.focal_x_scale:.3f}",
+              0.005, 6),
+        Field("fy scale", "fyscale", lambda s: f"{s.profile.focal_y_scale:.3f}",
+              0.005, 6),
+        Field("skew", "skew", lambda s: f"{s.profile.skew:+.4f}", 0.002, 7),
+        Field("p1 tangent", "p1", lambda s: f"{s.profile.p1:+.4f}", 0.002, 7),
+        Field("p2 tangent", "p2", lambda s: f"{s.profile.p2:+.4f}", 0.002, 7),
 
         Field("out fov", "out", lambda s: f"{s.profile.output_fov_deg:.0f}",
               5.0, 5, "OUTPUT"),
@@ -1547,7 +1645,11 @@ def save_snapshot(raw, corrected, profile):
     CAPTURE_DIR.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     tag = (f"{profile.model}-lens{profile.lens_fov_deg:.0f}"
-           f"-out{profile.output_fov_deg:.0f}-k{profile.k1:+.2f}")
+           f"-out{profile.output_fov_deg:.0f}"
+           f"-k{profile.k1:+.2f}_{profile.k2:+.2f}_{profile.k3:+.2f}_{profile.k4:+.2f}"
+           f"-c{profile.centre_dx:+.0f}_{profile.centre_dy:+.0f}"
+           f"-f{profile.focal_x_scale:.3f}_{profile.focal_y_scale:.3f}"
+           f"-s{profile.skew:+.3f}-p{profile.p1:+.3f}_{profile.p2:+.3f}")
     raw_path = CAPTURE_DIR / f"{stamp}_raw.png"
     fixed_path = CAPTURE_DIR / f"{stamp}_corrected_{tag}.png"
     cv2.imwrite(str(raw_path), raw)
@@ -2324,13 +2426,20 @@ class StudioWindow:
                     raw_view = crop_resize(
                         frame, self.studio.roi(), self.studio.maps.out_size,
                         INTERPOLATIONS[self.studio.interp])
-                    image = (side_by_side(raw_view, corrected)
-                             if self.studio.view == "both" else raw_view.copy())
+                    if self.studio.view == "both":
+                        raw_view, corrected_view = raw_view.copy(), corrected.copy()
+                        if self.studio.show_grid:
+                            draw_grid(raw_view, 8, 8)
+                            draw_grid(corrected_view, 8, 8)
+                        image = side_by_side(raw_view, corrected_view)
+                    else:
+                        image = raw_view.copy()
+                        if self.studio.show_grid:
+                            draw_grid(image, 8, 8)
                 else:
                     image = corrected.copy()
-
-                if self.studio.show_grid:
-                    draw_grid(image, 8, 8)
+                    if self.studio.show_grid:
+                        draw_grid(image, 8, 8)
                 draw_drag(image, self.studio)
                 self._push_image(image)
                 self._preview_rate.tick()
@@ -2437,6 +2546,24 @@ def parse_args():
                       help="radial trim, edge-weighted (-0.5..0.5, default 0)")
     lens.add_argument("--k2", type=float,
                       help="radial trim, corner-weighted (-0.5..0.5, default 0)")
+    lens.add_argument("--k3", type=float,
+                      help="radial trim, extreme-edge weighted (-0.5..0.5, default 0)")
+    lens.add_argument("--k4", type=float,
+                      help="radial trim, extreme-corner weighted (-0.5..0.5, default 0)")
+    lens.add_argument("--centre-x", type=float,
+                      help="source optical-centre X offset in pixels")
+    lens.add_argument("--centre-y", type=float,
+                      help="source optical-centre Y offset in pixels")
+    lens.add_argument("--focal-x-scale", type=float,
+                      help="source X focal multiplier (0.5..1.5, default 1)")
+    lens.add_argument("--focal-y-scale", type=float,
+                      help="source Y focal multiplier (0.5..1.5, default 1)")
+    lens.add_argument("--skew", type=float,
+                      help="source X shear (-0.25..0.25, default 0)")
+    lens.add_argument("--p1", type=float,
+                      help="tangential/decentring trim (-0.25..0.25, default 0)")
+    lens.add_argument("--p2", type=float,
+                      help="tangential/decentring trim (-0.25..0.25, default 0)")
     lens.add_argument("--output-fov", type=float,
                       help="diagonal FOV of the rectilinear output (default 120)")
     lens.add_argument("--output-scale", type=float,
@@ -2509,18 +2636,27 @@ def apply_overrides(studio, args):
     """
     changed = []
     for attr, value in (
-        ("lens_fov_deg", args.lens_fov),
-        ("fov_reference", args.fov_reference),
-        ("model", args.model),
-        ("k1", args.k1),
-        ("k2", args.k2),
-        ("output_fov_deg", args.output_fov),
-        ("output_scale", args.output_scale),
+        ("lens_fov_deg", getattr(args, "lens_fov", None)),
+        ("fov_reference", getattr(args, "fov_reference", None)),
+        ("model", getattr(args, "model", None)),
+        ("k1", getattr(args, "k1", None)),
+        ("k2", getattr(args, "k2", None)),
+        ("k3", getattr(args, "k3", None)),
+        ("k4", getattr(args, "k4", None)),
+        ("centre_dx", getattr(args, "centre_x", None)),
+        ("centre_dy", getattr(args, "centre_y", None)),
+        ("focal_x_scale", getattr(args, "focal_x_scale", None)),
+        ("focal_y_scale", getattr(args, "focal_y_scale", None)),
+        ("skew", getattr(args, "skew", None)),
+        ("p1", getattr(args, "p1", None)),
+        ("p2", getattr(args, "p2", None)),
+        ("output_fov_deg", getattr(args, "output_fov", None)),
+        ("output_scale", getattr(args, "output_scale", None)),
     ):
         if value is not None:
             setattr(studio.profile, attr, value)
             changed.append(f"{attr}={value}")
-    if args.hq and args.output_scale is None:
+    if args.hq and getattr(args, "output_scale", None) is None:
         # Render half the capture resolution, so --hq keeps the familiar
         # 1296x972 output but feeds it from four times as many sensor pixels.
         studio.profile.output_scale = 0.5

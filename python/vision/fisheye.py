@@ -3,16 +3,17 @@
 
 READ THIS FIRST: nothing here is measured
 -----------------------------------------
-Until a checkerboard/ChArUco calibration is run, the lens is described by exactly
-two estimates:
+Until a checkerboard/ChArUco calibration is run, the lens starts from two
+estimates:
 
   1. the vendor's "160 degrees" FOV number, assumed to be the *diagonal* FOV;
   2. an assumed ideal projection curve (equidistant by default).
 
-On top of that we assume the principal point is the exact image centre and that
-decentring (tangential) distortion is zero. Both are certainly a little wrong.
-That is enough to make straight edges look substantially straight, and nowhere
-near enough to measure with. Treat the output as visually straightened, not
+The advanced manual trims can then model radial residuals, an off-centre optical
+axis, unequal X/Y focal scale, sensor skew, and tangential/decentring distortion.
+All default to identity, so old profiles render exactly as before. This is enough
+to make straight edges look substantially straight, and still nowhere near
+enough to measure with. Treat a hand-tuned output as visually straightened, not
 metrically correct.
 
 How the correction works
@@ -132,12 +133,21 @@ class LensProfile:
     # once the FOV is close. k1/k2 reshape the radial curve without rescaling it
     # (they are zero on the optical axis and grow toward the edge), which is a
     # different correction from lens_fov_deg — that one scales every radius
-    # uniformly. centre_dx/dy move the assumed optical axis, for the common case
-    # of a sensor that is not quite centred behind the lens.
+    # uniformly. k3/k4 isolate the extreme edge/corners. centre_dx/dy move the
+    # assumed optical axis, for the common case of a sensor that is not quite
+    # centred behind the lens. The remaining intrinsic/decentring controls are
+    # advanced escape hatches; identity values preserve the historical map.
     k1: float = 0.0                   # radial trim weighted by (theta/theta_max)^2
     k2: float = 0.0                   # radial trim weighted by (theta/theta_max)^4
+    k3: float = 0.0                   # radial trim weighted by (theta/theta_max)^6
+    k4: float = 0.0                   # radial trim weighted by (theta/theta_max)^8
     centre_dx: float = 0.0            # principal point offset from image centre, px
     centre_dy: float = 0.0
+    focal_x_scale: float = 1.0        # source fx multiplier (identity = 1)
+    focal_y_scale: float = 1.0        # source fy multiplier (identity = 1)
+    skew: float = 0.0                 # source X shear, relative to focal length
+    p1: float = 0.0                   # tangential/decentring distortion
+    p2: float = 0.0
 
     # --- desired output rendering ---
     output_fov_deg: float = 120.0     # how much of the source cone to re-project
@@ -172,8 +182,15 @@ class LensProfile:
         # back on itself and the remap folds the image over.
         self.k1 = float(min(max(self.k1, -0.5), 0.5))
         self.k2 = float(min(max(self.k2, -0.5), 0.5))
+        self.k3 = float(min(max(self.k3, -0.5), 0.5))
+        self.k4 = float(min(max(self.k4, -0.5), 0.5))
         self.centre_dx = float(min(max(self.centre_dx, -2000.0), 2000.0))
         self.centre_dy = float(min(max(self.centre_dy, -2000.0), 2000.0))
+        self.focal_x_scale = float(min(max(self.focal_x_scale, 0.5), 1.5))
+        self.focal_y_scale = float(min(max(self.focal_y_scale, 0.5), 1.5))
+        self.skew = float(min(max(self.skew, -0.25), 0.25))
+        self.p1 = float(min(max(self.p1, -0.25), 0.25))
+        self.p2 = float(min(max(self.p2, -0.25), 0.25))
         if self.model not in PROJECTIONS:
             self.model = "equidistant"
         if self.fov_reference not in ("diagonal", "horizontal"):
@@ -399,16 +416,40 @@ def _estimated_maps(profile, size, out_size, k_out):
     #    independent of the FOV, and vanish on the optical axis — which is what
     #    makes them independent of lens_fov_deg rather than a second copy of it.
     r_src = f_src * PROJECTIONS[profile.model](theta).astype(np.float32)
-    if profile.k1 or profile.k2:
+    if profile.k1 or profile.k2 or profile.k3 or profile.k4:
         t = (theta / theta_max).astype(np.float32)
         t2 = t * t
-        r_src = r_src * (1.0 + profile.k1 * t2 + profile.k2 * t2 * t2)
+        # Preserve the historical k1/k2 expression byte-for-byte when the new
+        # high-order terms are at identity. Existing saved profiles must not
+        # move merely because Camera Studio gained more controls.
+        if not profile.k3 and not profile.k4:
+            radial = 1.0 + profile.k1 * t2 + profile.k2 * t2 * t2
+        else:
+            t4 = t2 * t2
+            radial = (1.0 + profile.k1 * t2 + profile.k2 * t4
+                      + profile.k3 * t4 * t2 + profile.k4 * t4 * t4)
+        r_src = r_src * radial
 
     # 4. Rescale the ray direction to that radius. r_src/r_rect has a finite
     #    limit on the optical axis, but is 0/0 numerically — guard that pixel.
     scale = np.divide(r_src, r_rect, out=np.zeros_like(r_rect), where=r_rect > 1e-9)
-    map_x = cx + x * scale
-    map_y = cy + y * scale
+    source_x = x * scale
+    source_y = y * scale
+
+    # Standard Brown-Conrady tangential terms, expressed in focal-normalised
+    # source coordinates. They model a lens whose elements are slightly
+    # decentered relative to the sensor. The explicit fast path also guarantees
+    # old profiles (p1=p2=0) retain their previous floating-point map exactly.
+    if profile.p1 or profile.p2:
+        xn, yn = source_x / f_src, source_y / f_src
+        r2 = xn * xn + yn * yn
+        tx = 2.0 * profile.p1 * xn * yn + profile.p2 * (r2 + 2.0 * xn * xn)
+        ty = profile.p1 * (r2 + 2.0 * yn * yn) + 2.0 * profile.p2 * xn * yn
+        source_x = f_src * (xn + tx)
+        source_y = f_src * (yn + ty)
+
+    map_x = cx + profile.focal_x_scale * source_x + profile.skew * source_y
+    map_y = cy + profile.focal_y_scale * source_y
 
     # 5. Rays beyond the lens' real cone have no source pixel at all. Send them
     #    well off-image so remap fills them with the border colour (black)
