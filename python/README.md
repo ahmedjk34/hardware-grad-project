@@ -132,6 +132,27 @@ built from transcripts:
 It proves the parsing and the cell numbering, not the machine. The other half of the testing is
 flashing the firmware and watching it.
 
+## Push captures to GitHub
+
+The `python/captures/` directory is ignored by default because camera captures
+can be large and are normally generated files. To deliberately publish selected
+captures, run these commands from the repository root:
+
+```bash
+cd ~/hardware-grad-project
+git status --short --ignored python/captures/
+git add -f python/captures/
+git diff --cached --stat
+git commit -m "Add camera captures"
+git push origin main
+```
+
+Replace `main` with the branch you use. Review `git diff --cached` before
+committing and remove unwanted files with `git restore --staged` if necessary.
+For very large images or videos, use Git LFS instead of committing them
+directly. The `-f` is required because `.gitignore` contains
+`python/captures/`.
+
 ## `python` or `python3`?
 
 The two machines disagree, and it only matters once.
