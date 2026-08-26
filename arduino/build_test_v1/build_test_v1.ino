@@ -541,7 +541,7 @@ float GRID_TRIM_Y_CM = 3.75; // feeder centre -> build-grid shift along Y
 // They apply exactly like GRID_TRIM_* and shift every grid centre from home.
 // Keep these paired with config/rig.json and start new error calibration at 0.
 float GRID_ERROR_OFFSET_X_CM = 0.0;
-float GRID_ERROR_OFFSET_Y_CM = 0.0;
+float GRID_ERROR_OFFSET_Y_CM = -0.5;
 
 long GRID_COLS = 9;
 long GRID_ROWS = 5;
