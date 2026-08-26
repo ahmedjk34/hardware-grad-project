@@ -48,7 +48,7 @@
 
   Multi-character commands need a newline. Single digit commands
   work with or without one - including 0 and 0+, which are special
-  cased in checkSerial() so the '+' has a chance to arrive. D, U, O, C, R and Z are letters, so like
+  cased in checkSerial() so the '+' has a chance to arrive. D, U, O, C, V, R and Z are letters, so like
   G/S/B/? they need a newline too. RR is two letters and ALSO needs
   a newline - there is no single-character fast path for it.
 
@@ -541,7 +541,7 @@ float GRID_TRIM_Y_CM = 3.75; // feeder centre -> build-grid shift along Y
 // They apply exactly like GRID_TRIM_* and shift every grid centre from home.
 // Keep these paired with config/rig.json and start new error calibration at 0.
 float GRID_ERROR_OFFSET_X_CM = 0.0;
-float GRID_ERROR_OFFSET_Y_CM = -0.5;
+float GRID_ERROR_OFFSET_Y_CM = 0.0;
 
 long GRID_COLS = 9;
 long GRID_ROWS = 5;
@@ -956,6 +956,7 @@ const char CMD_MOVE_Z_POS = 'U'; // Z+  (top limit switch, pin 29)
 
 const char CMD_SERVO_OPEN = 'O';
 const char CMD_SERVO_CLOSE = 'C';
+const char CMD_SERVO_ANGLE = 'V'; // V <angle> (0..180 degrees)
 
 const char CMD_AUX_STEPPER_CW = 'R'; // "R"  (RR is handled in handleLine)
 
@@ -1212,6 +1213,19 @@ void handleLine(char *line)
       statBadCommands++;
       Serial.println();
       Serial.println(F("  ERROR - use:  S <cols> <rows>   e.g.  S 20 4"));
+    }
+    break;
+
+  case CMD_SERVO_ANGLE:
+    if (parseNumbers(line + 1, &a, 1, NULL) == 1 && a >= 0 && a <= 180)
+    {
+      setServoAngle((int)a);
+    }
+    else
+    {
+      statBadCommands++;
+      Serial.println();
+      Serial.println(F("  ERROR - use:  V <angle>   where angle is 0..180 degrees"));
     }
     break;
 
@@ -1641,6 +1655,17 @@ void closeServo()
   Serial.println();
   Serial.print(F("SERVO: CLOSE ("));
   Serial.print(SERVO_CLOSE_ANGLE);
+  Serial.println(F(" deg)"));
+}
+
+void setServoAngle(int angle)
+{
+  gripperServo.write(angle);
+  servoIsOpen = (angle == SERVO_OPEN_ANGLE);
+
+  Serial.println();
+  Serial.print(F("SERVO: ANGLE ("));
+  Serial.print(angle);
   Serial.println(F(" deg)"));
 }
 
@@ -4581,6 +4606,7 @@ void printInstructions()
   Serial.println(F("--------------------------------------"));
   Serial.println(F("O = Servo OPEN              [pin 6]"));
   Serial.println(F("C = Servo CLOSE             [pin 6]"));
+  Serial.println(F("V <angle> = Servo angle 0..180 deg [pin 6]"));
   Serial.println(F("--------------------------------------"));
   Serial.println(F("R  = Aux stepper ~90 deg CW   [28BYJ-48, pins 36-39]"));
   Serial.println(F("RR = Aux stepper ~90 deg CCW  [28BYJ-48, pins 36-39]"));

@@ -109,10 +109,10 @@ positive-block footprint Y = 5 × 7.5 + 4 × 0.5 = 39.5 cm
 ```
 
 The X/Y spans start one half feeder block away from the feeder centre: X
-`+1.1 cm`, Y `+3.75 cm`. First centres are X `1.1 + 0.5 + 2.2/2 = 2.7 cm`
-and Y `3.75 + 0.5 + 7.5/2 = 8.0 cm`; pitch then repeats to last centres X
-`24.3` and Y `40.0 cm`. The final physical block edges are `25.4 × 43.75 cm`
-from the feeder centre. This is safe only because the holder needs to reach
+`+1.1 cm`, Y `+3.75 cm`. With the shipped zero error offsets, first centres
+are X `2.7 cm` and Y `8.0 cm`, with the last centres at X `24.3 cm` and
+Y `40.0 cm`. The final physical block edges are `25.4 × 43.75 cm` from the
+feeder centre. This is safe only because the holder needs to reach
 each block's **centre** inside its 24.3 × 40 cm travel envelope; the held
 block itself extends past that holder coordinate.
 
@@ -281,7 +281,8 @@ together. Every ack literal is `F()`, like everything else the sketch prints.
 ### 6. Firmware command vocabulary
 
 The sketch's commands (`B`, `G`, `S`, `0`, `0+`, `5`, `9`, `Z`, `U`, `D`, `O`,
-`C`, `R`, `RR`) are the contract between the two machines.
+`C`, `V`, `R`, `RR`) are the contract between the two machines. `V <angle>`
+sets the gripper servo to an integer angle from 0 to 180 degrees.
 
 If you rename a command, change its arguments, or change the text it prints on
 success or failure, **grep `python/` for the old form first.** `B` has an `@`

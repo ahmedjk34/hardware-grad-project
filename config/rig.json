@@ -17,7 +17,7 @@
     "trim_x_cm": 1.1,
     "trim_y_cm": 3.75,
     "error_offset_x_cm": 0.0,
-    "error_offset_y_cm": -0.5
+    "error_offset_y_cm": 0.0
   },
   "workspace": {
     "width_cm": 24.3,

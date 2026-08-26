@@ -409,6 +409,7 @@ def _grid_geometry(workspace, image_size):
         g.block_width_cm, g.block_length_cm, g.gap_x_cm, g.gap_y_cm,
         g.workspace_width_cm, g.workspace_height_cm,
         g.trim_x_cm, g.trim_y_cm,
+        g.error_offset_x_cm, g.error_offset_y_cm,
     )
     cached = _GRID_GEOMETRY_CACHE.get(key)
     if cached is not None:

@@ -15,7 +15,8 @@ The script reads the port, the board FQBN and the sketch path out of
 `config/rig.json`, so none of them are written down twice.
 
 Board is an Arduino MEGA 2560. Serial is **9600 baud**. Multi-character
-commands need a newline; single digits do not.
+commands need a newline; single digits do not. `V <angle>` sets the gripper
+servo to an arbitrary angle from 0 to 180 degrees.
 
 The auxiliary 28BYJ-48 stepper uses these ULN2003 connections:
 
