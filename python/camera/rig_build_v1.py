@@ -38,6 +38,7 @@ Keys
   y       pick a Y-only build target: type a row, Enter confirms B 0 <row>,
           any other key cancels the entry
   p       toggle the printed colour-grid overlay
+  , / .   select the previous / next detected printed-grid window
   k       calibrate from the printed colour grid and save
   g       toggle grid
   v       toggle block detection on/off
@@ -327,7 +328,7 @@ def main():
 
     forbidden_during_build = {
         ord("c"), ord("k"), ord("u"), ord("x"), ord("y"), ord("["), ord("-"),
-        ord("]"), ord("+"), ord("="), ord("o"), ord("d"),
+        ord("]"), ord("+"), ord("="), ord("o"), ord("d"), ord(","), ord("."),
         ord("b"), ord("q"), 10, 13, 27,
     }
 
@@ -372,6 +373,7 @@ def main():
                      ("Deselect (d)", "d"), ("X-only (x)", "x"),
                      ("Y-only (y)", "y"),
                      ("Paper grid (p)", "p"), ("Paper calib (k)", "k"),
+                     ("Grid choice < (,)", ","), ("Grid choice > (.)", "."),
                      ("BUILD (b)", "b"),
                      ("Save (s)", "s"), ("Quit (q)", "q")),
         )
@@ -452,6 +454,17 @@ def main():
         elif key == ord("p"):
             ui["message"] = ("printed-sheet overlay on" if paper.toggle()
                              else "printed-sheet overlay off")
+        elif key in (ord(","), ord(".")):
+            try:
+                reject_mutation_if_unsafe()
+                if paper.cycle(-1 if key == ord(",") else 1):
+                    controller.clear_selection()
+                    ui["message"] = (f"selected printed grid {paper.selection + 1}/"
+                                     f"{len(paper.calibrations)}")
+                else:
+                    ui["message"] = "only one printed-grid candidate is available"
+            except BuildStateError as exc:
+                ui["message"] = str(exc)
         elif key == ord("k"):
             # Same guards as the four-click route: it replaces the very map the
             # operator is about to select build targets on.
@@ -592,7 +605,7 @@ def main():
             f"seq {result.source_sequence} | {analysis_text} | blocks {len(detections)} | "
             f"replaced {result.replaced_count} | duplicate {result.duplicate_count}",
             f"Grid: {grid.cols}x{grid.rows} | {'CALIBRATED' if calibrated else 'APPROXIMATION ONLY'}",
-            f"{paper.status()} | home {args.home_convention}",
+            f"{paper.status()} | ,/. choose | home {args.home_convention}",
             f"Rig: {rig.port_name} | level {controller.level} | rotation {controller.rotation}",
             f"Selected: {selected_text}",
             block_hover_text(detections, ui["hover"]),
@@ -605,7 +618,7 @@ def main():
             f"grid {timings.ms.get('grid', 0):.1f} ms | "
             f"display {timings.ms.get('display', 0):.1f} ms",
             "i overlay | c calibrate | g grid | v detect | [/] level | o rotate | d deselect",
-            "p paper overlay | k paper calibrate | x X-only | y Y-only",
+            "p paper | ,/. choose grid | k paper calibrate | x X-only | y Y-only",
             "b/Enter BUILD | s snapshot | q/Esc quit when safe",
         ]
 
@@ -667,7 +680,8 @@ def main():
                     if image_size is None or not camera_is_live(snapshot, now):
                         raise ValueError("calibration paused: camera feed is stale")
                     candidate, found = paper_workspace_map(
-                        view, paper_spec, grid, projection, args.home_convention)
+                        view, paper_spec, grid, projection,
+                        args.home_convention, paper.selection)
                     candidate.save(args.workspace_map)
                     saved_workspace = candidate
                     workspace = candidate

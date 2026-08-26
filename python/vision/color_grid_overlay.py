@@ -24,6 +24,7 @@ MAPPED_COLOR = (120, 255, 120)      # a cell that is part of the [col,row] grid
 EXTRA_COLOR = (200, 200, 90)        # a whole cell outside the chosen window
 PARTIAL_COLOR = (80, 80, 255)       # clipped by the paper edge or the frame
 OUTLINE_COLOR = (255, 180, 30)      # the grid's own outer boundary
+ALTERNATE_COLOR = (220, 120, 255)    # valid, but not currently selected
 ORIGIN_COLOR = (255, 80, 255)       # cell [0,0]
 HOVER_COLOR = (0, 165, 255)
 
@@ -104,6 +105,17 @@ def draw_color_grid(frame: np.ndarray, calibration: ColorGridCalibration, *,
     return hovered
 
 
+def draw_grid_alternatives(frame: np.ndarray, calibrations, selected_index: int):
+    """Outline every non-selected valid window and label its selection number."""
+    for index, calibration in enumerate(calibrations):
+        if index == selected_index:
+            continue
+        outline = _quad(calibration.outline())
+        cv2.polylines(frame, [outline], True, ALTERNATE_COLOR, 2, cv2.LINE_AA)
+        x, y = outline.mean(axis=0).astype(int)
+        _stamp(frame, f"GRID {index + 1}", (x - 28, y), ALTERNATE_COLOR, 0.5)
+
+
 def draw_candidates(frame: np.ndarray, error, *, labels=True):
     """Draw what a *failed* detection did find, so the failure is diagnosable.
 
@@ -154,6 +166,8 @@ def status_text(calibration: ColorGridCalibration | None, error: str | None = No
         return f"paper grid: {error or 'not detected'}"
     metrics = calibration.metrics
     return (f"paper grid: {metrics.full_cells} whole cells, "
+            f"window {metrics.window_index + 1}/{metrics.window_candidates} "
+            f"({metrics.window_observed}/{calibration.spec.cols * calibration.spec.rows}), "
             f"lattice {metrics.lattice_shape[0]}x{metrics.lattice_shape[1]}, "
             f"residual {metrics.residual_px:.2f} px, "
             f"parity {metrics.parity_agreement * 100:.0f}%")

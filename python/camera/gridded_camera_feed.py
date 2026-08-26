@@ -30,6 +30,7 @@ Keys
   u       undo the most recent calibration corner
   x       cancel an in-progress calibration
   p       toggle the printed colour-grid overlay
+  , / .   select the previous / next detected printed-grid window
   k       save a complete-sheet calibration, or a ready evidence session
   e       start/replace an evidence session for gantry-occluded sheets
   Space   accept the current frame as evidence
@@ -85,10 +86,12 @@ from vision.color_grid import (  # noqa: E402
     ColorGridError,
     ColorGridSpec,
     detect_color_grid,
+    detect_color_grids,
 )
 from vision.color_grid_overlay import (  # noqa: E402
     draw_candidates,
     draw_color_grid,
+    draw_grid_alternatives,
     draw_workspace_corners,
     status_text as paper_status_text,
 )
@@ -129,7 +132,7 @@ def analyze_paper_grid(frame, spec, process_width=PAPER_OVERLAY_WIDTH):
     a value instead of raised, and survives the trip back to the UI intact.
     """
     try:
-        return ((detect_color_grid(frame, spec, process_width=process_width), None),)
+        return ((detect_color_grids(frame, spec, process_width=process_width), None),)
     except ColorGridError as exc:
         return ((None, exc),)
 
@@ -149,6 +152,8 @@ class PaperGridTracker:
         self._worker = AnalysisWorker(analyze_paper_grid, max_hz=max_hz,
                                       name="paper-grid")
         self._calibration = None
+        self._calibrations = ()
+        self._selection = 0
         self._error = "overlay off"
         self._failure = None
 
@@ -161,7 +166,8 @@ class PaperGridTracker:
     def toggle(self):
         self.enabled = not self.enabled
         if not self.enabled:
-            self._calibration, self._error, self._failure = None, "overlay off", None
+            self._calibration, self._calibrations = None, ()
+            self._error, self._failure = "overlay off", None
         else:
             self._error = "looking for the sheet"
         return self.enabled
@@ -181,14 +187,42 @@ class PaperGridTracker:
                 self._calibration, self._error = None, snapshot.error
                 self._failure = None
             return
-        calibration, failure = snapshot.detections[0]
-        self._calibration = calibration
-        self._failure = None if calibration is not None else failure
-        self._error = None if failure is None else str(failure)
+        calibrations, failure = snapshot.detections[0]
+        self._calibrations = tuple(calibrations or ())
+        if self._selection < len(self._calibrations):
+            self._calibration = self._calibrations[self._selection]
+            self._error = None
+        elif self._calibrations:
+            self._calibration = None
+            self._error = (f"selected grid {self._selection + 1} is temporarily "
+                           f"unavailable; {len(self._calibrations)} detected")
+        else:
+            self._calibration = None
+        self._failure = None if self._calibration is not None else failure
+        if failure is not None:
+            self._error = str(failure)
 
     @property
     def calibration(self):
         return self._calibration
+
+    @property
+    def calibrations(self):
+        return self._calibrations
+
+    @property
+    def selection(self):
+        return self._selection
+
+    def cycle(self, delta):
+        """Select another overlapping grid; returns whether selection changed."""
+        if not self._calibrations:
+            return False
+        previous = self._selection
+        self._selection = (self._selection + delta) % len(self._calibrations)
+        self._calibration = self._calibrations[self._selection]
+        self._error = None
+        return self._selection != previous
 
     @property
     def error(self):
@@ -203,7 +237,7 @@ class PaperGridTracker:
         return paper_status_text(self._calibration, self._error)
 
 
-def paper_workspace_map(view, spec, grid, projection, convention):
+def paper_workspace_map(view, spec, grid, projection, convention, window_index=0):
     """Turn the printed sheet in ``view`` into a saveable :class:`WorkspaceMap`.
 
     Detection runs at full resolution here: a calibration is written once and
@@ -212,7 +246,8 @@ def paper_workspace_map(view, spec, grid, projection, convention):
     is not usable and ``ValueError`` when the corners it implies fall outside
     the frame — both are sentences worth showing an operator verbatim.
     """
-    calibration = detect_color_grid(view, spec, process_width=0)
+    calibration = detect_color_grid(
+        view, spec, process_width=0, window_index=window_index)
     corners = calibration.workspace_corners(grid, convention)
     workspace = WorkspaceMap.from_grid(grid, corners, view.shape[1::-1], projection)
     return workspace, calibration
@@ -227,6 +262,7 @@ def draw_paper_grid(frame, tracker, hover, grid, convention, *, detail=False):
         if tracker.failure is not None:
             draw_candidates(frame, tracker.failure, labels=detail)
         return None
+    draw_grid_alternatives(frame, tracker.calibrations, tracker.selection)
     hovered = draw_color_grid(frame, calibration, hover=hover, labels=detail,
                               shade=0.30)
     try:
@@ -612,6 +648,7 @@ def main():
                      ("Save (s)", "s"), ("Grid (g)", "g"),
                      ("Detect (v)", "v"),
                      ("Paper grid (p)", "p"), ("Paper calib (k)", "k"),
+                     ("Grid choice < (,)", ","), ("Grid choice > (.)", "."),
                      ("Evidence (e)", "e"), ("Accept frame (Space)", " "),
                      ("Quit (q)", "q")),
         )
@@ -667,7 +704,7 @@ def main():
             f"replaced {result.replaced_count} | duplicate {result.duplicate_count}",
             f"Grid: {grid.cols}x{grid.rows} | {calibration_text} | "
             f"hover {f'[{cell[0]},{cell[1]}]' if cell else 'none'}",
-            f"{paper.status()} | home {args.home_convention} | k calibrates from it",
+            f"{paper.status()} | ,/. choose | home {args.home_convention} | k saves it",
             (f"Evidence: {evidence.status.describe()}"
              if ui["evidence_active"] else
              "Evidence: off | e starts a gantry-occlusion session"),
@@ -678,7 +715,8 @@ def main():
             f"display {timings.ms.get('display', 0):.1f} ms",
             f"Status: {result.error or snapshot.error or ui['message']}",
             "o overlay | c calibrate | Enter save | u undo | x cancel | g grid | v detect",
-            "p paper overlay | e evidence | Space accept frame | k save paper map | s snapshot | q quit",
+            "p paper | ,/. choose grid | e evidence | Space accept | "
+            "k save map | s snapshot | q quit",
         ]
 
     def handle_key(key):
@@ -725,6 +763,12 @@ def main():
             else:
                 ui["message"] = ("printed-sheet overlay on" if paper.toggle()
                                  else "printed-sheet overlay off")
+        elif key in (ord(","), ord(".")):
+            if paper.cycle(-1 if key == ord(",") else 1):
+                ui["message"] = (f"selected printed grid {paper.selection + 1}/"
+                                 f"{len(paper.calibrations)}")
+            else:
+                ui["message"] = "only one printed-grid candidate is available"
         elif key == ord("e"):
             if ui["calibrating"]:
                 ui["message"] = "finish or cancel the four-corner calibration first"
@@ -831,7 +875,8 @@ def main():
                             grid, corners, view.shape[1::-1], projection)
                     else:
                         candidate, found = paper_workspace_map(
-                            view, paper_spec, grid, projection, args.home_convention)
+                            view, paper_spec, grid, projection,
+                            args.home_convention, paper.selection)
                     candidate.save(args.workspace_map)
                     saved_workspace = candidate
                     rejection = None

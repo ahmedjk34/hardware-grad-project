@@ -39,6 +39,7 @@ from vision.color_grid import (
     ColorGridSpec,
     color_masks,
     detect_color_grid,
+    detect_color_grids,
     white_balance,
 )
 
@@ -411,6 +412,15 @@ try:
         tracker.poll(1)
     check("the tracker finds the sheet off the preview thread",
           tracker.calibration is not None, tracker.status())
+    initial_origin = tracker.calibration.cell_center(0, 0)
+    check("the tracker retains every overlapping window",
+          len(tracker.calibrations) > 1, str(len(tracker.calibrations)))
+    changed = tracker.cycle(1)
+    check("the operator can select a different detected window",
+          changed and tracker.selection == 1
+          and tracker.calibration.cell_center(0, 0) != initial_origin,
+          tracker.status())
+    tracker.cycle(-1)
 
     frame = image.copy()
     hovered = draw_paper_grid(frame, tracker, tracker.calibration.cell_center(4, 3),
@@ -483,6 +493,65 @@ except ColorGridError as exc:
 
 
 # --- 8. the training captures, when they are there --------------------------
+
+# The user's root-level live capture intentionally has no overlay baked into
+# it.  It is an 11-column physical sheet, so there must be two overlapping
+# 10-column choices.  The absolute-left choice loses one underlit edge contour;
+# the larger lattice still constrains it, and both choices must be exposed.
+live_raw = Path(__file__).resolve().parents[1] / "captures" / "live_feed_no_grid.png"
+if live_raw.exists():
+    raw = cv2.imread(str(live_raw))
+    try:
+        choices = detect_color_grids(raw, spec, process_width=0)
+        check("raw live capture exposes exactly two 10x6 windows",
+              len(choices) == 2, f"found {len(choices)}")
+        if len(choices) >= 2:
+            left, shifted = choices[:2]
+            check("raw candidate 1 is the absolute-left grid",
+                  left.cell_center(0, 0)[0] < shifted.cell_center(0, 0)[0],
+                  f"origins {left.cell_center(0, 0)}, {shifted.cell_center(0, 0)}")
+            overlap_error = max(
+                np.linalg.norm(np.asarray(left.cell_center(col + 1, row))
+                               - np.asarray(shifted.cell_center(col, row)))
+                for col in range(spec.cols - 1) for row in range(spec.rows)
+            )
+            check("the two raw candidates agree on their nine-column overlap",
+                  overlap_error < 0.75, f"max {overlap_error:.3f} px")
+            check("the underlit left window retains strong physical coverage",
+                  left.metrics.window_observed >= 59,
+                  f"{left.metrics.window_observed}/60")
+            left_map, left_saved = paper_workspace_map(
+                raw, spec, grid, {"test": "left-choice"}, "firmware", 0)
+            shifted_map, shifted_saved = paper_workspace_map(
+                raw, spec, grid, {"test": "shifted-choice"}, "firmware", 1)
+            check("the map writer honours the selected detected window",
+                  left_saved.metrics.window_index == 0
+                  and shifted_saved.metrics.window_index == 1
+                  and left_map.corners != shifted_map.corners)
+
+        # A multiplicative illumination gradient preserves ink chromaticity but
+        # used to erase the absolute-left window through its fixed brightness
+        # and all-60-cells gates.  Darken image top-left to 35% and demand the
+        # same two choices.
+        height, width = raw.shape[:2]
+        yy, xx = np.mgrid[:height, :width]
+        radius = np.sqrt((xx / max(width - 1, 1)) ** 2
+                         + (yy / max(height - 1, 1)) ** 2)
+        illumination = 0.35 + 0.65 * np.clip(radius / 1.1, 0.0, 1.0)
+        shadowed = np.clip(raw.astype(np.float32) * illumination[..., None],
+                           0, 255).astype(np.uint8)
+        shadow_choices = detect_color_grids(shadowed, spec, process_width=0)
+        check("both grids survive a severe top-left lighting gradient",
+              len(shadow_choices) == 2,
+              f"found {len(shadow_choices)} with "
+              f"{[c.metrics.window_observed for c in shadow_choices]} cells")
+    except ColorGridError as exc:
+        check("raw live capture multi-window detection", False, str(exc))
+else:
+    print("skip  live_feed_no_grid.png: not present (captures/ is gitignored)")
+
+
+# --- 9. older training captures, when they are there ------------------------
 
 training = Path(__file__).resolve().parents[1] / "captures" / "grid_training"
 cases = (

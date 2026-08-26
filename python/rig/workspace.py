@@ -104,6 +104,8 @@ class WorkspaceMap:
                 workspace_height_cm=float(geometry["workspace_height_cm"]),
                 trim_x_cm=float(geometry.get("trim_x_cm", 0.0)),
                 trim_y_cm=float(geometry.get("trim_y_cm", 0.0)),
+                error_offset_x_cm=float(geometry.get("error_offset_x_cm", 0.0)),
+                error_offset_y_cm=float(geometry.get("error_offset_y_cm", 0.0)),
             )
 
     @classmethod
@@ -130,6 +132,8 @@ class WorkspaceMap:
             "gap_y_cm": grid.gap_y_cm,
             "trim_x_cm": grid.trim_x_cm,
             "trim_y_cm": grid.trim_y_cm,
+            "error_offset_x_cm": grid.error_offset_x_cm,
+            "error_offset_y_cm": grid.error_offset_y_cm,
         }
         return cls(grid.cols, grid.rows, [(x / w, y / h) for x, y in corners],
                    projection, geometry)
@@ -180,6 +184,8 @@ class WorkspaceMap:
             and float(geometry["gap_y_cm"]) == grid.gap_y_cm
             and float(geometry.get("trim_x_cm", 0.0)) == grid.trim_x_cm
             and float(geometry.get("trim_y_cm", 0.0)) == grid.trim_y_cm
+            and float(geometry.get("error_offset_x_cm", 0.0)) == grid.error_offset_x_cm
+            and float(geometry.get("error_offset_y_cm", 0.0)) == grid.error_offset_y_cm
         )
 
     def normalized_at(self, point, image_size):

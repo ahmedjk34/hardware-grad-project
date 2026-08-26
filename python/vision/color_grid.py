@@ -64,7 +64,7 @@ the 7.5 cm cell side — a genuinely rotated *machine*, not a rotated camera.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import math
 
 import cv2
@@ -93,6 +93,16 @@ MAGENTA_HUE = (130, 178)
 # 50 the studio captures allowed. Anything below it is paper, not ink.
 MIN_SATURATION = 32
 MIN_VALUE = 40
+
+# Shadow fallback in raw, normalized BGR chromaticity.  Multiplying a patch by
+# an illumination gain changes neither score, unlike an absolute Value cutoff.
+# The thresholds are conservative because this mask is ORed with HSV: it exists
+# to reconnect ink at a dark edge, while the lattice/shape gates reject rails
+# and other similarly coloured scene objects.
+GREEN_OPPONENT_MIN = 0.035
+MAGENTA_OPPONENT_MIN = 0.055
+GREEN_CHANNEL_SPREAD_MIN = 10
+MAGENTA_CHANNEL_SPREAD_MIN = 12
 
 # The bright quantile that :func:`white_balance` drives to neutral. High enough
 # to land on the sheet's white paper, low enough not to chase one specular
@@ -153,6 +163,15 @@ DEFAULT_PROCESS_WIDTH = 1024
 # decision belongs to PaperGridEvidence, which combines accepted frames and
 # applies coverage gates before a map can be written.
 MIN_EVIDENCE_FRAME_CELLS = 12
+
+# A complete 10x6 window may lose one or two cells to a lighting falloff at the
+# edge of the sheet without losing its geometry: the homography is supported by
+# the rest of the larger lattice.  This is deliberately much stricter than the
+# evidence mode.  Every row and column must still contain observations, and the
+# selected row span must touch the physical lattice edge nearest image
+# bottom-left (see ``_choose_windows``), so a clipped extra border cannot become
+# a second, vertically shifted calibration by accident.
+MIN_WINDOW_COVERAGE = 0.95
 
 # How far a blob's long/short ratio may sit from the printed 3.41 and still be
 # treated as a cell. Only used when sampling colour, where there is no lattice
@@ -281,6 +300,9 @@ class ColorGridMetrics:
     max_residual_px: float = 0.0
     parity_agreement: float = 0.0
     measured_aspect: float = 0.0
+    window_candidates: int = 1
+    window_index: int = 0
+    window_observed: int = 0
 
 
 # Where the machine's origin sits on the printed sheet. The sheet prints a real
@@ -459,7 +481,9 @@ class ColorGridCalibration:
     def describe(self) -> str:
         m = self.metrics
         return (f"{self.spec.cols}x{self.spec.rows} printed grid from "
-                f"{m.full_cells} full cells of {m.components} found, residual "
+                f"{m.window_observed or m.full_cells}/{self.spec.cols * self.spec.rows} "
+                f"window cells ({m.full_cells} lattice cells, {m.components} blobs), "
+                f"candidate {m.window_index + 1}/{m.window_candidates}, residual "
                 f"{m.residual_px:.2f} px (max {m.max_residual_px:.2f}), "
                 f"parity {m.parity_agreement * 100:.0f}%")
 
@@ -604,13 +628,29 @@ def color_masks(frame: np.ndarray, *, min_saturation: int = MIN_SATURATION,
     neutralises the camera's colour cast first — see :func:`white_balance` for
     why that is not optional in practice.
     """
-    if balance:
-        frame = white_balance(frame)
-    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    raw = frame
+    balanced = white_balance(frame) if balance else frame
+    hsv = cv2.cvtColor(balanced, cv2.COLOR_BGR2HSV)
     hue, sat, val = cv2.split(hsv)
     strong = (sat >= min_saturation) & (val >= min_value)
     green = (hue >= GREEN_HUE[0]) & (hue <= GREEN_HUE[1]) & strong
     magenta = (hue >= MAGENTA_HUE[0]) & (hue <= MAGENTA_HUE[1]) & strong
+
+    # A second, illumination-invariant vote.  Use the raw frame so a global
+    # white-patch estimate cannot amplify one shadow differently from another.
+    # Adding a small denominator pedestal suppresses quantisation noise in very
+    # dark near-black pixels.
+    b, g, r = np.moveaxis(raw.astype(np.float32), 2, 0)
+    total = b + g + r + 12.0
+    spread = np.maximum.reduce((b, g, r)) - np.minimum.reduce((b, g, r))
+    weak_chroma = sat >= max(8, min_saturation // 2)
+    green |= (((g - r) / total >= GREEN_OPPONENT_MIN)
+              & (spread >= GREEN_CHANNEL_SPREAD_MIN)
+              & weak_chroma & (hue >= GREEN_HUE[0] - 8)
+              & (hue <= GREEN_HUE[1] + 8))
+    magenta |= ((((r + b) * 0.5 - g) / total >= MAGENTA_OPPONENT_MIN)
+                & (spread >= MAGENTA_CHANNEL_SPREAD_MIN)
+                & weak_chroma & (hue >= MAGENTA_HUE[0] - 8))
     return green, magenta
 
 
@@ -957,38 +997,92 @@ def _largest_solid_block(full):
     return best
 
 
-def _choose_window(coords, found, need_i, need_j, image_size):
-    """Pick the need_i x need_j block of full cells nearest the image's bottom-left.
+def _choose_windows(coords, found, need_i, need_j, image_size, matrix):
+    """Return every strongly supported window on the bottom-left row span.
 
-    The sheet is bigger than the machine's grid, so a window has to be chosen.
-    Anchoring it at the bottom-left of the picture is what makes ``[0,0]`` land
-    where the operator expects without another setting to get wrong.
+    An oversized physical sheet can contain more than one overlapping 10x6
+    calibration grid.  The old detector silently chose the first *perfect*
+    window, which made a single underlit edge cell both hide the absolute-left
+    choice and move the calibration one column.  Here the larger fitted lattice
+    supplies the geometry and each window supplies independent coverage.
+
+    The long-axis span is still unambiguous: it must touch the lattice edge
+    whose projected corner is nearest image bottom-left.  Alternatives are
+    therefore horizontal/short-axis shifts only.  A window needs at least 95%
+    physical coverage, at most one missing observation per row and column, and
+    observations on every boundary.  Those constraints admit the raw rig
+    capture's 59/60 left window without admitting its clipped seventh row.
     """
     full = {coords[i]: i for i in coords if found[i]["full"]}
     if not full:
-        return None
+        return []
     width, height = image_size
     bottom_left = np.array([0.0, height], dtype=float)
+    i_values = [key[0] for key in full]
+    j_values = [key[1] for key in full]
 
-    best = None
-    for (i0, j0) in full:
-        block = [(i0 + di, j0 + dj) for di in range(need_i) for dj in range(need_j)]
-        if any(key not in full for key in block):
-            continue
-        # Score by the corner of the candidate window that is nearest the
-        # bottom-left of the frame; the winner is the window whose own corner
-        # sits closest to it.
-        corners = ((i0, j0), (i0 + need_i - 1, j0), (i0, j0 + need_j - 1),
-                   (i0 + need_i - 1, j0 + need_j - 1))
-        for corner in corners:
-            distance = float(np.linalg.norm(
-                np.asarray(found[full[corner]]["center"]) - bottom_left))
-            if best is None or distance < best[0]:
-                best = (distance, (i0, j0), corner)
-    if best is None:
+    # The nearest observed lattice point establishes only the long-axis edge.
+    # Its short-axis coordinate must remain free, otherwise an 11-column sheet
+    # could never expose both overlapping 10-column choices.
+    nearest_key = min(
+        full,
+        key=lambda key: float(np.linalg.norm(
+            np.asarray(found[full[key]]["center"]) - bottom_left)),
+    )
+    anchor_j = nearest_key[1]
+    minimum = math.ceil(MIN_WINDOW_COVERAGE * need_i * need_j - 1e-9)
+    choices = []
+    for i0 in range(min(i_values), max(i_values) - need_i + 2):
+        for j0 in range(min(j_values), max(j_values) - need_j + 2):
+            block = [(i0 + di, j0 + dj)
+                     for di in range(need_i) for dj in range(need_j)]
+            observed = sum(key in full for key in block)
+            if observed < minimum:
+                continue
+
+            # Missing cells may be isolated shadow failures, never an absent
+            # strip.  Requiring all rows/columns and nearly all of each makes a
+            # regular patch of scene clutter unable to borrow the lattice fit.
+            row_counts = [sum((i0 + di, j0 + dj) in full
+                              for di in range(need_i))
+                          for dj in range(need_j)]
+            col_counts = [sum((i0 + di, j0 + dj) in full
+                              for dj in range(need_j))
+                          for di in range(need_i)]
+            if (min(row_counts) < need_i - 1
+                    or min(col_counts) < need_j - 1):
+                continue
+
+            corners = ((i0, j0), (i0 + need_i - 1, j0),
+                       (i0, j0 + need_j - 1),
+                       (i0 + need_i - 1, j0 + need_j - 1))
+            # All corners are projectable even when the physical ink in one was
+            # underlit; the homography came from the larger accepted lattice.
+            projected = cv2.perspectiveTransform(
+                np.float32(corners).reshape(-1, 1, 2),
+                matrix,
+            ).reshape(-1, 2)
+            corner_index = int(np.argmin(np.linalg.norm(projected - bottom_left,
+                                                         axis=1)))
+            corner = corners[corner_index]
+            if corner[1] != anchor_j:
+                continue
+            distance = float(np.linalg.norm(projected[corner_index] - bottom_left))
+            choices.append((distance, -observed, (i0, j0), corner, observed))
+
+    choices.sort(key=lambda item: (item[0], item[1], item[2]))
+    return [(origin, corner, observed)
+            for _distance, _negative_observed, origin, corner, observed in choices]
+
+
+def _choose_window(coords, found, need_i, need_j, image_size):
+    """Compatibility helper returning the first candidate, when one exists."""
+    matrix, _mean, _maximum = _fit(
+        coords, found, lambda index: found[index]["full"])
+    if matrix is None:
         return None
-    _, origin, corner = best
-    return origin, corner
+    choices = _choose_windows(coords, found, need_i, need_j, image_size, matrix)
+    return choices[0][:2] if choices else None
 
 
 def _choose_evidence_window(coords, found, need_i, need_j, image_size, matrix):
@@ -1061,20 +1155,21 @@ def _window_transform(origin, corner, need_i, need_j, spec):
     ], dtype=np.float64)
 
 
-def detect_color_grid(frame: np.ndarray, spec: ColorGridSpec | None = None, *,
-                      process_width: int = DEFAULT_PROCESS_WIDTH,
-                      min_area: int = MIN_COMPONENT_AREA,
-                      min_saturation: int = MIN_SATURATION,
-                      min_value: int = MIN_VALUE,
-                      balance: bool = True,
-                      evidence: bool = False) -> ColorGridCalibration:
-    """Find the printed sheet in ``frame`` and fit a grid to it.
+def detect_color_grids(frame: np.ndarray, spec: ColorGridSpec | None = None, *,
+                       process_width: int = DEFAULT_PROCESS_WIDTH,
+                       min_area: int = MIN_COMPONENT_AREA,
+                       min_saturation: int = MIN_SATURATION,
+                       min_value: int = MIN_VALUE,
+                       balance: bool = True,
+                       evidence: bool = False) -> tuple[ColorGridCalibration, ...]:
+    """Find every strongly supported grid window in ``frame``.
 
     Raises :class:`ColorGridError` with a sentence an operator can act on when
     the sheet is missing, cropped, or too small to hold the whole grid. It never
     returns a partial or approximate result: a wrong calibration written to disk
-    is worse than no calibration, and the callers all have an existing map to
-    fall back on.
+    is worse than no calibration.  Multiple overlapping windows are ordered by
+    proximity to image bottom-left, so index zero is the absolute-left choice in
+    the normal rig view and later indices are the shifted alternatives.
     """
     spec = spec or ColorGridSpec()
     if frame is None or frame.ndim != 3 or frame.shape[2] != 3:
@@ -1185,11 +1280,20 @@ def detect_color_grid(frame: np.ndarray, spec: ColorGridSpec | None = None, *,
 
     need_i, need_j = ((spec.cols, spec.rows) if spec.short_is_x
                       else (spec.rows, spec.cols))
-    window = _choose_window(coords, found, need_i, need_j, work_size)
-    if window is None and evidence:
-        window = _choose_evidence_window(coords, found, need_i, need_j,
-                                         work_size, matrix)
-    if window is None:
+    windows = _choose_windows(coords, found, need_i, need_j, work_size, matrix)
+    if not windows and evidence:
+        evidence_window = _choose_evidence_window(
+            coords, found, need_i, need_j, work_size, matrix)
+        if evidence_window is not None:
+            origin, corner = evidence_window
+            observed = sum(
+                found[index]["full"]
+                for index, (i, j) in coords.items()
+                if origin[0] <= i < origin[0] + need_i
+                and origin[1] <= j < origin[1] + need_j
+            )
+            windows = [(origin, corner, observed)]
+    if not windows:
         # Say which of the two failures this is. "Not enough cells in view" and
         # "enough cells but something punched holes in them" need opposite
         # responses from the operator, and the counts alone do not distinguish
@@ -1213,29 +1317,66 @@ def detect_color_grid(frame: np.ndarray, spec: ColorGridSpec | None = None, *,
         raise ColorGridError(
             message, stage="window", candidates=boxes(),
             lattice=boxes(i for i in coords if found[i]["full"]))
-    origin, corner = window
-    transform = _window_transform(origin, corner, need_i, need_j, spec)
-
     unscale = np.diag([1 / scale, 1 / scale, 1.0])
-    cell_matrix = unscale @ matrix @ transform
-    inverse_transform = np.linalg.inv(transform)
+    calibrations = []
+    for window_index, (origin, corner, observed) in enumerate(windows):
+        transform = _window_transform(origin, corner, need_i, need_j, spec)
+        cell_matrix = unscale @ matrix @ transform
+        inverse_transform = np.linalg.inv(transform)
 
-    cells = []
-    for index, (i, j) in coords.items():
-        rect = found[index]
-        grid_ij = inverse_transform @ np.array([i, j, 1.0])
-        col, row = int(round(grid_ij[0])), int(round(grid_ij[1]))
-        inside = 0 <= col < spec.cols and 0 <= row < spec.rows
-        cells.append(PrintedCell(
-            lattice=(i, j),
-            center=tuple(np.asarray(rect["center"]) / scale),
-            quad=np.asarray(rect["box"], dtype=np.float32) / scale,
-            color=rect["color"],
-            area=rect["area"] / (scale * scale),
-            fill=rect.get("fill", 0.0),
-            full=bool(rect.get("full", False)),
-            cell=(col, row) if inside and rect.get("full") else None,
+        cells = []
+        for index, (i, j) in coords.items():
+            rect = found[index]
+            grid_ij = inverse_transform @ np.array([i, j, 1.0])
+            col, row = int(round(grid_ij[0])), int(round(grid_ij[1]))
+            inside = 0 <= col < spec.cols and 0 <= row < spec.rows
+            cells.append(PrintedCell(
+                lattice=(i, j),
+                center=tuple(np.asarray(rect["center"]) / scale),
+                quad=np.asarray(rect["box"], dtype=np.float32) / scale,
+                color=rect["color"],
+                area=rect["area"] / (scale * scale),
+                fill=rect.get("fill", 0.0),
+                full=bool(rect.get("full", False)),
+                cell=(col, row) if inside and rect.get("full") else None,
+            ))
+        cells.sort(key=lambda c: (c.cell is None, c.cell or (0, 0)))
+        candidate_metrics = replace(
+            metrics,
+            window_candidates=len(windows),
+            window_index=window_index,
+            window_observed=observed,
+        )
+        calibrations.append(ColorGridCalibration(
+            spec=spec, homography=cell_matrix, cells=cells,
+            metrics=candidate_metrics,
         ))
-    cells.sort(key=lambda c: (c.cell is None, c.cell or (0, 0)))
-    return ColorGridCalibration(spec=spec, homography=cell_matrix, cells=cells,
-                                metrics=metrics)
+    return tuple(calibrations)
+
+
+def detect_color_grid(frame: np.ndarray, spec: ColorGridSpec | None = None, *,
+                      process_width: int = DEFAULT_PROCESS_WIDTH,
+                      min_area: int = MIN_COMPONENT_AREA,
+                      min_saturation: int = MIN_SATURATION,
+                      min_value: int = MIN_VALUE,
+                      balance: bool = True,
+                      evidence: bool = False,
+                      window_index: int = 0) -> ColorGridCalibration:
+    """Find one printed-grid window, selected from all valid candidates.
+
+    ``window_index=0`` preserves the historical image-bottom-left default.
+    Interactive callers should expose the other indices rather than silently
+    committing the first one.
+    """
+    calibrations = detect_color_grids(
+        frame, spec, process_width=process_width, min_area=min_area,
+        min_saturation=min_saturation, min_value=min_value, balance=balance,
+        evidence=evidence,
+    )
+    if not 0 <= window_index < len(calibrations):
+        raise ColorGridError(
+            f"grid window {window_index + 1} was requested but only "
+            f"{len(calibrations)} candidate(s) were detected",
+            stage="selection",
+        )
+    return calibrations[window_index]

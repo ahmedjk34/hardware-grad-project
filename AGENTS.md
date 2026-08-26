@@ -73,6 +73,7 @@ Including coordinate zero, commands address col `0..9` and row `0..5`: a
 | one block footprint | `rig.json` → `grid.block_width_cm` / `block_length_cm` | `GRID_BLOCK_X_CM` / `GRID_BLOCK_Y_CM` |
 | gap before each positive cell | `rig.json` → `grid.gap_x_cm` / `gap_y_cm` | `GRID_GAP_X_CM` / `GRID_GAP_Y_CM` |
 | signed complete-grid shift | `rig.json` → `grid.trim_x_cm` / `trim_y_cm` | `GRID_TRIM_X_CM` / `GRID_TRIM_Y_CM` |
+| signed error correction shift | `rig.json` → `grid.error_offset_x_cm` / `error_offset_y_cm` | `GRID_ERROR_OFFSET_X_CM` / `GRID_ERROR_OFFSET_Y_CM` |
 
 `rig.json` → `observed_build_area` is a measurement record only. It has no
 firmware partner and never replaces the holder travel cap in `workspace`.
@@ -126,6 +127,9 @@ partners in the same commit. Positive trim moves the entire grid away from its
 home/feeder reference; negative trim moves it toward that reference. The
 shipped trims are X `+1.1 cm` and Y `+3.75 cm`, the measured
 feeder-centre-to-build-grid shifts; they are not holder-to-tool offsets.
+For any user-marked **error offsetting**, use `error_offset_x_cm` and
+`error_offset_y_cm` (and the paired firmware variables) as an additional
+signed shift exactly like the grid trim. Both start at zero.
 
 ### 3b. Grid NUMBERING — the convention, not the count
 

@@ -73,6 +73,10 @@ class MachineGrid:
     workspace_height_cm: float | None = None
     trim_x_cm: float = 0.0
     trim_y_cm: float = 0.0
+    # AI AGENT NOTE: For any user-marked "error" offsetting, use these fields.
+    # They apply exactly like trim_x_cm/trim_y_cm and shift every grid centre.
+    error_offset_x_cm: float = 0.0
+    error_offset_y_cm: float = 0.0
 
     @classmethod
     def from_config(cls, cfg: dict | None = None, **kwargs) -> "MachineGrid":
@@ -96,6 +100,8 @@ class MachineGrid:
             workspace_height_cm=float(workspace["height_cm"]),
             trim_x_cm=float(grid.get("trim_x_cm", 0.0)),
             trim_y_cm=float(grid.get("trim_y_cm", 0.0)),
+            error_offset_x_cm=float(grid.get("error_offset_x_cm", 0.0)),
+            error_offset_y_cm=float(grid.get("error_offset_y_cm", 0.0)),
             **kwargs,
         )
 
@@ -119,8 +125,10 @@ class MachineGrid:
             if not all(math.isfinite(value) and value >= 0
                        for value in (self.gap_x_cm, self.gap_y_cm)):
                 raise ValueError("grid gaps must be finite and non-negative")
-            if not math.isfinite(self.trim_x_cm) or not math.isfinite(self.trim_y_cm):
-                raise ValueError("grid trims must be finite")
+            if not all(math.isfinite(value) for value in (
+                    self.trim_x_cm, self.trim_y_cm,
+                    self.error_offset_x_cm, self.error_offset_y_cm)):
+                raise ValueError("grid trims and error offsets must be finite")
             if self.x_first_center_cm < 0 or self.y_first_center_cm < 0 \
                     or self.x_last_center_cm > self.workspace_width_cm \
                     or self.y_last_center_cm > self.workspace_height_cm:
@@ -166,11 +174,13 @@ class MachineGrid:
 
     @property
     def x_allocation_start_cm(self) -> float:
-        return (self.workspace_width_cm - self.allocation_width_cm) / 2 + self.trim_x_cm
+        return ((self.workspace_width_cm - self.allocation_width_cm) / 2
+                + self.trim_x_cm + self.error_offset_x_cm)
 
     @property
     def y_allocation_start_cm(self) -> float:
-        return (self.workspace_height_cm - self.allocation_height_cm) / 2 + self.trim_y_cm
+        return ((self.workspace_height_cm - self.allocation_height_cm) / 2
+                + self.trim_y_cm + self.error_offset_y_cm)
 
     @property
     def x_start_cm(self) -> float:
@@ -303,6 +313,8 @@ class MachineGrid:
             and self.workspace_height_cm == other.workspace_height_cm
             and self.trim_x_cm == other.trim_x_cm
             and self.trim_y_cm == other.trim_y_cm
+            and self.error_offset_x_cm == other.error_offset_x_cm
+            and self.error_offset_y_cm == other.error_offset_y_cm
         )
 
     def describe(self) -> str:

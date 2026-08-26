@@ -176,6 +176,8 @@ paired_values = {
     "GRID_GAP_Y_CM": from_cfg.gap_y_cm,
     "GRID_TRIM_X_CM": from_cfg.trim_x_cm,
     "GRID_TRIM_Y_CM": from_cfg.trim_y_cm,
+    "GRID_ERROR_OFFSET_X_CM": from_cfg.error_offset_x_cm,
+    "GRID_ERROR_OFFSET_Y_CM": from_cfg.error_offset_y_cm,
 }
 tool_offsets = config["tool_offsets"]
 paired_values.update({

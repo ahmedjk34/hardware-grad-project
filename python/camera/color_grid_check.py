@@ -27,6 +27,7 @@ Keys
   t       cycle the cell tint: 35% -> 60% -> off
   w       toggle the holder-envelope corners a calibration would save
   h       switch the home convention: firmware <-> printed
+  , / .   select the previous / next detected grid window
   s       save the annotated frame next to the captures
   q/Esc   quit
 """
@@ -65,11 +66,12 @@ from vision.color_grid import (  # noqa: E402
     HOME_CONVENTIONS,
     ColorGridError,
     ColorGridSpec,
-    detect_color_grid,
+    detect_color_grids,
 )
 from vision.color_grid_overlay import (  # noqa: E402
     draw_candidates,
     draw_color_grid,
+    draw_grid_alternatives,
     draw_workspace_corners,
     status_text,
 )
@@ -96,6 +98,8 @@ def parse_args():
                         default=DEFAULT_HOME_CONVENTION,
                         help="where the machine origin sits on the sheet "
                              f"(default: {DEFAULT_HOME_CONVENTION})")
+    parser.add_argument("--grid-window", type=int, default=1, metavar="N",
+                        help="initial detected grid window, 1-based (default: 1)")
     parser.add_argument("--process-width", type=int, default=0,
                         help="detection working width; 0 uses the full frame "
                              "(default: 0 for stills, 1024 for the camera)")
@@ -131,6 +135,8 @@ def report(calibration, grid, convention):
 def annotate(frame, calibration, grid, ui, hover=None):
     """Draw the whole overlay onto a copy of ``frame`` and return it."""
     display = frame.copy()
+    draw_grid_alternatives(display, ui.get("calibrations", ()),
+                           ui.get("selection", 0))
     hovered = draw_color_grid(display, calibration, hover=hover,
                               labels=ui["labels"], shade=TINTS[ui["tint"]],
                               show_rejected=ui["rejected"])
@@ -150,9 +156,17 @@ def run_still(args, spec, grid):
         return 1
     print(f"{args.image.name}: {frame.shape[1]}x{frame.shape[0]}")
     ui = {"labels": True, "rejected": True, "tint": 0, "envelope": True,
-          "convention": args.home_convention}
+          "convention": args.home_convention, "selection": args.grid_window - 1}
     try:
-        calibration = detect_color_grid(frame, spec, process_width=args.process_width)
+        calibrations = detect_color_grids(
+            frame, spec, process_width=args.process_width)
+        if ui["selection"] >= len(calibrations):
+            raise ColorGridError(
+                f"grid window {args.grid_window} requested, but only "
+                f"{len(calibrations)} candidate(s) were detected",
+                stage="selection")
+        ui["calibrations"] = calibrations
+        calibration = calibrations[ui["selection"]]
     except ColorGridError as exc:
         # Still render. A refusal with the blobs drawn says which of "no sheet",
         # "wrong colours" and "not enough whole cells" happened; a bare error
@@ -224,7 +238,8 @@ def run_camera(args, spec, grid):
     print(f"Sheet:  {spec.describe()}")
 
     ui = {"labels": True, "rejected": True, "tint": 0, "envelope": True,
-          "convention": args.home_convention, "hover": None, "message": "looking"}
+          "convention": args.home_convention, "hover": None, "message": "looking",
+          "selection": args.grid_window - 1, "calibrations": ()}
 
     def on_mouse(event, point):
         if event == "move" and point is not None:
@@ -237,6 +252,7 @@ def run_camera(args, spec, grid):
             buttons=(("Labels (l)", "l"), ("Rejected (r)", "r"),
                      ("Tint (t)", "t"), ("Envelope (w)", "w"),
                      ("Home mode (h)", "h"), ("Save (s)", "s"),
+                     ("Grid choice < (,)", ","), ("Grid choice > (.)", "."),
                      ("Quit (q)", "q")),
         )
     except (tk.TclError, cv2.error) as exc:
@@ -268,7 +284,7 @@ def run_camera(args, spec, grid):
             f"{TINTS[ui['tint']]:.0%} | labels {'on' if ui['labels'] else 'off'}",
             f"Hover: {f'[{hovered[0]},{hovered[1]}]' if hovered else 'none'} | "
             f"{ui['message']}",
-            "l labels | r rejected | t tint | w envelope | h home mode | s save | q quit",
+            "l labels | r rejected | t tint | w envelope | h home | ,/. grid | s save | q quit",
         ]
 
     def handle_key(key):
@@ -286,6 +302,14 @@ def run_camera(args, spec, grid):
             index = HOME_CONVENTIONS.index(ui["convention"])
             ui["convention"] = HOME_CONVENTIONS[(index + 1) % len(HOME_CONVENTIONS)]
             ui["message"] = f"home convention: {ui['convention']}"
+        elif key in (ord(","), ord(".")):
+            if not ui["calibrations"]:
+                ui["message"] = "no grid candidate is available"
+            else:
+                delta = -1 if key == ord(",") else 1
+                ui["selection"] = (ui["selection"] + delta) % len(ui["calibrations"])
+                ui["message"] = (f"selected grid {ui['selection'] + 1}/"
+                                 f"{len(ui['calibrations'])}")
         elif key == ord("s"):
             if last_display is None:
                 ui["message"] = "no frame to save"
@@ -325,9 +349,16 @@ def run_camera(args, spec, grid):
             if now - last_detect >= interval:
                 last_detect = now
                 try:
-                    calibration = detect_color_grid(view, spec,
-                                                    process_width=process_width)
-                    error, failure = None, None
+                    calibrations = detect_color_grids(
+                        view, spec, process_width=process_width)
+                    ui["calibrations"] = calibrations
+                    if ui["selection"] < len(calibrations):
+                        calibration = calibrations[ui["selection"]]
+                        error, failure = None, None
+                    else:
+                        calibration, failure = None, None
+                        error = (f"selected grid {ui['selection'] + 1} temporarily "
+                                 f"unavailable; {len(calibrations)} detected")
                 except ColorGridError as exc:
                     calibration, failure = None, exc
                     error = str(exc)
@@ -358,7 +389,8 @@ def main():
     if args.save and not args.image:
         print("--save only applies with --image", file=sys.stderr)
         return 1
-    if args.display_scale <= 0 or args.opencv_threads <= 0 or args.detect_hz <= 0:
+    if (args.display_scale <= 0 or args.opencv_threads <= 0
+            or args.detect_hz <= 0 or args.grid_window <= 0):
         print("display-scale, opencv-threads and detect-hz must be positive",
               file=sys.stderr)
         return 1

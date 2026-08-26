@@ -72,8 +72,13 @@ the problem.
    repeated on the survivors. Both an upper and lower fill bound reject clipped
    and merged cells. Colour parity, measured aspect, mean residual and maximum
    residual are hard acceptance gates rather than status-only measurements.
-5. **A 10 × 6 window of whole cells is chosen**, anchored at the corner nearest
-   the bottom-left of the image. That corner becomes `[0,0]`.
+5. **Every strongly supported 10 × 6 window is retained.** The long-axis span
+   is anchored at the lattice edge nearest the bottom-left of the image, while
+   an oversized short axis may produce overlapping horizontal choices. A
+   window needs at least 95% physical coverage and every row/column must remain
+   supported, so one underlit edge cell does not move the calibration but a
+   clipped strip still cannot pass. The operator selects among candidates with
+   `,` / `.` before `k` saves the map; candidate 1 is the absolute-left window.
 
 ### Which axis is X
 

@@ -537,6 +537,12 @@ float GRID_GAP_Y_CM = 0.5;
 float GRID_TRIM_X_CM = 1.1; // feeder centre -> build-grid shift along X
 float GRID_TRIM_Y_CM = 3.75; // feeder centre -> build-grid shift along Y
 
+// AI AGENT NOTE: For any user-marked "error" offsetting, use these variables.
+// They apply exactly like GRID_TRIM_* and shift every grid centre from home.
+// Keep these paired with config/rig.json and start new error calibration at 0.
+float GRID_ERROR_OFFSET_X_CM = 0.0;
+float GRID_ERROR_OFFSET_Y_CM = 0.0;
+
 long GRID_COLS = 9;
 long GRID_ROWS = 5;
 
@@ -1997,7 +2003,8 @@ float gridPitchCmOf(uint8_t axis)
 
 float gridTrimCmOf(uint8_t axis)
 {
-  return (axis == AXIS_X) ? GRID_TRIM_X_CM : GRID_TRIM_Y_CM;
+  return (axis == AXIS_X) ? GRID_TRIM_X_CM + GRID_ERROR_OFFSET_X_CM
+                          : GRID_TRIM_Y_CM + GRID_ERROR_OFFSET_Y_CM;
 }
 
 float xyStepsPerCmOf(uint8_t axis)
