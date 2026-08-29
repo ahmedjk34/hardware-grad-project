@@ -22,7 +22,9 @@ The firmware also keeps its own copy of the machine numbers (step envelope, Z
 levels, pin assignments) and stays the authority on them. The grid count is
 Python-side intent and is pushed with 'S <cols> <rows>' on every connection.
 The `workspace` X/Y holder displacement, block footprint, 0.5 cm gaps and
-signed trims are also consumed by the Pi's camera mapping. `tool_offsets` are the calibrated vector from the
+signed trims are also consumed by the Pi's camera mapping. Python serial
+clients prefer `/dev/ttyACM0` and fall back to `/dev/ttyACM1` if needed.
+`tool_offsets` are the calibrated vector from the
 gantry holder reference to the actual block-placement point. They are consumed
 by the firmware only, but retained here as the editable counterpart to its
 compiled constants. Their compiled firmware partners are listed in AGENTS.md

@@ -25,6 +25,10 @@ file is the list of them.
 A mismatch does not error. You get garbage bytes or silence, which reads like a
 dead cable. Change all three together.
 
+Python serial clients try `/dev/ttyACM0` first and automatically fall back to
+`/dev/ttyACM1` when the preferred ACM port cannot be opened. The configured
+port remains the preferred port and the upload script still uses it directly.
+
 ### 2. Serial port and board — single source, keep it that way
 
 | Where | What |
