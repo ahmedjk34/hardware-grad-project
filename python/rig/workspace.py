@@ -357,25 +357,20 @@ class WorkspaceMap:
     def axis_lane_polygon(self, axis, index, image_size):
         """Image polygon for the axis-only lane cell ``[index,0]`` or ``[0,index]``.
 
-        The zero axis is the actual holder-home coordinate. Consequently half
-        of the block footprint may project outside the measured motion quad;
-        it is not replaced with a fabricated full-pitch lane inside the grid.
+        Coordinate zero is a holder-home *axis*, not a second physical block.
+        It is drawn as a gap-wide strip immediately outside the holder envelope.
+        A full block centred on home overlaps horizontal cell [1,*], whose near
+        edge is only 0.65 cm from home.
         """
         if self._grid is None:
             raise ValueError("axis lanes need a physically scaled grid")
         g = self._grid
         if axis == "col":
-            x_center, _ = g.cell_center_cm(index, 1)
-            x0_cm = x_center - g.block_x_cm / 2
-            x1_cm = x_center + g.block_x_cm / 2
-            y0_cm = -g.block_y_cm / 2
-            y1_cm = g.block_y_cm / 2
+            x0_cm, _y0, x1_cm, _y1 = g.cell_bounds_cm(index, 1)
+            y0_cm, y1_cm = -g.gap_y_cm, 0.0
         elif axis == "row":
-            _, y_center = g.cell_center_cm(1, index)
-            y0_cm = y_center - g.block_y_cm / 2
-            y1_cm = y_center + g.block_y_cm / 2
-            x0_cm = -g.block_x_cm / 2
-            x1_cm = g.block_x_cm / 2
+            _x0, y0_cm, _x1, y1_cm = g.cell_bounds_cm(1, index)
+            x0_cm, x1_cm = -g.gap_x_cm, 0.0
         else:
             raise ValueError("axis must be 'col' or 'row'")
         corners_cm = ((x0_cm, y0_cm), (x1_cm, y0_cm), (x1_cm, y1_cm), (x0_cm, y1_cm))
@@ -383,12 +378,12 @@ class WorkspaceMap:
                               image_size) for x, y in corners_cm]
 
     def origin_polygon(self, image_size):
-        """Block-sized visualization centred on the real ``[0,0]`` home."""
+        """Gap-sized home marker immediately outside real ``[0,0]``."""
         if self._grid is None:
             raise ValueError("the origin cell needs a physically scaled grid")
         g = self._grid
-        x0_cm, x1_cm = -g.block_x_cm / 2, g.block_x_cm / 2
-        y0_cm, y1_cm = -g.block_y_cm / 2, g.block_y_cm / 2
+        x0_cm, x1_cm = -g.gap_x_cm, 0.0
+        y0_cm, y1_cm = -g.gap_y_cm, 0.0
         corners_cm = ((x0_cm, y0_cm), (x1_cm, y0_cm), (x1_cm, y1_cm), (x0_cm, y1_cm))
         return [self.pixel_at(x / g.workspace_width_cm, y / g.workspace_height_cm,
                               image_size) for x, y in corners_cm]
@@ -396,8 +391,8 @@ class WorkspaceMap:
     def target_polygon(self, col, row, image_size):
         """Image polygon for any valid B/G target - 0 on either axis included.
 
-        Always one block-sized visualization: a positive ``[col,row]`` block,
-        a footprint centred on ``[0,0]`` home, or an axis-only target.
+        Positive cells draw their real block footprint. Zero-axis targets draw
+        non-overlapping home-axis strips.
         """
         if col > 0 and row > 0:
             return self.cell_polygon(col, row, image_size)
@@ -422,10 +417,8 @@ class WorkspaceMap:
         x_cm = u * g.workspace_width_cm
         y_cm = v * g.workspace_height_cm
         epsilon = 1e-9
-        row0_lane_y0 = -g.block_y_cm / 2
-        row0_lane_y1 = g.block_y_cm / 2
-        col0_lane_x0 = -g.block_x_cm / 2
-        col0_lane_x1 = g.block_x_cm / 2
+        row0_lane_y0, row0_lane_y1 = -g.gap_y_cm, 0.0
+        col0_lane_x0, col0_lane_x1 = -g.gap_x_cm, 0.0
         in_row0_lane_y = row0_lane_y0 - epsilon <= y_cm <= row0_lane_y1 + epsilon
         in_col0_lane_x = col0_lane_x0 - epsilon <= x_cm <= col0_lane_x1 + epsilon
         if in_col0_lane_x and in_row0_lane_y:

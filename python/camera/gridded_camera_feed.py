@@ -458,9 +458,8 @@ def _grid_geometry(workspace, image_size):
                 x, y = _pixel(_point(workspace, g, x_cm, y_cm, image_size))
                 _add_label(labels, f"{col},{row}", x, y)
 
-    # Axis-only targets are centred on the real zero axes. Their polygons may
-    # extend outside the holder-motion envelope rather than being shifted into
-    # a fabricated extra pitch.
+    # Axis-only targets live on real zero axes. They are gap-wide strips outside
+    # the holder envelope, not fake full blocks that overlap horizontal [1,*].
     extra_polygons = []
     for axis, count, label_fmt in (("col", g.cols, "{},0"),
                                    ("row", g.rows, "0,{}")):

@@ -596,8 +596,8 @@ float GRID_GAP_X_CM[GRID_MODE_COUNT] = {0.5, 0.5};
 float GRID_GAP_Y_CM[GRID_MODE_COUNT] = {0.5, 0.5};
 
 // Signed whole-allocation shift, per mode. Not copied between modes - see above.
-float GRID_TRIM_X_CM[GRID_MODE_COUNT] = {1.1, 0.0};
-float GRID_TRIM_Y_CM[GRID_MODE_COUNT] = {3.75, -0.25};
+float GRID_TRIM_X_CM[GRID_MODE_COUNT] = {1.1, 3.75};
+float GRID_TRIM_Y_CM[GRID_MODE_COUNT] = {3.75, 0.85};
 
 // AI AGENT NOTE: For any user-marked "error" offsetting, use these variables.
 // They apply exactly like GRID_TRIM_* and shift every grid centre from home.
