@@ -652,10 +652,11 @@ class Rig:
         out = self._send_and_settle(
             f"S {cols} {rows}",
             timeout=10.0,
-            done=("GRID RESIZED", "ERROR - grid must be"),
+            done=("GRID RESIZED", "ERROR - grid must be", "ERROR - claw"),
             quiet=3.0,
         )
-        if any("ERROR - grid must be" in line for line in out):
+        if any("ERROR - grid must be" in line or "ERROR - claw" in line
+               for line in out):
             raise RigError(
                 f"the rig refused the grid {cols}x{rows} from config/rig.json:\n  "
                 + "\n  ".join(line for line in out if "ERROR" in line or "cols" in line)
@@ -693,7 +694,7 @@ class Rig:
             command,
             timeout=timeout,
             done=("GRID MODE:", "ERROR - already in", "ERROR - home X/Y first",
-                  "ERROR - the", "ERROR - use:"),
+                  "ERROR - claw", "ERROR - the", "ERROR - use:"),
             quiet=3.0,
         )
         latched = any("GRID MODE:" in line for line in out)

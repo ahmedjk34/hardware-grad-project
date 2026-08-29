@@ -2556,6 +2556,13 @@ void setGridSize(long cols, long rows)
 {
   Serial.println();
 
+  if (!clawRotationKnown)
+  {
+    Serial.println(F("  ERROR - claw is at an arbitrary manual A angle."));
+    Serial.println(F("  S needs a calibrated 0/+90/-90 angle; run B first."));
+    return;
+  }
+
   if (cols < 1 || rows < 1 ||
       cols > gridCountMaxOf(AXIS_X) || rows > gridCountMaxOf(AXIS_Y) ||
       !gridGeometryFits(AXIS_X, cols) || !gridGeometryFits(AXIS_Y, rows))
@@ -4324,6 +4331,15 @@ void printGrid()
 
   printGridConfig();
   printGridPosition();
+
+  if (!clawRotationKnown)
+  {
+    Serial.println();
+    Serial.println(F("Map not drawn - claw is at an arbitrary manual A angle."));
+    Serial.println(F("Run B to return it to neutral before interpreting cells."));
+    Serial.println(F("======================================"));
+    return;
+  }
 
   long liveCol = positionToIndex(AXIS_X, axisPos[AXIS_X], clawRotation);
   long liveRow = positionToIndex(AXIS_Y, axisPos[AXIS_Y], clawRotation);

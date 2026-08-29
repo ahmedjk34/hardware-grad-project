@@ -121,6 +121,12 @@ MODE_UNHOMED = [
     "  current cell has to mean something before it is re-read.",
 ]
 
+MODE_MANUAL_ANGLE = [
+    "",
+    "  ERROR - claw is at an arbitrary manual A angle.",
+    "  Latching a grid needs a calibrated 0/+90/-90 angle; run B first.",
+]
+
 GRID_RESIZED = [
     "",
     "GRID RESIZED",
@@ -521,6 +527,15 @@ except link.RigError as exc:
     check("an un-homed latch refusal raises", "home X/Y first" in str(exc))
 check("the refused latch left the grid alone",
       rig.grid.mode == "vertical" and (rig.cols, rig.rows) == (9, 5))
+rig.close()
+
+rig, fake = fake_rig(replies={**DEFAULT_REPLIES, "RR": MODE_MANUAL_ANGLE})
+try:
+    rig.set_mode("horizontal")
+    check("a manual aux angle refuses the latch", False)
+except link.RigError as exc:
+    check("a manual aux angle refuses the latch", "arbitrary manual A angle" in str(exc))
+check("manual-angle latch refusal leaves Python vertical", rig.grid.mode == "vertical")
 rig.close()
 
 # ------------------------------------------------------------------

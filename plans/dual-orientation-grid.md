@@ -38,12 +38,13 @@ quietly working around it.
 | D12 | Each mode declares `block_x_cm` and `block_y_cm` outright. There is no shared `block_width`/`block_length` that gets swapped. | A swap has to be performed identically in the firmware, in `MachineGrid`, and in the camera overlay. Three chances to get a sign or an axis backwards. Declaring both per mode removes the operation entirely. |
 | D13 | Trims, error offsets and gaps are **per mode per axis**. | X and Y were already separate. Mode is the missing dimension. |
 | D14 | Horizontal seeds at `trim_x = 0.0`, `trim_y = -0.25`. **Do not copy vertical's trims.** | Copying produces an out-of-bounds grid that the current validator accepts — see R2 in §6. |
-| D15 | `tool_offsets` stays **separate** from trims and keeps its `neutral`/`cw`/`ccw` shape. `cw` becomes unreachable but stays in the schema. | Trim moves cell *centres* (grid layout). Tool offset moves the *holder* for a given centre (claw asymmetry). Conflating them makes calibration unfalsifiable — two knobs that both look like "shift everything". |
+| D15 | `tool_offsets` stays **separate** from trims and keeps its `neutral`/`cw`/`ccw` shape. `cw` has no grid/build route but stays in the schema. | Trim moves cell *centres* (grid layout). Tool offset moves the *holder* for a given centre (claw asymmetry). Conflating them makes calibration unfalsifiable — two knobs that both look like "shift everything". |
 | D16 | `S <cols> <rows>` survives, **scoped to the active mode** and revalidated against that mode's geometry. | Keeps the bring-up path and the reconnect handshake. |
 | D17 | One `config/workspace_map.json`, with both calibrations under keyed modes. Old flat files migrate into `modes.vertical` on read. | Keeps the two calibrations visibly in sync in one artifact. |
 | D18 | The detector takes mode as an **explicit input**, and uses cell counts as a **cross-check that refuses a mismatch**. | A partially visible sheet cannot be counted reliably, so inference is unsafe. But 10 short / 6 long vs 16 short / 4 long is unmistakable when fully visible, so it makes a free guard against calibrating with the wrong sheet. |
 | D19 | All existing detector robustness is retained for horizontal: multi-grid detection with operator selection, partial-cell rejection, evidence pooling across frames. | Non-negotiable. Horizontal is not a degraded mode. |
 | D20 | `gridGeometryFits` gains a **block-edge** check alongside its centre check, measured against a **per-mode overhang budget** that each mode declares. | See R2, and the amendment below. |
+| D21 | `A <degrees>` is a signed, relative manual aux-stepper jog (`-360..360`, positive CW). It is never a grid mode or a build rotation choice. | The aux motor has neither a home switch nor an absolute angle sensor. An arbitrary manual angle has no calibrated tool offset, so `G`, `S` and `R`/`RR` refuse it; a build returns it to neutral at its feeder-safe step 3. |
 
 > **D20 was amended during implementation (§8 rule 5).** As first written, D20
 > said only "add a block-edge check". No such check can be written: the rule
@@ -373,7 +374,8 @@ drift here is not cosmetic — it is how the two machines stop agreeing.
    - §3 — the "Current default: 9 × 5" statement and the `S`-on-connect account
    - §3a — the whole geometry table, plus the worked pitch/footprint block
    - §3b — numbering holds for both modes, but the map dimensions differ
-   - §3c — `cw` is now unreachable; say so and say why it is retained
+   - §3c — `cw` has no grid/build route; say why it is retained and how the
+     explicit manual `A 90` bench state is guarded
    - §3d — the sheet section needs the second sheet and the new layout rule
 3. **Update the `plans/README.md` row** for this plan as its state changes
    (`draft` → `active` → `built`).

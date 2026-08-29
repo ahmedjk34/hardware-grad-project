@@ -243,16 +243,16 @@ the requested cell. `neutral` is the vertical grid's placement orientation and `
 horizontal grid's; a `G` command uses the claw's current orientation, a `B`
 command uses the active grid's.
 
-**`cw` is unreachable and is kept anyway.** Nothing can now ask for a clockwise
-placement: `B` has no rotation word, and the mode latch derives the placement
-rotation from the grid — vertical → none, horizontal → 90° CCW. There is no
-clockwise grid because a clockwise grid would be a second, separately
-calibrated layout that nobody has measured. The `cw` entry stays in both the
-JSON and the firmware because `toolOffsetCmOf()` is written over the three
-rotation states, and deleting one leg of that would make the offsets no longer
-line up with `ROT_CW` / `ROT_NONE` / `ROT_CCW` — a schema change that buys
-nothing. Leave it at zero; do not calibrate it, and do not read it as a hint
-that a clockwise mode exists.
+**`cw` is not a grid/build orientation and is kept anyway.** `B` has no
+rotation word, and the mode latch derives placement from the grid — vertical →
+none, horizontal → 90° CCW. There is no clockwise grid because that would be a
+second, separately calibrated layout that nobody has measured. An explicit
+manual `A 90` can put the claw in the CW state for a bench `G` test, but it
+does not create a CW placement mode and its offset is uncalibrated. The `cw`
+entry stays in both JSON and firmware because `toolOffsetCmOf()` is written
+over the three rotation states; deleting one leg would make it no longer line
+up with `ROT_CW` / `ROT_NONE` / `ROT_CCW`. Leave it at zero unless it is
+measured; do not read it as a hint that a clockwise grid exists.
 
 `ccw` is also **uncalibrated**. Horizontal placement accuracy is unverified
 until it is measured on hardware.
