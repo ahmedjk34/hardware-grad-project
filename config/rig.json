@@ -51,7 +51,7 @@
   "tool_offsets": {
     "neutral": {"x_cm": 0.0, "y_cm": 0.0},
     "cw": {"x_cm": 0.0, "y_cm": 0.0},
-    "ccw": {"x_cm": 3.75, "y_cm": 1.1}
+    "ccw": {"x_cm": 3.75, "y_cm": 1.4}
   },
   "frame": {
     "width_cm": 20.0,

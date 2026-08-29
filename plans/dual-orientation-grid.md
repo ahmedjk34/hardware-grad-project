@@ -393,8 +393,9 @@ drift here is not cosmetic — it is how the two machines stop agreeing.
 
 ## 9. What this plan does not do
 
-- Does not calibrate `tool_offsets`. They stay zero. Horizontal placement
-  accuracy is unverified until `ccw` is measured on hardware.
+- Records the current horizontal-grid `ccw` tool-offset trial as X `+3.75 cm`,
+  Y `+1.40 cm`; `neutral` and `cw` remain zero. This is an on-hardware trial
+  and must be remeasured if the holder or claw geometry changes.
 - Does not change travel, step envelopes, Z levels or the feeder.
 - Does not add a third orientation, or any rotation other than 90° CCW.
 - Does not auto-detect the claw's physical angle. Nothing senses it (D10).

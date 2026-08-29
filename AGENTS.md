@@ -130,7 +130,8 @@ Never hard-code those ratios; firmware derives them from the cap and measured
 displacement. A separate physical observation found a **24.3 × 43 cm build
 footprint**. The feeder-centre model currently predicts physical outer block
 edges at **25.4 × 43.75 cm**, which needs physical verification; neither record
-changes the 24.3 × 40 cm holder-centre motion cap. Tool offsets remain zero.
+changes the 24.3 × 40 cm holder-centre motion cap. The measured horizontal
+CCW tool offset is X `+3.75 cm`, Y `+1.40 cm`; neutral and CW remain zero.
 
 A block is **2.2 × 7.5 × 1.5 cm**. Which of its two plan dimensions lies along
 X is what the mode decides. `[0,0]` is the feeder-block centre where the claw
@@ -254,13 +255,15 @@ over the three rotation states; deleting one leg would make it no longer line
 up with `ROT_CW` / `ROT_NONE` / `ROT_CCW`. Leave it at zero unless it is
 measured; do not read it as a hint that a clockwise grid exists.
 
-`ccw` is also **uncalibrated**. Horizontal placement accuracy is unverified
-until it is measured on hardware.
+`ccw` is calibrated for the current horizontal-grid trial at X `+3.75 cm`,
+Y `+1.40 cm`; this remains an on-hardware trial and must be remeasured if the
+holder/claw geometry changes.
 
-All shipped offsets are **zero**, which is an intentional no-op. Enter measured
-values in both places in the same commit. Do not compensate this by moving the
-camera grid or changing `grid.trim_*`: those define the block grid itself, not
-the holder-to-tool geometry. Targets that would put the holder outside its safe
+The neutral and CW offsets remain **zero** as intentional no-ops. The horizontal
+CCW values are an entered measured trial. Keep measured values paired in both
+places in the same commit. Do not compensate this by moving the camera grid or
+changing `grid.trim_*`: those define the block grid itself, not the
+holder-to-tool geometry. Targets that would put the holder outside its safe
 X/Y envelope are refused, never silently clipped.
 
 #### 3d. The printed colour calibration sheet — geometry it must be reprinted for

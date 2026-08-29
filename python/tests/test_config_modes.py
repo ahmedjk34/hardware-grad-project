@@ -96,6 +96,9 @@ check("travel is mode-independent",
       == (24.3, 40.0))
 check("tool_offsets keeps neutral/cw/ccw (D15)",
       set(config["tool_offsets"]) == {"neutral", "cw", "ccw"})
+check("horizontal CCW tool offset is calibrated",
+      (config["tool_offsets"]["ccw"]["x_cm"],
+       config["tool_offsets"]["ccw"]["y_cm"]) == (3.75, 1.4))
 
 # ------------------------------------------------------------------
 # Legacy migration

@@ -658,7 +658,7 @@ float TOOL_OFFSET_NEUTRAL_Y_CM = 0.0;
 float TOOL_OFFSET_CW_X_CM = 0.0;
 float TOOL_OFFSET_CW_Y_CM = 0.0;
 float TOOL_OFFSET_CCW_X_CM = 3.75;
-float TOOL_OFFSET_CCW_Y_CM = 1.1;
+float TOOL_OFFSET_CCW_Y_CM = 1.4;
 
 // The ASCII map is only drawn when the grid is small enough to be
 // readable. Bigger grids print a numeric summary instead.

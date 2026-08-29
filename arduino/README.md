@@ -48,7 +48,8 @@ Firmware derives both ratios; neither is hard-coded. The separately observed
 physical build footprint is `24.3 × 43 cm`. The feeder-centre model currently
 predicts outer block edges at `25.4 × 43.75 cm`, which needs physical
 verification; neither measurement changes the `24.3 × 40 cm` holder span.
-Tool offsets remain zero.
+The current horizontal-grid CCW tool offset trial is X `+3.75 cm`, Y `+1.40 cm`;
+neutral and CW tool offsets remain zero.
 
 A block is `2.2 × 7.5 × 1.5 cm`, and it can be laid either way round. Which
 way round decides how many cells fit, so **there are two grids**, each with its
