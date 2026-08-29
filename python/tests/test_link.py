@@ -190,6 +190,13 @@ HOME_XY_OK = [
     "  AT ORIGIN. Position = X 0 / Y 0",
 ]
 
+AUX_TURN_OK = [
+    "",
+    "AUX STEPPER: rotating -45 deg relative (-256 steps) CCW...",
+    "AUX STEPPER: done. Tracked angle from power-on neutral: -45.0 deg.",
+    "  Grid moves/latches are refused until a B returns the claw to neutral.",
+]
+
 GOTO_OK = [
     "",
     "=== GOTO CELL [3,5] ===",
@@ -341,6 +348,19 @@ check("horizontal connect homes X/Y before RR and S",
       fake.written == ["0", "RR", "S 3 15"], str(fake.written))
 check("horizontal connect selects its requested grid",
       rig.grid.mode == "horizontal" and (rig.cols, rig.rows) == (3, 15))
+rig.close()
+
+# The manual auxiliary-stepper helper is deliberately relative and bounded.
+rig, fake = fake_rig(replies={"S": GRID_RESIZED, "A": AUX_TURN_OK})
+fake.written.clear()
+rig.rotate_aux(-45)
+check("manual aux turn sends signed degree command", fake.written == ["A -45"],
+      str(fake.written))
+try:
+    rig.rotate_aux(361)
+    check("manual aux turn rejects more than one turn", False)
+except ValueError:
+    check("manual aux turn rejects more than one turn", True)
 rig.close()
 
 # A board still running the pre-ack firmware: no READY ever arrives. Must give

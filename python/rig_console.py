@@ -19,12 +19,13 @@ What the firmware understands (build_test_v1)
     0             home X/Y into their switches
     0+            full reset: Z down, Z up, then home X/Y
     G <col> <row> go to a grid cell, e.g.  G 3 5
-    B <col> <row> <level> [R|RR|NR]        one full pick-and-place cycle
+    B <col> <row> <level>                  one full pick-and-place cycle
       col/row may be 0 for calibration; B 0 0 <level> is a no-op
     Z             the Z / block-level calibration table
     U / D         jog Z up / down
     O / C         gripper open / close
-    R / RR        aux stepper +/-90 degrees
+    A <degrees>   auxiliary stepper relative turn, -360..360; +CW / -CCW
+    R / RR        select vertical / horizontal grid; no physical rotation
 
 Type `quit` (or Ctrl-D, or Ctrl-C) to leave.
 

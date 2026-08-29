@@ -130,13 +130,13 @@
   ------------------------------------------------------------
     1. Z up to the TOP SWITCH                    (clear of everything)
     2. X/Y home to the origin                    (the block feeder)
-    3. Un-rotate the claw if the LAST build rotated it
+    3. Return the claw to neutral (including any manual A jog)
     4. Open the claw
     5. Z down to GROUND (into the Z switch - this also re-zeroes Z)
     6. Close the claw                            (block is now held)
     7. Z up to the TOP SWITCH                    (carry height)
     8. X/Y to the requested cell
-    9. Rotate the claw if this build asked for R / RR
+    9. Apply the active grid's placement rotation
    10. Z down to the requested BLOCK LEVEL
    11. Open the claw                             (block is placed)
 
@@ -829,14 +829,13 @@ const bool BUILD_VERBOSE = true;
 // SECTION 6F - CLAW ROTATION STATE                    <<< NEW
 // ============================================================
 //
-// The claw is assumed to START in the neutral / correct orientation -
-// it is set by hand (or by R / RR) before the program is driven.
+// The claw is assumed to START neutral. A manual `A <degrees>` jog is tracked
+// relative to that assumed position; there is no sensor that can prove it.
 //
-// A build may ask for R (90 CW) or RR (90 CCW) so the block lands
-// turned. That leaves the claw turned too, which would be wrong for
-// the NEXT pick-up. So the build sequence always UN-ROTATES back to
-// neutral while it is over the feeder at 0,0 - before it descends -
-// and only then applies whatever THIS build asked for, at the target.
+// A horizontal build turns its block 90 CCW. That leaves the claw turned too,
+// which would be wrong for the NEXT pick-up. So the build sequence always
+// returns to neutral while it is over the feeder at 0,0 - before it descends -
+// and only then applies THIS grid's placement rotation at the target.
 //
 //   last build did R   ->  next build rotates RR at home  (back to 0)
 //   last build did RR  ->  next build rotates R  at home  (back to 0)
@@ -1129,7 +1128,10 @@ void setup()
   auxStepper.setSpeed(AUX_STEPPER_SPEED_RPM);
 
   // The claw is assumed to be physically neutral at power-on.
+  auxStepperPos = 0;
+  auxAngleSteps = 0;
   clawRotation = ROT_NONE;
+  clawRotationKnown = true;
 
   // Start the statistics window with the machine.
   statsSinceMs = millis();
@@ -1859,12 +1861,95 @@ void closeServoAndWait()
 // AUXILIARY STEPPER (28BYJ-48)
 // ============================================================
 
+// Keep the physical angle in (-half turn, +half turn]. The motor has no
+// sensor, so this is only as true as the assumed neutral at power-on and the
+// steps that have successfully been commanded since then.
+long normaliseAuxAngleSteps(long steps)
+{
+  const long halfTurn = AUX_STEPPER_STEPS_PER_REV / 2;
+  while (steps > halfTurn)
+  {
+    steps -= AUX_STEPPER_STEPS_PER_REV;
+  }
+  while (steps <= -halfTurn)
+  {
+    steps += AUX_STEPPER_STEPS_PER_REV;
+  }
+  return steps;
+}
+
+void updateClawRotationKnowledge()
+{
+  if (auxAngleSteps == 0)
+  {
+    clawRotation = ROT_NONE;
+    clawRotationKnown = true;
+  }
+  else if (auxAngleSteps == AUX_STEPPER_QUARTER_TURN)
+  {
+    clawRotation = ROT_CW;
+    clawRotationKnown = true;
+  }
+  else if (auxAngleSteps == -AUX_STEPPER_QUARTER_TURN)
+  {
+    clawRotation = ROT_CCW;
+    clawRotationKnown = true;
+  }
+  else
+  {
+    clawRotationKnown = false;
+  }
+}
+
+void stepAuxStepper(long steps)
+{
+  if (steps == 0)
+  {
+    return;
+  }
+  auxStepper.step(steps);
+  auxStepperPos += steps;
+  auxAngleSteps = normaliseAuxAngleSteps(auxAngleSteps + steps);
+  updateClawRotationKnowledge();
+}
+
+long auxStepsForDegrees(long degrees)
+{
+  long magnitude = degrees < 0 ? -degrees : degrees;
+  // Round to the nearest available motor step rather than always making a
+  // small requested angle short. 2048 steps/rev gives ~0.176 degrees/step.
+  long steps = (magnitude * AUX_STEPPER_STEPS_PER_REV + 180) / 360;
+  return degrees < 0 ? -steps : steps;
+}
+
+void rotateAuxStepperDegrees(long degrees)
+{
+  long steps = auxStepsForDegrees(degrees);
+
+  Serial.println();
+  Serial.print(F("AUX STEPPER: rotating "));
+  Serial.print(degrees);
+  Serial.print(F(" deg relative ("));
+  Serial.print(steps);
+  Serial.print(F(" steps) "));
+  Serial.println(degrees < 0 ? F("CCW...") : F("CW..."));
+
+  stepAuxStepper(steps);
+
+  Serial.print(F("AUX STEPPER: done. Tracked angle from power-on neutral: "));
+  Serial.print((float)auxAngleSteps * 360.0 / (float)AUX_STEPPER_STEPS_PER_REV, 1);
+  Serial.println(F(" deg."));
+  if (!clawRotationKnown)
+  {
+    Serial.println(F("  Grid moves/latches are refused until a B returns the claw to neutral."));
+  }
+}
+
 void rotateAuxStepperCW()
 {
   Serial.println();
   Serial.println(F("AUX STEPPER: rotating ~90 deg CW..."));
-  auxStepper.step(AUX_STEPPER_QUARTER_TURN);
-  auxStepperPos += AUX_STEPPER_QUARTER_TURN;
+  stepAuxStepper(AUX_STEPPER_QUARTER_TURN);
   statRotCW++;
   Serial.println(F("AUX STEPPER: done."));
 }
@@ -1873,8 +1958,7 @@ void rotateAuxStepperCCW()
 {
   Serial.println();
   Serial.println(F("AUX STEPPER: rotating ~90 deg CCW..."));
-  auxStepper.step(-AUX_STEPPER_QUARTER_TURN);
-  auxStepperPos -= AUX_STEPPER_QUARTER_TURN;
+  stepAuxStepper(-AUX_STEPPER_QUARTER_TURN);
   statRotCCW++;
   Serial.println(F("AUX STEPPER: done."));
 }
@@ -1882,8 +1966,9 @@ void rotateAuxStepperCCW()
 // ------------------------------------------------------------
 // Rotation as a TRACKED STATE, not a blind jog.        <<< NEW
 // ------------------------------------------------------------
-// Everything the build does goes through here, so clawRotation
-// always describes where the claw actually is.
+// Build rotation is a target angle, not a blind jog. A manual A command may
+// leave the claw at an arbitrary tracked angle, so return from that actual
+// angle rather than assuming only the three old quarter-turn states exist.
 
 const char *rotationName(int8_t rot)
 {
@@ -1898,12 +1983,13 @@ const char *rotationName(int8_t rot)
   return "NR (neutral)";
 }
 
-// Turns the claw so it ends up at `target` (ROT_NONE / CW / CCW),
-// whatever it is doing now. One quarter turn covers every case we
-// use, because the only states are -1, 0 and +1.
+// Turns the claw so it ends up at `target` (ROT_NONE / CW / CCW), whatever it
+// is doing now, including a tracked arbitrary manual A angle.
 void rotateClawTo(int8_t target)
 {
-  if (clawRotation == target)
+  long targetSteps = (long)target * AUX_STEPPER_QUARTER_TURN;
+  long delta = targetSteps - auxAngleSteps;
+  if (delta == 0)
   {
     if (BUILD_VERBOSE)
     {
@@ -1914,25 +2000,43 @@ void rotateClawTo(int8_t target)
     return;
   }
 
-  int8_t delta = target - clawRotation; // -2 .. +2
-
   Serial.print(F("  Rotating claw: "));
-  Serial.print(rotationName(clawRotation));
+  if (clawRotationKnown)
+  {
+    Serial.print(rotationName(clawRotation));
+  }
+  else
+  {
+    Serial.print(F("manual angle"));
+  }
   Serial.print(F("  ->  "));
   Serial.println(rotationName(target));
 
-  while (delta > 0)
+  // One direct correction handles e.g. a manual 45-degree jog. Ordinary
+  // quarter-turn build moves keep their existing statistics and diagnostics.
+  if ((delta % AUX_STEPPER_QUARTER_TURN) == 0)
   {
-    rotateAuxStepperCW();
-    delta--;
+    while (delta > 0)
+    {
+      rotateAuxStepperCW();
+      delta -= AUX_STEPPER_QUARTER_TURN;
+    }
+    while (delta < 0)
+    {
+      rotateAuxStepperCCW();
+      delta += AUX_STEPPER_QUARTER_TURN;
+    }
   }
-  while (delta < 0)
+  else
   {
-    rotateAuxStepperCCW();
-    delta++;
+    Serial.print(F("  AUX STEPPER: correcting "));
+    Serial.print(delta);
+    Serial.println(F(" steps to a calibrated grid angle..."));
+    stepAuxStepper(delta);
   }
 
   clawRotation = target;
+  clawRotationKnown = true;
 }
 
 // ============================================================
@@ -2530,6 +2634,13 @@ bool setGridMode(uint8_t mode)
     return false;
   }
 
+  if (!clawRotationKnown)
+  {
+    Serial.println(F("  ERROR - claw is at an arbitrary manual A angle."));
+    Serial.println(F("  Latching a grid needs a calibrated 0/+90/-90 angle; run B first."));
+    return false;
+  }
+
   uint8_t previous = gridMode;
   gridMode = mode;
 
@@ -2668,6 +2779,13 @@ bool gotoCellForRotation(long col, long row, int8_t rotation)
 // supplies its requested final orientation explicitly before it rotates.
 bool gotoCell(long col, long row)
 {
+  if (!clawRotationKnown)
+  {
+    Serial.println();
+    Serial.println(F("  ERROR - claw is at an arbitrary manual A angle."));
+    Serial.println(F("  G needs a calibrated 0/+90/-90 angle; run B to return neutral."));
+    return false;
+  }
   return gotoCellForRotation(col, row, clawRotation);
 }
 
@@ -3188,7 +3306,7 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
   // ---- 3. undo the previous build's rotation, while still high ----
 
   // Normally a no-op, because phase 14 already left the claw neutral.
-  // It stays as a safety net for a manual R/RR between builds.
+  // It also corrects a manually requested A angle before a new pickup.
   buildStep(3, "Return the claw to neutral before picking up");
   rotateClawTo(ROT_NONE);
   buildPause();
@@ -3306,7 +3424,14 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
   Serial.println();
 
   Serial.print(F("Claw rotation: "));
-  Serial.println(rotationName(clawRotation));
+  if (clawRotationKnown)
+  {
+    Serial.println(rotationName(clawRotation));
+  }
+  else
+  {
+    Serial.println(F("MANUAL / uncalibrated (the build returned it to neutral)"));
+  }
 
   if (!BUILD_PARK_AFTER_PLACE)
   {
@@ -3857,10 +3982,18 @@ void printAuxStepperStatus()
   Serial.println(F(")"));
 
   Serial.print(F("Claw rotation: "));
-  Serial.print(rotationName(clawRotation));
-  if (clawRotation != ROT_NONE)
+  if (clawRotationKnown)
   {
-    Serial.print(F("  <- the next B un-rotates this at the feeder"));
+    Serial.print(rotationName(clawRotation));
+    if (clawRotation != ROT_NONE)
+    {
+      Serial.print(F("  <- the next B un-rotates this at the feeder"));
+    }
+  }
+  else
+  {
+    Serial.print(F("MANUAL / uncalibrated"));
+    Serial.print(F("  <- the next B returns it to neutral at the feeder"));
   }
   Serial.println();
 }
@@ -4013,6 +4146,16 @@ void printGridConfig()
 // full report, so the two can never disagree.
 void printGridPosition()
 {
+  if (!clawRotationKnown)
+  {
+    Serial.print(F("Machine pos : X "));
+    Serial.print(axisPos[AXIS_X]);
+    Serial.print(F("  /  Y "));
+    Serial.println(axisPos[AXIS_Y]);
+    Serial.println(F("Current cell: UNKNOWN - claw is at an arbitrary manual A angle"));
+    Serial.println(F("Last commanded cell: unchanged; run B to return the claw to neutral."));
+    return;
+  }
   long liveCol = positionToIndex(AXIS_X, axisPos[AXIS_X], clawRotation);
   long liveRow = positionToIndex(AXIS_Y, axisPos[AXIS_Y], clawRotation);
   if (axisPos[AXIS_X] != 0 && liveCol == 0)
@@ -4732,7 +4875,7 @@ void printCommandStats()
   Serial.print(F(" opens / "));
   Serial.print(statServoCloses);
   Serial.println(F(" closes"));
-  Serial.print(F("  Rotations R/RR : "));
+  Serial.print(F("  Quarter turns  : "));
   Serial.print(statRotCW);
   Serial.print(F(" CW / "));
   Serial.print(statRotCCW);
@@ -4896,6 +5039,8 @@ void printInstructions()
   Serial.println(F("O = Servo OPEN              [pin 6]"));
   Serial.println(F("C = Servo CLOSE             [pin 6]"));
   Serial.println(F("V <angle> = Servo angle 0..180 deg [pin 6]"));
+  Serial.println(F("A <degrees> = AUX turn -360..360 deg; +CW/-CCW, relative"));
+  Serial.println(F("    no aux home sensor: arbitrary A angles block G/R/RR until B"));
   Serial.println(F("--------------------------------------"));
   Serial.println(F("R  = select the VERTICAL grid    [latch only, moves nothing]"));
   Serial.println(F("RR = select the HORIZONTAL grid  [latch only, moves nothing]"));

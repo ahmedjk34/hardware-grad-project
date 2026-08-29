@@ -373,8 +373,11 @@ together. Every ack literal is `F()`, like everything else the sketch prints.
 ### 6. Firmware command vocabulary
 
 The sketch's commands (`B`, `G`, `S`, `0`, `0+`, `5`, `9`, `Z`, `U`, `D`, `O`,
-`C`, `V`, `R`, `RR`) are the contract between the two machines. `V <angle>`
-sets the gripper servo to an integer angle from 0 to 180 degrees.
+`C`, `V`, `A`, `R`, `RR`) are the contract between the two machines. `V <angle>`
+sets the gripper servo to an integer angle from 0 to 180 degrees. `A <degrees>`
+is a signed, **relative** auxiliary-stepper jog: `-360..360`, positive CW and
+negative CCW. It cannot be an absolute angle because that motor has no home
+switch or angle sensor.
 
 Two of these changed meaning and one lost an argument:
 
@@ -384,6 +387,10 @@ Two of these changed meaning and one lost an argument:
   already true — a latch that confirms a state nobody asked for cannot tell a
   confirmation from a mistake. `python/rig/link.py` sends them through
   `set_mode()`, matching the prose `GRID MODE:` and `ERROR - already in`.
+- **`A <degrees>` is manual bench rotation, not a new grid orientation.** A
+  non-0/+90/-90 command has no calibrated tool offset, so manual `G` and an
+  `R`/`RR` latch are refused until a `B` returns the claw to neutral. `B`
+  explicitly corrects the tracked manual angle at its feeder-safe step 3.
 - **`B` no longer takes a rotation word.** `B <col> <row> <level>`, three
   numbers, nothing after them. How the block is laid comes from the active
   grid. A fourth word is a parse error that names the latch.
@@ -439,7 +446,7 @@ of these rules when editing it:
 
 - Both the amber approximate map and a saved calibrated `WorkspaceMap` may
   select a build target. Calibration refines the camera mapping but is optional.
-- A click selects and shows the exact `B <col> <row> <level> [R|RR]` command;
+- A click selects and shows the exact `B <col> <row> <level>` command;
   it never moves hardware. `b`/Enter is the separate confirmation.
 - Send builds only through `rig.link.Rig.build()`, never a second raw serial
   connection. That call blocks for minutes, so `rig/build_job.py` runs it on one

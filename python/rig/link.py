@@ -53,13 +53,18 @@ Two hardware facts this module is shaped around
   `@0 BOOT` at any other moment means it happened again underneath us, and is
   raised as `RigReset`.
 
-Rotation is not something you ask for
--------------------------------------
+Build rotation is not per-block
+-------------------------------
 `build()` takes no rotation. Which way a block is laid is a property of the
 active GRID, not of the block: the vertical grid places blocks as the feeder
 presents them, the horizontal grid turns every one of them 90° CCW. Choose
 with `set_mode()`, which sends the firmware's `R` / `RR` latch. See
 plans/dual-orientation-grid.md D7 and D8.
+
+For a deliberate bench test there is also `rotate_aux(degrees)`, which sends
+the firmware's signed relative `A <degrees>` command. It is not an absolute
+angle — the aux stepper has no home switch — and a non-grid-aligned manual
+angle disables manual `G`/mode-latch moves until the next `B` returns neutral.
 """
 
 from __future__ import annotations
@@ -740,6 +745,32 @@ class Rig:
         out = self._send_and_settle(line, timeout=timeout, done=done)
         bad = ("FULL RESET INCOMPLETE", "ORIGIN NOT REACHED", "ABORTED")
         return not any(marker in text for text in out for marker in bad)
+
+    def rotate_aux(self, degrees: int, timeout: float = 30.0) -> None:
+        """Relative auxiliary-stepper jog: ``A <degrees>``.
+
+        Positive is clockwise and negative is counter-clockwise. The firmware
+        intentionally limits one request to one turn (``-360..360``): this
+        motor has no limit switch or absolute-angle sensor. A manual angle not
+        equal to 0/+90/-90 has no calibrated tool offset; a later build safely
+        returns it to neutral before picking up a block.
+        """
+        self._require_not_reset()
+        if isinstance(degrees, bool) or int(degrees) != degrees:
+            raise ValueError("aux rotation degrees must be an integer")
+        degrees = int(degrees)
+        if not -360 <= degrees <= 360:
+            raise ValueError("aux rotation degrees must be in -360..360")
+        out = self._send_and_settle(
+            f"A {degrees}",
+            timeout=timeout,
+            done=("AUX STEPPER: done.", "ERROR - use:"),
+        )
+        if any("ERROR - use:" in line for line in out):
+            raise RigError(
+                "the rig refused the auxiliary-stepper angle:\n  "
+                + "\n  ".join(line.strip() for line in out if line.strip())
+            )
 
     def goto(self, col: int, row: int, timeout: float = 180.0) -> bool:
         """`G <col> <row>` — drive to a cell without picking anything up.
