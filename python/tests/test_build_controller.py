@@ -25,6 +25,8 @@ class FakeRig:
         self.outcomes = list(outcomes)
         self.calls = []
         self.mode_calls = []
+        self.home_calls = []
+        self.home_result = True
 
     def build(self, col, row, level, timeout=300):
         self.calls.append((col, row, level, timeout))
@@ -39,6 +41,10 @@ class FakeRig:
         # controller keep selecting cells the new grid does not have.
         self.mode_calls.append(mode)
         self.grid = MachineGrid.from_config(mode=mode)
+
+    def home(self, full=True):
+        self.home_calls.append(full)
+        return self.home_result
 
 
 rig = FakeRig([BuildResult(PLACED)])
@@ -105,13 +111,30 @@ controller.cycle_mode()
 check("cycle_mode toggles back", rig.mode_calls == ["horizontal", "vertical"]
       and controller.mode == "vertical")
 
+controller.cycle_mode(home_before_horizontal=True)
+check("entering horizontal can explicitly home X/Y first",
+      rig.home_calls == [False] and rig.mode_calls == ["horizontal", "vertical", "horizontal"])
+controller.cycle_mode(home_before_horizontal=True)
+check("returning vertical does not home", rig.home_calls == [False]
+      and rig.mode_calls[-1] == "vertical")
+
+rig = FakeRig([])
+rig.home_result = False
+controller = BuildController(rig)
+try:
+    controller.set_mode("horizontal", home_before_horizontal=True)
+    check("failed X/Y home refuses horizontal", False)
+except RigError:
+    check("failed X/Y home refuses horizontal",
+          rig.home_calls == [False] and rig.mode_calls == [] and controller.mode == "vertical")
+
 try:
     controller.set_mode("diagonal")
     check("an unknown mode is refused", False)
 except BuildStateError as exc:
     check("an unknown mode is refused", "vertical" in str(exc), str(exc))
 check("the refused mode sent nothing",
-      rig.mode_calls == ["horizontal", "vertical"])
+      rig.mode_calls == [])
 
 # A horizontal controller builds with a plain three-number command too: the
 # turn is the grid's, and the firmware derives it from the mode.

@@ -44,7 +44,8 @@ Keys
   g       toggle grid
   v       toggle block detection on/off
   [ / ]   build level down/up
-  o       latch the other grid: vertical <-> horizontal
+  o       latch the other grid: vertical <-> horizontal; entering horizontal
+          explicitly homes X/Y first
   d       clear selected cell
   b/Enter confirm the displayed B command
   s       save annotated frame and block detection JSON
@@ -253,23 +254,23 @@ def main():
         cfg=rig_data,
         on_line=lambda line: print(f"[rig] {line}"),
         on_error=lambda error: print(f"[rig error] {error}", file=sys.stderr),
+        mode=args.mode,
     )
     try:
         print(f"Connecting to rig at {rig.port_name} / {rig.baud} baud...")
-        rig.connect(timeout=args.connect_timeout)
+        # The Mega resets to an un-homed vertical state when this port opens.
+        # RR is only legal after X/Y are homed, so an explicit request to run
+        # the horizontal layout includes that one necessary 0 command.
+        rig.connect(
+            timeout=args.connect_timeout,
+            home_before_configure=(rig.grid.mode == "horizontal"),
+        )
     except RigError as exc:
         print(f"Cannot start Rig Build V1: {exc}", file=sys.stderr)
         rig.close()
         return 1
 
     controller = BuildController(rig, level=args.level)
-    if args.mode is not None and args.mode != controller.mode:
-        try:
-            controller.set_mode(args.mode)
-        except (BuildStateError, RigError) as exc:
-            print(f"Cannot select the {args.mode} grid: {exc}", file=sys.stderr)
-            rig.close()
-            return 1
     # `--mode` is a latch request, so the serial handshake may have changed
     # the active layout after the config and camera settings were read.
     grid = rig.grid
@@ -561,7 +562,7 @@ def main():
             # the selection and the drawn grid has to be rebuilt from the rig.
             try:
                 reject_mutation_if_unsafe()
-                controller.cycle_mode()
+                controller.cycle_mode(home_before_horizontal=True)
                 grid = rig.grid
                 paper_spec = ColorGridSpec.from_config(rig_data, mode=grid.mode)
                 paper.set_spec(paper_spec)

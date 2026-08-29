@@ -251,7 +251,8 @@ class Rig:
     runs strictly one command at a time, so the waiting sends take a lock and
     raise `RigBusy` rather than queueing behind each other."""
 
-    def __init__(self, cfg: dict | None = None, on_line=None, on_error=None):
+    def __init__(self, cfg: dict | None = None, on_line=None, on_error=None,
+                 mode: str | None = None):
         """`on_line` is called from the reader thread with every raw line the
         rig prints, acks included. That is how `rig_console.py` still shows
         everything while this class quietly parses the same stream.
@@ -266,7 +267,10 @@ class Rig:
         # trims and 24.3x40 cm displacement of the SELECTED MODE before S is
         # sent. Which mode that is comes from grid.active_mode in the config.
         self._cfg = cfg
-        self.grid = MachineGrid.from_config(cfg)
+        # A UI may make an explicit one-session mode choice before it opens
+        # the port.  Store that desired grid now, so connect() can home before
+        # it attempts the mode latch after the board's reset-to-vertical boot.
+        self.grid = MachineGrid.from_config(cfg, mode=mode)
         self.cols: int = self.grid.cols
         self.rows: int = self.grid.rows
 
@@ -305,7 +309,7 @@ class Rig:
         return self._port is not None and self._port.is_open
 
     def connect(self, timeout: float = 25.0, configure: bool = True,
-                home: bool = False) -> None:
+                home: bool = False, home_before_configure: bool = False) -> None:
         """Open the port, wait out the reboot, and put the board in a known state.
 
         Three steps, in order:
@@ -314,13 +318,17 @@ class Rig:
            so it ends the banner exactly. Before the acks existed this meant
            matching the final banner line by its wording, which broke whenever
            someone reworded it.
-        2. push the grid MODE from config/rig.json, then send
+        2. optionally home X/Y with ``0`` before configuring. This is for an
+           explicit horizontal-mode request: its ``RR`` latch is only legal
+           after X/Y are homed.
+        3. push the grid MODE from config/rig.json (or an explicit one-session
+           override), then send
            `S <cols> <rows>` — in that order. The sketch has no EEPROM and the
            port-open reset just wiped both back to the compiled vertical
            default, so neither is optional. The order is not arbitrary: the
            firmware validates `S` against the active mode's geometry, so
            sending it first would check the counts against the wrong grid.
-        3. optionally `0+` — home Z, park it at the top, home X/Y.
+        4. optionally `0+` — home Z, park it at the top, home X/Y.
 
         `home` defaults to FALSE because opening a connection should not make
         the machine move on its own. `B` homes everything itself anyway, so
@@ -360,6 +368,9 @@ class Rig:
         # following configure handshake is here to repair. Later BOOT events
         # remain latched until recover_after_reset() is explicitly authorized.
         self._reset_detected = False
+        if home_before_configure:
+            if not self.home(full=False):
+                raise RigError("X/Y home did not reach the origin before configuration")
         if configure:
             self.sync_mode()
             self.set_grid()

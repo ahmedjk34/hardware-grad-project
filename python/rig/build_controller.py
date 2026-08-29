@@ -80,7 +80,7 @@ class BuildController:
     def adjust_level(self, delta: int) -> None:
         self.set_level(max(0, self.level + int(delta)))
 
-    def set_mode(self, mode: str) -> None:
+    def set_mode(self, mode: str, *, home_before_horizontal: bool = False) -> None:
         """Latch the rig into one of the two grids.
 
         This is where per-block rotation used to live. It moved here because
@@ -98,14 +98,24 @@ class BuildController:
             raise BuildStateError(f"grid mode must be one of {', '.join(GRID_MODES)}")
         if mode == self.mode:
             return
+        if mode == "horizontal" and home_before_horizontal:
+            # RR is intentionally rejected until X/Y have a known origin. A
+            # request to enter the horizontal layout is an explicit operator
+            # action, so home only those two axes here; never make an
+            # incidental vertical-mode selection move the rig.
+            if not self.rig.home(full=False):
+                raise RigError("X/Y home did not reach the origin; horizontal grid was not selected")
         self.rig.set_mode(mode)
         self.selected = None
 
-    def cycle_mode(self) -> None:
+    def cycle_mode(self, *, home_before_horizontal: bool = False) -> None:
         """Latch the other grid. Two modes, so this is a toggle."""
         current = self.mode
         index = GRID_MODES.index(current) if current in GRID_MODES else 0
-        self.set_mode(GRID_MODES[(index + 1) % len(GRID_MODES)])
+        self.set_mode(
+            GRID_MODES[(index + 1) % len(GRID_MODES)],
+            home_before_horizontal=home_before_horizontal,
+        )
 
     def build(self, timeout: float = 300.0) -> BuildResult:
         """Send the selected B command once; lock if machine state is unknown."""
