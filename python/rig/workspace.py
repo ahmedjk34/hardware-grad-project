@@ -22,6 +22,7 @@ from pathlib import Path
 
 import numpy as np
 
+from rig.config import DEFAULT_GRID_MODE, GRID_MODES
 from rig.grid import MachineGrid
 
 
@@ -79,10 +80,17 @@ class WorkspaceMap:
     corners: list[tuple[float, float]]
     projection: dict | None = None
     physical_grid: dict | None = None
+    # A calibration belongs to a block orientation as well as a camera.  Flat
+    # v2 maps predate that distinction and are migrated as vertical on read.
+    mode: str = DEFAULT_GRID_MODE
 
     def __post_init__(self):
         if self.cols < 1 or self.rows < 1:
             raise ValueError("workspace grid dimensions must be positive")
+        if self.mode not in GRID_MODES:
+            raise ValueError(
+                f"workspace map mode must be one of {', '.join(GRID_MODES)}, "
+                f"not {self.mode!r}")
         if len(self.corners) != 4:
             raise ValueError("workspace map needs exactly four corners")
         self.corners = [(float(x), float(y)) for x, y in self.corners]
@@ -117,16 +125,25 @@ class WorkspaceMap:
                 workspace_height_cm=float(geometry["workspace_height_cm"]),
                 trim_x_cm=float(geometry.get("trim_x_cm", 0.0)),
                 trim_y_cm=float(geometry.get("trim_y_cm", 0.0)),
+                max_edge_overhang_x_cm=(
+                    float(geometry["max_edge_overhang_x_cm"])
+                    if "max_edge_overhang_x_cm" in geometry else None),
+                max_edge_overhang_y_cm=(
+                    float(geometry["max_edge_overhang_y_cm"])
+                    if "max_edge_overhang_y_cm" in geometry else None),
                 error_offset_x_cm=float(geometry.get("error_offset_x_cm", 0.0)),
                 error_offset_y_cm=float(geometry.get("error_offset_y_cm", 0.0)),
+                mode=self.mode,
             )
 
     @classmethod
-    def from_pixels(cls, cols, rows, corners, image_size, projection=None):
+    def from_pixels(cls, cols, rows, corners, image_size, projection=None,
+                    mode=DEFAULT_GRID_MODE):
         w, h = image_size
         if w <= 0 or h <= 0:
             raise ValueError("image size must be positive")
-        return cls(cols, rows, [(x / w, y / h) for x, y in corners], projection)
+        return cls(cols, rows, [(x / w, y / h) for x, y in corners], projection,
+                   mode=mode)
 
     @classmethod
     def from_grid(cls, grid: MachineGrid, corners, image_size, projection=None):
@@ -145,49 +162,132 @@ class WorkspaceMap:
             "gap_y_cm": grid.gap_y_cm,
             "trim_x_cm": grid.trim_x_cm,
             "trim_y_cm": grid.trim_y_cm,
+            "max_edge_overhang_x_cm": grid.max_edge_overhang_x_cm,
+            "max_edge_overhang_y_cm": grid.max_edge_overhang_y_cm,
             "error_offset_x_cm": grid.error_offset_x_cm,
             "error_offset_y_cm": grid.error_offset_y_cm,
         }
         return cls(grid.cols, grid.rows, [(x / w, y / h) for x, y in corners],
-                   projection, geometry)
+                   projection, geometry, grid.mode or DEFAULT_GRID_MODE)
 
     @classmethod
-    def load(cls, path=WORKSPACE_MAP_PATH, cols=None, rows=None):
+    def load(cls, path=WORKSPACE_MAP_PATH, cols=None, rows=None, *, mode=None):
         path = Path(path)
         data = json.loads(path.read_text())
-        if int(data.get("version", 0)) != 2:
+        version = int(data.get("version", 0))
+        wanted = DEFAULT_GRID_MODE if mode is None else str(mode)
+        if wanted not in GRID_MODES:
+            raise ValueError(
+                f"workspace map mode must be one of {', '.join(GRID_MODES)}, "
+                f"not {wanted!r}")
+        if version == 2:
+            # A flat map was necessarily made for the only grid that existed:
+            # vertical.  Read it without pretending it calibrated horizontal.
+            if wanted != DEFAULT_GRID_MODE:
+                raise ValueError(
+                    f"legacy workspace map has only a {DEFAULT_GRID_MODE} calibration; "
+                    f"no {wanted} calibration is saved")
+            entry = data
+        elif version == 3:
+            modes = data.get("modes")
+            if not isinstance(modes, dict):
+                raise ValueError("workspace map modes must be an object")
+            if wanted not in modes:
+                raise ValueError(
+                    f"workspace map has no {wanted} calibration; recalibrate that mode")
+            entry = modes[wanted]
+            if not isinstance(entry, dict):
+                raise ValueError(f"workspace map {wanted} calibration must be an object")
+        else:
             raise ValueError("workspace map uses obsolete pre-gap geometry; recalibrate")
-        result = cls(int(data["grid"]["cols"]), int(data["grid"]["rows"]),
-                     [tuple(p) for p in data["corners_normalized"]],
-                     data.get("projection"), data.get("physical_grid"))
+        result = cls(int(entry["grid"]["cols"]), int(entry["grid"]["rows"]),
+                     [tuple(p) for p in entry["corners_normalized"]],
+                     entry.get("projection"), entry.get("physical_grid"), wanted)
         if cols is not None and rows is not None and (result.cols, result.rows) != (cols, rows):
             raise ValueError(
                 f"workspace map is for {result.cols}x{result.rows}, config is {cols}x{rows}"
             )
         return result
 
-    def save(self, path=WORKSPACE_MAP_PATH):
-        path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
+    def _entry(self):
+        """The per-mode portion of the v3 JSON document."""
         payload = {
-            "version": 2,
-            "view": "corrected",
-            "corner_order": list(CORNER_NAMES),
             "grid": {"cols": self.cols, "rows": self.rows},
             "corners_normalized": [[x, y] for x, y in self.corners],
             "projection": self.projection,
         }
         if self.physical_grid is not None:
             payload["physical_grid"] = self.physical_grid
-        path.write_text(json.dumps(payload, indent=2) + "\n")
+        return payload
+
+    @staticmethod
+    def _document_from_legacy(data):
+        """Normalize a v2/v3 document without discarding another mode."""
+        version = int(data.get("version", 0))
+        if version == 3:
+            modes = data.get("modes")
+            if not isinstance(modes, dict):
+                raise ValueError("workspace map modes must be an object")
+            return data
+        if version == 2:
+            entry = {
+                key: data[key] for key in
+                ("grid", "corners_normalized", "projection", "physical_grid")
+                if key in data
+            }
+            return {
+                "version": 3,
+                "view": data.get("view", "corrected"),
+                "corner_order": data.get("corner_order", list(CORNER_NAMES)),
+                "modes": {DEFAULT_GRID_MODE: entry},
+            }
+        raise ValueError("workspace map uses obsolete pre-gap geometry; recalibrate")
+
+    def save(self, path=WORKSPACE_MAP_PATH, *, mode=None):
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        wanted = self.mode if mode is None else str(mode)
+        if wanted not in GRID_MODES:
+            raise ValueError(
+                f"workspace map mode must be one of {', '.join(GRID_MODES)}, "
+                f"not {wanted!r}")
+        if wanted != self.mode:
+            raise ValueError(
+                f"cannot save a {self.mode} calibration as {wanted}; regenerate it "
+                "from that mode's MachineGrid")
+        if path.exists():
+            document = self._document_from_legacy(json.loads(path.read_text()))
+        else:
+            document = {
+                "version": 3,
+                "view": "corrected",
+                "corner_order": list(CORNER_NAMES),
+                "modes": {},
+            }
+        document["version"] = 3
+        document.setdefault("view", "corrected")
+        document.setdefault("corner_order", list(CORNER_NAMES))
+        document["modes"][wanted] = self._entry()
+        path.write_text(json.dumps(document, indent=2) + "\n")
         return path
 
-    def matches_grid(self, grid: MachineGrid) -> bool:
-        """Whether this calibration was made for the complete current geometry."""
+    def matches_grid(self, grid: MachineGrid, *, mode=None) -> bool:
+        """Whether this calibration was made for the complete current geometry.
+
+        ``mode`` is optional only because ``MachineGrid`` already carries it;
+        accepting it makes an accidental caller-side mode mismatch explicit at
+        the same seam as :meth:`load` and :meth:`save`.
+        """
         if self.physical_grid is None or not grid.has_physical_scale:
+            return False
+        wanted = grid.mode if mode is None else str(mode)
+        if wanted not in GRID_MODES:
             return False
         geometry = self.physical_grid
         return (
+            self.mode == wanted
+            and grid.mode == wanted
+            and
             (self.cols, self.rows) == (grid.cols, grid.rows)
             and float(geometry["workspace_width_cm"]) == grid.workspace_width_cm
             and float(geometry["workspace_height_cm"]) == grid.workspace_height_cm
@@ -197,6 +297,15 @@ class WorkspaceMap:
             and float(geometry["gap_y_cm"]) == grid.gap_y_cm
             and float(geometry.get("trim_x_cm", 0.0)) == grid.trim_x_cm
             and float(geometry.get("trim_y_cm", 0.0)) == grid.trim_y_cm
+            # v2 maps did not record D20's safety budget. Its absence means
+            # "unknown", not a different camera mapping, so preserve their
+            # vertical migration; new v3 entries compare it exactly.
+            and ("max_edge_overhang_x_cm" not in geometry
+                 or float(geometry["max_edge_overhang_x_cm"])
+                 == grid.max_edge_overhang_x_cm)
+            and ("max_edge_overhang_y_cm" not in geometry
+                 or float(geometry["max_edge_overhang_y_cm"])
+                 == grid.max_edge_overhang_y_cm)
             and float(geometry.get("error_offset_x_cm", 0.0)) == grid.error_offset_x_cm
             and float(geometry.get("error_offset_y_cm", 0.0)) == grid.error_offset_y_cm
         )

@@ -89,17 +89,18 @@ with `--enhance`. `--analysis-hz` changes the analysis cap and
 **Use it for:** seeing the real fixed-pitch Arduino grid on the canonical camera
 feed and checking which `[col,row]` lies under the cursor. It reads camera
 appearance from `python/config/camera_settings.json`, physical geometry from
-the repository-level `config/rig.json`, and saves four-corner calibration to
-`config/workspace_map.json`.
+the repository-level `config/rig.json`, and saves four-corner calibration under
+the selected mode in `config/workspace_map.json`.
 
 ```bash
 python camera/gridded_camera_feed.py
 python camera/gridded_camera_feed.py --display-scale 1.5
+python camera/gridded_camera_feed.py --mode horizontal
 ```
 
 It opens with an amber **APPROXIMATION ONLY** grid so you can see the configured
-9×5 positive-cell layout immediately. That guess fills the image and is not evidence that
-camera and motor cells match. To calibrate:
+layout immediately (9×5 vertical or 3×15 horizontal). That guess fills the
+image and is not evidence that camera and motor cells match. To calibrate:
 
 1. Press `c`.
 2. Click the complete 24.3×40 cm holder-centre envelope corners in the prompted order:
@@ -173,7 +174,9 @@ Startup opens the configured serial port, waits for the Mega reboot banner,
 latches the grid mode and then pushes that mode's grid count — in that order,
 because the Mega validates the count against whichever grid is active. A reset
 returns the board to the vertical grid without saying so, which is why the mode
-is pushed on every connect rather than assumed. It then opens the same corrected/detected camera
+is pushed on every connect rather than assumed. An unexpected reset locks the
+build UI; recovery needs inspection and an explicit `recover_after_reset(home=True)`,
+which homes before re-pushing mode then size. It then opens the same corrected/detected camera
 pipeline as `camera_feed.py`. The amber approximate grid is selectable and can
 issue a build immediately. A matching `workspace_map.json` refines the mapping
 when present, but it is not required. The camera image contains only the camera,
@@ -256,14 +259,16 @@ it never writes `config/workspace_map.json`.
 
 ```bash
 python camera/color_grid_check.py                       # live camera
-python camera/color_grid_check.py --image captures/grid_training/original_image_VERTICAL.jpeg
+python camera/color_grid_check.py --image captures/grid_training/original_image_VERTICAL.jpeg --mode vertical
+python camera/color_grid_check.py --mode horizontal
 python camera/color_grid_check.py --image IN.jpeg --save OUT.png
 ```
 
-The sheet is 7.5 × 2.2 cm cells with 0.5 cm inner margins — the rig's own block
-footprint and gap — in alternating green and magenta. It is printed larger than
-the grid on purpose, so the tool picks a 10 × 6 window of **whole** cells
-anchored at the bottom-left of the image and ignores everything else.
+The vertical sheet is 2.2 × 7.5 cm and the horizontal sheet 7.5 × 2.2 cm, both
+with 0.5 cm inner margins and alternating green/magenta cells. It is printed
+larger than the mapped grid on purpose, so the tool picks a mode-sized window
+of **whole** cells (10 × 6 vertical; 4 × 16 horizontal) anchored at the
+bottom-left of the image and ignores everything else.
 
 Every mapped cell is tinted and stamped with its `col,row`; whole cells outside
 the chosen window are outlined dull yellow, and cells clipped by the paper edge

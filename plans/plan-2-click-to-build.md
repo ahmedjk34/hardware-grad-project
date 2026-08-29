@@ -128,7 +128,9 @@ cells with the machine col/row.
 manual verification step.**
 
 Click the four corners of the complete 24.3×40 cm holder envelope once, in a
-prompted order. Save them to `config/workspace_map.json`. From those four
+prompted order. Save them under the active grid mode in
+`config/workspace_map.json`; vertical and horizontal calibrations coexist and
+never substitute for one another. From those four
 points, compute the mapping from image pixel through physical centimetres to a
 machine cell. It must preserve every 0.5 cm inter-cell gap instead of drawing
 touching pitch-sized rectangles.

@@ -267,8 +267,8 @@ X/Y envelope are refused, never silently clipped.
 
 | Where | What |
 | --- | --- |
-| `config/rig.json` -> `grid.block_width_cm` / `block_length_cm` / `gap_x_cm` / `gap_y_cm` | what `ColorGridSpec.from_config()` expects to see on the paper |
-| the physical printed sheet | 7.5 x 2.2 cm cells with 0.5 cm inner margins |
+| `config/rig.json` -> `grid.modes.<mode>.block_x_cm` / `block_y_cm` / `gap_x_cm` / `gap_y_cm` | what `ColorGridSpec.from_config(mode=...)` expects to see on that sheet |
+| the physical printed sheets | vertical: 2.2 x 7.5 cm; horizontal: 7.5 x 2.2 cm; both with 0.5 cm inner margins |
 | `python/vision/color_grid.py` | detects it; refuses a sheet whose measured geometry disagrees |
 | `plans/printed-color-grid.md` | the full treatment, including the layout disagreement below |
 
@@ -278,9 +278,12 @@ it belongs on this list even though nothing can push a number onto paper. If
 reprinted; `ColorGridCalibration._check_geometry_matches` refuses rather than
 calibrating against stale paper.
 
-`ColorGridSpec.from_config()` reads `grid.cols + 1` and `grid.rows + 1`: the
-sheet prints a real block at **every** coordinate, coordinate zero included, so
-its layout is the complete 10 x 6 map, not the 9 x 5 positive one.
+`ColorGridSpec.from_config(mode=...)` reads that mode's `cols + 1` and `rows +
+1`: each sheet prints a real block at **every** coordinate, coordinate zero
+included. The vertical sheet maps the complete 10 x 6 map, not the 9 x 5
+positive one; the horizontal sheet maps 4 x 16, not 3 x 15. Mode is explicit:
+the detector does not infer it from a partial sheet, and it refuses a sheet/map
+count or geometry mismatch.
 
 **The sheet and the firmware do not lay coordinate zero out the same way.** The
 sheet puts a whole 2.2 x 7.5 cm block there; the firmware puts a bare point with
@@ -289,8 +292,10 @@ on X and one block taller on Y than the machine's grid, and aligning them is an
 explicit decision, not an assumption:
 
 ```text
-sheet  X = 10 x 2.2 + 9 x 0.5 = 26.5 cm      rig X = 9 x 2.7 = 24.3 cm
-sheet  Y =  6 x 7.5 + 5 x 0.5 = 47.5 cm      rig Y = 5 x 8.0 = 40.0 cm
+vertical sheet X = 10 x 2.2 + 9 x 0.5 = 26.5 cm   rig X = 9 x 2.7 = 24.3 cm
+vertical sheet Y =  6 x 7.5 + 5 x 0.5 = 47.5 cm   rig Y = 5 x 8.0 = 40.0 cm
+horizontal sheet X = 4 x 7.5 + 3 x 0.5 = 31.5 cm  rig X = 3 x 8.0 = 24.0 cm
+horizontal sheet Y = 16 x 2.2 + 15 x 0.5 = 42.7 cm rig Y = 15 x 2.7 = 40.5 cm
 ```
 
 `ColorGridCalibration.workspace_corners()` takes a `convention`. The default

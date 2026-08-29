@@ -90,7 +90,10 @@ coordinate zero, commands span col `0..cols` and row `0..rows`: `[0,0]` home,
 `[col,0]` X-only, and `[0,row]` Y-only. `MachineGrid.from_config(mode=...)`
 gives you either; `rig.json`'s `grid.active_mode` picks the default.
 
-A calibration is per mode and never transfers between them.
+A calibration is per mode and never transfers between them. The generated
+`config/workspace_map.json` stores both entries under `modes.vertical` and
+`modes.horizontal`; recalibrating one preserves the other, and a legacy flat
+map migrates as vertical only.
 
 `camera/rig_build_v1.py` adds the serial link and is the first camera UI allowed
 to move hardware. Its approximate grid works immediately; a saved calibration

@@ -55,11 +55,11 @@ apart, so the axis with the shorter pitch is the machine's X and the other is
 Y, whichever way round the sheet was photographed. That much is orientation
 free and is what makes the module reusable when the camera is remounted.
 
-What is NOT handled yet is the sheet laid out so the machine's own X runs along
-the 7.5 cm cell side — a genuinely rotated *machine*, not a rotated camera.
-:data:`SUPPORTED_LAYOUT` names the one supported layout and
-``detect_color_grid`` refuses anything else rather than guessing. See
-``plans/printed-color-grid.md``.
+The sheet may describe either calibrated machine layout.  In vertical mode the
+machine X side is the short block side; in horizontal mode it is the long one.
+The mode is an explicit input — the detector never guesses it from a partial
+sheet — and the complete coordinate counts cross-check that the sheet and the
+machine grid agree.  See ``plans/dual-orientation-grid.md`` D18.
 """
 
 from __future__ import annotations
@@ -70,14 +70,21 @@ import math
 import cv2
 import numpy as np
 
-from rig.config import load as load_rig_config
+from rig.config import (GRID_MODES, active_grid_mode, grid_geometry,
+                        load as load_rig_config)
 
 
 # The sheet is printed at the rig's own block geometry, so the ratio between a
 # block and its pitch is fixed and known. Everything below is expressed in
 # those ratios rather than in centimetres, which keeps the detector working at
-# any camera distance without a scale calibration.
-SUPPORTED_LAYOUT = "y-along-block-length"
+# any camera distance without a scale calibration.  These are machine layouts,
+# not camera rotations: a quarter-turned photograph is valid in either mode.
+SUPPORTED_LAYOUTS = {
+    "vertical": "y-along-block-length",
+    "horizontal": "x-along-block-length",
+}
+# Compatibility name for callers that only ever dealt with the original sheet.
+SUPPORTED_LAYOUT = SUPPORTED_LAYOUTS["vertical"]
 
 # Hue windows, in OpenCV's 0..179 space, applied AFTER the white balance below.
 # The training captures put green at 80-88 and magenta at 150-162. A live rig
@@ -162,7 +169,12 @@ DEFAULT_PROCESS_WIDTH = 1024
 # is deliberately *not* enough to save a workspace map on its own.  That
 # decision belongs to PaperGridEvidence, which combines accepted frames and
 # applies coverage gates before a map can be written.
-MIN_EVIDENCE_FRAME_CELLS = 12
+MIN_EVIDENCE_FRAME_FRACTION = 0.20
+
+
+def min_evidence_frame_cells(spec) -> int:
+    """Whole cells needed to fit one evidence frame for this sheet layout."""
+    return math.ceil(MIN_EVIDENCE_FRAME_FRACTION * spec.cols * spec.rows)
 
 # A complete 10x6 window may lose one or two cells to a lighting falloff at the
 # edge of the sheet without losing its geometry: the homography is supported by
@@ -204,11 +216,11 @@ class ColorGridSpec:
     """The printed sheet's geometry, which is the rig's block geometry.
 
     ``cols``/``rows`` are the *complete* coordinate map including zero — 10 x 6
-    for the shipped 9 x 5 positive grid — because the sheet prints a real block
-    at every coordinate, coordinate zero included. That is the one place the
-    paper and the firmware disagree, and it is why the mapping back onto the
-    machine envelope is an explicit convention rather than an assumption. See
-    :meth:`ColorGridCalibration.workspace_corners`.
+    in vertical mode and 4 x 16 in horizontal — because the sheet prints a real
+    block at every coordinate, coordinate zero included. That is the one place
+    the paper and the firmware disagree, and it is why the mapping back onto
+    the machine envelope is an explicit convention rather than an assumption.
+    See :meth:`ColorGridCalibration.workspace_corners`.
     """
 
     cols: int = 10
@@ -217,12 +229,19 @@ class ColorGridSpec:
     block_y_cm: float = 7.5
     gap_x_cm: float = 0.5
     gap_y_cm: float = 0.5
+    mode: str = "vertical"
 
     @classmethod
-    def from_config(cls, cfg: dict | None = None) -> "ColorGridSpec":
-        """Build from ``config/rig.json``, adding coordinate zero to the counts."""
+    def from_config(cls, cfg: dict | None = None, mode: str | None = None) -> "ColorGridSpec":
+        """Build one mode's printed map from ``config/rig.json``.
+
+        ``mode`` is deliberately explicit at this seam.  A partial sheet does
+        not contain enough information to infer a layout safely, while a UI
+        already knows which machine grid it is calibrating.
+        """
         cfg = cfg if cfg is not None else load_rig_config()
-        grid = cfg["grid"]
+        name = active_grid_mode(cfg) if mode is None else str(mode)
+        grid = grid_geometry(cfg, name)
         return cls(
             cols=int(grid["cols"]) + 1,
             rows=int(grid["rows"]) + 1,
@@ -230,6 +249,7 @@ class ColorGridSpec:
             block_y_cm=float(grid["block_y_cm"]),
             gap_x_cm=float(grid["gap_x_cm"]),
             gap_y_cm=float(grid["gap_y_cm"]),
+            mode=name,
         )
 
     def __post_init__(self):
@@ -240,6 +260,10 @@ class ColorGridSpec:
             raise ValueError("printed gaps must be finite and non-negative")
         if self.cols < 2 or self.rows < 2:
             raise ValueError("the printed grid needs at least 2x2 coordinates")
+        if self.mode not in GRID_MODES:
+            raise ValueError(
+                f"printed grid mode must be one of {', '.join(GRID_MODES)}, "
+                f"not {self.mode!r}")
         if abs(self.block_x_cm - self.block_y_cm) < 1e-9:
             raise ValueError(
                 "square cells give no way to tell the X side from the Y side"
@@ -267,8 +291,29 @@ class ColorGridSpec:
     def short_is_x(self) -> bool:
         return self.block_x_cm < self.block_y_cm
 
+    @property
+    def layout(self) -> str:
+        return SUPPORTED_LAYOUTS[self.mode]
+
+    @property
+    def lattice_counts(self) -> tuple[int, int]:
+        """Required cells along the physical short and long block sides."""
+        return ((self.cols, self.rows) if self.short_is_x
+                else (self.rows, self.cols))
+
+    def matches_grid(self, grid) -> bool:
+        """Whether this sheet was made for exactly this machine layout."""
+        return (
+            self.mode == grid.mode
+            and (self.cols, self.rows) == (grid.cols + 1, grid.rows + 1)
+            and self.block_x_cm == grid.block_x_cm
+            and self.block_y_cm == grid.block_y_cm
+            and self.gap_x_cm == grid.gap_x_cm
+            and self.gap_y_cm == grid.gap_y_cm
+        )
+
     def describe(self) -> str:
-        return (f"{self.cols}x{self.rows} printed coordinates, "
+        return (f"{self.mode} {self.cols}x{self.rows} printed coordinates, "
                 f"{self.block_x_cm:g}x{self.block_y_cm:g} cm cells, "
                 f"{self.gap_x_cm:g}x{self.gap_y_cm:g} cm inner margins, "
                 f"pitch {self.pitch_x_cm:g}x{self.pitch_y_cm:g} cm")
@@ -337,7 +382,7 @@ class ColorGridCalibration:
     homography: np.ndarray              # [col,row,1] -> pixel, 3x3
     cells: list[PrintedCell]
     metrics: ColorGridMetrics = field(default_factory=ColorGridMetrics)
-    layout: str = SUPPORTED_LAYOUT
+    layout: str | None = None
 
     def __post_init__(self):
         self.homography = np.asarray(self.homography, dtype=np.float64)
@@ -352,6 +397,12 @@ class ColorGridCalibration:
             raise ColorGridError(
                 "the detected cells are degenerate; the sheet is edge-on or "
                 "only one row of it is in view") from exc
+        if self.layout is None:
+            self.layout = self.spec.layout
+        elif self.layout != self.spec.layout:
+            raise ValueError(
+                f"printed grid layout {self.layout!r} disagrees with "
+                f"the {self.spec.mode!r} sheet")
 
     # --- forward geometry -------------------------------------------------
 
@@ -452,6 +503,17 @@ class ColorGridCalibration:
         return [self.point_at(*to_grid(x, y)) for x, y in corners_cm]
 
     def _check_geometry_matches(self, grid):
+        if self.spec.mode != grid.mode:
+            raise ColorGridError(
+                f"the {self.spec.mode} printed sheet cannot calibrate the "
+                f"{grid.mode} machine grid; select the {grid.mode} sheet")
+        expected_counts = (grid.cols + 1, grid.rows + 1)
+        if (self.spec.cols, self.spec.rows) != expected_counts:
+            raise ColorGridError(
+                f"the {self.spec.mode} printed sheet maps "
+                f"{self.spec.cols}x{self.spec.rows} coordinates, but the "
+                f"{grid.mode} machine grid requires {expected_counts[0]}x"
+                f"{expected_counts[1]} including the zero lanes")
         pairs = ((self.spec.block_x_cm, grid.block_x_cm, "block X"),
                  (self.spec.block_y_cm, grid.block_y_cm, "block Y"),
                  (self.spec.gap_x_cm, grid.gap_x_cm, "gap X"),
@@ -1085,7 +1147,7 @@ def _choose_window(coords, found, need_i, need_j, image_size):
     return choices[0][:2] if choices else None
 
 
-def _choose_evidence_window(coords, found, need_i, need_j, image_size, matrix):
+def _choose_evidence_window(coords, found, need_i, need_j, image_size, matrix, spec):
     """Choose a 10x6 window despite holes caused by a known occluder.
 
     This is intentionally only for the evidence collector.  Unlike
@@ -1095,7 +1157,8 @@ def _choose_evidence_window(coords, found, need_i, need_j, image_size, matrix):
     collector later requires broad edge/corner coverage before it can save.
     """
     full = {coords[i]: i for i in coords if found[i]["full"]}
-    if len(full) < MIN_EVIDENCE_FRAME_CELLS:
+    minimum_cells = min_evidence_frame_cells(spec)
+    if len(full) < minimum_cells:
         return None
     i_values = [key[0] for key in full]
     j_values = [key[1] for key in full]
@@ -1111,7 +1174,7 @@ def _choose_evidence_window(coords, found, need_i, need_j, image_size, matrix):
         for j0 in range(min(j_values) - need_j + 1, max(j_values) + 1):
             inside = [key for key in full
                       if i0 <= key[0] < i0 + need_i and j0 <= key[1] < j0 + need_j]
-            if len(inside) < MIN_EVIDENCE_FRAME_CELLS:
+            if len(inside) < minimum_cells:
                 continue
             corners = ((i0, j0), (i0 + need_i - 1, j0),
                        (i0, j0 + need_j - 1), (i0 + need_i - 1, j0 + need_j - 1))
@@ -1195,7 +1258,7 @@ def detect_color_grids(frame: np.ndarray, spec: ColorGridSpec | None = None, *,
         source = found if subset is None else [found[i] for i in subset]
         return [np.asarray(rect["box"], dtype=np.float32) / scale for rect in source]
 
-    required_components = (MIN_EVIDENCE_FRAME_CELLS if evidence
+    required_components = (min_evidence_frame_cells(spec) if evidence
                            else spec.cols * spec.rows)
     if len(found) < required_components:
         needed = (f"evidence frame needs at least {required_components}"
@@ -1278,12 +1341,11 @@ def detect_color_grids(frame: np.ndarray, spec: ColorGridSpec | None = None, *,
             "; ".join(quality_errors), stage="quality", candidates=boxes(),
             lattice=boxes(full_indices))
 
-    need_i, need_j = ((spec.cols, spec.rows) if spec.short_is_x
-                      else (spec.rows, spec.cols))
+    need_i, need_j = spec.lattice_counts
     windows = _choose_windows(coords, found, need_i, need_j, work_size, matrix)
     if not windows and evidence:
         evidence_window = _choose_evidence_window(
-            coords, found, need_i, need_j, work_size, matrix)
+            coords, found, need_i, need_j, work_size, matrix, spec)
         if evidence_window is not None:
             origin, corner = evidence_window
             observed = sum(
@@ -1314,6 +1376,8 @@ def detect_color_grids(frame: np.ndarray, spec: ColorGridSpec | None = None, *,
                         "holes: something is lying across it, or a row is clipped")
         else:
             message += ". Move the sheet or the camera so more of it is in view"
+        message += (f". The selected {spec.mode} layout needs a "
+                    f"{spec.cols}x{spec.rows} coordinate map")
         raise ColorGridError(
             message, stage="window", candidates=boxes(),
             lattice=boxes(i for i in coords if found[i]["full"]))

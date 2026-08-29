@@ -6,9 +6,10 @@ a grid cell selects it; it does not move the machine. Press Enter or ``b`` to
 send the exact command shown in the build panel, normally
 ``B <col> <row> <level>``. The firmware performs the pick-and-place sequence.
 
-Coordinates span col ``0..9`` and row ``0..5``. ``[1,1]`` through
-``[9,5]`` are separated block footprints; ``[0,0]``/``[col,0]``/``[0,row]``
-are holder home and its two axis-only target families. ``0`` on an axis means
+Coordinates span `0..9` x `0..5` vertically and `0..3` x `0..15`
+horizontally. Positive cells are separated by the active layout's block
+footprints; ``[0,0]``/``[col,0]``/``[0,row]`` are holder home and its two
+axis-only target families. ``0`` on an axis means
 "leave that axis at the origin" - the firmware's own single-axis move:
 ``B 0 5`` skips X, ``B 9 0`` skips Y,
 ``G 0 0`` is the home command, and ``B 0 0`` is an inert no-op. ``x``/``y``
@@ -228,8 +229,8 @@ def main():
     try:
         camera_data = load_settings(args.settings)
         rig_data = load_rig_config(args.rig_config, reload=True)
-        grid = MachineGrid.from_config(rig_data)
-        paper_spec = ColorGridSpec.from_config(rig_data)
+        grid = MachineGrid.from_config(rig_data, mode=args.mode)
+        paper_spec = ColorGridSpec.from_config(rig_data, mode=grid.mode)
         backend, device, size = capture_settings(camera_data)
         profile = profile_from_settings(camera_data)
         sensor = sensor_from_settings(camera_data)
@@ -269,6 +270,10 @@ def main():
             print(f"Cannot select the {args.mode} grid: {exc}", file=sys.stderr)
             rig.close()
             return 1
+    # `--mode` is a latch request, so the serial handshake may have changed
+    # the active layout after the config and camera settings were read.
+    grid = rig.grid
+    paper_spec = ColorGridSpec.from_config(rig_data, mode=grid.mode)
     job = BuildJob(controller, args.build_timeout)
 
     try:
@@ -377,7 +382,7 @@ def main():
                      ("Undo (u)", "u"),
                      ("Grid (g)", "g"), ("Detect (v)", "v"),
                      ("Level - ([)", "["),
-                     ("Level + (])", "]"), ("Rotate (o)", "o"),
+                     ("Other grid (o)", "o"),
                      ("Deselect (d)", "d"), ("X-only (x)", "x"),
                      ("Y-only (y)", "y"),
                      ("Paper grid (p)", "p"), ("Paper calib (k)", "k"),
@@ -418,6 +423,7 @@ def main():
     DIGIT_KEYS = tuple(ord(d) for d in "0123456789")
 
     def handle_key(key, snapshot, now):
+        nonlocal grid, paper_spec, saved_workspace, rejection, map_generation
         if key in (ord("q"), 27):
             if job.running:
                 ui["message"] = "build in progress; cannot quit until it reports"
@@ -557,9 +563,19 @@ def main():
                 reject_mutation_if_unsafe()
                 controller.cycle_mode()
                 grid = rig.grid
+                paper_spec = ColorGridSpec.from_config(rig_data, mode=grid.mode)
+                paper.set_spec(paper_spec)
+                # Results for the old sheet layout and calibration never cross
+                # the mode boundary.  Reloading may recover the independently
+                # saved map for the newly latched layout.
+                map_generation += 1
+                saved_workspace, rejection = load_workspace(
+                    args.workspace_map, grid, projection)
                 ui["message"] = (f"latched the {controller.mode} grid "
-                                 f"({grid.cols}x{grid.rows}); recalibrate the "
-                                 "camera map for this mode")
+                                 f"({grid.cols}x{grid.rows}); "
+                                 + ("loaded its calibration"
+                                    if saved_workspace is not None else
+                                    "calibrate the camera map for this mode"))
             except (BuildStateError, RigError) as exc:
                 ui["message"] = str(exc)
         elif key == ord("d"):
@@ -617,7 +633,7 @@ def main():
             f"Analysis: {'OFF' if not ui['detect_enabled'] else f'{result.rate_hz:4.1f} Hz'} | "
             f"seq {result.source_sequence} | {analysis_text} | blocks {len(detections)} | "
             f"replaced {result.replaced_count} | duplicate {result.duplicate_count}",
-            f"Grid: {grid.cols}x{grid.rows} | {'CALIBRATED' if calibrated else 'APPROXIMATION ONLY'}",
+            f"Grid: {grid.mode} {grid.cols}x{grid.rows} | {'CALIBRATED' if calibrated else 'APPROXIMATION ONLY'}",
             f"{paper.status()} | ,/. choose | home {args.home_convention}",
             f"Rig: {rig.port_name} | level {controller.level} | grid {controller.mode}",
             f"Selected: {selected_text}",
@@ -630,7 +646,7 @@ def main():
             f"overlay {timings.ms.get('overlay', 0):.1f} ms | "
             f"grid {timings.ms.get('grid', 0):.1f} ms | "
             f"display {timings.ms.get('display', 0):.1f} ms",
-            "i overlay | c calibrate | g grid | v detect | [/] level | o rotate | d deselect",
+            "i overlay | c calibrate | g grid | v detect | [/] level | o other grid | d deselect",
             "p paper | ,/. choose grid | k paper calibrate | x X-only | y Y-only",
             "b/Enter BUILD | s snapshot | q/Esc quit when safe",
         ]

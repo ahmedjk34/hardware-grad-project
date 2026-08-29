@@ -9,11 +9,11 @@ visible even before calibration. Press ``c`` and click the four real holder-
 motion corners named by ``rig.workspace.CORNER_NAMES``. The resulting map is
 saved to ``config/workspace_map.json`` and reloaded on the next run.
 
-Coordinates span col ``0..9`` and row ``0..5``. ``[0,0]`` is holder home;
-``[col,0]``/``[0,row]`` are axis-only targets. Positive cells are separated
-2.2x7.5 cm block footprints: each starts after a 0.5 cm gap and repeats at
-2.7x8.0 cm pitch. A changed lens/framing setup or changed grid JSON invalidates
-the saved map instead of silently drawing old geometry.
+Coordinates span `0..9` x `0..5` in vertical mode and `0..3` x `0..15` in
+horizontal. ``[0,0]`` is holder home; ``[col,0]``/``[0,row]`` are axis-only
+targets. The selected mode supplies its own block footprint and pitch. A changed
+lens/framing setup or changed grid JSON invalidates that mode's saved map
+instead of silently drawing old geometry.
 
 There are two printed-sheet routes.  Press ``p`` to overlay the two-colour
 sheet (``vision/color_grid.py``) and ``k`` to calibrate from one complete
@@ -75,7 +75,7 @@ from camera.camera_feed import (  # noqa: E402
     sensor_from_settings,
 )
 from camera.snapshot_worker import SnapshotWorker  # noqa: E402
-from rig.config import CONFIG_PATH, load as load_rig_config  # noqa: E402
+from rig.config import CONFIG_PATH, GRID_MODES, load as load_rig_config  # noqa: E402
 from rig.grid import MachineGrid  # noqa: E402
 from rig.workspace import CORNER_NAMES, WORKSPACE_MAP_PATH, WorkspaceMap  # noqa: E402
 from vision.block_detector import detect_blocks  # noqa: E402
@@ -171,6 +171,14 @@ class PaperGridTracker:
         else:
             self._error = "looking for the sheet"
         return self.enabled
+
+    def set_spec(self, spec):
+        """Change layouts without allowing an old worker result to leak across."""
+        self.spec = spec
+        self._calibration, self._calibrations = None, ()
+        self._selection = 0
+        self._failure = None
+        self._error = "looking for the sheet" if self.enabled else "overlay off"
 
     def submit(self, frame, sequence, generation):
         if self.enabled:
@@ -328,6 +336,9 @@ def parse_args():
                         help=f"camera settings JSON (default: {SETTINGS_PATH})")
     parser.add_argument("--rig-config", type=Path, default=CONFIG_PATH,
                         help=f"grid/workspace JSON (default: {CONFIG_PATH})")
+    parser.add_argument("--mode", choices=GRID_MODES, default=None,
+                        help="grid and printed sheet to calibrate (default: "
+                             "rig.json's grid.active_mode)")
     parser.add_argument("--workspace-map", type=Path, default=WORKSPACE_MAP_PATH,
                         help=f"four-corner calibration JSON (default: {WORKSPACE_MAP_PATH})")
     parser.add_argument("--display-scale", type=float, default=1.0,
@@ -376,7 +387,7 @@ def approximate_workspace(grid, image_size, projection):
 def load_workspace(path, grid, projection):
     """Return a trustworthy saved map, or a concise reason it was rejected."""
     try:
-        workspace = WorkspaceMap.load(path)
+        workspace = WorkspaceMap.load(path, mode=grid.mode)
     except FileNotFoundError:
         return None, "no four-corner calibration saved"
     except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
@@ -572,8 +583,8 @@ def main():
     try:
         camera_data = load_settings(args.settings)
         rig_data = load_rig_config(args.rig_config, reload=True)
-        grid = MachineGrid.from_config(rig_data)
-        paper_spec = ColorGridSpec.from_config(rig_data)
+        grid = MachineGrid.from_config(rig_data, mode=args.mode)
+        paper_spec = ColorGridSpec.from_config(rig_data, mode=grid.mode)
         backend, device, size = capture_settings(camera_data)
         profile = profile_from_settings(camera_data)
         sensor = sensor_from_settings(camera_data)
@@ -703,7 +714,7 @@ def main():
             f"Analysis: {'OFF' if not ui['detect_enabled'] else f'{result.rate_hz:4.1f} Hz'} | "
             f"seq {result.source_sequence} | {analysis_text} | blocks {len(detections)} | "
             f"replaced {result.replaced_count} | duplicate {result.duplicate_count}",
-            f"Grid: {grid.cols}x{grid.rows} | {calibration_text} | "
+            f"Grid: {grid.mode} {grid.cols}x{grid.rows} | {calibration_text} | "
             f"hover {f'[{cell[0]},{cell[1]}]' if cell else 'none'}",
             f"{paper.status()} | ,/. choose | home {args.home_convention} | k saves it",
             (f"Evidence: {evidence.status.describe()}"

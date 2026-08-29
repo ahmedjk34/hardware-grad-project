@@ -423,6 +423,26 @@ check("connect pushes the horizontal counts", "S 3 15" in fake.written,
       str(fake.written))
 check("the rig's grid followed the latch",
       rig.grid.mode == "horizontal" and (rig.cols, rig.rows) == (3, 15))
+
+# An idle reset must not disappear when the next command drains old events.
+# Recovery is deliberately explicit because a reset loses X/Y homing: only the
+# caller's `home=True` authorizes that motion, after a human has inspected it.
+fake.written.clear()
+fake._emit(["@0 BOOT fw=build_test_v1"])
+time.sleep(0.05)
+try:
+    rig.goto(1, 1)
+    check("an idle reset blocks later commands until recovery", False)
+except link.RigReset:
+    check("an idle reset blocks later commands until recovery", True)
+try:
+    rig.recover_after_reset()
+    check("reset recovery requires explicit homing authority", False)
+except link.RigReset:
+    check("reset recovery requires explicit homing authority", True)
+rig.recover_after_reset(home=True)
+check("reset recovery homes then re-pushes horizontal mode before S",
+      fake.written == ["0+", "RR", "S 3 15"], str(fake.written))
 rig.close()
 
 # set_mode outside connect re-sends S, because the board's count for the mode

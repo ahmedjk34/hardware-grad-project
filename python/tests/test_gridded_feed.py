@@ -18,6 +18,7 @@ from camera.gridded_camera_feed import (  # noqa: E402
     load_workspace,
 )
 from rig.grid import MachineGrid  # noqa: E402
+from rig.workspace import WorkspaceMap  # noqa: E402
 
 
 PASSED, FAILED = [], []
@@ -100,6 +101,47 @@ with tempfile.TemporaryDirectory() as directory:
     loaded, reason = load_workspace(path, shifted, projection)
     check("changed grid JSON invalidates map",
           loaded is None and "grid JSON" in reason, str(reason))
+
+    # One v3 artifact holds both independently calibrated layouts.  Saving the
+    # second map must preserve the first, and loading through the wrong mode is
+    # a rejection even if callers forgot to look at the count shape first.
+    horizontal = MachineGrid.from_config(mode="horizontal")
+    horizontal_workspace = approximate_workspace(horizontal, image_size, projection)
+    horizontal_workspace.save(path)
+    vertical_loaded = WorkspaceMap.load(path, mode="vertical")
+    horizontal_loaded = WorkspaceMap.load(path, mode="horizontal")
+    check("two-mode workspace map retains vertical calibration",
+          vertical_loaded.matches_grid(grid) and vertical_loaded.mode == "vertical")
+    check("two-mode workspace map retains horizontal calibration",
+          horizontal_loaded.matches_grid(horizontal) and horizontal_loaded.mode == "horizontal")
+    check("a workspace calibration from the other mode is refused",
+          not vertical_loaded.matches_grid(horizontal)
+          and not vertical_loaded.matches_grid(grid, mode="horizontal"))
+
+    # Flat v2 is the only legacy geometry that may migrate: it was necessarily
+    # vertical because no horizontal layout existed when it was written.
+    legacy_v2 = Path(directory) / "workspace_map_v2.json"
+    entry = vertical_loaded._entry()
+    legacy_v2.write_text(json.dumps({
+        "version": 2,
+        "view": "corrected",
+        "corner_order": ["a", "b", "c", "d"],
+        **entry,
+    }))
+    migrated = WorkspaceMap.load(legacy_v2, mode="vertical")
+    check("flat v2 workspace map migrates into vertical",
+          migrated.matches_grid(grid) and migrated.mode == "vertical")
+    try:
+        WorkspaceMap.load(legacy_v2, mode="horizontal")
+        check("flat v2 map cannot masquerade as horizontal", False)
+    except ValueError as exc:
+        check("flat v2 map cannot masquerade as horizontal",
+              "only a vertical calibration" in str(exc), str(exc))
+    migrated.save(legacy_v2)
+    migrated_document = json.loads(legacy_v2.read_text())
+    check("saving a migrated map writes keyed modes",
+          migrated_document["version"] == 3
+          and set(migrated_document["modes"]) == {"vertical"})
 
 print(f"\n{len(PASSED)} passed, {len(FAILED)} failed")
 if FAILED:

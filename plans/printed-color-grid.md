@@ -22,18 +22,19 @@ coverage gates pass. See
 
 ## The sheet
 
-Each printed cell is **7.5 × 2.2 cm** with **0.5 cm** of white between
-neighbours — the block footprint and gap from `config/rig.json`, so the paper
-and the machine are describing the same grid. Colours alternate like a
+Each printed cell has the active mode's block footprint with **0.5 cm** of
+white between neighbours: vertical is **2.2 × 7.5 cm**, horizontal is
+**7.5 × 2.2 cm**. Both come from `config/rig.json`, so the paper and the
+machine are describing the same grid. Colours alternate like a
 chessboard, which costs nothing to print and gives the detector a free
 consistency check: if a cell's colour disagrees with the parity of its index,
 the indices are wrong.
 
 The sheet is deliberately printed **larger than the machine's grid**. An A2
-print holds roughly 22 × 5 cells one way round and 15 × 7 the other, and the
-machine needs 10 × 6. That surplus is what makes the sheet usable at any camera
-height without reprinting it — and it is why choosing which cells count is half
-the problem.
+print holds more cells than the mapped window. Vertical maps 10 × 6; the
+horizontal sheet maps 4 × 16 and is deliberately wider than that mapped extent.
+That surplus is what makes the sheet usable at any camera height without
+reprinting it — and it is why choosing which cells count is half the problem.
 
 ### What is not part of the project
 
@@ -72,7 +73,8 @@ the problem.
    repeated on the survivors. Both an upper and lower fill bound reject clipped
    and merged cells. Colour parity, measured aspect, mean residual and maximum
    residual are hard acceptance gates rather than status-only measurements.
-5. **Every strongly supported 10 × 6 window is retained.** The long-axis span
+5. **Every strongly supported mode-sized window is retained** (10 × 6 vertical,
+   4 × 16 horizontal). The long-axis span
    is anchored at the lattice edge nearest the bottom-left of the image, while
    an oversized short axis may produce overlapping horizontal choices. A
    window needs at least 95% physical coverage and every row/column must remain
@@ -82,18 +84,12 @@ the problem.
 
 ### Which axis is X
 
-Never from the image. The 2.2 cm and 7.5 cm sides are 3.4:1 apart, so the axis
-with the shorter pitch is the machine's X and the other is Y, whichever way the
-sheet was photographed. Columns therefore follow the 2.2 cm side and rows the
-7.5 cm side even when the camera is remounted a quarter turn out.
-
-### What is deliberately not handled yet
-
-The sheet laid out so the **machine's** X runs along the 7.5 cm cell side — a
-rotated machine, not a rotated camera. `SUPPORTED_LAYOUT` names the one
-supported layout and detection refuses anything else rather than guessing.
-Adding it means deciding what the firmware's `B <col> <row>` should mean in
-that orientation, which is a rig decision and not a vision one.
+Never from the image alone. The explicit mode decides which physical side is
+machine X: vertical maps 2.2 cm to X; horizontal maps 7.5 cm to X. The detected
+short/long lattice axes then follow that declared geometry, whichever way the
+sheet was photographed. `ColorGridSpec.mode` and the 10 × 6 / 4 × 16 complete
+counts cross-check the `MachineGrid` before calibration; a partial sheet never
+causes an orientation guess.
 
 ---
 
@@ -217,18 +213,19 @@ looking straight down from 50 cm sees far more forgiving geometry than either.
 cd python
 
 # prove the detection on a still, or live on the camera
-../.venv/bin/python camera/color_grid_check.py --image captures/grid_training/original_image_VERTICAL.jpeg
-../.venv/bin/python camera/color_grid_check.py
+../.venv/bin/python camera/color_grid_check.py --image captures/grid_training/original_image_VERTICAL.jpeg --mode vertical
+../.venv/bin/python camera/color_grid_check.py --mode horizontal
 
 # the two feeds: p overlays the sheet, k calibrates from it and saves
-../.venv/bin/python camera/gridded_camera_feed.py
+../.venv/bin/python camera/gridded_camera_feed.py --mode horizontal
 ../.venv/bin/python camera/rig_build_v1.py
 ```
 
-`k` writes the same `config/workspace_map.json` the four-click route writes, in
-the same format, with the same invalidation rules. Nothing downstream knows the
-sheet exists. In `rig_build_v1.py` it is guarded exactly like `c`: refused
-during a build, refused on a stale camera, and it clears the current selection.
+`k` writes the same mode-keyed `config/workspace_map.json` the four-click route
+writes. Recalibrating one layout preserves the other; loading a map through the
+wrong mode is refused. Nothing downstream knows the sheet exists. In
+`rig_build_v1.py` it is guarded exactly like `c`: refused during a build,
+refused on a stale camera, and it clears the current selection.
 
 The overlay tints every mapped cell and stamps its `col,row`; whole cells
 outside the chosen window are outlined dull yellow and clipped ones red. Watch

@@ -30,8 +30,8 @@ A printed sheet of alternating **green** and **magenta** blocks on white paper.
 
 | property | value | why |
 | --- | --- | --- |
-| cell size | **7.5 × 2.2 cm** | the rig's own block footprint, `grid.block_length_cm` × `grid.block_width_cm` |
-| inner margin | **0.5 cm** between any two blocks | the rig's own `grid.gap_x_cm` / `gap_y_cm` |
+| cell size | vertical **2.2 × 7.5 cm**; horizontal **7.5 × 2.2 cm** | that mode's own `grid.modes.<mode>.block_x_cm` × `block_y_cm` |
+| inner margin | **0.5 cm** between any two blocks | that mode's `gap_x_cm` / `gap_y_cm` |
 | colours | strong green and strong magenta, alternating like a chessboard | far apart in hue; the alternation is a free consistency check |
 | size | **larger than the grid**, deliberately | so it works at any camera height without reprinting |
 
@@ -81,23 +81,24 @@ pitch-sized border.
 
 ### R4 — Grid size and origin
 
-The grid is **10 columns × 6 rows**: columns `0..9` on X, rows `0..5` on Y —
-the complete coordinate map including zero, matching what the firmware
-addresses. It starts at `[0,0]` with **no outer margin**, with inner margins
-between every pair of neighbours.
+Vertical is **10 columns × 6 rows** (`0..9`, `0..5`); horizontal is **4 columns
+× 16 rows** (`0..3`, `0..15`). Both are the complete coordinate map including
+zero, matching the active firmware layout. A sheet starts at `[0,0]` with **no
+outer margin**, with inner margins between every pair of neighbours.
 
 `[0,0]` is the cell nearest the **bottom-left of the image**. Both indices
 increase away from that corner.
 
-**Accept when:** exactly 60 cells are mapped, `[0,0]` is the bottom-left corner
-cell, and raising either index moves away from it.
+**Accept when:** exactly 60 vertical or 64 horizontal cells are mapped,
+`[0,0]` is the bottom-left corner cell, and raising either index moves away
+from it.
 
 ### R5 — Which axis is X
 
-Decided by **cell size, never by image direction**. The 2.2 cm side and the
-7.5 cm side are 3.4:1 apart, so the axis with the shorter pitch is the
-machine's X (10 of them) and the longer is Y (6 of them) — whichever way round
-the sheet was photographed and however the camera is mounted.
+Decided by **the explicit mode plus cell size, never by image direction**. The
+2.2 cm and 7.5 cm sides are 3.4:1 apart. Vertical maps the short side to X
+(10) and the long side to Y (6); horizontal maps the long side to X (4) and
+the short side to Y (16). A quarter-turned camera changes neither assignment.
 
 **Accept when:** rotating the input frame 90° leaves the column/row assignment
 unchanged.
@@ -167,13 +168,14 @@ accepted frames while the camera and paper remain fixed, then fit the unseen
 interior cells virtually.
 
 **Accept when:** `e` starts a fresh session, Space accepts one frame, and `k`
-writes the ordinary `workspace_map.json` only after at least two accepted
-frames (each later frame overlapping four earlier physical cells), 36 physical
-cells, all four corner regions, three physical cells on every outer edge, <=2
-px mean / <=6 px max merged residual and <=3 px cross-frame spread. Physical
-cells are solid green; virtual cells are amber and dashed. `x` abandons the
-session without changing the previously saved map. The feature must never
-command the rig.
+writes the ordinary mode-keyed `workspace_map.json` only after at least two
+accepted frames (each later frame overlapping four earlier physical cells), at
+least 60% of that mode's physical cells (36/60 vertical; 39/64 horizontal), all
+four corner regions, at least half of each short edge and 30% of each long edge,
+<=2 px mean / <=6 px max merged residual and <=3 px cross-frame spread.
+Physical cells are solid green; virtual cells are amber and dashed. `x`
+abandons the session without changing the previously saved map. The feature
+must never command the rig.
 
 ---
 
@@ -190,25 +192,14 @@ These are **not** bugs. They were specified as excluded.
 
 ---
 
-## 5. Deferred, and documented as deferred
+## 5. Two machine layouts, not camera rotations
 
-### D1 — The rotated **machine**
-
-The sheet can be laid down two ways. The detector already handles a rotated
-*camera* (R5, by cell size). What is **not** handled is the sheet placed so the
-machine's own X runs along the 7.5 cm cell side — a rotated *machine*, not a
-rotated camera.
-
-For now: **vertical only.** Y is 6 rows `[0..5]`, X is 10 columns `[0..9]`, and
-the 7.5 cm side is Y — which is what the firmware, the maths and the rest of
-the code already assume.
-
-`SUPPORTED_LAYOUT` in `vision/color_grid.py` names the one supported layout and
-detection **refuses** anything else rather than guessing.
-
-Finishing it means deciding what `B <col> <row>` should mean in that
-orientation. That is a rig decision, not a vision one, which is why it is not
-being guessed at here.
+The detector supports both calibrated machine layouts. `ColorGridSpec` takes a
+mode explicitly and `SUPPORTED_LAYOUTS` records vertical's
+`y-along-block-length` and horizontal's `x-along-block-length`; neither is
+inferred from a partial view. Its count and geometry must agree with the active
+`MachineGrid` before a workspace map can be made. This is distinct from a
+rotated camera, which the homography handles in either mode.
 
 ---
 
@@ -279,7 +270,7 @@ get wrong.
 | R8, R10 | `python/vision/color_grid_overlay.py`, driven from all three tools |
 | R9 | `paper_workspace_map()` in `python/camera/gridded_camera_feed.py`, used by both feeds |
 | R12 | `vision/grid_evidence.py` and the `e` / Space / `k` flow in `gridded_camera_feed.py` |
-| D1 | `SUPPORTED_LAYOUT`, and the refusal in `detect_color_grid()` |
+| two layouts | `SUPPORTED_LAYOUTS`, `ColorGridSpec.mode`, and the count/geometry refusal |
 | A2 | `ColorGridCalibration.workspace_corners()` |
 
 Rules that must not drift: **AGENTS.md §3d** (the sheet carries a copy of the
@@ -298,8 +289,8 @@ homographies, and on one real frame from the rig.
 | R1 detect and fit | done — 1.13 px mean residual on the training capture |
 | R2 whole cells only | done — partials excluded; short frames refused |
 | R3 margins | done — inner margins return `None`, outer never measured |
-| R4 10 × 6, `[0,0]` bottom-left | done |
-| R5 axis from cell size | done — survives a 90° input rotation |
+| R4 10 × 6 / 4 × 16, `[0,0]` bottom-left | done |
+| R5 axis from explicit mode + cell size | done — survives a 90° input rotation |
 | R6 modular core | done |
 | R7 verification tool | done — live path **not verified on hardware** |
 | R8 overlay in both feeds | done — live path **not verified on hardware** |
@@ -307,7 +298,7 @@ homographies, and on one real frame from the rig.
 | R10 never fail silently | done |
 | R11 survive the colour cast | done |
 | R12 evidence-assisted gantry occlusion | done — synthetic occlusion test; live Pi path needs hardware verification |
-| D1 rotated machine | deferred, refused explicitly |
+| two machine layouts | done — synthetic horizontal checks; Pi camera path unverified |
 
 **What is not verified:** anything that needs the Pi's camera. Camera code
 cannot be exercised on the dev desktop (AGENTS.md, "Environment rules"), so the

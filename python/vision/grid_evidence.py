@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from dataclasses import dataclass
+import math
 
 import cv2
 import numpy as np
@@ -19,8 +20,14 @@ from vision.color_grid import ColorGridCalibration, ColorGridError, ColorGridMet
 
 
 MIN_FRAMES = 2
-MIN_CELLS = 36                       # 60% of the 10x6 printed map
-MIN_EDGE_CELLS = 3
+# Coverage is a fraction of the selected printed map, never a vertical-sheet
+# constant.  That keeps 4x16 horizontal evidence at the same standard as the
+# original 10x6 route: 60% verified, half of each short edge and 30% of each
+# long edge physically observed.
+MIN_CELL_FRACTION = 0.60
+MIN_EVIDENCE_FRAME_FRACTION = 0.20
+MIN_SHORT_EDGE_FRACTION = 0.50
+MIN_LONG_EDGE_FRACTION = 0.30
 MIN_FRAME_OVERLAP = 4
 MAX_MEAN_RESIDUAL_PX = 2.0
 MAX_RESIDUAL_PX = 6.0
@@ -71,6 +78,21 @@ class PaperGridEvidence:
                               (0, 0, 0, 0), 0.0, 0.0, 0.0, False,
                               (f"capture {MIN_FRAMES} accepted frames",))
 
+    def _min_cells(self):
+        return math.ceil(MIN_CELL_FRACTION * self.spec.cols * self.spec.rows)
+
+    def _min_frame_cells(self):
+        return math.ceil(MIN_EVIDENCE_FRAME_FRACTION * self.spec.cols * self.spec.rows)
+
+    def _min_edge_cells(self):
+        """Required L/R/B/T observations, scaled to this layout's sides."""
+        return (
+            math.ceil(MIN_SHORT_EDGE_FRACTION * self.spec.rows),
+            math.ceil(MIN_SHORT_EDGE_FRACTION * self.spec.rows),
+            math.ceil(MIN_LONG_EDGE_FRACTION * self.spec.cols),
+            math.ceil(MIN_LONG_EDGE_FRACTION * self.spec.cols),
+        )
+
     @property
     def frames(self):
         return len(self._frames)
@@ -104,8 +126,10 @@ class PaperGridEvidence:
         if calibration.spec != self.spec:
             raise ValueError("evidence frame uses a different printed-grid geometry")
         metrics = calibration.metrics
-        if metrics.full_cells < 12:
-            raise ColorGridError("evidence frame has fewer than 12 whole cells")
+        minimum_frame_cells = self._min_frame_cells()
+        if metrics.full_cells < minimum_frame_cells:
+            raise ColorGridError(
+                f"evidence frame has fewer than {minimum_frame_cells} whole cells")
         if metrics.parity_agreement < 0.95:
             raise ColorGridError(
                 f"evidence frame parity is only {metrics.parity_agreement:.0%}; "
@@ -217,13 +241,18 @@ class PaperGridEvidence:
         reasons = []
         if self.frames < MIN_FRAMES:
             reasons.append(f"capture {MIN_FRAMES - self.frames} more accepted frame")
-        if len(observed) < MIN_CELLS:
-            reasons.append(f"need {MIN_CELLS - len(observed)} more verified cells")
+        minimum_cells = self._min_cells()
+        if len(observed) < minimum_cells:
+            reasons.append(f"need {minimum_cells - len(observed)} more verified cells")
         if anchors < 4:
             reasons.append(f"need {4 - anchors} more corner-region anchor")
-        if any(count < MIN_EDGE_CELLS for count in edges):
-            missing = ", ".join(name for name, count in zip(("left", "right", "bottom", "top"), edges)
-                                if count < MIN_EDGE_CELLS)
+        edge_minimums = self._min_edge_cells()
+        edge_names = ("left", "right", "bottom", "top")
+        if any(count < minimum for count, minimum in zip(edges, edge_minimums)):
+            missing = ", ".join(
+                name for name, count, minimum in zip(edge_names, edges, edge_minimums)
+                if count < minimum
+            )
             reasons.append(f"observe {missing} outer edge")
         if metrics.residual_px > MAX_MEAN_RESIDUAL_PX or metrics.max_residual_px > MAX_RESIDUAL_PX:
             reasons.append("merged fit residual is too high")

@@ -16,9 +16,10 @@ when it is a complete, colour-detected printed block that passes the detector's
 fullness, lattice, parity and per-frame residual checks. The feature then pools
 those physical observations from two or more manually accepted camera frames.
 
-The merged fit draws all 10 x 6 printed coordinates. A cell seen physically is
-solid green. A cell that is present only in the fitted geometry is amber and
-dashed. Amber means **virtual**, not measured.
+The merged fit draws every coordinate in the selected mode: 10 x 6 vertical or
+4 x 16 horizontal. A cell seen physically is solid green. A cell that is
+present only in the fitted geometry is amber and dashed. Amber means
+**virtual**, not measured.
 
 This is safe for an interior gantry occlusion because the observed outer edges
 and corner regions constrain the surrounding grid. It never permits a virtual
@@ -42,7 +43,7 @@ four corner regions before it can save a map.
 From the `python/` directory:
 
 ```bash
-../.venv/bin/python camera/gridded_camera_feed.py
+../.venv/bin/python camera/gridded_camera_feed.py --mode horizontal
 ```
 
 The program opens a Tk Controls dashboard and an OpenCV Preview. Work in the
@@ -74,9 +75,9 @@ preview; read the evidence report in the dashboard.
 | --- | --- | --- |
 | accepted frames | at least 2 | catches camera/paper motion and avoids saving an accidental single glimpse |
 | overlap between later frames | at least 4 previously verified cells | proves a newly revealed region still belongs to the same fixed camera/sheet view |
-| physical printed cells | at least 36 of 60 | the fit is supported by most of the selected map |
+| physical printed cells | at least 60%: 36 of 60 vertical, 39 of 64 horizontal | the fit is supported by most of the selected map |
 | corner regions | 4 of 4 | no virtual extrapolation at a workspace corner |
-| each outer edge | at least 3 physical cells | no virtual extrapolation along a workspace boundary |
+| each outer edge | at least 50% of a short edge and 30% of a long edge | no virtual extrapolation along a workspace boundary; horizontal's 16-cell sides need 8 anchors |
 | merged residual | mean <= 2 px, max <= 6 px | the virtual grid remains tied to the ink |
 | repeated-cell spread | <= 3 px | camera and paper did not move between accepted frames |
 
@@ -99,7 +100,7 @@ without making an unsafe camera map.
 
 | Situation | Route |
 | --- | --- |
-| One clean frame contains a complete, unobstructed 10 x 6 window | `p`, then `k`: strict single-frame printed-sheet calibration. |
+| One clean frame contains a complete unobstructed mode-sized window (10 x 6 vertical; 4 x 16 horizontal) | `p`, then `k`: strict single-frame printed-sheet calibration. |
 | Gantry/cable hides interior sheet cells but the outer boundaries can be seen across a few positions | `e`, `Space` for each useful position, wait for READY TO SAVE, then `k`. |
 | A workspace boundary cannot be seen at all | Reframe the camera/sheet or use four clicked corners; evidence mode correctly refuses to invent it. |
 | Lens/crop/orientation is being changed | Do that first, then calibrate the workspace again. |

@@ -58,7 +58,7 @@ from camera.camera_feed import (  # noqa: E402
     sensor_from_settings,
 )
 from camera.tk_camera_window import TkCameraWindow  # noqa: E402
-from rig.config import CONFIG_PATH, load as load_rig_config  # noqa: E402
+from rig.config import CONFIG_PATH, GRID_MODES, load as load_rig_config  # noqa: E402
 from rig.grid import MachineGrid  # noqa: E402
 from vision.camera_source import LatestFramePump, open_camera  # noqa: E402
 from vision.color_grid import (  # noqa: E402
@@ -94,6 +94,9 @@ def parse_args():
                         help=f"camera settings JSON (default: {SETTINGS_PATH})")
     parser.add_argument("--rig-config", type=Path, default=CONFIG_PATH,
                         help=f"grid geometry JSON (default: {CONFIG_PATH})")
+    parser.add_argument("--mode", choices=GRID_MODES, default=None,
+                        help="printed-sheet layout to check (default: "
+                             "rig.json's grid.active_mode)")
     parser.add_argument("--home-convention", choices=HOME_CONVENTIONS,
                         default=DEFAULT_HOME_CONVENTION,
                         help="where the machine origin sits on the sheet "
@@ -398,8 +401,8 @@ def main():
 
     try:
         rig_data = load_rig_config(args.rig_config, reload=True)
-        spec = ColorGridSpec.from_config(rig_data)
-        grid = MachineGrid.from_config(rig_data)
+        grid = MachineGrid.from_config(rig_data, mode=args.mode)
+        spec = ColorGridSpec.from_config(rig_data, mode=grid.mode)
     except (KeyError, TypeError, ValueError, SystemExit) as exc:
         print(exc, file=sys.stderr)
         return 1

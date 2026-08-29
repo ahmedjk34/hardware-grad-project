@@ -32,6 +32,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from rig.config import load as load_rig_config
 from rig.grid import MachineGrid
 from rig.workspace import WorkspaceMap
 from vision.color_grid import (
@@ -137,10 +138,57 @@ grid = MachineGrid.from_config()
 print(f"sheet: {spec.describe()}")
 
 
+# --- 0. the horizontal sheet is a first-class detector layout ---------------
+
+rig_config = load_rig_config()
+horizontal_spec = ColorGridSpec.from_config(rig_config, mode="horizontal")
+horizontal_grid = MachineGrid.from_config(rig_config, mode="horizontal")
+check("horizontal sheet maps the complete 4x16 coordinate grid",
+      (horizontal_spec.mode, horizontal_spec.cols, horizontal_spec.rows)
+      == ("horizontal", 4, 16), horizontal_spec.describe())
+
+# The real horizontal paper has spare width.  Six long-side columns gives the
+# detector that same window-search problem while retaining the 4x16 mapped
+# extent; eighteen short-side rows give two overlapping choices there too.
+horizontal_image, horizontal_centres = render_sheet(
+    horizontal_spec, 6, 18, clip_cm=(0.6, 0.8))
+horizontal = detect_color_grid(horizontal_image, horizontal_spec, process_width=0)
+check("horizontal sheet fits all 64 mapped cells",
+      len(horizontal.found_cells) == 64 and horizontal.layout == "x-along-block-length",
+      horizontal.describe())
+check("horizontal partial edge blocks never enter the map",
+      all(cell.full for cell in horizontal.found_cells.values()),
+      f"{len(horizontal.found_cells)} whole mapped cells")
+horizontal_choices = detect_color_grids(horizontal_image, horizontal_spec, process_width=0)
+check("horizontal sheet retains operator-selectable overlapping windows",
+      len(horizontal_choices) > 1,
+      f"{len(horizontal_choices)} choices")
+horizontal_workspace = WorkspaceMap.from_grid(
+    horizontal_grid, horizontal.workspace_corners(horizontal_grid, "firmware"),
+    horizontal_image.shape[1::-1], {"test": "horizontal"})
+check("horizontal printed cells map to horizontal machine cells",
+      horizontal_workspace.cell_at(horizontal.cell_center(3, 15),
+                                   horizontal_image.shape[1::-1]) == (3, 15))
+try:
+    # The explicit count/layout cross-check protects a caller that accidentally
+    # feeds a vertical calibration into a horizontal machine map.
+    horizontal.workspace_corners(grid, "firmware")
+    check("wrong-mode sheet is refused before calibration", False)
+except ColorGridError as exc:
+    check("wrong-mode sheet is refused before calibration",
+          "horizontal printed sheet" in str(exc), str(exc))
+
+
 # --- 1. an upright sheet, printed oversized and clipped on two edges --------
 
 image, centers = render_sheet(spec, 13, 8, clip_cm=(1.2, 4.0))
 calibration = detect_color_grid(image, spec, process_width=0)
+try:
+    detect_color_grid(image, horizontal_spec, process_width=0)
+    check("a vertical sheet offered in horizontal mode is refused", False)
+except ColorGridError as exc:
+    check("a vertical sheet offered in horizontal mode is refused",
+          "selected horizontal layout" in str(exc), str(exc)[:120])
 check("upright sheet fits the 10x6 grid",
       (calibration.spec.cols, calibration.spec.rows) == (10, 6),
       calibration.describe())
@@ -490,6 +538,44 @@ try:
           not np.array_equal(evidence_view, image))
 except ColorGridError as exc:
     check("complementary gantry evidence is accepted", False, str(exc))
+
+
+# The same evidence and partial-cell rules are not vertical special cases.
+# Horizontal's long stack is the harder layout: its left/right boundaries span
+# 16 short-side cells, so the scaled evidence gate needs eight real anchors on
+# each instead of reusing vertical's literal three.
+horizontal_evidence_image, horizontal_evidence_centres = render_sheet(
+    horizontal_spec, 6, 18)
+
+def hide_horizontal_cells(source, row, columns):
+    result = source.copy()
+    y = round(horizontal_evidence_centres[(3, row)][1])
+    left = round(horizontal_evidence_centres[(min(columns), row)][0] - 62)
+    right = round(horizontal_evidence_centres[(max(columns), row)][0] + 62)
+    cv2.rectangle(result, (left, y - 22), (right, y + 22), PAPER_BGR, -1)
+    return result
+
+
+horizontal_sparse_image = hide_horizontal_cells(
+    horizontal_evidence_image, 8, range(1, 5))
+try:
+    detect_color_grid(horizontal_sparse_image, horizontal_spec, process_width=0)
+    check("horizontal gantry-split frame stays refused in strict mode", False)
+except ColorGridError:
+    check("horizontal gantry-split frame stays refused in strict mode", True)
+try:
+    horizontal_sparse = detect_color_grid(
+        horizontal_sparse_image, horizontal_spec, process_width=0, evidence=True)
+    horizontal_evidence = PaperGridEvidence(horizontal_spec)
+    first_status = horizontal_evidence.add(horizontal_sparse)
+    final_status = horizontal_evidence.add(horizontal_sparse)
+    check("horizontal evidence keeps its scaled 64-cell coverage gates",
+          not first_status.ready and final_status.ready,
+          final_status.describe())
+    check("horizontal evidence requires eight anchors on each long edge",
+          final_status.edge_cells[:2] >= (8, 8), final_status.describe())
+except ColorGridError as exc:
+    check("horizontal evidence pooling is accepted", False, str(exc))
 
 
 # --- 8. the training captures, when they are there --------------------------

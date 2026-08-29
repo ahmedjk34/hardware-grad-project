@@ -1,7 +1,7 @@
 # Dual-orientation grid — vertical and horizontal, both calibrated
 
-**State:** active — **steps 1-5 built and tested; steps 6, 7 and part of 8
-remain.** See §10 for exactly where the work stopped.
+**State:** built on the desk — all eight steps have regression coverage; camera
+and hardware verification remain. See §10 for exactly what has and has not run.
 **Blocked on:** nothing; §4 was answered (see §4)
 
 The rig currently knows one grid: blocks standing with their 7.5 cm side along
@@ -433,15 +433,34 @@ drift here is not cosmetic — it is how the two machines stop agreeing.
 `python/README.md`; `python/GUIDE.md`; `plans/ack-protocol.md`;
 `plans/README.md` (draft → active). D20's amendment is recorded in §1.
 
-**Step 8 is half done.** The connect-time half of R4 is built and tested:
-`connect()` calls `sync_mode()` and then `set_grid()`, in that order, and
-`test_link.py` asserts `RR` precedes `S 3 15` on the wire. The mid-session
-half is NOT: `RigReset` is still raised and left to the caller, with nothing
-re-pushing the mode after it.
+**Step 6 is built and desk-tested.** `ColorGridSpec` takes an explicit mode;
+vertical maps 10 x 6 printed coordinates and horizontal maps 4 x 16. The
+pitch-to-axis mapping follows that mode, not the image. Count and physical
+geometry are cross-checked before a sheet map can be applied to a
+`MachineGrid`. Horizontal synthetic tests cover 64 mapped cells, overlapping
+operator-selectable windows, partial-cell rejection, wrong-layout refusal and
+the evidence collector's scaled coverage gates.
 
-**Not started: steps 6 and 7**, and their doc obligations —
-`plans/printed-grid-spec.md` R5/R6 and its "vertical only" section are still
-wrong in the general case, and AGENTS.md §3d still describes one sheet.
+**Step 7 is built and desk-tested.** `workspace_map.json` version 3 stores
+per-mode entries in `modes.vertical` / `modes.horizontal`; saving one preserves
+the other. Flat version-2 maps migrate as vertical only, and a map is refused
+if its stored mode differs from the current `MachineGrid`. All calibration
+entry points select the mode (`--mode` in the non-moving feeds; the rig UI
+rebuilds the sheet tracker and reloads that mode's map when `o` latches it).
+
+**Step 8 is built and desk-tested.** The connect-time half remains mode then
+`S`; `test_link.py` asserts `RR` precedes `S 3 15`. An unexpected `BOOT` now
+latches a reset state so an idle reset cannot be drained by a later command.
+`recover_after_reset(home=True)` explicitly homes and then replays mode before
+`S`. It is intentionally not automatic: reset loses X/Y homing and D9 forbids
+the horizontal latch until after home; the hardware-moving UI still locks the
+session for a human inspection rather than invoking recovery itself.
+
+**Docs updated with these steps:** AGENTS.md §3d;
+`plans/printed-grid-spec.md`, `plans/printed-color-grid.md` and
+`plans/evidence-assisted-printed-grid-calibration.md` now describe both sheets
+and per-mode evidence gates; `plans/plan-2-click-to-build.md`, `python/GUIDE.md`
+and `python/README.md` describe the keyed workspace map and reset recovery.
 
 ### Verification honesty
 

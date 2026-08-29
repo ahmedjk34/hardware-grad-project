@@ -291,6 +291,11 @@ class Rig:
         # 'vertical' without asking, so this is read from the machine rather
         # than assumed from the config.
         self.ready_mode: str | None = None
+        # Unlike the transient BOOT event, this remains set until an explicit,
+        # human-authorized recovery homes the reset board and replays its mode
+        # and size.  Otherwise an idle reset could be drained by the next
+        # command and leave Python addressing the wrong layout.
+        self._reset_detected = False
         self.prose_fallbacks = 0  # how often the ack lines were missing
 
     # -- lifecycle -------------------------------------------------
@@ -346,10 +351,15 @@ class Rig:
 
         self._stopping.clear()
         self._booted.clear()
+        self._reset_detected = False
         self._reader = threading.Thread(target=self._read_loop, daemon=True)
         self._reader.start()
 
         self._wait_ready(timeout)
+        # This BOOT is the expected port-open reset; it is exactly what the
+        # following configure handshake is here to repair. Later BOOT events
+        # remain latched until recover_after_reset() is explicitly authorized.
+        self._reset_detected = False
         if configure:
             self.sync_mode()
             self.set_grid()
@@ -416,6 +426,9 @@ class Rig:
 
             if ack.kind == "BOOT":
                 self._booted.set()
+                self.ready_grid = None
+                self.ready_mode = None
+                self._reset_detected = True
             elif ack.kind == "READY":
                 self.ready_grid = ack.fields.get("grid")
                 # Absent on firmware predating the mode latch. None means
@@ -571,6 +584,43 @@ class Rig:
 
     # -- commands --------------------------------------------------
 
+    def _require_not_reset(self) -> None:
+        if self._reset_detected:
+            raise RigReset(
+                "the board reset and is back in its unhomed vertical default. "
+                "Inspect the rig, then call recover_after_reset(home=True) "
+                "before sending another command."
+            )
+
+    def recover_after_reset(self, *, home: bool = False) -> None:
+        """Explicitly restore mode and size after an unexpected board reset.
+
+        A reset loses homing as well as returning the firmware to vertical.
+        D9 therefore makes an automatic horizontal latch impossible and the
+        build UI deliberately never calls this method: a person must inspect
+        the claw and consciously authorize the recovery homing move. Once
+        homed, replay the same safe order as connect: mode first, then ``S``.
+        """
+        if not self._reset_detected:
+            return
+        if not home:
+            raise RigReset(
+                "the board reset; inspect it and call "
+                "recover_after_reset(home=True) to home and re-sync the grid"
+            )
+        # The explicit `home=True` is the authorization for this motion. Let
+        # the normal helpers run, but restore the lock if anything goes wrong.
+        self._reset_detected = False
+        try:
+            if not self.home():
+                raise RigError("reset recovery homing did not reach the origin")
+            self.ready_mode = DEFAULT_GRID_MODE
+            self.sync_mode()
+            self.set_grid()
+        except Exception:
+            self._reset_detected = True
+            raise
+
     def set_grid(self, cols: int | None = None, rows: int | None = None) -> None:
         """Push the grid from config/rig.json. The board forgot it on reset.
 
@@ -578,6 +628,7 @@ class Rig:
         mode's geometry, so the mode has to be right before this is sent.
         `connect()` does them in that order.
         """
+        self._require_not_reset()
         cols = self.cols if cols is None else cols
         rows = self.rows if rows is None else rows
         # quiet= is safe here and only here: S moves nothing and answers
@@ -611,6 +662,7 @@ class Rig:
         `connect()` passes False only because it sends `S` itself immediately
         after.
         """
+        self._require_not_reset()
         mode = str(mode)
         if mode not in GRID_MODES:
             raise ValueError(
@@ -670,6 +722,7 @@ class Rig:
         False is not an exception: the firmware prints its own warnings and
         stops safely, and the caller has to decide whether it cares.
         """
+        self._require_not_reset()
         line = "0+" if full else "0"
         done = ("FULL RESET COMPLETE", "FULL RESET INCOMPLETE") if full else (
             "AT ORIGIN", "ORIGIN NOT REACHED")
@@ -687,6 +740,7 @@ class Rig:
         it means "leave that axis at the origin", so ``G 0 0`` goes home
         (or does nothing if already there) and e.g. ``G 5 0`` moves X only.
         """
+        self._require_not_reset()
         out = self._send_and_settle(
             f"G {col} {row}",
             timeout=timeout,
@@ -722,6 +776,7 @@ class Rig:
         timeout therefore means something outside the firmware's model went
         wrong, which is also a go-and-look, not a retry.
         """
+        self._require_not_reset()
         try:
             col, row, level = int(col), int(row), int(level)
         except (TypeError, ValueError) as exc:
