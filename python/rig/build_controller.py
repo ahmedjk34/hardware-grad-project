@@ -5,10 +5,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from rig.config import GRID_MODES
 from rig.link import ABORTED, PLACED, BuildResult, RigError
-
-
-ROTATIONS = ("NR", "R", "RR")
 
 
 class BuildStateError(RuntimeError):
@@ -22,32 +20,41 @@ class BuildController:
     The controller deliberately knows nothing about OpenCV. It enforces the
     pieces that must remain true whichever UI calls it: levels cannot be
     negative, successful builds clear selection to prevent accidental repeats,
-    and an aborted/unknown serial outcome locks the session until a human has
-    inspected the rig and restarts the program.
+    a grid-mode switch clears it too because the coordinates now mean something
+    else, and an aborted/unknown serial outcome locks the session until a human
+    has inspected the rig and restarts the program.
     """
 
     rig: object
     level: int = 0
-    rotation: str = "NR"
     selected: tuple[int, int] | None = None
     last_result: BuildResult | None = None
     locked_reason: str | None = None
 
     def __post_init__(self):
         self.set_level(self.level)
-        self.set_rotation(self.rotation)
 
     @property
     def locked(self) -> bool:
         return self.locked_reason is not None
 
     @property
+    def mode(self) -> str | None:
+        """Which grid the rig is in. Read from the rig, never cached here.
+
+        A stale copy of this would put a block in the wrong place, so the
+        controller does not keep one: it asks the object that owns the grid.
+        """
+        return getattr(self.rig.grid, "mode", None)
+
+    @property
     def command(self) -> str | None:
         if self.selected is None:
             return None
         col, row = self.selected
-        command = f"B {col} {row} {self.level}"
-        return command if self.rotation == "NR" else f"{command} {self.rotation}"
+        # No rotation word: how the block is laid is a property of the active
+        # grid, and the rig already knows which grid it is in.
+        return f"B {col} {row} {self.level}"
 
     def select(self, cell: tuple[int, int]) -> None:
         if self.locked:
@@ -73,14 +80,32 @@ class BuildController:
     def adjust_level(self, delta: int) -> None:
         self.set_level(max(0, self.level + int(delta)))
 
-    def set_rotation(self, rotation: str) -> None:
-        rotation = str(rotation).upper()
-        if rotation not in ROTATIONS:
-            raise BuildStateError(f"rotation must be one of {', '.join(ROTATIONS)}")
-        self.rotation = rotation
+    def set_mode(self, mode: str) -> None:
+        """Latch the rig into one of the two grids.
 
-    def cycle_rotation(self) -> None:
-        self.rotation = ROTATIONS[(ROTATIONS.index(self.rotation) + 1) % len(ROTATIONS)]
+        This is where per-block rotation used to live. It moved here because
+        rotation turned out to be a property of the GRID, not of a block: a
+        turned block only makes sense inside cells shaped for it. Selecting a
+        mode therefore changes the whole coordinate system, which is why it
+        goes to the rig instead of being remembered locally, and why any
+        pending selection is dropped — `[3,5]` means a different place
+        afterwards.
+        """
+        if self.locked:
+            raise BuildStateError(self.locked_reason)
+        mode = str(mode).lower()
+        if mode not in GRID_MODES:
+            raise BuildStateError(f"grid mode must be one of {', '.join(GRID_MODES)}")
+        if mode == self.mode:
+            return
+        self.rig.set_mode(mode)
+        self.selected = None
+
+    def cycle_mode(self) -> None:
+        """Latch the other grid. Two modes, so this is a toggle."""
+        current = self.mode
+        index = GRID_MODES.index(current) if current in GRID_MODES else 0
+        self.set_mode(GRID_MODES[(index + 1) % len(GRID_MODES)])
 
     def build(self, timeout: float = 300.0) -> BuildResult:
         """Send the selected B command once; lock if machine state is unknown."""
@@ -91,11 +116,7 @@ class BuildController:
 
         col, row = self.selected
         try:
-            result = self.rig.build(
-                col, row, self.level,
-                rotation=None if self.rotation == "NR" else self.rotation,
-                timeout=timeout,
-            )
+            result = self.rig.build(col, row, self.level, timeout=timeout)
         except RigError as exc:
             self.locked_reason = (
                 f"serial/build state unknown: {exc}; inspect the rig and restart"

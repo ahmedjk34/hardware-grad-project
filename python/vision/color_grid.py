@@ -226,8 +226,8 @@ class ColorGridSpec:
         return cls(
             cols=int(grid["cols"]) + 1,
             rows=int(grid["rows"]) + 1,
-            block_x_cm=float(grid["block_width_cm"]),
-            block_y_cm=float(grid["block_length_cm"]),
+            block_x_cm=float(grid["block_x_cm"]),
+            block_y_cm=float(grid["block_y_cm"]),
             gap_x_cm=float(grid["gap_x_cm"]),
             gap_y_cm=float(grid["gap_y_cm"]),
         )
@@ -452,8 +452,8 @@ class ColorGridCalibration:
         return [self.point_at(*to_grid(x, y)) for x, y in corners_cm]
 
     def _check_geometry_matches(self, grid):
-        pairs = ((self.spec.block_x_cm, grid.block_width_cm, "block X"),
-                 (self.spec.block_y_cm, grid.block_length_cm, "block Y"),
+        pairs = ((self.spec.block_x_cm, grid.block_x_cm, "block X"),
+                 (self.spec.block_y_cm, grid.block_y_cm, "block Y"),
                  (self.spec.gap_x_cm, grid.gap_x_cm, "gap X"),
                  (self.spec.gap_y_cm, grid.gap_y_cm, "gap Y"))
         for printed, machine, name in pairs:

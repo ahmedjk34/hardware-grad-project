@@ -19,7 +19,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from rig.grid import ORIGIN_CORNERS, MachineGrid
-from rig.config import load
+from rig.config import UnknownGridMode, load
 from rig.workspace import WorkspaceMap
 
 PASSED, FAILED = [], []
@@ -148,6 +148,204 @@ check("block footprint reaches past the last holder centres",
       math.isclose(from_cfg.x_end_cm, 25.4)
       and math.isclose(from_cfg.y_end_cm, 43.75))
 
+# ------------------------------------------------------------------
+# The dual-orientation numeric contract
+# ------------------------------------------------------------------
+# Section 3 of plans/dual-orientation-grid.md tabulates every derived
+# centimetre for both modes. That table IS the contract between the firmware,
+# MachineGrid and the camera overlay, so it is transcribed here rather than
+# recomputed: a test that redoes the arithmetic would agree with a bug.
+#
+#  mode        axis  block  gap  pitch  count  footprint  centres        edges
+#  vertical    X     2.2    0.5  2.7      9    23.80      2.70 -> 24.30  1.60 -> 25.40
+#  vertical    Y     7.5    0.5  8.0      5    39.50      8.00 -> 40.00  4.25 -> 43.75
+#  horizontal  X     7.5    0.5  8.0      3    23.50      4.40 -> 20.40  0.65 -> 24.15
+#  horizontal  Y     2.2    0.5  2.7     15    40.00      1.10 -> 38.90  0.00 -> 40.00
+
+SECTION_3 = {
+    "vertical": {
+        "counts": (9, 5),
+        "block": (2.2, 7.5),
+        "gap": (0.5, 0.5),
+        "pitch": (2.7, 8.0),
+        "footprint": (23.80, 39.50),
+        "first_centre": (2.70, 8.00),
+        "last_centre": (24.30, 40.00),
+        "first_edge": (1.60, 4.25),
+        "last_edge": (25.40, 43.75),
+    },
+    "horizontal": {
+        "counts": (3, 15),
+        "block": (7.5, 2.2),
+        "gap": (0.5, 0.5),
+        "pitch": (8.0, 2.7),
+        "footprint": (23.50, 40.00),
+        "first_centre": (4.40, 1.10),
+        "last_centre": (20.40, 38.90),
+        "first_edge": (0.65, 0.00),
+        "last_edge": (24.15, 40.00),
+    },
+}
+
+
+def close_pair(actual, expected):
+    return all(math.isclose(a, b, abs_tol=1e-9) for a, b in zip(actual, expected))
+
+
+for mode, want in SECTION_3.items():
+    m = MachineGrid.from_config(config, mode=mode)
+
+    check(f"{mode}: mode is recorded on the grid", m.mode == mode, m.describe())
+    check(f"{mode}: counts", (m.cols, m.rows) == want["counts"],
+          f"{m.cols}x{m.rows}")
+    check(f"{mode}: block extents stated per axis",
+          close_pair((m.block_x_cm, m.block_y_cm), want["block"]),
+          f"{m.block_x_cm} x {m.block_y_cm}")
+    check(f"{mode}: gaps", close_pair((m.gap_x_cm, m.gap_y_cm), want["gap"]))
+    check(f"{mode}: pitch", close_pair((m.pitch_x_cm, m.pitch_y_cm), want["pitch"]),
+          f"{m.pitch_x_cm} x {m.pitch_y_cm}")
+    check(f"{mode}: footprint",
+          close_pair((m.packed_width_cm, m.packed_height_cm), want["footprint"]),
+          f"{m.packed_width_cm} x {m.packed_height_cm}")
+    check(f"{mode}: first centre",
+          close_pair(m.cell_center_cm(1, 1), want["first_centre"]),
+          str(m.cell_center_cm(1, 1)))
+    check(f"{mode}: last centre",
+          close_pair(m.cell_center_cm(m.cols, m.rows), want["last_centre"]),
+          str(m.cell_center_cm(m.cols, m.rows)))
+    check(f"{mode}: first block edge",
+          close_pair((m.x_start_cm, m.y_start_cm), want["first_edge"]),
+          f"{m.x_start_cm} x {m.y_start_cm}")
+    check(f"{mode}: last block edge",
+          close_pair((m.x_end_cm, m.y_end_cm), want["last_edge"]),
+          f"{m.x_end_cm} x {m.y_end_cm}")
+    check(f"{mode}: every placement centre is reachable",
+          m.x_first_center_cm >= 0 and m.y_first_center_cm >= 0
+          and m.x_last_center_cm <= m.workspace_width_cm
+          and m.y_last_center_cm <= m.workspace_height_cm)
+    check(f"{mode}: 45 build cells", m.cols * m.rows == 45)
+    check(f"{mode}: matches its own config entry", m.matches(config), m.describe())
+
+# The counts in section 3 are hard geometric maxima, not preferences. One more
+# cell on either axis needs more centimetres than the axis has.
+check("a 4th horizontal column cannot physically fit",
+      4 * 7.5 + 3 * 0.5 > 24.3, f"{4 * 7.5 + 3 * 0.5} cm into 24.3")
+check("a 16th horizontal row cannot physically fit",
+      16 * 2.2 + 15 * 0.5 > 40.0, f"{16 * 2.2 + 15 * 0.5} cm into 40.0")
+check("15 horizontal rows are exactly flush",
+      math.isclose(15 * 2.2 + 14 * 0.5, 40.0),
+      f"{15 * 2.2 + 14 * 0.5} cm into 40.0")
+
+# Addressable extents including the zero lanes: 10 x 6 and 4 x 16.
+vertical_grid = MachineGrid.from_config(config, mode="vertical")
+horizontal_grid = MachineGrid.from_config(config, mode="horizontal")
+check("vertical addresses a 10 x 6 coordinate grid",
+      (vertical_grid.cols + 1, vertical_grid.rows + 1) == (10, 6))
+check("horizontal addresses a 4 x 16 coordinate grid",
+      (horizontal_grid.cols + 1, horizontal_grid.rows + 1) == (4, 16))
+check("horizontal ascii map is 4 wide and 16 tall",
+      len(horizontal_grid.ascii_map().splitlines()[3].split()) == 4 + 2
+      and horizontal_grid.ascii_map().splitlines()[3].startswith(" 15 |"),
+      repr(horizontal_grid.ascii_map().splitlines()[3]))
+
+# D14 / R2: horizontal must NOT inherit vertical's trims. At trim_x = 1.1 the
+# far column edge lands 0.95 cm past the X limit while its CENTRE stays legal,
+# so a centre-only validator accepts an out-of-bounds grid. D20's per-mode
+# overhang budget is what closes that, and this is its regression test.
+
+
+def horizontal_at(trim_x, trim_y, budget=0.0):
+    return MachineGrid(
+        cols=3, rows=15, mode="horizontal",
+        block_x_cm=7.5, block_y_cm=2.2, gap_x_cm=0.5, gap_y_cm=0.5,
+        workspace_width_cm=24.3, workspace_height_cm=40.0,
+        trim_x_cm=trim_x, trim_y_cm=trim_y,
+        max_edge_overhang_x_cm=budget, max_edge_overhang_y_cm=budget,
+    )
+
+
+# Unbudgeted, the bad grid is accepted and its own numbers show why that is wrong.
+unchecked = MachineGrid(
+    cols=3, rows=15, mode="horizontal",
+    block_x_cm=7.5, block_y_cm=2.2, gap_x_cm=0.5, gap_y_cm=0.5,
+    workspace_width_cm=24.3, workspace_height_cm=40.0,
+    trim_x_cm=1.1, trim_y_cm=-0.25,
+)
+check("vertical's X trim keeps horizontal's last centre legal",
+      unchecked.x_last_center_cm <= unchecked.workspace_width_cm,
+      f"last centre {unchecked.x_last_center_cm:g} cm")
+check("...but pushes the far block edge 0.95 cm past the X limit (R2)",
+      math.isclose(unchecked.x_end_cm - unchecked.workspace_width_cm, 0.95,
+                   abs_tol=1e-9),
+      f"far edge {unchecked.x_end_cm:g} cm vs 24.3 cm travel")
+
+try:
+    horizontal_at(1.1, -0.25)
+    check("horizontal at vertical's X trim is refused (R2)", False)
+except ValueError as exc:
+    check("horizontal at vertical's X trim is refused (R2)",
+          "X block edges" in str(exc), str(exc))
+
+# The other wrong-trim case from section 3: at trim_y = 0.0 the far block
+# overhangs Y by 0.25 cm, which the zero budget also has to catch.
+try:
+    horizontal_at(0.0, 0.0)
+    check("horizontal at trim_y = 0.0 is refused", False)
+except ValueError as exc:
+    check("horizontal at trim_y = 0.0 is refused", "Y block edges" in str(exc),
+          str(exc))
+
+check("horizontal at the shipped trims is accepted",
+      horizontal_at(0.0, -0.25).mode == "horizontal")
+
+# Vertical keeps its half-block budget, which is what makes its documented
+# 25.40 / 43.75 cm block edges legal rather than a bug.
+check("vertical's budget is half a block on each axis",
+      (vertical_grid.max_edge_overhang_x_cm,
+       vertical_grid.max_edge_overhang_y_cm) == (1.1, 3.75))
+check("horizontal's budget is zero on both axes",
+      (horizontal_grid.max_edge_overhang_x_cm,
+       horizontal_grid.max_edge_overhang_y_cm) == (0.0, 0.0))
+try:
+    MachineGrid(
+        cols=9, rows=5, mode="vertical",
+        block_x_cm=2.2, block_y_cm=7.5, gap_x_cm=0.5, gap_y_cm=0.5,
+        workspace_width_cm=24.3, workspace_height_cm=40.0,
+        trim_x_cm=1.1, trim_y_cm=3.75,
+        max_edge_overhang_x_cm=0.0, max_edge_overhang_y_cm=0.0,
+    )
+    check("a zero budget would refuse even vertical", False)
+except ValueError as exc:
+    check("a zero budget would refuse even vertical", "block edges" in str(exc),
+          str(exc))
+
+# D2 / R6: the two modes are different grids, and a grid must not claim to
+# match the config entry for the other one.
+check("a horizontal grid does not match the vertical entry",
+      not MachineGrid.from_config(config, mode="horizontal").matches(
+          {"grid": {"active_mode": "vertical",
+                    "modes": {"horizontal": config["grid"]["modes"]["vertical"]}},
+           "workspace": config["workspace"]}))
+
+# `mode` is the BLOCK's orientation; `swap_axes` is the CAMERA's. They are
+# independent, and neither is allowed to stand in for the other.
+turned_horizontal = MachineGrid.from_config(config, mode="horizontal",
+                                            swap_axes=True)
+check("mode and swap_axes stay independent",
+      turned_horizontal.mode == "horizontal" and turned_horizontal.swap_axes
+      and (turned_horizontal.nx, turned_horizontal.ny) == (15, 3),
+      f"{turned_horizontal.nx}x{turned_horizontal.ny}")
+check("a horizontal grid is not axis-swapped by default",
+      not horizontal_grid.swap_axes and (horizontal_grid.nx, horizontal_grid.ny) == (3, 15))
+
+# An unknown mode is a readable error rather than a KeyError, at this layer too.
+try:
+    MachineGrid.from_config(config, mode="diagonal")
+    check("MachineGrid refuses an unknown mode", False)
+except UnknownGridMode as exc:
+    check("MachineGrid refuses an unknown mode", "diagonal" in str(exc), str(exc))
+
+
 # The Mega cannot read rig.json, so its safe manual-monitor defaults are baked
 # into the sketch. Keep this executable check beside the AGENTS.md pairing rule
 # so an agent changing JSON alone gets a loud failure before flashing.
@@ -165,19 +363,75 @@ def firmware_number(name):
     return float(match.group(1)) if match else None
 
 
+def firmware_mode_numbers(name):
+    """Read one per-mode table, e.g. `float GRID_TRIM_X_CM[...] = {1.1, 0.0};`.
+
+    Returned keyed by mode NAME, not by index, so a test can never silently
+    compare vertical's JSON against horizontal's firmware slot.
+    """
+    match = re.search(
+        rf"^\s*(?:float|long)\s+{re.escape(name)}\s*\[[^\]]*\]\s*=\s*\{{([^}}]*)\}}\s*;",
+        sketch,
+        re.MULTILINE,
+    )
+    if match is None:
+        return None
+    values = [float(part.strip()) for part in match.group(1).split(",")]
+    if len(values) != len(FIRMWARE_MODE_ORDER):
+        return None
+    return dict(zip(FIRMWARE_MODE_ORDER, values))
+
+
+# The table index each mode occupies in the sketch. Read out of the sketch
+# rather than assumed, because everything below depends on it and swapping the
+# two initialisers would otherwise pass every check while inverting the rig.
+FIRMWARE_MODE_ORDER = [None, None]
+for mode_name, constant in (("vertical", "GRID_MODE_VERTICAL"),
+                            ("horizontal", "GRID_MODE_HORIZONTAL")):
+    found = re.search(rf"const uint8_t {constant} = (\d+);", sketch)
+    if found is not None and int(found.group(1)) < 2:
+        FIRMWARE_MODE_ORDER[int(found.group(1))] = mode_name
+check("firmware mode order is vertical, horizontal",
+      FIRMWARE_MODE_ORDER == ["vertical", "horizontal"], str(FIRMWARE_MODE_ORDER))
+
+# D2: the board has no EEPROM and a USB open resets it, so the compiled default
+# IS what the machine is at the start of every session.
+check("firmware boots vertical (D2)",
+      re.search(r"uint8_t gridMode = GRID_MODE_VERTICAL;", sketch) is not None)
+check("firmware mode count is 2",
+      re.search(r"const uint8_t GRID_MODE_COUNT = 2;", sketch) is not None)
+
+# Every geometry value is now a per-mode table, and BOTH entries have to match
+# their config/rig.json partner. Checking only the active mode would let the
+# horizontal half of the firmware drift silently until someone sent RR.
+per_mode_pairs = {
+    "GRID_COLS": "cols",
+    "GRID_ROWS": "rows",
+    "GRID_BLOCK_X_CM": "block_x_cm",
+    "GRID_BLOCK_Y_CM": "block_y_cm",
+    "GRID_GAP_X_CM": "gap_x_cm",
+    "GRID_GAP_Y_CM": "gap_y_cm",
+    "GRID_TRIM_X_CM": "trim_x_cm",
+    "GRID_TRIM_Y_CM": "trim_y_cm",
+    "GRID_ERROR_OFFSET_X_CM": "error_offset_x_cm",
+    "GRID_ERROR_OFFSET_Y_CM": "error_offset_y_cm",
+    "GRID_MAX_EDGE_OVERHANG_X_CM": "max_edge_overhang_x_cm",
+    "GRID_MAX_EDGE_OVERHANG_Y_CM": "max_edge_overhang_y_cm",
+}
+for constant, json_key in per_mode_pairs.items():
+    actual = firmware_mode_numbers(constant)
+    if actual is None:
+        check(f"firmware table {constant}", False, "no readable per-mode table")
+        continue
+    for mode_name in ("vertical", "horizontal"):
+        expected = float(config["grid"]["modes"][mode_name][json_key])
+        check(f"firmware/config pair {constant}[{mode_name}]",
+              actual[mode_name] == expected,
+              f"firmware {actual[mode_name]}, JSON {expected}")
+
 paired_values = {
-    "GRID_COLS": from_cfg.cols,
-    "GRID_ROWS": from_cfg.rows,
     "X_TRAVEL_CM": from_cfg.workspace_width_cm,
     "Y_TRAVEL_CM": from_cfg.workspace_height_cm,
-    "GRID_BLOCK_X_CM": from_cfg.block_width_cm,
-    "GRID_BLOCK_Y_CM": from_cfg.block_length_cm,
-    "GRID_GAP_X_CM": from_cfg.gap_x_cm,
-    "GRID_GAP_Y_CM": from_cfg.gap_y_cm,
-    "GRID_TRIM_X_CM": from_cfg.trim_x_cm,
-    "GRID_TRIM_Y_CM": from_cfg.trim_y_cm,
-    "GRID_ERROR_OFFSET_X_CM": from_cfg.error_offset_x_cm,
-    "GRID_ERROR_OFFSET_Y_CM": from_cfg.error_offset_y_cm,
 }
 tool_offsets = config["tool_offsets"]
 paired_values.update({

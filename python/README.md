@@ -82,10 +82,15 @@ screen-horizontal, magenta edges screen-vertical, and orange edges diagonal
 an approximation. Hovering a calibrated cell shows its `[col,row]`, physical
 centre and matching `G` command.
 
-The positive grid is `9 × 5`. Including coordinate zero, commands span col
-`0..9` and row `0..5`: `[0,0]` home, `[col,0]` X-only, and `[0,row]` Y-only.
-The controlled span follows directly from `9 × (2.2 + 0.5) = 24.3 cm` and
-`5 × (7.5 + 0.5) = 40 cm`.
+There are two grids, and which one is live decides every coordinate. The
+`vertical` grid is `9 × 5` (blocks standing, `9 × (2.2 + 0.5) = 24.3 cm` by
+`5 × (7.5 + 0.5) = 40 cm`); the `horizontal` grid is `3 × 15` (blocks lying,
+`3 × (7.5 + 0.5) = 24 cm` by `15 × (2.2 + 0.5) = 40.5 cm`). Including
+coordinate zero, commands span col `0..cols` and row `0..rows`: `[0,0]` home,
+`[col,0]` X-only, and `[0,row]` Y-only. `MachineGrid.from_config(mode=...)`
+gives you either; `rig.json`'s `grid.active_mode` picks the default.
+
+A calibration is per mode and never transfers between them.
 
 `camera/rig_build_v1.py` adds the serial link and is the first camera UI allowed
 to move hardware. Its approximate grid works immediately; a saved calibration

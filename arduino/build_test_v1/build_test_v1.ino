@@ -33,16 +33,25 @@
     O = Servo OPEN   (pin 6)
     C = Servo CLOSE  (pin 6)
 
-    R  = Aux stepper rotate ~90 deg CW   (28BYJ-48, pins 36-39)
-    RR = Aux stepper rotate ~90 deg CCW  (28BYJ-48, pins 36-39)
+    R  = select the VERTICAL grid    (9 x 5, block 2.2 X x 7.5 Y cm)
+    RR = select the HORIZONTAL grid  (3 x 15, block 7.5 X x 2.2 Y cm)
+      These LATCH a grid layout. NEITHER MOVES ANYTHING. Each is refused
+      when it is already true, and both need X/Y homed first. The claw's
+      rotation is owned entirely by the build cycle.
+      THE CLAW'S PHYSICAL ANGLE IS NOT SENSED. You are trusted to start
+      with it neutral - 7.5 cm jaw axis along Y. If it is not, every
+      placement this session is turned 90 degrees and nothing can tell.
 
     G <col> <row>   = go to grid cell. e.g.  G 3 5   or  G3,5
       col/row may be 0: 0,0 is the ORIGIN (home; a no-op if already there),
       and 0 on just one axis moves only the other axis, e.g. G 5 0 = X only.
-    S <cols> <rows> = change fixed-pitch grid count live. e.g.  S 20 4
+    S <cols> <rows> = change fixed-pitch grid count live, for the ACTIVE
+      grid only. The other mode keeps the count it was last given.
 
-    B <col> <row> <level> [R|RR|NR]   = BUILD one block   <<< NEW
+    B <col> <row> <level>   = BUILD one block   <<< NEW
       BUILD calibration: col/row may be 0; B 0 0 is a no-op.
+      There is NO rotation word. The active grid decides how the block is
+      laid: vertical places it unrotated, horizontal turns it 90 CCW.
     Z               = print the Z / build calibration table  <<< NEW
     ?               = reprint the help text
 
@@ -497,54 +506,127 @@ const bool SOFT_LIMIT_VERBOSE = true;
 // SECTION 6C - GRID CONFIGURATION
 // ============================================================
 //
-// A block is 2.2 cm along X and 7.5 cm along Y. Blocks do NOT touch: adjacent
-// positive cells have a 0.5 cm edge-to-edge gap. On Y the same gap separates
-// the feeder block's far edge from row 1's near edge:
+// TWO GRIDS, BOTH REAL.  A block measures 2.2 x 7.5 cm in plan, and it can be
+// laid either way round.  Which way round it is laid decides how many cells
+// fit, where they sit, and how far the grid has to be trimmed - so it is not
+// one grid with a flag, it is two grids, each with its own complete geometry:
 //
-//   X pitch = 2.2 + 0.5 = 2.7 cm; 9 * 2.7 = 24.3 cm
-//   Y pitch = 7.5 + 0.5 = 8.0 cm; 5 * 8.0 = 40.0 cm
+//   VERTICAL   (mode 0)  block 2.2 X x 7.5 Y      9 cols x  5 rows
+//   HORIZONTAL (mode 1)  block 7.5 X x 2.2 Y      3 cols x 15 rows
 //
-// There is no trailing outer margin inside one 24.3 x 40 cm grid span.
-// Coordinate 0 is the feeder-block centre / home reference. The measured
-// feeder-centre-to-grid shifts are +1.1 cm X (half width) and +3.75 cm Y
-// (half length), so column centres are 2.7,5.4,...,24.3 cm and row centres
-// are 8,16,...,40 cm. Final physical block edges are 25.4 x 43.75 cm from
-// the feeder centre; only the HOLDER centres are constrained by travel caps.
-// The complete coordinate ranges are therefore col 0..9 and row 0..5,
-// while the normal two-axis block grid is 9 cols x 5 rows.
+// Blocks do NOT touch: adjacent positive cells have a 0.5 cm edge-to-edge gap,
+// and on each axis the same gap separates coordinate 0 from cell 1.
 //
-// A smaller S-selected grid remains centred. The signed trims then move that
-// complete allocation away from (+) or toward (-) its home switch. The +1.1
-// X / +3.75 cm Y trims record feeder-centre-to-build-grid shifts, not tool
-// offsets.
+//   vertical    X pitch = 2.2 + 0.5 = 2.7 cm;  9 * 2.7 = 24.3 cm
+//               Y pitch = 7.5 + 0.5 = 8.0 cm;  5 * 8.0 = 40.0 cm
+//   horizontal  X pitch = 7.5 + 0.5 = 8.0 cm;  3 * 8.0 = 24.0 cm
+//               Y pitch = 2.2 + 0.5 = 2.7 cm; 15 * 2.7 = 40.5 cm
+//
+// Both counts are hard geometric maxima against the 24.3 x 40.0 cm holder
+// travel, which is PHYSICAL and does not change with the mode.  A 4th
+// horizontal column needs 4*7.5 + 3*0.5 = 31.5 cm into 24.3; a 16th
+// horizontal row needs 16*2.2 + 15*0.5 = 42.7 cm into 40.0.
+//
+// EACH MODE STATES BOTH BLOCK EXTENTS OUTRIGHT.  Nothing here swaps a width
+// for a length.  A swap would have to be performed identically here, in
+// python/rig/grid.py and in the camera overlay - three chances to get an axis
+// backwards, for no gain.  See plans/dual-orientation-grid.md D12.
+//
+// Coordinate 0 is the feeder-block centre / home reference.  The signed trims
+// move a mode's whole allocation away from (+) or toward (-) the home
+// switches.  Vertical's +1.1 / +3.75 cm are the measured feeder-centre-to-
+// build-grid shifts, so its column centres are 2.7,5.4,...,24.3 cm and its row
+// centres 8,16,...,40 cm.  HORIZONTAL'S TRIMS ARE NOT VERTICAL'S AND MUST NOT
+// BE COPIED FROM THEM: at vertical's +1.1 cm X trim, horizontal's third column
+// would hang 0.95 cm off the end of the machine.
+//
+// Horizontal's 15 rows are exactly flush: 15*2.2 + 14*0.5 = 40.00 cm into
+// 40.00 cm of travel, at trim_y = -0.25.  There is NO slack to absorb error.
+// A 1 mm per-block error accumulates to 1.5 cm and costs a row - measure the
+// real block width across a stack of 15 before trusting this calibration.
 //
 // Targets are computed as absolute physical cell centres and rounded only
 // once, so sub-step rounding error never accumulates between cells.
 //
 // ------------------------------------------------------------
+//   WHICH MODE IS THE BOARD IN?
+// ------------------------------------------------------------
+//   VERTICAL, at every power-on and after every reset.  There is no EEPROM
+//   and opening the USB port resets the board, so vertical is simply what the
+//   machine is unless something has said otherwise since.  RR latches to
+//   horizontal, R latches back; see the mode latch further down.
+//
+//   NOTHING SENSES THE CLAW'S PHYSICAL ANGLE.  The operator is trusted to
+//   start with the claw physically neutral (its 7.5 cm jaw axis along Y).
+//   If it is not, every placement in this session is turned 90 degrees and no
+//   amount of software can tell.
+//
+// ------------------------------------------------------------
 //   HOW MANY CELLS FIT?
 // ------------------------------------------------------------
-//   Counts are limited by block-plus-gap pitch and by reachable HOLDER
-//   centres. The shipped feeder-to-grid Y trim gives a maximum of 9 x 5.
-//   Command S can choose a smaller centred grid but cannot squeeze cells or
-//   change their footprint.
+//   Counts are limited by block-plus-gap pitch, by reachable HOLDER centres,
+//   and by each mode's block-edge overhang budget (below).  Command S can
+//   choose a smaller centred grid for the ACTIVE mode but cannot squeeze
+//   cells or change their footprint.
 
-float GRID_BLOCK_X_CM = 2.2;
-float GRID_BLOCK_Y_CM = 7.5;
-float GRID_GAP_X_CM = 0.5;
-float GRID_GAP_Y_CM = 0.5;
+const uint8_t GRID_MODE_VERTICAL = 0;   // block standing: 7.5 cm along Y
+const uint8_t GRID_MODE_HORIZONTAL = 1; // block lying:    7.5 cm along X
+const uint8_t GRID_MODE_COUNT = 2;
 
-float GRID_TRIM_X_CM = 1.1; // feeder centre -> build-grid shift along X
-float GRID_TRIM_Y_CM = 3.75; // feeder centre -> build-grid shift along Y
+// The live mode. Compiled default is vertical and every reset returns here.
+uint8_t gridMode = GRID_MODE_VERTICAL;
+
+//                                          { vertical, horizontal }
+float GRID_BLOCK_X_CM[GRID_MODE_COUNT] = {2.2, 7.5};
+float GRID_BLOCK_Y_CM[GRID_MODE_COUNT] = {7.5, 2.2};
+float GRID_GAP_X_CM[GRID_MODE_COUNT] = {0.5, 0.5};
+float GRID_GAP_Y_CM[GRID_MODE_COUNT] = {0.5, 0.5};
+
+// Signed whole-allocation shift, per mode. Not copied between modes - see above.
+float GRID_TRIM_X_CM[GRID_MODE_COUNT] = {1.1, 0.0};
+float GRID_TRIM_Y_CM[GRID_MODE_COUNT] = {3.75, -0.25};
 
 // AI AGENT NOTE: For any user-marked "error" offsetting, use these variables.
 // They apply exactly like GRID_TRIM_* and shift every grid centre from home.
 // Keep these paired with config/rig.json and start new error calibration at 0.
-float GRID_ERROR_OFFSET_X_CM = 0.0;
-float GRID_ERROR_OFFSET_Y_CM = 0.0;
+float GRID_ERROR_OFFSET_X_CM[GRID_MODE_COUNT] = {0.0, 0.0};
+float GRID_ERROR_OFFSET_Y_CM[GRID_MODE_COUNT] = {0.0, 0.0};
 
-long GRID_COLS = 9;
-long GRID_ROWS = 5;
+// How far past the travel limit this mode lets a placed block's own EDGE sit.
+// This is NOT a trim: it moves nothing. It is the budget gridGeometryFits()
+// measures the block edges against, and it exists because a centre-only check
+// happily accepts a grid whose far block hangs off the machine.
+//
+// Vertical gets half a block on each axis, because its last centre sits
+// exactly ON the travel limit and the held block unavoidably overhangs - that
+// is the shipped, working 9 x 5 grid, whose block edges are 25.4 x 43.75 cm.
+// Horizontal gets zero, because its rows are flush with both walls and any
+// overhang there means the trims are wrong.
+// Keep paired with config/rig.json -> grid.modes.*.max_edge_overhang_*_cm.
+float GRID_MAX_EDGE_OVERHANG_X_CM[GRID_MODE_COUNT] = {1.1, 0.0};
+float GRID_MAX_EDGE_OVERHANG_Y_CM[GRID_MODE_COUNT] = {3.75, 0.0};
+
+// Per mode, so that S applies to the grid the operator is looking at and the
+// other mode keeps whatever count it was given.
+long GRID_COLS[GRID_MODE_COUNT] = {9, 3};
+long GRID_ROWS[GRID_MODE_COUNT] = {5, 15};
+
+// Read these rather than indexing the tables. Everything downstream of here
+// is written against the ACTIVE mode and never mentions the other one.
+long gridColsNow()
+{
+  return GRID_COLS[gridMode];
+}
+
+long gridRowsNow()
+{
+  return GRID_ROWS[gridMode];
+}
+
+const char *gridModeName(uint8_t mode)
+{
+  return (mode == GRID_MODE_HORIZONTAL) ? "horizontal" : "vertical";
+}
 
 // The X/Y counters describe the GANTRY HOLDER, not necessarily the point where
 // the claw places a block.  These vectors describe HOLDER -> block centre in
@@ -932,9 +1014,14 @@ void ackBoot()
 void ackReady()
 {
   Serial.print(F("@0 READY grid="));
-  Serial.print(GRID_COLS);
+  Serial.print(gridColsNow());
   Serial.print('x');
-  Serial.print(GRID_ROWS);
+  Serial.print(gridRowsNow());
+  // The mode is on this line because a reset silently returns the board to
+  // vertical. A Pi that believes otherwise would send every coordinate to the
+  // wrong grid, so it has to be told on every connect, not asked for later.
+  Serial.print(F(" mode="));
+  Serial.print(gridModeName(gridMode));
   Serial.println();
 }
 
@@ -958,9 +1045,12 @@ const char CMD_SERVO_OPEN = 'O';
 const char CMD_SERVO_CLOSE = 'C';
 const char CMD_SERVO_ANGLE = 'V'; // V <angle> (0..180 degrees)
 
-const char CMD_AUX_STEPPER_CW = 'R'; // "R"  (RR is handled in handleLine)
+// R and RR are the GRID MODE LATCH, not a claw jog. R selects the vertical
+// grid, RR the horizontal one; neither moves the aux stepper. RR is handled in
+// handleLine because it is two characters.
+const char CMD_GRID_MODE_VERTICAL = 'R';
 
-const char CMD_BUILD = 'B';   // B <col> <row> <level> [R|RR|NR]
+const char CMD_BUILD = 'B';   // B <col> <row> <level>
 const char CMD_Z_TABLE = 'Z'; // print the Z / build calibration
 
 // ============================================================
@@ -1236,13 +1326,17 @@ void handleLine(char *line)
   case 'R':
     if (toUpperChar(line[1]) == 'R' && line[2] == '\0')
     {
-      rotateAuxStepperCCW();
+      // RR: latch the HORIZONTAL grid. Moves nothing - see setGridMode().
+      if (!setGridMode(GRID_MODE_HORIZONTAL))
+      {
+        statBadCommands++;
+      }
     }
     else
     {
       statBadCommands++;
       Serial.println();
-      Serial.println(F("  ERROR - use:  R (CW ~90 deg) or RR (CCW ~90 deg)"));
+      Serial.println(F("  ERROR - use:  R (vertical grid) or RR (horizontal grid)"));
     }
     break;
 
@@ -1321,8 +1415,12 @@ void handleSingleChar(char command)
     closeServo();
     break;
 
-  case CMD_AUX_STEPPER_CW:
-    rotateAuxStepperCW();
+  case CMD_GRID_MODE_VERTICAL:
+    // R: latch the VERTICAL grid. Moves nothing - see setGridMode().
+    if (!setGridMode(GRID_MODE_VERTICAL))
+    {
+      statBadCommands++;
+    }
     break;
 
   case CMD_Z_TABLE:
@@ -2003,7 +2101,7 @@ int8_t gridDirOf(uint8_t axis)
 
 long gridCountOf(uint8_t axis)
 {
-  return (axis == AXIS_X) ? GRID_COLS : GRID_ROWS;
+  return (axis == AXIS_X) ? gridColsNow() : gridRowsNow();
 }
 
 float xyTravelCmOf(uint8_t axis)
@@ -2013,12 +2111,12 @@ float xyTravelCmOf(uint8_t axis)
 
 float gridBlockCmOf(uint8_t axis)
 {
-  return (axis == AXIS_X) ? GRID_BLOCK_X_CM : GRID_BLOCK_Y_CM;
+  return (axis == AXIS_X) ? GRID_BLOCK_X_CM[gridMode] : GRID_BLOCK_Y_CM[gridMode];
 }
 
 float gridGapCmOf(uint8_t axis)
 {
-  return (axis == AXIS_X) ? GRID_GAP_X_CM : GRID_GAP_Y_CM;
+  return (axis == AXIS_X) ? GRID_GAP_X_CM[gridMode] : GRID_GAP_Y_CM[gridMode];
 }
 
 float gridPitchCmOf(uint8_t axis)
@@ -2028,8 +2126,17 @@ float gridPitchCmOf(uint8_t axis)
 
 float gridTrimCmOf(uint8_t axis)
 {
-  return (axis == AXIS_X) ? GRID_TRIM_X_CM + GRID_ERROR_OFFSET_X_CM
-                          : GRID_TRIM_Y_CM + GRID_ERROR_OFFSET_Y_CM;
+  return (axis == AXIS_X)
+             ? GRID_TRIM_X_CM[gridMode] + GRID_ERROR_OFFSET_X_CM[gridMode]
+             : GRID_TRIM_Y_CM[gridMode] + GRID_ERROR_OFFSET_Y_CM[gridMode];
+}
+
+// The ACTIVE mode's block-edge overhang budget. See SECTION 6C for why this is
+// per mode and why it is not a trim.
+float gridMaxEdgeOverhangCmOf(uint8_t axis)
+{
+  return (axis == AXIS_X) ? GRID_MAX_EDGE_OVERHANG_X_CM[gridMode]
+                          : GRID_MAX_EDGE_OVERHANG_Y_CM[gridMode];
 }
 
 float xyStepsPerCmOf(uint8_t axis)
@@ -2086,13 +2193,33 @@ bool gridGeometryFits(uint8_t axis, long count)
     return false;
   }
   const float slack = 0.0001;
+  float travelCm = xyTravelCmOf(axis);
   float firstCentre = gridAllocationStartCmOf(axis, count)
                     + gridGapCmOf(axis) + gridBlockCmOf(axis) * 0.5;
   float lastCentre = firstCentre
                    + (float)(count - 1) * gridPitchCmOf(axis);
-  // The holder must be able to reach every placement centre. A held block may
-  // naturally extend beyond the holder-centre envelope at the far edge.
-  return firstCentre >= -slack && lastCentre <= xyTravelCmOf(axis) + slack;
+
+  // Half one: the holder must be able to reach every placement centre.
+  if (firstCentre < -slack || lastCentre > travelCm + slack)
+  {
+    return false;
+  }
+
+  // Half two: and the BLOCKS those centres carry must land on the machine.
+  // The centre test alone is not enough. A held block naturally extends past
+  // the holder-centre envelope, so "the centre is legal" accepts a grid whose
+  // far block hangs off the end - which is exactly what copying vertical's
+  // +1.1 cm X trim into horizontal produces (third column edge at 25.25 cm,
+  // 0.95 cm past the X limit, from a perfectly legal centre at 21.5 cm).
+  // Each mode therefore declares how much edge overhang it will tolerate.
+  float overhang = gridMaxEdgeOverhangCmOf(axis);
+  if (overhang < 0.0)
+  {
+    return false;
+  }
+  float nearEdge = gridBlockStartCmOf(axis, count);
+  float farEdge = gridBlockEndCmOf(axis, count);
+  return nearEdge >= -overhang - slack && farEdge <= travelCm + overhang + slack;
 }
 
 long gridCountMaxOf(uint8_t axis)
@@ -2222,7 +2349,8 @@ bool gridReady()
     Serial.println(F("  and non-zero. Check SECTION 6B."));
     return false;
   }
-  if (!gridGeometryFits(AXIS_X, GRID_COLS) || !gridGeometryFits(AXIS_Y, GRID_ROWS))
+  if (!gridGeometryFits(AXIS_X, gridColsNow())
+      || !gridGeometryFits(AXIS_Y, gridRowsNow()))
   {
     Serial.println(F("  ERROR - grid placement centres/trim do not fit the X/Y holder travel."));
     Serial.println(F("  Check SECTION 6B/6C and send 5 for the calculated geometry."));
@@ -2235,12 +2363,12 @@ bool gridReady()
 // means "leave that axis at the origin" - see gotoCellForRotation().
 bool cellInRange(long col, long row)
 {
-  if (col < 0 || col > GRID_COLS || row < 0 || row > GRID_ROWS)
+  if (col < 0 || col > gridColsNow() || row < 0 || row > gridRowsNow())
   {
     Serial.print(F("  ERROR - out of range. Valid: col 0.."));
-    Serial.print(GRID_COLS);
+    Serial.print(gridColsNow());
     Serial.print(F(", row 0.."));
-    Serial.println(GRID_ROWS);
+    Serial.println(gridRowsNow());
     return false;
   }
   return true;
@@ -2262,8 +2390,10 @@ void setGridSize(long cols, long rows)
     return;
   }
 
-  GRID_COLS = cols;
-  GRID_ROWS = rows;
+  // Scoped to the ACTIVE mode: the other orientation keeps whatever count it
+  // was last given, so latching back and forth does not quietly resize it.
+  GRID_COLS[gridMode] = cols;
+  GRID_ROWS[gridMode] = rows;
 
   // Old cell numbers no longer mean the same thing.
   curCol = positionToIndex(AXIS_X, axisPos[AXIS_X], clawRotation);
@@ -2271,6 +2401,88 @@ void setGridSize(long cols, long rows)
 
   Serial.println(F("GRID RESIZED"));
   printGridConfig();
+}
+
+// ============================================================
+// GRID MODE LATCH                                      <<< NEW
+// ============================================================
+//
+//   RR  latches vertical -> horizontal
+//   R   latches horizontal -> vertical
+//
+// THIS IS A LATCH, NOT A MOTION. Neither command moves the aux stepper.
+// They used to: R and RR were a free 90-degree jog of the claw. That jog is
+// gone, because the build cycle already owns claw rotation completely - step 3
+// returns to neutral before the pick, step 9 applies the placement rotation,
+// step 14 returns to neutral again. Anything a latch did to the claw would be
+// undone by the very next build's step 3, so it could only ever look like a
+// bug. What these commands change is which GRID the coordinates refer to.
+//
+// Each command is refused when it is already true: RR in horizontal and R in
+// vertical are errors, not no-ops. A latch that silently accepts the state it
+// is already in cannot tell a confirmation apart from a mistake.
+//
+// A mode switch redefines what every coordinate means, so it is also refused
+// unless X and Y are homed - curCol/curRow would otherwise be re-read from a
+// position whose meaning nobody knows.
+//
+// NOTHING SENSES THE CLAW'S PHYSICAL ANGLE. The operator is trusted to have
+// started with the claw neutral; see SECTION 6C.
+
+bool setGridMode(uint8_t mode)
+{
+  Serial.println();
+
+  if (mode >= GRID_MODE_COUNT)
+  {
+    Serial.println(F("  ERROR - unknown grid mode."));
+    return false;
+  }
+
+  if (mode == gridMode)
+  {
+    Serial.print(F("  ERROR - already in "));
+    Serial.print(gridModeName(gridMode));
+    Serial.println(F(" mode."));
+    Serial.println(F("  RR selects horizontal, R selects vertical."));
+    return false;
+  }
+
+  if (!axisHomed[AXIS_X] || !axisHomed[AXIS_Y])
+  {
+    Serial.println(F("  ERROR - home X/Y first (send 0)."));
+    Serial.println(F("  A mode switch redefines every coordinate, so the"));
+    Serial.println(F("  current cell has to mean something before it is re-read."));
+    return false;
+  }
+
+  uint8_t previous = gridMode;
+  gridMode = mode;
+
+  // The other mode's counts and trims are now live. If they do not fit, say
+  // so and stay where we were rather than latching into an unusable grid.
+  if (!gridGeometryFits(AXIS_X, gridColsNow())
+      || !gridGeometryFits(AXIS_Y, gridRowsNow()))
+  {
+    gridMode = previous;
+    Serial.print(F("  ERROR - the "));
+    Serial.print(gridModeName(mode));
+    Serial.println(F(" grid does not fit the X/Y travel."));
+    Serial.println(F("  Staying in the current mode. Check SECTION 6C, send 5."));
+    return false;
+  }
+
+  // Every old cell number was measured against the other grid's pitch.
+  curCol = positionToIndex(AXIS_X, axisPos[AXIS_X], clawRotation);
+  curRow = positionToIndex(AXIS_Y, axisPos[AXIS_Y], clawRotation);
+
+  Serial.print(F("GRID MODE: "));
+  Serial.print(gridModeName(previous));
+  Serial.print(F("  ->  "));
+  Serial.println(gridModeName(gridMode));
+  Serial.println(F("  The claw did NOT move. The next B turns it at the feeder."));
+  printGridConfig();
+  return true;
 }
 
 // ============================================================
@@ -2389,7 +2601,7 @@ bool gotoCell(long col, long row)
 // separate because BUILD has its own range/lock checks around this call.
 bool gotoBuildTarget(long col, long row, int8_t rotation)
 {
-  if (!gridReady() || col < 0 || col > GRID_COLS || row < 0 || row > GRID_ROWS)
+  if (!gridReady() || col < 0 || col > gridColsNow() || row < 0 || row > gridRowsNow())
     return false;
 
   long targetX = 0;
@@ -2566,87 +2778,66 @@ bool zGoLevel(long level)
 // BUILD COMMAND                                        <<< NEW
 // ============================================================
 //
-//    B <col> <row> <level> [R | RR | NR]
+//    B <col> <row> <level>
 //
 // col / row are grid cells, exactly as in the G command. BUILD additionally
 // accepts zero as a calibration sentinel: B 0 5 moves only Y, B 17 0 moves
 // only X, and B 0 0 is a completely inert successful command.
 // level is a BLOCK level: 0 = ground, 1 = 1.5 cm, 2 = 3.0 cm ...
-// The rotation word is OPTIONAL and defaults to NR (no rotation).
+//
+// THERE IS NO ROTATION WORD ANY MORE. Rotation is a property of the GRID, not
+// of a block: the vertical grid places blocks unrotated, the horizontal grid
+// places every block turned 90 degrees CCW. Select the grid with R / RR.
+//
+// It was removed rather than kept as an override because a per-block rotation
+// could place a turned block inside a grid whose cells are not shaped for it -
+// a 7.5 cm block laid across a 2.7 cm column pitch, silently, with every
+// number in the geometry check still agreeing. That is the exact failure the
+// two-grid model exists to prevent, so the override had to go with it.
 
 void printBuildUsage()
 {
   Serial.println();
-  Serial.println(F("  ERROR - use:  B <col> <row> <level> [R|RR|NR]"));
-  Serial.println(F("    col   0..GRID_COLS      (0 = do not move X)"));
-  Serial.println(F("    row   0..GRID_ROWS      (0 = do not move Y)"));
+  Serial.println(F("  ERROR - use:  B <col> <row> <level>"));
+  Serial.print(F("    col   0.."));
+  Serial.print(gridColsNow());
+  Serial.println(F("      (0 = do not move X)"));
+  Serial.print(F("    row   0.."));
+  Serial.print(gridRowsNow());
+  Serial.println(F("      (0 = do not move Y)"));
   Serial.print(F("    level 0.."));
   Serial.print(maxBuildLevel());
   Serial.print(F("   (0 = ground, 1 = "));
   Serial.print(BLOCK_HEIGHT_CM, 2);
   Serial.println(F(" cm, ...)"));
-  Serial.println(F("    R = 90 CW, RR = 90 CCW, NR / omitted = no rotation"));
-  Serial.println(F("    e.g.  B 3 5 2 R      or   B 3 5 0"));
+  Serial.print(F("    rotation comes from the grid mode - now "));
+  Serial.print(gridModeName(gridMode));
+  Serial.print(F(" ("));
+  Serial.print(rotationName(buildRotationForMode()));
+  Serial.println(F(")"));
+  Serial.println(F("    e.g.  B 3 5 2      or   B 3 5 0"));
 }
 
-// Reads the optional trailing rotation word. Returns false only if
-// something was there and it was not R / RR / NR.
-bool parseRotationWord(const char *s, int8_t *outRot)
+// D7: the placement rotation is derived from the ACTIVE GRID, never passed
+// per block. Vertical places a block the way the feeder presents it;
+// horizontal places it turned 90 degrees CCW. There is deliberately no way to
+// ask for CW: the horizontal grid is defined in terms of one 90-degree turn,
+// and a second direction would be a second, uncalibrated grid.
+int8_t buildRotationForMode()
+{
+  return (gridMode == GRID_MODE_HORIZONTAL) ? ROT_CCW : ROT_NONE;
+}
+
+// True when only separators are left. B takes exactly three numbers now, and
+// anything after them is a mistake worth naming rather than ignoring.
+bool onlySeparatorsLeft(const char *s)
 {
   uint8_t i = 0;
-
-  // Skip separators.
   while (s[i] == ' ' || s[i] == ',' || s[i] == ':' || s[i] == ';' || s[i] == '\t')
   {
     i++;
   }
-
-  if (s[i] == '\0')
-  {
-    *outRot = ROT_NONE; // nothing given - the documented default
-    return true;
-  }
-
-  char w[4] = {0, 0, 0, 0};
-  uint8_t n = 0;
-  while (s[i] != '\0' && n < 3)
-  {
-    char c = toUpperChar(s[i]);
-    if (c < 'A' || c > 'Z')
-    {
-      break;
-    }
-    w[n++] = c;
-    i++;
-  }
-
-  // Anything trailing after the word (other than separators) is junk.
-  while (s[i] == ' ' || s[i] == ',' || s[i] == '\t')
-  {
-    i++;
-  }
-  if (s[i] != '\0')
-  {
-    return false;
-  }
-
-  if (n == 1 && w[0] == 'R')
-  {
-    *outRot = ROT_CW;
-    return true;
-  }
-  if (n == 2 && w[0] == 'R' && w[1] == 'R')
-  {
-    *outRot = ROT_CCW;
-    return true;
-  }
-  if (n == 2 && w[0] == 'N' && w[1] == 'R')
-  {
-    *outRot = ROT_NONE;
-    return true;
-  }
-
-  return false;
+  return s[i] == '\0';
 }
 
 void handleBuildCommand(const char *args)
@@ -2663,23 +2854,25 @@ void handleBuildCommand(const char *args)
   {
     statBadCommands++;
     printBuildUsage();
-    ackReason(F("ERR"), F("expected: B <col> <row> <level> [R|RR|NR]"));
+    ackReason(F("ERR"), F("expected: B <col> <row> <level>"));
     return;
   }
 
-  int8_t rot = ROT_NONE;
-  if (!parseRotationWord(args + endIndex, &rot))
+  if (!onlySeparatorsLeft(args + endIndex))
   {
     statBadCommands++;
     Serial.println();
-    Serial.println(F("  ERROR - rotation must be R, RR or NR (or left out)."));
+    Serial.println(F("  ERROR - B takes exactly three numbers."));
+    Serial.println(F("  The rotation word is gone. Rotation is a property of"));
+    Serial.println(F("  the grid: send RR for the horizontal grid, R for the"));
+    Serial.println(F("  vertical one, then build."));
     printBuildUsage();
-    ackReason(F("ERR"), F("rotation must be R, RR or NR"));
+    ackReason(F("ERR"), F("no rotation word - rotation comes from the R/RR grid mode"));
     return;
   }
 
   statBuildCommands++;
-  buildBlock(v[0], v[1], v[2], rot);
+  buildBlock(v[0], v[1], v[2], buildRotationForMode());
 }
 
 void buildPause()
@@ -2828,7 +3021,7 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
   {
     return buildReject("grid needs both X/Y software limits");
   }
-  if (col < 0 || col > GRID_COLS || row < 0 || row > GRID_ROWS)
+  if (col < 0 || col > gridColsNow() || row < 0 || row > gridRowsNow())
   {
     return buildReject("cell out of range");
   }
@@ -3602,6 +3795,16 @@ void printGridConfig()
 {
   Serial.println();
   Serial.println(F("--- GRID ---"));
+
+  Serial.print(F("Mode      : "));
+  Serial.print(gridModeName(gridMode));
+  Serial.print(F("  (block "));
+  Serial.print(gridBlockCmOf(AXIS_X), 2);
+  Serial.print(F(" X x "));
+  Serial.print(gridBlockCmOf(AXIS_Y), 2);
+  Serial.print(F(" Y cm)  RR = horizontal, R = vertical"));
+  Serial.println();
+
   Serial.print(F("Software cap: "));
   Serial.print(gridTravelOf(AXIS_X));
   Serial.print(F(" x "));
@@ -3621,15 +3824,15 @@ void printGridConfig()
   Serial.println(F(" steps/cm"));
 
   Serial.print(F("Block size: "));
-  Serial.print(GRID_BLOCK_X_CM, 2);
+  Serial.print(gridBlockCmOf(AXIS_X), 2);
   Serial.print(F(" x "));
-  Serial.print(GRID_BLOCK_Y_CM, 2);
-  Serial.println(F(" cm  (X x Y, one orientation)"));
+  Serial.print(gridBlockCmOf(AXIS_Y), 2);
+  Serial.println(F(" cm  (X x Y, this mode)"));
 
   Serial.print(F("Gap       : "));
-  Serial.print(GRID_GAP_X_CM, 2);
+  Serial.print(gridGapCmOf(AXIS_X), 2);
   Serial.print(F(" x "));
-  Serial.print(GRID_GAP_Y_CM, 2);
+  Serial.print(gridGapCmOf(AXIS_Y), 2);
   Serial.println(F(" cm  (before every positive cell)"));
 
   Serial.print(F("Pitch     : "));
@@ -3639,41 +3842,41 @@ void printGridConfig()
   Serial.println(F(" cm  (block + gap)"));
 
   Serial.print(F("Division : "));
-  Serial.print(GRID_COLS);
+  Serial.print(gridColsNow());
   Serial.print(F(" cols x "));
-  Serial.print(GRID_ROWS);
+  Serial.print(gridRowsNow());
   Serial.print(F(" rows  = "));
-  Serial.print(GRID_COLS * GRID_ROWS);
+  Serial.print(gridColsNow() * gridRowsNow());
   Serial.println(F(" positive cells"));
 
   Serial.print(F("Coordinates: col 0.."));
-  Serial.print(GRID_COLS);
+  Serial.print(gridColsNow());
   Serial.print(F(" / row 0.."));
-  Serial.print(GRID_ROWS);
+  Serial.print(gridRowsNow());
   Serial.println(F("  (0 = home/axis-only)"));
 
   Serial.print(F("Block footprint: "));
-  Serial.print(gridBlockFootprintCmOf(AXIS_X, GRID_COLS), 2);
+  Serial.print(gridBlockFootprintCmOf(AXIS_X, gridColsNow()), 2);
   Serial.print(F(" x "));
-  Serial.print(gridBlockFootprintCmOf(AXIS_Y, GRID_ROWS), 2);
+  Serial.print(gridBlockFootprintCmOf(AXIS_Y, gridRowsNow()), 2);
   Serial.println(F(" cm  (blocks + internal gaps)"));
 
   Serial.print(F("One grid span: "));
-  Serial.print(gridAllocationCmOf(AXIS_X, GRID_COLS), 2);
+  Serial.print(gridAllocationCmOf(AXIS_X, gridColsNow()), 2);
   Serial.print(F(" x "));
-  Serial.print(gridAllocationCmOf(AXIS_Y, GRID_ROWS), 2);
+  Serial.print(gridAllocationCmOf(AXIS_Y, gridRowsNow()), 2);
   Serial.println(F(" cm  (gap + blocks, measured from grid origin)"));
 
   Serial.print(F("Home->far block edge: X "));
-  Serial.print(gridBlockEndCmOf(AXIS_X, GRID_COLS), 2);
+  Serial.print(gridBlockEndCmOf(AXIS_X, gridColsNow()), 2);
   Serial.print(F(" cm / Y "));
-  Serial.print(gridBlockEndCmOf(AXIS_Y, GRID_ROWS), 2);
+  Serial.print(gridBlockEndCmOf(AXIS_Y, gridRowsNow()), 2);
   Serial.println(F(" cm  (block may extend past holder-centre travel)"));
 
   Serial.print(F("First block edge: X "));
-  Serial.print(gridBlockStartCmOf(AXIS_X, GRID_COLS), 3);
+  Serial.print(gridBlockStartCmOf(AXIS_X, gridColsNow()), 3);
   Serial.print(F(" cm / Y "));
-  Serial.print(gridBlockStartCmOf(AXIS_Y, GRID_ROWS), 3);
+  Serial.print(gridBlockStartCmOf(AXIS_Y, gridRowsNow()), 3);
   Serial.println(F(" cm from home switches"));
 
   Serial.print(F("First centre: X "));
@@ -3683,16 +3886,28 @@ void printGridConfig()
   Serial.println(F(" cm"));
 
   Serial.print(F("Last centre : X "));
-  Serial.print(cellCentreCmOf(AXIS_X, GRID_COLS), 3);
+  Serial.print(cellCentreCmOf(AXIS_X, gridColsNow()), 3);
   Serial.print(F(" cm / Y "));
-  Serial.print(cellCentreCmOf(AXIS_Y, GRID_ROWS), 3);
+  Serial.print(cellCentreCmOf(AXIS_Y, gridRowsNow()), 3);
   Serial.println(F(" cm"));
 
   Serial.print(F("Grid trims : X "));
-  Serial.print(GRID_TRIM_X_CM, 3);
+  Serial.print(GRID_TRIM_X_CM[gridMode], 3);
   Serial.print(F(" cm / Y "));
-  Serial.print(GRID_TRIM_Y_CM, 3);
-  Serial.println(F(" cm  (+ away from home)"));
+  Serial.print(GRID_TRIM_Y_CM[gridMode], 3);
+  Serial.println(F(" cm  (+ away from home, per mode)"));
+
+  Serial.print(F("Edge budget: X "));
+  Serial.print(gridMaxEdgeOverhangCmOf(AXIS_X), 3);
+  Serial.print(F(" cm / Y "));
+  Serial.print(gridMaxEdgeOverhangCmOf(AXIS_Y), 3);
+  Serial.println(F(" cm  (how far a block edge may pass the travel cap)"));
+
+  Serial.print(F("Max counts : "));
+  Serial.print(gridCountMaxOf(AXIS_X));
+  Serial.print(F(" cols x "));
+  Serial.print(gridCountMaxOf(AXIS_Y));
+  Serial.println(F(" rows in this mode"));
 
   Serial.print(F("Pitch steps: ~"));
   Serial.print(gridPitchStepsOf(AXIS_X), 2);
@@ -3900,7 +4115,7 @@ void printGrid()
   if (axisPos[AXIS_Y] != 0 && liveRow == 0)
     liveRow = -1;
 
-  if (GRID_COLS > GRID_MAP_MAX_COLS || GRID_ROWS > GRID_MAP_MAX_ROWS)
+  if (gridColsNow() > GRID_MAP_MAX_COLS || gridRowsNow() > GRID_MAP_MAX_ROWS)
   {
     Serial.println();
     Serial.print(F("Map not drawn - grid larger than "));
@@ -3917,7 +4132,7 @@ void printGrid()
   Serial.println(F("  (row/col 0 are real coordinates; positive cells are 1-based)"));
   Serial.println();
 
-  for (long r = GRID_ROWS; r >= 0; r--)
+  for (long r = gridRowsNow(); r >= 0; r--)
   {
     // Right-aligned row label, 3 wide.
     if (r < 100)
@@ -3927,7 +4142,7 @@ void printGrid()
     Serial.print(r);
     Serial.print(F(" |"));
 
-    for (long c = 0; c <= GRID_COLS; c++)
+    for (long c = 0; c <= gridColsNow(); c++)
     {
       if (c == liveCol && r == liveRow && axisHomed[AXIS_X] && axisHomed[AXIS_Y])
       {
@@ -3951,7 +4166,7 @@ void printGrid()
 
   // Bottom rule.
   Serial.print(F("    +"));
-  for (long c = 0; c <= GRID_COLS; c++)
+  for (long c = 0; c <= gridColsNow(); c++)
   {
     Serial.print(F("--"));
   }
@@ -3959,10 +4174,10 @@ void printGrid()
 
   // Column numbers, last digit only (keeps the map aligned).
   Serial.print(F("     "));
-  for (long c = 0; c <= GRID_COLS; c++)
+  for (long c = 0; c <= gridColsNow(); c++)
   {
     Serial.print(c % 10);
-    if (c < GRID_COLS)
+    if (c < gridColsNow())
       Serial.print(F(" "));
   }
   Serial.println();
@@ -4608,18 +4823,26 @@ void printInstructions()
   Serial.println(F("C = Servo CLOSE             [pin 6]"));
   Serial.println(F("V <angle> = Servo angle 0..180 deg [pin 6]"));
   Serial.println(F("--------------------------------------"));
-  Serial.println(F("R  = Aux stepper ~90 deg CW   [28BYJ-48, pins 36-39]"));
-  Serial.println(F("RR = Aux stepper ~90 deg CCW  [28BYJ-48, pins 36-39]"));
+  Serial.println(F("R  = select the VERTICAL grid    [latch only, moves nothing]"));
+  Serial.println(F("RR = select the HORIZONTAL grid  [latch only, moves nothing]"));
+  Serial.print(F("     now: "));
+  Serial.print(gridModeName(gridMode));
+  Serial.print(F("  "));
+  Serial.print(gridColsNow());
+  Serial.print(F(" x "));
+  Serial.print(gridRowsNow());
+  Serial.println(F("   (needs X/Y homed; refused if already selected)"));
+  Serial.println(F("     the claw's real angle is NOT sensed - start it neutral"));
   Serial.println(F("--------------------------------------"));
   Serial.println(F("G <col> <row>   goto cell, e.g.  G 3 5"));
   Serial.println(F("    col/row 0 skips that axis (stays at origin); G 0 0 goes home"));
-  Serial.println(F("S <cols> <rows> fixed-pitch count, e.g. S 20 4"));
+  Serial.println(F("S <cols> <rows> fixed-pitch count for the ACTIVE grid"));
   Serial.println(F("--------------------------------------"));
-  Serial.println(F("B <col> <row> <level> [R|RR|NR]   BUILD one block"));
+  Serial.println(F("B <col> <row> <level>   BUILD one block"));
   Serial.println(F("    build calibration: col/row 0 skips that axis; B 0 0 is no-op"));
   Serial.println(F("    level 0 = ground, 1 = one block up, 2 = two ..."));
-  Serial.println(F("    rotation is optional, default NR (no rotation)"));
-  Serial.println(F("    e.g.  B 3 5 2 R     B 4 7 0     B 2 2 3 RR"));
+  Serial.println(F("    NO rotation word: the grid mode decides. R / RR select it."));
+  Serial.println(F("    e.g.  B 3 5 2     B 4 7 0     B 2 2 3"));
   Serial.println(F("Z               print the Z / build calibration table"));
   Serial.println(F("?               reprint this help"));
   Serial.println(F("(letters and multi-arg commands need a newline / Enter)"));

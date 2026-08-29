@@ -43,7 +43,7 @@ Keys
   g       toggle grid
   v       toggle block detection on/off
   [ / ]   build level down/up
-  o       cycle rotation: NR -> R -> RR
+  o       latch the other grid: vertical <-> horizontal
   d       clear selected cell
   b/Enter confirm the displayed B command
   s       save annotated frame and block detection JSON
@@ -93,13 +93,13 @@ from camera.gridded_camera_feed import (  # noqa: E402
     projection_metadata,
 )
 from camera.tk_camera_window import TkCameraWindow  # noqa: E402
-from rig.build_controller import (  # noqa: E402
-    BuildController,
-    BuildStateError,
-    ROTATIONS,
-)
+from rig.build_controller import BuildController, BuildStateError  # noqa: E402
 from rig.build_job import BUSY_MESSAGE, BuildJob  # noqa: E402
-from rig.config import CONFIG_PATH, load as load_rig_config  # noqa: E402
+from rig.config import (  # noqa: E402
+    CONFIG_PATH,
+    GRID_MODES,
+    load as load_rig_config,
+)
 from rig.grid import MachineGrid  # noqa: E402
 from rig.link import ABORTED, PLACED, REJECTED, Rig, RigError  # noqa: E402
 from rig.workspace import CORNER_NAMES, WORKSPACE_MAP_PATH, WorkspaceMap  # noqa: E402
@@ -132,8 +132,9 @@ def parse_args():
                         help=f"four-corner calibration JSON (default: {WORKSPACE_MAP_PATH})")
     parser.add_argument("--level", type=int, default=0,
                         help="initial build level Z argument (default: 0/ground)")
-    parser.add_argument("--rotation", choices=ROTATIONS, default="NR",
-                        help="initial optional rotation (default: NR)")
+    parser.add_argument("--mode", choices=GRID_MODES, default=None,
+                        help="grid to latch on connect (default: rig.json's "
+                             "grid.active_mode)")
     parser.add_argument("--build-target", nargs=2, type=int, metavar=("COL", "ROW"),
                         help="initial B target; each coordinate allows 0 for "
                              "calibration (0 0 is a no-op)")
@@ -260,7 +261,14 @@ def main():
         rig.close()
         return 1
 
-    controller = BuildController(rig, level=args.level, rotation=args.rotation)
+    controller = BuildController(rig, level=args.level)
+    if args.mode is not None and args.mode != controller.mode:
+        try:
+            controller.set_mode(args.mode)
+        except (BuildStateError, RigError) as exc:
+            print(f"Cannot select the {args.mode} grid: {exc}", file=sys.stderr)
+            rig.close()
+            return 1
     job = BuildJob(controller, args.build_timeout)
 
     try:
@@ -543,11 +551,16 @@ def main():
             except BuildStateError as exc:
                 ui["message"] = str(exc)
         elif key == ord("o"):
+            # The grid mode changes what every coordinate means, so this drops
+            # the selection and the drawn grid has to be rebuilt from the rig.
             try:
                 reject_mutation_if_unsafe()
-                controller.cycle_rotation()
-                ui["message"] = f"rotation set to {controller.rotation}"
-            except BuildStateError as exc:
+                controller.cycle_mode()
+                grid = rig.grid
+                ui["message"] = (f"latched the {controller.mode} grid "
+                                 f"({grid.cols}x{grid.rows}); recalibrate the "
+                                 "camera map for this mode")
+            except (BuildStateError, RigError) as exc:
                 ui["message"] = str(exc)
         elif key == ord("d"):
             try:
@@ -606,7 +619,7 @@ def main():
             f"replaced {result.replaced_count} | duplicate {result.duplicate_count}",
             f"Grid: {grid.cols}x{grid.rows} | {'CALIBRATED' if calibrated else 'APPROXIMATION ONLY'}",
             f"{paper.status()} | ,/. choose | home {args.home_convention}",
-            f"Rig: {rig.port_name} | level {controller.level} | rotation {controller.rotation}",
+            f"Rig: {rig.port_name} | level {controller.level} | grid {controller.mode}",
             f"Selected: {selected_text}",
             block_hover_text(detections, ui["hover"]),
             f"Build: {build_state} | {ui['message']}",

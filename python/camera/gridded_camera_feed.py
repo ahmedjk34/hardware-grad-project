@@ -406,7 +406,7 @@ def _grid_geometry(workspace, image_size):
     g = workspace.mapped_grid
     key = (
         image_size, tuple(workspace.corners), g.cols, g.rows,
-        g.block_width_cm, g.block_length_cm, g.gap_x_cm, g.gap_y_cm,
+        g.block_x_cm, g.block_y_cm, g.gap_x_cm, g.gap_y_cm,
         g.workspace_width_cm, g.workspace_height_cm,
         g.trim_x_cm, g.trim_y_cm,
         g.error_offset_x_cm, g.error_offset_y_cm,

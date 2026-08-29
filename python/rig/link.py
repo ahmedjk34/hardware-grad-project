@@ -45,10 +45,21 @@ Two hardware facts this module is shaped around
   A second command sent into that silence sits in a 64-byte buffer and arrives
   late. So the waiting sends refuse to overlap — see `RigBusy`.
 - **Opening the port reboots the board.** Normal USB serial behaviour on a Mega:
-  DTR toggles, the sketch restarts, and it forgets its grid size. That is why
-  `connect()` pushes `S <cols> <rows>` from config/rig.json every time. An
-  unexpected `@0 BOOT` at any other moment means it happened again underneath
-  us, and is raised as `RigReset`.
+  DTR toggles, the sketch restarts, and it forgets its grid size AND its grid
+  mode — it comes back vertical, whatever it was doing. That is why `connect()`
+  pushes the mode and then `S <cols> <rows>` from config/rig.json every time,
+  in that order: `S` is validated against the active mode's geometry, so
+  pushing it first checks the counts against the wrong grid. An unexpected
+  `@0 BOOT` at any other moment means it happened again underneath us, and is
+  raised as `RigReset`.
+
+Rotation is not something you ask for
+-------------------------------------
+`build()` takes no rotation. Which way a block is laid is a property of the
+active GRID, not of the block: the vertical grid places blocks as the feeder
+presents them, the horizontal grid turns every one of them 90° CCW. Choose
+with `set_mode()`, which sends the firmware's `R` / `RR` latch. See
+plans/dual-orientation-grid.md D7 and D8.
 """
 
 from __future__ import annotations
@@ -61,7 +72,8 @@ from dataclasses import dataclass, field
 
 import serial
 
-from rig.config import load, serial_port_candidates
+from rig.config import (DEFAULT_GRID_MODE, GRID_MODES, load,
+                        serial_port_candidates)
 from rig.grid import MachineGrid
 
 # ------------------------------------------------------------------
@@ -250,8 +262,10 @@ class Rig:
         cfg = cfg if cfg is not None else load()
         self.port_name: str = cfg["serial"]["port"]
         self.baud: int = cfg["serial"]["baud"]
-        # One object validates the 9x5 logical counts, 2.2x7.5 cm block
-        # footprints, 0.5 cm gaps and 24.3x40 cm displacement before S is sent.
+        # One object validates the logical counts, block footprints, gaps,
+        # trims and 24.3x40 cm displacement of the SELECTED MODE before S is
+        # sent. Which mode that is comes from grid.active_mode in the config.
+        self._cfg = cfg
         self.grid = MachineGrid.from_config(cfg)
         self.cols: int = self.grid.cols
         self.rows: int = self.grid.rows
@@ -273,6 +287,10 @@ class Rig:
         self._booted = threading.Event()
 
         self.ready_grid: str | None = None  # what the board booted with
+        # The board's own word for which grid it is in. A reset returns it to
+        # 'vertical' without asking, so this is read from the machine rather
+        # than assumed from the config.
+        self.ready_mode: str | None = None
         self.prose_fallbacks = 0  # how often the ack lines were missing
 
     # -- lifecycle -------------------------------------------------
@@ -291,9 +309,12 @@ class Rig:
            so it ends the banner exactly. Before the acks existed this meant
            matching the final banner line by its wording, which broke whenever
            someone reworded it.
-        2. send `S <cols> <rows>` from config/rig.json. The sketch has no EEPROM
-           and the port-open reset just wiped its grid back to the compiled
-           default, so this is not optional.
+        2. push the grid MODE from config/rig.json, then send
+           `S <cols> <rows>` — in that order. The sketch has no EEPROM and the
+           port-open reset just wiped both back to the compiled vertical
+           default, so neither is optional. The order is not arbitrary: the
+           firmware validates `S` against the active mode's geometry, so
+           sending it first would check the counts against the wrong grid.
         3. optionally `0+` — home Z, park it at the top, home X/Y.
 
         `home` defaults to FALSE because opening a connection should not make
@@ -330,6 +351,7 @@ class Rig:
 
         self._wait_ready(timeout)
         if configure:
+            self.sync_mode()
             self.set_grid()
         if home:
             self.home()
@@ -396,6 +418,9 @@ class Rig:
                 self._booted.set()
             elif ack.kind == "READY":
                 self.ready_grid = ack.fields.get("grid")
+                # Absent on firmware predating the mode latch. None means
+                # "the board did not say", not "vertical".
+                self.ready_mode = ack.fields.get("mode")
             self._put((_ACK, ack, time.monotonic()))
 
     def _put(self, event) -> None:
@@ -547,7 +572,12 @@ class Rig:
     # -- commands --------------------------------------------------
 
     def set_grid(self, cols: int | None = None, rows: int | None = None) -> None:
-        """Push the grid from config/rig.json. The board forgot it on reset."""
+        """Push the grid from config/rig.json. The board forgot it on reset.
+
+        `S` is scoped to the board's ACTIVE mode and revalidated against that
+        mode's geometry, so the mode has to be right before this is sent.
+        `connect()` does them in that order.
+        """
         cols = self.cols if cols is None else cols
         rows = self.rows if rows is None else rows
         # quiet= is safe here and only here: S moves nothing and answers
@@ -563,6 +593,76 @@ class Rig:
                 f"the rig refused the grid {cols}x{rows} from config/rig.json:\n  "
                 + "\n  ".join(line for line in out if "ERROR" in line or "cols" in line)
             )
+
+    def set_mode(self, mode: str, timeout: float = 20.0,
+                 push_grid: bool = True) -> None:
+        """Latch the board's grid mode with `R` (vertical) or `RR` (horizontal).
+
+        This moves nothing. It changes which grid every coordinate refers to —
+        `[3,5]` means a different physical place afterwards, so anything
+        holding a cell from before the switch is holding a stale one.
+
+        The firmware refuses the latch unless X and Y are homed (a mode switch
+        redefines what the current cell means). It does NOT home for you: an
+        un-homed rig raises rather than starting an unasked-for motion.
+
+        `push_grid` re-sends `S` afterwards, because the board's counts for the
+        newly selected mode are ITS compiled defaults, not this config's.
+        `connect()` passes False only because it sends `S` itself immediately
+        after.
+        """
+        mode = str(mode)
+        if mode not in GRID_MODES:
+            raise ValueError(
+                f"grid mode must be one of {', '.join(GRID_MODES)}, not {mode!r}")
+
+        # Build the new grid BEFORE touching the machine: an unknown mode or a
+        # geometry that does not fit should fail with the rig untouched.
+        grid = MachineGrid.from_config(self._cfg, mode=mode)
+
+        command = "RR" if mode == "horizontal" else "R"
+        out = self._send_and_settle(
+            command,
+            timeout=timeout,
+            done=("GRID MODE:", "ERROR - already in", "ERROR - home X/Y first",
+                  "ERROR - the", "ERROR - use:"),
+            quiet=3.0,
+        )
+        latched = any("GRID MODE:" in line for line in out)
+        # "already in" is the firmware refusing to confirm a state nobody asked
+        # it to reach. From the Pi's side, wanting what you already have is
+        # simply done, so it counts as success here and nowhere else.
+        already = any("ERROR - already in" in line for line in out)
+        if not (latched or already):
+            raise RigError(
+                f"the rig refused to switch to the {mode} grid:\n  "
+                + "\n  ".join(line.strip() for line in out if line.strip())
+            )
+
+        self.grid = grid
+        self.cols, self.rows = grid.cols, grid.rows
+        if push_grid:
+            self.set_grid()
+
+    def sync_mode(self, timeout: float = 20.0) -> None:
+        """Make the board's mode agree with this Rig's grid. Called on connect.
+
+        The board comes up vertical after every reset, so a session that wants
+        horizontal has to say so before anything else — see R4 in
+        plans/dual-orientation-grid.md. Sending the latch is skipped when the
+        board has already told us, on its READY line, that it is where we want
+        it; that keeps the common vertical case free of an error line in the
+        log and free of an unasked-for homing move.
+        """
+        wanted = self.grid.mode or DEFAULT_GRID_MODE
+        if self.ready_mode is not None and self.ready_mode == wanted:
+            return
+        if self.ready_mode is None and wanted == DEFAULT_GRID_MODE:
+            # Firmware too old to report its mode. It has just reset, so it is
+            # vertical, and vertical is what we want: nothing to do.
+            return
+        # connect() sends S itself on the next line, so do not send it twice.
+        self.set_mode(wanted, timeout=timeout, push_grid=False)
 
     def home(self, full: bool = True, timeout: float = 180.0) -> bool:
         """`0+` (Z down, Z up, then X/Y) or `0` (X/Y only). True if it completed.
@@ -601,9 +701,13 @@ class Rig:
         # rather than "did it say a bad word".
         return False
 
-    def build(self, col: int, row: int, level: int, rotation: str | None = None,
+    def build(self, col: int, row: int, level: int,
               timeout: float = 300.0) -> BuildResult:
         """`B <col> <row> <level>` — one full pick-and-place. Blocks until done.
+
+        There is no rotation argument. The active grid decides how the block is
+        laid; use `set_mode()` to change that. See D7/D8 in
+        plans/dual-orientation-grid.md.
 
         For calibration, firmware also accepts zero for either coordinate:
         ``B 0 5`` skips X and ``B 9 0`` skips Y; ``B 0 0`` is an inert no-op.
@@ -631,8 +735,6 @@ class Rig:
             raise ValueError("build level cannot be negative")
 
         command = f"B {col} {row} {level}"
-        if rotation:
-            command += f" {rotation.upper()}"
 
         if not self._inflight.acquire(blocking=False):
             raise RigBusy("a build is already running — the rig is not listening")
@@ -712,6 +814,6 @@ def _prose_outcome(line: str) -> tuple[str | None, str]:
         return REJECTED, line.split(" - ", 1)[-1].strip()
     if "BUILD ABORTED" in line:
         return ABORTED, line.split(" - ", 1)[-1].strip()
-    if "ERROR - use:  B " in line or "rotation must be R, RR or NR" in line:
+    if "ERROR - use:  B " in line or "B takes exactly three numbers" in line:
         return REJECTED, "bad arguments"
     return None, ""

@@ -53,7 +53,7 @@ running it:
 ```
 @0 BOOT fw=build_test_v1
 @0 READY grid=10x20
-@1 ERR expected: B <col> <row> <level> [R|RR|NR]
+@1 ERR expected: B <col> <row> <level>
 @2 SAFE cell out of range
 @3 OK col=3 row=5 level=0
 @4 HELD Z never reached the ground switch

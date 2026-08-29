@@ -34,6 +34,19 @@ CORNER_NAMES = (
 )
 
 
+# Maps saved before plans/dual-orientation-grid.md named the two block extents
+# `block_width_cm` / `block_length_cm`. They meant exactly X and Y, so reading
+# them under the new names is a rename, not a reinterpretation.
+_LEGACY_BLOCK_KEYS = {"x": "block_width_cm", "y": "block_length_cm"}
+
+
+def _block_cm(geometry: dict, axis: str) -> float:
+    key = f"block_{axis}_cm"
+    if key in geometry:
+        return geometry[key]
+    return geometry[_LEGACY_BLOCK_KEYS[axis]]
+
+
 def _homography(src, dst):
     """Return the projective transform taking four ``src`` points to ``dst``."""
     rows = []
@@ -96,8 +109,8 @@ class WorkspaceMap:
             self._grid = MachineGrid(
                 cols=self.cols,
                 rows=self.rows,
-                block_width_cm=float(geometry["block_width_cm"]),
-                block_length_cm=float(geometry["block_length_cm"]),
+                block_x_cm=float(_block_cm(geometry, "x")),
+                block_y_cm=float(_block_cm(geometry, "y")),
                 gap_x_cm=float(geometry["gap_x_cm"]),
                 gap_y_cm=float(geometry["gap_y_cm"]),
                 workspace_width_cm=float(geometry["workspace_width_cm"]),
@@ -126,8 +139,8 @@ class WorkspaceMap:
         geometry = {
             "workspace_width_cm": grid.workspace_width_cm,
             "workspace_height_cm": grid.workspace_height_cm,
-            "block_width_cm": grid.block_width_cm,
-            "block_length_cm": grid.block_length_cm,
+            "block_x_cm": grid.block_x_cm,
+            "block_y_cm": grid.block_y_cm,
             "gap_x_cm": grid.gap_x_cm,
             "gap_y_cm": grid.gap_y_cm,
             "trim_x_cm": grid.trim_x_cm,
@@ -178,8 +191,8 @@ class WorkspaceMap:
             (self.cols, self.rows) == (grid.cols, grid.rows)
             and float(geometry["workspace_width_cm"]) == grid.workspace_width_cm
             and float(geometry["workspace_height_cm"]) == grid.workspace_height_cm
-            and float(geometry["block_width_cm"]) == grid.block_width_cm
-            and float(geometry["block_length_cm"]) == grid.block_length_cm
+            and float(_block_cm(geometry, "x")) == grid.block_x_cm
+            and float(_block_cm(geometry, "y")) == grid.block_y_cm
             and float(geometry["gap_x_cm"]) == grid.gap_x_cm
             and float(geometry["gap_y_cm"]) == grid.gap_y_cm
             and float(geometry.get("trim_x_cm", 0.0)) == grid.trim_x_cm
@@ -244,16 +257,16 @@ class WorkspaceMap:
         g = self._grid
         if axis == "col":
             x_center, _ = g.cell_center_cm(index, 1)
-            x0_cm = x_center - g.block_width_cm / 2
-            x1_cm = x_center + g.block_width_cm / 2
-            y0_cm = -g.block_length_cm / 2
-            y1_cm = g.block_length_cm / 2
+            x0_cm = x_center - g.block_x_cm / 2
+            x1_cm = x_center + g.block_x_cm / 2
+            y0_cm = -g.block_y_cm / 2
+            y1_cm = g.block_y_cm / 2
         elif axis == "row":
             _, y_center = g.cell_center_cm(1, index)
-            y0_cm = y_center - g.block_length_cm / 2
-            y1_cm = y_center + g.block_length_cm / 2
-            x0_cm = -g.block_width_cm / 2
-            x1_cm = g.block_width_cm / 2
+            y0_cm = y_center - g.block_y_cm / 2
+            y1_cm = y_center + g.block_y_cm / 2
+            x0_cm = -g.block_x_cm / 2
+            x1_cm = g.block_x_cm / 2
         else:
             raise ValueError("axis must be 'col' or 'row'")
         corners_cm = ((x0_cm, y0_cm), (x1_cm, y0_cm), (x1_cm, y1_cm), (x0_cm, y1_cm))
@@ -265,8 +278,8 @@ class WorkspaceMap:
         if self._grid is None:
             raise ValueError("the origin cell needs a physically scaled grid")
         g = self._grid
-        x0_cm, x1_cm = -g.block_width_cm / 2, g.block_width_cm / 2
-        y0_cm, y1_cm = -g.block_length_cm / 2, g.block_length_cm / 2
+        x0_cm, x1_cm = -g.block_x_cm / 2, g.block_x_cm / 2
+        y0_cm, y1_cm = -g.block_y_cm / 2, g.block_y_cm / 2
         corners_cm = ((x0_cm, y0_cm), (x1_cm, y0_cm), (x1_cm, y1_cm), (x0_cm, y1_cm))
         return [self.pixel_at(x / g.workspace_width_cm, y / g.workspace_height_cm,
                               image_size) for x, y in corners_cm]
@@ -300,10 +313,10 @@ class WorkspaceMap:
         x_cm = u * g.workspace_width_cm
         y_cm = v * g.workspace_height_cm
         epsilon = 1e-9
-        row0_lane_y0 = -g.block_length_cm / 2
-        row0_lane_y1 = g.block_length_cm / 2
-        col0_lane_x0 = -g.block_width_cm / 2
-        col0_lane_x1 = g.block_width_cm / 2
+        row0_lane_y0 = -g.block_y_cm / 2
+        row0_lane_y1 = g.block_y_cm / 2
+        col0_lane_x0 = -g.block_x_cm / 2
+        col0_lane_x1 = g.block_x_cm / 2
         in_row0_lane_y = row0_lane_y0 - epsilon <= y_cm <= row0_lane_y1 + epsilon
         in_col0_lane_x = col0_lane_x0 - epsilon <= x_cm <= col0_lane_x1 + epsilon
         if in_col0_lane_x and in_row0_lane_y:

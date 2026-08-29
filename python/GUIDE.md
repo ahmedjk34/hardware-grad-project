@@ -144,6 +144,10 @@ block footprint 43.75 cm high while holder centres remain limited to 40 cm.
 The Pi maps pixels through centimetres
 to a logical cell; Arduino alone converts the selected centre to step pulses.
 
+The numbers below are the **vertical** grid's. The horizontal grid swaps which
+block extent lies along which axis and repacks to `3 × 15`; see AGENTS.md §3a
+for both tables. A calibration belongs to one mode and never transfers.
+
 Grid pitch is not block size. X pitch is `2.2 + 0.5 = 2.7 cm`; Y pitch is
 `7.5 + 0.5 = 8 cm`. `[0,0]` is the feeder-block centre. The X/Y grid shifts
 are half a feeder block: `1.1 cm` X and `3.75 cm` Y. Column centres are
@@ -162,11 +166,14 @@ complete Arduino build there.
 ```bash
 python camera/rig_build_v1.py
 python camera/rig_build_v1.py --level 0
-python camera/rig_build_v1.py --level 2 --rotation R
+python camera/rig_build_v1.py --level 2 --mode horizontal
 ```
 
-Startup opens the configured serial port, waits for the Mega reboot banner and
-pushes the JSON grid count. It then opens the same corrected/detected camera
+Startup opens the configured serial port, waits for the Mega reboot banner,
+latches the grid mode and then pushes that mode's grid count — in that order,
+because the Mega validates the count against whichever grid is active. A reset
+returns the board to the vertical grid without saying so, which is why the mode
+is pushed on every connect rather than assumed. It then opens the same corrected/detected camera
 pipeline as `camera_feed.py`. The amber approximate grid is selectable and can
 issue a build immediately. A matching `workspace_map.json` refines the mapping
 when present, but it is not required. The camera image contains only the camera,
@@ -180,7 +187,10 @@ Workflow:
    you want to refine the mapping with four envelope corners, or `k` to refine
    it from the printed calibration sheet (`p` shows what the sheet detector
    sees). Both are refused during a build and both clear the selection.
-3. Set the stack level with `[` / `]`; `o` cycles `NR`, `R`, `RR`.
+3. Set the stack level with `[` / `]`. `o` latches the other grid — vertical
+   ⇄ horizontal. That is not a per-block rotation: it changes what every
+   coordinate means, so it drops the selection, and the camera map has to be
+   recalibrated for the mode you switch into.
 4. Read the displayed command, such as `B 3 4 0`.
 5. Press `b` or Enter to confirm and send it.
 

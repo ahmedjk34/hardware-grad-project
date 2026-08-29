@@ -3,7 +3,8 @@
 
     from rig.grid import MachineGrid
 
-    grid = MachineGrid.from_config()     # 9 positive cols x 5 rows
+    grid = MachineGrid.from_config()                   # the active mode
+    grid = MachineGrid.from_config(mode="horizontal")  # 3 positive cols x 15 rows
     grid.cell_at(0, 4)                   # image cell (left, bottom) -> (1, 1)
     grid.image_cell(3, 5)                # (col, row) -> the image cell to draw in
     grid.contains_build_target(0, 5)     # calibration target: skip X
@@ -29,6 +30,20 @@ Straight out of `printGrid()` in build_test_v1.ino: positive block cells are
 coordinates. Col 1 is nearest the X switch and row 1 is nearest the Y switch;
 rows increase upward in the machine's own drawing.
 
+Two orientations, and both of them are real
+-------------------------------------------
+A block can stand with its 7.5 cm side along Y (`vertical`, 9 x 5) or lie with
+that side along X (`horizontal`, 3 x 15). These are separate grids with
+separate counts, separate trims and separate calibrations, and `mode` names
+which one this object is. Every mode declares both `block_x_cm` and
+`block_y_cm` outright, so nothing in this module swaps an X extent for a Y one
+- see plans/dual-orientation-grid.md D12 for why that matters.
+
+`mode` is emphatically NOT `swap_axes`. `swap_axes` is about the CAMERA: it
+covers a lens mounted a quarter turn out, where the machine's columns run down
+the picture rather than across it. `mode` is about the BLOCK. The two are
+independent, and a horizontal grid seen through a turned camera needs both.
+
 Why the orientation is a setting at all
 ---------------------------------------
 The camera's rotation and mirroring relative to the rig is arbitrary — nobody
@@ -49,7 +64,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 
-from rig.config import load
+from rig.config import (active_grid_mode, grid_geometry, load,
+                        max_edge_overhang_cm)
 
 # Which image corner holds machine cell [1,1].
 ORIGIN_CORNERS = ("bottom-left", "bottom-right", "top-left", "top-right")
@@ -65,41 +81,59 @@ class MachineGrid:
     rows: int
     origin: str = DEFAULT_ORIGIN
     swap_axes: bool = False
-    block_width_cm: float | None = None
-    block_length_cm: float | None = None
+    # Which block orientation this grid is. None means "nobody said", which is
+    # how the count-only/legacy drawings are still constructed.
+    mode: str | None = None
+    # The block's extent along each machine axis, stated outright per mode.
+    block_x_cm: float | None = None
+    block_y_cm: float | None = None
     gap_x_cm: float = 0.0
     gap_y_cm: float = 0.0
     workspace_width_cm: float | None = None
     workspace_height_cm: float | None = None
     trim_x_cm: float = 0.0
     trim_y_cm: float = 0.0
+    # How far past the travel limit this mode lets a placed block's own EDGE
+    # sit. Not a trim: it moves nothing, it is what the geometry check measures
+    # the block edges against. None means "do not check edges at all", which is
+    # what a count-only grid and a pre-D20 saved calibration get.
+    max_edge_overhang_x_cm: float | None = None
+    max_edge_overhang_y_cm: float | None = None
     # AI AGENT NOTE: For any user-marked "error" offsetting, use these fields.
     # They apply exactly like trim_x_cm/trim_y_cm and shift every grid centre.
     error_offset_x_cm: float = 0.0
     error_offset_y_cm: float = 0.0
 
     @classmethod
-    def from_config(cls, cfg: dict | None = None, **kwargs) -> "MachineGrid":
-        """Read `grid.cols` / `grid.rows` from config/rig.json.
+    def from_config(cls, cfg: dict | None = None, mode: str | None = None,
+                    **kwargs) -> "MachineGrid":
+        """Read one `grid.modes.<mode>` entry from config/rig.json.
 
-        That block is authoritative at runtime: the Pi pushes it to the board
-        with `S <cols> <rows>` on every connect, because opening the port resets
-        the board back to its compiled default. See AGENTS.md section 3.
+        `mode=None` means the file's own `grid.active_mode`. An unknown name
+        raises :class:`rig.config.UnknownGridMode`, not a KeyError.
+
+        That block is authoritative at runtime: the Pi pushes the mode and then
+        `S <cols> <rows>` on every connect, because opening the port resets the
+        board back to its compiled vertical default. See AGENTS.md section 3.
         """
         cfg = cfg if cfg is not None else load()
-        grid = cfg["grid"]
+        name = active_grid_mode(cfg) if mode is None else str(mode)
+        grid = grid_geometry(cfg, name)
         workspace = cfg["workspace"]
         return cls(
             cols=int(grid["cols"]),
             rows=int(grid["rows"]),
-            block_width_cm=float(grid["block_width_cm"]),
-            block_length_cm=float(grid["block_length_cm"]),
+            mode=name,
+            block_x_cm=float(grid["block_x_cm"]),
+            block_y_cm=float(grid["block_y_cm"]),
             gap_x_cm=float(grid["gap_x_cm"]),
             gap_y_cm=float(grid["gap_y_cm"]),
             workspace_width_cm=float(workspace["width_cm"]),
             workspace_height_cm=float(workspace["height_cm"]),
             trim_x_cm=float(grid.get("trim_x_cm", 0.0)),
             trim_y_cm=float(grid.get("trim_y_cm", 0.0)),
+            max_edge_overhang_x_cm=max_edge_overhang_cm(grid, "x"),
+            max_edge_overhang_y_cm=max_edge_overhang_cm(grid, "y"),
             error_offset_x_cm=float(grid.get("error_offset_x_cm", 0.0)),
             error_offset_y_cm=float(grid.get("error_offset_y_cm", 0.0)),
             **kwargs,
@@ -113,8 +147,8 @@ class MachineGrid:
         if self.cols < 1 or self.rows < 1:
             raise ValueError(f"grid must be at least 1x1, got {self.cols}x{self.rows}")
         physical = (
-            self.block_width_cm,
-            self.block_length_cm,
+            self.block_x_cm,
+            self.block_y_cm,
             self.workspace_width_cm,
             self.workspace_height_cm,
         )
@@ -137,39 +171,74 @@ class MachineGrid:
                     f"the {self.workspace_width_cm:g}x{self.workspace_height_cm:g} cm "
                     "holder-travel envelope"
                 )
+            self._check_block_edges()
+
+    def _check_block_edges(self) -> None:
+        """The other half of the geometry check: where the BLOCKS end up.
+
+        The centre check above asks only whether the holder can reach every
+        placement point. That accepts a grid whose far block hangs off the
+        machine, because the centre it hangs from is legal — see
+        plans/dual-orientation-grid.md R2. This is the firmware's
+        `gridGeometryFits` block-edge half, kept identical on purpose.
+        """
+        slack = 1e-4
+        axes = (
+            ("X", self.max_edge_overhang_x_cm, self.x_start_cm, self.x_end_cm,
+             self.workspace_width_cm),
+            ("Y", self.max_edge_overhang_y_cm, self.y_start_cm, self.y_end_cm,
+             self.workspace_height_cm),
+        )
+        for name, budget, near, far, travel in axes:
+            if budget is None:
+                continue
+            if not math.isfinite(budget) or budget < 0:
+                raise ValueError("max edge overhang must be finite and non-negative")
+            if near < -budget - slack:
+                raise ValueError(
+                    f"{self.cols}x{self.rows} {name} block edges start "
+                    f"{-near:g} cm before home, past this mode's "
+                    f"{budget:g} cm overhang budget"
+                )
+            if far > travel + budget + slack:
+                raise ValueError(
+                    f"{self.cols}x{self.rows} {name} block edges reach {far:g} cm, "
+                    f"past the {travel:g} cm travel limit plus this mode's "
+                    f"{budget:g} cm overhang budget"
+                )
 
     @property
     def has_physical_scale(self) -> bool:
-        return self.block_width_cm is not None
+        return self.block_x_cm is not None
 
     @property
     def pitch_x_cm(self) -> float:
-        """Centre-to-centre X pitch: 2.2 cm block + 0.5 cm gap = 2.7 cm."""
-        return self.block_width_cm + self.gap_x_cm
+        """Centre-to-centre X pitch: block + gap. Vertical 2.7, horizontal 8.0 cm."""
+        return self.block_x_cm + self.gap_x_cm
 
     @property
     def pitch_y_cm(self) -> float:
-        """Centre-to-centre Y pitch: 7.5 cm block + 0.5 cm gap = 8.0 cm."""
-        return self.block_length_cm + self.gap_y_cm
+        """Centre-to-centre Y pitch: block + gap. Vertical 8.0, horizontal 2.7 cm."""
+        return self.block_y_cm + self.gap_y_cm
 
     @property
     def packed_width_cm(self) -> float:
-        """Positive blocks plus only their eight internal X gaps: 23.8 cm."""
-        return self.cols * self.block_width_cm + (self.cols - 1) * self.gap_x_cm
+        """Positive blocks plus only their internal X gaps: 23.8 / 23.5 cm."""
+        return self.cols * self.block_x_cm + (self.cols - 1) * self.gap_x_cm
 
     @property
     def packed_height_cm(self) -> float:
-        """Positive blocks plus only their four internal Y gaps: 39.5 cm."""
-        return self.rows * self.block_length_cm + (self.rows - 1) * self.gap_y_cm
+        """Positive blocks plus only their internal Y gaps: 39.5 / 40.0 cm."""
+        return self.rows * self.block_y_cm + (self.rows - 1) * self.gap_y_cm
 
     @property
     def allocation_width_cm(self) -> float:
-        """One X grid span: 9 * 2.7 = 24.3 cm."""
+        """One X grid span: 9 * 2.7 = 24.3 cm vertical, 3 * 8.0 = 24.0 horizontal."""
         return self.cols * self.pitch_x_cm
 
     @property
     def allocation_height_cm(self) -> float:
-        """One Y grid span: 5 * 8.0 = 40.0 cm."""
+        """One Y grid span: 5 * 8.0 = 40.0 cm vertical, 15 * 2.7 = 40.5 horizontal."""
         return self.rows * self.pitch_y_cm
 
     @property
@@ -189,7 +258,7 @@ class MachineGrid:
 
     @property
     def y_start_cm(self) -> float:
-        """Near edge of row 1, after the feeder half-length and Y gap."""
+        """Near edge of row 1, after the allocation centring/trim and the Y gap."""
         return self.y_allocation_start_cm + self.gap_y_cm
 
     @property
@@ -202,11 +271,11 @@ class MachineGrid:
 
     @property
     def x_first_center_cm(self) -> float:
-        return self.x_start_cm + self.block_width_cm / 2
+        return self.x_start_cm + self.block_x_cm / 2
 
     @property
     def y_first_center_cm(self) -> float:
-        return self.y_start_cm + self.block_length_cm / 2
+        return self.y_start_cm + self.block_y_cm / 2
 
     @property
     def x_last_center_cm(self) -> float:
@@ -231,10 +300,10 @@ class MachineGrid:
         """Physical block edges, excluding the visible 0.5 cm gaps."""
         cx, cy = self.cell_center_cm(col, row)
         return (
-            cx - self.block_width_cm / 2,
-            cy - self.block_length_cm / 2,
-            cx + self.block_width_cm / 2,
-            cy + self.block_length_cm / 2,
+            cx - self.block_x_cm / 2,
+            cy - self.block_y_cm / 2,
+            cx + self.block_x_cm / 2,
+            cy + self.block_y_cm / 2,
         )
 
     # --- how many cells the image is divided into ------------------------
@@ -300,34 +369,44 @@ class MachineGrid:
     # --- reporting --------------------------------------------------------
 
     def matches(self, cfg: dict | None = None) -> bool:
-        """Is this still the grid config/rig.json asks for?"""
-        other = MachineGrid.from_config(cfg)
+        """Is this still the grid config/rig.json asks for, in this same mode?
+
+        Compared against THIS grid's own mode rather than the config's active
+        one, so the question stays "has my geometry drifted" rather than
+        turning into "has the operator latched the other orientation".
+        """
+        other = MachineGrid.from_config(cfg, mode=self.mode)
         return (
-            self.cols == other.cols
+            self.mode == other.mode
+            and self.cols == other.cols
             and self.rows == other.rows
-            and self.block_width_cm == other.block_width_cm
-            and self.block_length_cm == other.block_length_cm
+            and self.block_x_cm == other.block_x_cm
+            and self.block_y_cm == other.block_y_cm
             and self.gap_x_cm == other.gap_x_cm
             and self.gap_y_cm == other.gap_y_cm
             and self.workspace_width_cm == other.workspace_width_cm
             and self.workspace_height_cm == other.workspace_height_cm
             and self.trim_x_cm == other.trim_x_cm
             and self.trim_y_cm == other.trim_y_cm
+            and self.max_edge_overhang_x_cm == other.max_edge_overhang_x_cm
+            and self.max_edge_overhang_y_cm == other.max_edge_overhang_y_cm
             and self.error_offset_x_cm == other.error_offset_x_cm
             and self.error_offset_y_cm == other.error_offset_y_cm
         )
 
     def describe(self) -> str:
         turned = ", axes swapped" if self.swap_axes else ""
+        named = f"{self.mode} " if self.mode else ""
         physical = ""
         if self.has_physical_scale:
             physical = (
-                f", {self.block_width_cm:g}x{self.block_length_cm:g} cm blocks"
+                f", {self.block_x_cm:g}x{self.block_y_cm:g} cm blocks"
                 f", {self.gap_x_cm:g}x{self.gap_y_cm:g} cm gaps"
                 f", pitch {self.pitch_x_cm:g}x{self.pitch_y_cm:g} cm"
                 f", footprint {self.packed_width_cm:g}x{self.packed_height_cm:g} cm"
             )
-        return f"{self.cols}x{self.rows} cells{physical}, [1,1] at {self.origin}{turned}"
+        return (f"{named}{self.cols}x{self.rows} cells{physical}"
+                f", [1,1] at {self.origin}{turned}")
 
     def ascii_map(self, here: tuple[int, int] | None = None) -> str:
         """Redraw the rig's own `9` map, so the two can be compared line by line.

@@ -88,8 +88,8 @@ with tempfile.TemporaryDirectory() as directory:
     shifted = MachineGrid(
         cols=grid.cols,
         rows=grid.rows,
-        block_width_cm=2.1,
-        block_length_cm=grid.block_length_cm,
+        block_x_cm=2.1,
+        block_y_cm=grid.block_y_cm,
         gap_x_cm=grid.gap_x_cm,
         gap_y_cm=grid.gap_y_cm,
         workspace_width_cm=grid.workspace_width_cm,

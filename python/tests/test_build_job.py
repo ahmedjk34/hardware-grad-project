@@ -36,8 +36,8 @@ class SlowRig:
         self.release = threading.Event()
         self.calls = []
 
-    def build(self, col, row, level, rotation=None, timeout=300):
-        self.calls.append((col, row, level, rotation, timeout))
+    def build(self, col, row, level, timeout=300):
+        self.calls.append((col, row, level, timeout))
         self.entered.set()
         self.release.wait(5.0)
         if isinstance(self.outcome, Exception):
@@ -124,7 +124,7 @@ check("aborted keeps the controller locked", controller.locked)
 
 # --- an unexpected worker crash is treated as unknown machine state ---------
 class BrokenRig(SlowRig):
-    def build(self, col, row, level, rotation=None, timeout=300):
+    def build(self, col, row, level, timeout=300):
         raise ValueError("bug in the worker")
 
 

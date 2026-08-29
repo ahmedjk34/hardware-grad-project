@@ -94,7 +94,31 @@ BANNER = [
     "=== GRID ===",
     "Division : 9 cols x 5 rows  = 45 positive cells",
     ">> Position is UNKNOWN until you home. Send 0 to home.",
-    "@0 READY grid=9x5",
+    "@0 READY grid=9x5 mode=vertical",
+]
+
+# A board that boots vertical, as every board does, being latched to the
+# horizontal grid. Copied out of setGridMode().
+MODE_LATCHED = [
+    "",
+    "GRID MODE: vertical  ->  horizontal",
+    "  The claw did NOT move. The next B turns it at the feeder.",
+    "--- GRID ---",
+    "Mode      : horizontal  (block 7.50 X x 2.20 Y cm)  RR = horizontal, R = vertical",
+    "Division : 3 cols x 15 rows  = 45 positive cells",
+]
+
+MODE_ALREADY = [
+    "",
+    "  ERROR - already in vertical mode.",
+    "  RR selects horizontal, R selects vertical.",
+]
+
+MODE_UNHOMED = [
+    "",
+    "  ERROR - home X/Y first (send 0).",
+    "  A mode switch redefines every coordinate, so the",
+    "  current cell has to mean something before it is re-read.",
 ]
 
 GRID_RESIZED = [
@@ -186,24 +210,37 @@ GOTO_AXIS_ONLY = [
 CFG = {
     "serial": {"port": "/dev/fake", "baud": 9600},
     "grid": {
-        "cols": 9, "rows": 5,
-        "block_width_cm": 2.2, "block_length_cm": 7.5,
-        "gap_x_cm": 0.5, "gap_y_cm": 0.5,
-        "trim_x_cm": 0.0, "trim_y_cm": 0.0,
+        "active_mode": "vertical",
+        "modes": {
+            "vertical": {
+                "cols": 9, "rows": 5,
+                "block_x_cm": 2.2, "block_y_cm": 7.5,
+                "gap_x_cm": 0.5, "gap_y_cm": 0.5,
+                "trim_x_cm": 0.0, "trim_y_cm": 0.0,
+            },
+            "horizontal": {
+                "cols": 3, "rows": 15,
+                "block_x_cm": 7.5, "block_y_cm": 2.2,
+                "gap_x_cm": 0.5, "gap_y_cm": 0.5,
+                "trim_x_cm": 0.0, "trim_y_cm": -0.25,
+                "max_edge_overhang_x_cm": 0.0, "max_edge_overhang_y_cm": 0.0,
+            },
+        },
     },
     "workspace": {"width_cm": 24.3, "height_cm": 40.0},
     "frame": {"width_cm": 20.0, "height_cm": 35.0},
 }
 
-DEFAULT_REPLIES = {"S": GRID_RESIZED, "B": BUILD_OK, "0+": HOME_OK, "G": GOTO_OK}
+DEFAULT_REPLIES = {"S": GRID_RESIZED, "B": BUILD_OK, "0+": HOME_OK, "G": GOTO_OK,
+                   "RR": MODE_LATCHED, "R": MODE_ALREADY}
 
 
-def fake_rig(replies=None, acks=True, timeout=10, **kwargs):
+def fake_rig(replies=None, acks=True, timeout=10, cfg=None, banner=None, **kwargs):
     """A connected Rig talking to a FakeSerial. Returns (rig, fake)."""
-    script = {"banner": BANNER, "replies": replies or DEFAULT_REPLIES}
+    script = {"banner": banner or BANNER, "replies": replies or DEFAULT_REPLIES}
     fake = FakeSerial(script, acks=acks)
     link.serial.Serial = lambda *a, **k: fake  # the whole point of the fake
-    rig = link.Rig(cfg=CFG)
+    rig = link.Rig(cfg=cfg or CFG)
     rig.connect(timeout=timeout, **kwargs)
     return rig, fake
 
@@ -223,8 +260,8 @@ def check(name, condition, detail=""):
 
 for raw, kind, seq in [
     ("@0 BOOT fw=build_test_v1", "BOOT", 0),
-    ("@0 READY grid=9x5", "READY", 0),
-    ("@1 ERR expected: B <col> <row> <level> [R|RR|NR]", "ERR", 1),
+    ("@0 READY grid=9x5 mode=vertical", "READY", 0),
+    ("@1 ERR expected: B <col> <row> <level>", "ERR", 1),
     ("@2 SAFE cell out of range", "SAFE", 2),
     ("@3 OK col=3 row=5 level=0", "OK", 3),
     ("@4 HELD Z never reached the ground switch", "HELD", 4),
@@ -272,6 +309,9 @@ for acks in (True, False):
 
 rig, fake = fake_rig()
 check("connect pushes the grid", "S 9 5" in fake.written, str(fake.written))
+check("connect reads the board's mode", rig.ready_mode == "vertical", str(rig.ready_mode))
+check("a vertical session sends no latch",
+      "R" not in fake.written and "RR" not in fake.written, str(fake.written))
 check("connect does not home", "0+" not in fake.written, str(fake.written))
 check("READY grid captured", rig.ready_grid == "9x5", str(rig.ready_grid))
 check("no fallback with acks", rig.prose_fallbacks == 0)
@@ -364,6 +404,81 @@ check(
     result == link.ABORTED and result.needs_a_human and not result.ok,
     repr(result),
 )
+
+# ------------------------------------------------------------------
+# The grid mode latch and the reset boundary (R4)
+# ------------------------------------------------------------------
+
+import copy  # noqa: E402
+
+HORIZONTAL_CFG = copy.deepcopy(CFG)
+HORIZONTAL_CFG["grid"]["active_mode"] = "horizontal"
+
+rig, fake = fake_rig(cfg=HORIZONTAL_CFG)
+check("a horizontal session latches on connect", "RR" in fake.written,
+      str(fake.written))
+check("the latch is pushed BEFORE S (R4)",
+      fake.written.index("RR") < fake.written.index("S 3 15"), str(fake.written))
+check("connect pushes the horizontal counts", "S 3 15" in fake.written,
+      str(fake.written))
+check("the rig's grid followed the latch",
+      rig.grid.mode == "horizontal" and (rig.cols, rig.rows) == (3, 15))
+rig.close()
+
+# set_mode outside connect re-sends S, because the board's count for the mode
+# it has just switched into is ITS compiled default, not this config's.
+rig, fake = fake_rig()
+fake.written.clear()
+rig.set_mode("horizontal")
+check("set_mode latches and then re-pushes S",
+      fake.written == ["RR", "S 3 15"], str(fake.written))
+check("set_mode re-read the grid",
+      rig.grid.mode == "horizontal" and (rig.cols, rig.rows) == (3, 15))
+
+# Wanting the mode the board is already in is not an error on this side.
+fake.written.clear()
+rig.set_mode("vertical")
+check("an 'already in' refusal still counts as success",
+      rig.grid.mode == "vertical" and (rig.cols, rig.rows) == (9, 5))
+
+try:
+    rig.set_mode("diagonal")
+    check("an unknown mode never reaches the wire", False)
+except ValueError as exc:
+    check("an unknown mode never reaches the wire",
+          "R" not in fake.written[-1:] or "diagonal" in str(exc), str(exc))
+rig.close()
+
+# An un-homed board refuses the latch, and that must surface as an error
+# rather than as a silent no-op that leaves Python believing the wrong grid.
+rig, fake = fake_rig(replies={**DEFAULT_REPLIES, "RR": MODE_UNHOMED})
+try:
+    rig.set_mode("horizontal")
+    check("an un-homed latch refusal raises", False)
+except link.RigError as exc:
+    check("an un-homed latch refusal raises", "home X/Y first" in str(exc))
+check("the refused latch left the grid alone",
+      rig.grid.mode == "vertical" and (rig.cols, rig.rows) == (9, 5))
+rig.close()
+
+# ------------------------------------------------------------------
+# The rotation word is gone (D8)
+# ------------------------------------------------------------------
+
+rig, fake = fake_rig()
+rig.build(3, 5, 0, timeout=20)
+check("B carries three numbers and nothing else",
+      fake.written[-1] == "B 3 5 0", str(fake.written[-1]))
+try:
+    rig.build(3, 5, 0, rotation="RR", timeout=20)
+    check("build() no longer accepts a rotation", False)
+except TypeError:
+    check("build() no longer accepts a rotation", True)
+rig.close()
+
+outcome, reason = link._prose_outcome("  ERROR - B takes exactly three numbers.")
+check("the firmware's new B error reads as a rejection",
+      outcome == link.REJECTED and reason == "bad arguments", f"{outcome} {reason}")
 
 print(f"\n{len(PASSED)} passed, {len(FAILED)} failed")
 if FAILED:

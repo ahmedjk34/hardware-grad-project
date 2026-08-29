@@ -47,37 +47,72 @@ Switching boards is then a one-line edit to `rig.json`.
 
 | Where | What |
 | --- | --- |
-| `config/rig.json` → `grid.cols` / `grid.rows` | **authoritative at runtime** |
-| `build_test_v1.ino` SECTION 6C | `GRID_COLS` / `GRID_ROWS` — the compiled default |
-| `python/rig/grid.py` | `MachineGrid.from_config()` — what the viewers draw |
+| `config/rig.json` → `grid.modes.<mode>.cols` / `.rows` | **authoritative at runtime** |
+| `config/rig.json` → `grid.active_mode` | which of the two grids the rig should be in |
+| `build_test_v1.ino` SECTION 6C | `GRID_COLS[]` / `GRID_ROWS[]` — per-mode compiled defaults |
+| `build_test_v1.ino` `gridMode` | the live mode; compiled default is vertical |
+| `python/rig/grid.py` | `MachineGrid.from_config(mode=...)` — what the viewers draw |
+
+**There are two grids, not one.** A block is 2.2 × 7.5 cm in plan and can be
+laid either way round, and which way round decides how many cells fit and where
+they sit. So each orientation is a complete, separately calibrated grid:
+
+| mode | block | grid | addressable with zero lanes |
+| --- | --- | --- | --- |
+| `vertical` | 2.2 X × 7.5 Y cm | **9 cols × 5 rows = 45 cells** | 10 × 6 |
+| `horizontal` | 7.5 X × 2.2 Y cm | **3 cols × 15 rows = 45 cells** | 4 × 16 |
+
+The equal cell count is a coincidence, not a design. Both counts are hard
+geometric maxima against the 24.3 × 40.0 cm holder travel, which is physical
+and does **not** change with the mode — see §3a.
 
 The sketch uses no EEPROM, so nothing survives a reset — and opening the USB
 port resets the board. Every session therefore starts at the compiled default,
-and the Pi pushes `S <cols> <rows>` on connect to overwrite it.
+which is **vertical**, at that mode's compiled `GRID_COLS[]` / `GRID_ROWS[]`.
+The Pi pushes the mode it wants **and then** `S <cols> <rows>` on connect to
+overwrite both. The order matters: `S` is validated against the active mode's
+geometry, so pushing it first validates the counts against the wrong grid.
 
-The firmware default should still be kept equal to the config, so that a manual
-Arduino Serial Monitor session behaves the same as a Pi-driven one. Editing only
-the sketch is the trap: the Pi will silently overwrite it on the next connect.
+The mode is latched from the serial console with `RR` (vertical → horizontal)
+and `R` (horizontal → vertical). Neither moves the aux stepper and neither is
+accepted unless X and Y are homed; see §3c.
+
+The firmware defaults should still be kept equal to the config, for **both**
+modes, so that a manual Arduino Serial Monitor session behaves the same as a
+Pi-driven one. Editing only the sketch is the trap: the Pi will silently
+overwrite the active mode on the next connect. Checking only the active mode is
+the newer trap: the horizontal half can drift unnoticed until someone sends
+`RR`.
 
 This applies to AI agents as well as humans: **an agent changing a paired grid
 value must edit both the Raspberry Pi JSON/Python side and the live Arduino
 sketch in the same change.** Run `python/tests/test_grid.py`; it parses the live
-sketch constants and fails if any listed pair differs from `rig.json`.
+sketch's per-mode tables and fails if any listed pair differs from `rig.json`,
+in either mode.
 
-Current default: **9 positive columns × 5 positive rows = 45 normal cells**.
-Including coordinate zero, commands address col `0..9` and row `0..5`: a
-**10 × 6 coordinate grid** consisting of 45 normal cells, 9 X-only targets,
-5 Y-only targets, and `[0,0]` home.
+`S <cols> <rows>` is scoped to the **active** mode and revalidated against that
+mode's geometry. The other mode keeps whatever count it was last given, so
+latching back and forth does not quietly resize the grid you are not looking at.
 
 ### 3a. X/Y physical grid geometry — fixed-pitch block cells
 
-| Meaning | Pi / camera side | Firmware side |
-| --- | --- | --- |
-| physical envelope | `rig.json` → `workspace.width_cm` / `height_cm` | `X_TRAVEL_CM` / `Y_TRAVEL_CM` |
-| one block footprint | `rig.json` → `grid.block_width_cm` / `block_length_cm` | `GRID_BLOCK_X_CM` / `GRID_BLOCK_Y_CM` |
-| gap before each positive cell | `rig.json` → `grid.gap_x_cm` / `gap_y_cm` | `GRID_GAP_X_CM` / `GRID_GAP_Y_CM` |
-| signed complete-grid shift | `rig.json` → `grid.trim_x_cm` / `trim_y_cm` | `GRID_TRIM_X_CM` / `GRID_TRIM_Y_CM` |
-| signed error correction shift | `rig.json` → `grid.error_offset_x_cm` / `error_offset_y_cm` | `GRID_ERROR_OFFSET_X_CM` / `GRID_ERROR_OFFSET_Y_CM` |
+Everything in this table except the physical envelope is **per mode**. On the
+Pi side that is `grid.modes.<mode>.<key>`; on the firmware side it is a
+two-element table indexed by `gridMode`, ordered `{vertical, horizontal}`.
+
+| Meaning | Per mode? | Pi / camera side | Firmware side |
+| --- | --- | --- | --- |
+| physical envelope | no | `rig.json` → `workspace.width_cm` / `height_cm` | `X_TRAVEL_CM` / `Y_TRAVEL_CM` |
+| one block footprint | yes | `grid.modes.*.block_x_cm` / `block_y_cm` | `GRID_BLOCK_X_CM[]` / `GRID_BLOCK_Y_CM[]` |
+| gap before each positive cell | yes | `grid.modes.*.gap_x_cm` / `gap_y_cm` | `GRID_GAP_X_CM[]` / `GRID_GAP_Y_CM[]` |
+| signed complete-grid shift | yes | `grid.modes.*.trim_x_cm` / `trim_y_cm` | `GRID_TRIM_X_CM[]` / `GRID_TRIM_Y_CM[]` |
+| signed error correction shift | yes | `grid.modes.*.error_offset_x_cm` / `error_offset_y_cm` | `GRID_ERROR_OFFSET_X_CM[]` / `GRID_ERROR_OFFSET_Y_CM[]` |
+| permitted block-edge overhang | yes | `grid.modes.*.max_edge_overhang_x_cm` / `_y_cm` | `GRID_MAX_EDGE_OVERHANG_X_CM[]` / `_Y_CM[]` |
+
+**Each mode declares both block extents outright.** Nothing in this project
+swaps a width for a length. A swap would have to be performed identically in
+the firmware, in `MachineGrid` and in the camera overlay — three chances to get
+an axis backwards, for no gain.
 
 `rig.json` → `observed_build_area` is a measurement record only. It has no
 firmware partner and never replaces the holder travel cap in `workspace`.
@@ -97,32 +132,61 @@ footprint**. The feeder-centre model currently predicts physical outer block
 edges at **25.4 × 43.75 cm**, which needs physical verification; neither record
 changes the 24.3 × 40 cm holder-centre motion cap. Tool offsets remain zero.
 
-Blocks are **2.2 cm X × 7.5 cm Y × 1.5 cm Z** in the supported unrotated
-footprint. `[0,0]` is the feeder-block centre where the claw picks up. Every
-positive cell has a **0.5 cm gap** before it. On Y the build grid begins
-**3.75 cm** (half a feeder-block length) away from `[0,0]`; this makes the
-centre-to-centre distance from the feeder to row 1 exactly `3.75 + 0.5 +
-3.75 = 8.0 cm`. There is no additional trailing outer margin inside the grid:
+A block is **2.2 × 7.5 × 1.5 cm**. Which of its two plan dimensions lies along
+X is what the mode decides. `[0,0]` is the feeder-block centre where the claw
+picks up, and every positive cell has a **0.5 cm gap** before it. The whole
+derivation is the same six lines in both modes:
 
 ```text
-X pitch = 2.2 + 0.5 = 2.7 cm; 9 × 2.7 = 24.3 cm
-Y pitch = 7.5 + 0.5 = 8.0 cm; 5 × 8.0 = 40.0 cm
-
-positive-block footprint X = 9 × 2.2 + 8 × 0.5 = 23.8 cm
-positive-block footprint Y = 5 × 7.5 + 4 × 0.5 = 39.5 cm
+pitch       = block + gap
+allocation  = count × pitch
+start       = (travel − allocation) / 2 + trim
+first centre= start + gap + block/2
+last centre = first centre + (count − 1) × pitch
+footprint   = count × block + (count − 1) × gap
 ```
 
-The X/Y spans start one half feeder block away from the feeder centre: X
-`+1.1 cm`, Y `+3.75 cm`. With the shipped zero error offsets, first centres
-are X `2.7 cm` and Y `8.0 cm`, with the last centres at X `24.3 cm` and
-Y `40.0 cm`. The final physical block edges are `25.4 × 43.75 cm` from the
-feeder centre. This is safe only because the holder needs to reach
-each block's **centre** inside its 24.3 × 40 cm travel envelope; the held
-block itself extends past that holder coordinate.
+Worked out for both, against the mode-independent 24.3 × 40.0 cm travel:
+
+| mode | axis | block | gap | pitch | count | footprint | centres | block edges |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| vertical | X | 2.2 | 0.5 | 2.7 | **9** | 23.80 | 2.70 → 24.30 | 1.60 → 25.40 |
+| vertical | Y | 7.5 | 0.5 | 8.0 | **5** | 39.50 | 8.00 → 40.00 | 4.25 → 43.75 |
+| horizontal | X | 7.5 | 0.5 | 8.0 | **3** | 23.50 | 4.40 → 20.40 | 0.65 → 24.15 |
+| horizontal | Y | 2.2 | 0.5 | 2.7 | **15** | 40.00 | 1.10 → 38.90 | 0.00 → 40.00 |
+
+Vertical's trims are the measured feeder-centre-to-build-grid shifts, X
+`+1.1 cm` and Y `+3.75 cm` — one half feeder block on each axis, which is what
+makes the feeder-to-row-1 centre distance exactly `3.75 + 0.5 + 3.75 = 8.0 cm`.
+Its final block edges are `25.4 × 43.75 cm` from the feeder centre. That is safe
+because the holder only needs to reach each block's **centre** inside its
+travel envelope; the held block itself overhangs.
+
+**Horizontal's trims are `0.0` and `−0.25`, and must never be copied from
+vertical's.** At vertical's `+1.1 cm` X trim, horizontal's third column would
+sit at 1.75 → 25.25 cm, hanging `0.95 cm` off the end of the machine — from a
+centre at 21.5 cm that is perfectly legal. A centre-only geometry check accepts
+that grid. This is why each mode also declares
+`max_edge_overhang_x_cm` / `_y_cm`: the budget the block **edges** are checked
+against, on both machines.
+
+- vertical allows half a block on each axis (`1.1` / `3.75`), which is exactly
+  the overhang a grid whose last centre sits on the travel limit must have;
+- horizontal allows **zero**, because its rows are flush with both walls.
+
+The budget moves nothing. It is not a trim, and it must not be used as one.
+
+**Horizontal's 15 rows have no margin at all.** `15 × 2.2 + 14 × 0.5 = 40.00 cm`
+into `40.00 cm` of travel, flush at both ends, with the home-to-row-1 gap
+collapsed to zero. A 1 mm per-block error accumulates to 1.5 cm and costs a
+row. Measure the real block width across a stack of 15 before trusting the
+horizontal Y calibration. At `trim_y = 0.0` the far block overhangs by 0.25 cm
+and the grid is refused; at vertical's `trim_y = 3.75` only 12 rows fit.
 
 The firmware owns the step counts and derives both steps/cm ratios at runtime;
 never hard-code either ratio and do not copy the `4750 × 8250` safety envelope
-into JSON. The Pi does not need motor steps to draw or select a cell: it maps
+into JSON. Neither the step envelope nor either steps/cm ratio is per mode:
+they describe the machine, and a block lying down does not move a limit switch. The Pi does not need motor steps to draw or select a cell: it maps
 camera pixel → physical cm → `[col,row]`, and the Arduino alone maps that cell
 to safe step targets. The Pi needs the centimetre geometry to interpret camera
 scale, while the firmware needs it to turn cell centres into steps, so those
@@ -149,6 +213,11 @@ draws col 0 and row 0: `[0,0]` is home, `[col,0]` is X-only, and `[0,row]` is
 Y-only. Rows increase upward and columns rightward. Cells are written
 `[col,row]`, the same order as the arguments to `G` and `B`.
 
+**The convention holds in both modes; only the map's dimensions change.**
+Vertical draws 10 wide × 6 tall, horizontal draws 4 wide × 16 tall. `9` prints
+the active mode's name above the map, so a map with the wrong shape for what
+you expected is a mode you did not expect, not a numbering change.
+
 `ascii_map()` reproduces `printGrid()` byte for byte on purpose, so a change to
 either can be caught by diffing them rather than by noticing that the claw went
 to the wrong place. If you reword that map, run `python/tests/test_grid.py`.
@@ -170,9 +239,23 @@ The X/Y counters describe the gantry holder. Each offset is the signed vector
 **from holder reference to actual block-placement centre**, where positive is
 away from that axis's home switch. The Arduino subtracts that vector from the
 selected grid-cell centre before moving, so the tool — not its holder — reaches
-the requested cell. `neutral` is for an unrotated claw; `cw` and `ccw` are for
-the eventual `R` and `RR` placement orientations. A `G` command uses the claw's
-current orientation; a `B` command uses the requested placement orientation.
+the requested cell. `neutral` is the vertical grid's placement orientation and `ccw` is the
+horizontal grid's; a `G` command uses the claw's current orientation, a `B`
+command uses the active grid's.
+
+**`cw` is unreachable and is kept anyway.** Nothing can now ask for a clockwise
+placement: `B` has no rotation word, and the mode latch derives the placement
+rotation from the grid — vertical → none, horizontal → 90° CCW. There is no
+clockwise grid because a clockwise grid would be a second, separately
+calibrated layout that nobody has measured. The `cw` entry stays in both the
+JSON and the firmware because `toolOffsetCmOf()` is written over the three
+rotation states, and deleting one leg of that would make the offsets no longer
+line up with `ROT_CW` / `ROT_NONE` / `ROT_CCW` — a schema change that buys
+nothing. Leave it at zero; do not calibrate it, and do not read it as a hint
+that a clockwise mode exists.
+
+`ccw` is also **uncalibrated**. Horizontal placement accuracy is unverified
+until it is measured on hardware.
 
 All shipped offsets are **zero**, which is an intentional no-op. Enter measured
 values in both places in the same commit. Do not compensate this by moving the
@@ -287,6 +370,20 @@ together. Every ack literal is `F()`, like everything else the sketch prints.
 The sketch's commands (`B`, `G`, `S`, `0`, `0+`, `5`, `9`, `Z`, `U`, `D`, `O`,
 `C`, `V`, `R`, `RR`) are the contract between the two machines. `V <angle>`
 sets the gripper servo to an integer angle from 0 to 180 degrees.
+
+Two of these changed meaning and one lost an argument:
+
+- **`R` and `RR` are the grid mode latch, not a claw jog.** `R` selects the
+  vertical grid, `RR` the horizontal one. Neither moves the aux stepper.
+  Neither is accepted unless X and Y are homed, and each is refused when it is
+  already true — a latch that confirms a state nobody asked for cannot tell a
+  confirmation from a mistake. `python/rig/link.py` sends them through
+  `set_mode()`, matching the prose `GRID MODE:` and `ERROR - already in`.
+- **`B` no longer takes a rotation word.** `B <col> <row> <level>`, three
+  numbers, nothing after them. How the block is laid comes from the active
+  grid. A fourth word is a parse error that names the latch.
+- **`@0 READY` carries `mode=` beside `grid=`.** A reset silently returns the
+  board to vertical, so the Pi is told rather than left to assume.
 
 If you rename a command, change its arguments, or change the text it prints on
 success or failure, **grep `python/` for the old form first.** `B` has an `@`

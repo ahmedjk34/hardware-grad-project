@@ -20,17 +20,25 @@ def check(name, condition, detail=""):
 
 
 class FakeRig:
-    def __init__(self, outcomes):
-        self.grid = MachineGrid.from_config()
+    def __init__(self, outcomes, mode="vertical"):
+        self.grid = MachineGrid.from_config(mode=mode)
         self.outcomes = list(outcomes)
         self.calls = []
+        self.mode_calls = []
 
-    def build(self, col, row, level, rotation=None, timeout=300):
-        self.calls.append((col, row, level, rotation, timeout))
+    def build(self, col, row, level, timeout=300):
+        self.calls.append((col, row, level, timeout))
         outcome = self.outcomes.pop(0)
         if isinstance(outcome, Exception):
             raise outcome
         return outcome
+
+    def set_mode(self, mode):
+        # The real Rig re-reads its grid here, because every coordinate now
+        # means a different place. A fake that skipped that would let the
+        # controller keep selecting cells the new grid does not have.
+        self.mode_calls.append(mode)
+        self.grid = MachineGrid.from_config(mode=mode)
 
 
 rig = FakeRig([BuildResult(PLACED)])
@@ -40,14 +48,15 @@ check("approximate grid can select", controller.selected == (3, 4))
 check("default command is exact B col row level", controller.command == "B 3 4 0")
 result = controller.build(timeout=12)
 check("placed result returned", result == PLACED)
-check("placed build sent correct arguments", rig.calls == [(3, 4, 0, None, 12)])
+check("placed build sent correct arguments", rig.calls == [(3, 4, 0, 12)])
 check("placed build requires fresh selection", controller.selected is None)
 
 rig = FakeRig([BuildResult(REJECTED, "bad level"),
                BuildResult(ABORTED, "Z switch not reached")])
-controller = BuildController(rig, level=2, rotation="R")
+controller = BuildController(rig, level=2)
 controller.select((9, 5))
-check("rotation appears only when requested", controller.command == "B 9 5 2 R")
+check("the command never carries a rotation word", controller.command == "B 9 5 2",
+      controller.command)
 result = controller.build()
 check("safe rejection keeps selection", result == REJECTED and controller.selected == (9, 5))
 result = controller.build()
@@ -58,17 +67,68 @@ try:
 except BuildStateError:
     check("locked controller refuses retry", True)
 
-calibration_controller = BuildController(FakeRig([]), level=2, rotation="R")
+calibration_controller = BuildController(FakeRig([]), level=2)
 calibration_controller.select((0, 5))
 check("zero X calibration target is valid",
-      calibration_controller.command == "B 0 5 2 R")
-calibration_controller.set_rotation("NR")
+      calibration_controller.command == "B 0 5 2")
 calibration_controller.select((9, 0))
 check("zero Y calibration target is valid",
       calibration_controller.command == "B 9 0 2")
 calibration_controller.select((0, 0))
 check("zero-zero no-op target is valid",
       calibration_controller.command == "B 0 0 2")
+
+# ------------------------------------------------------------------
+# Grid mode is selected here, and it is not a per-block rotation
+# ------------------------------------------------------------------
+
+rig = FakeRig([])
+controller = BuildController(rig)
+check("the controller reports the rig's grid", controller.mode == "vertical")
+check("no mode is cached on the controller",
+      not hasattr(controller, "rotation") and "mode" not in vars(controller))
+
+controller.select((9, 5))
+controller.set_mode("horizontal")
+check("set_mode latched the rig", rig.mode_calls == ["horizontal"])
+check("set_mode re-read the grid", controller.mode == "horizontal"
+      and (rig.grid.cols, rig.grid.rows) == (3, 15))
+check("a mode switch drops the pending selection", controller.selected is None)
+check("cells the new grid lacks are now refused",
+      not rig.grid.contains_build_target(9, 5))
+
+controller.set_mode("horizontal")
+check("selecting the mode already latched sends nothing",
+      rig.mode_calls == ["horizontal"])
+
+controller.cycle_mode()
+check("cycle_mode toggles back", rig.mode_calls == ["horizontal", "vertical"]
+      and controller.mode == "vertical")
+
+try:
+    controller.set_mode("diagonal")
+    check("an unknown mode is refused", False)
+except BuildStateError as exc:
+    check("an unknown mode is refused", "vertical" in str(exc), str(exc))
+check("the refused mode sent nothing",
+      rig.mode_calls == ["horizontal", "vertical"])
+
+# A horizontal controller builds with a plain three-number command too: the
+# turn is the grid's, and the firmware derives it from the mode.
+horizontal = BuildController(FakeRig([BuildResult(PLACED)], mode="horizontal"),
+                             level=1)
+horizontal.select((3, 15))
+check("horizontal builds carry no rotation word either",
+      horizontal.command == "B 3 15 1", horizontal.command)
+check("horizontal knows which grid it is in", horizontal.mode == "horizontal")
+
+locked = BuildController(FakeRig([]))
+locked.locked_reason = "aborted earlier"
+try:
+    locked.set_mode("horizontal")
+    check("a locked controller refuses a mode switch", False)
+except BuildStateError:
+    check("a locked controller refuses a mode switch", True)
 
 rig = FakeRig([RigError("cable lost")])
 controller = BuildController(rig)
