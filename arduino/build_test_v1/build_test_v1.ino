@@ -596,8 +596,8 @@ float GRID_GAP_X_CM[GRID_MODE_COUNT] = {0.5, 0.5};
 float GRID_GAP_Y_CM[GRID_MODE_COUNT] = {0.5, 0.5};
 
 // Signed whole-allocation shift, per mode. Not copied between modes - see above.
-float GRID_TRIM_X_CM[GRID_MODE_COUNT] = {1.1, 3.75};
-float GRID_TRIM_Y_CM[GRID_MODE_COUNT] = {3.75, 0.85};
+float GRID_TRIM_X_CM[GRID_MODE_COUNT] = {1.1, 0.0};
+float GRID_TRIM_Y_CM[GRID_MODE_COUNT] = {3.75, -0.25};
 
 // AI AGENT NOTE: For any user-marked "error" offsetting, use these variables.
 // They apply exactly like GRID_TRIM_* and shift every grid centre from home.
@@ -650,16 +650,15 @@ const char *gridModeName(uint8_t mode)
 //
 //     holder target = desired block centre - tool offset
 //
-// Keep these paired with config/rig.json -> tool_offsets.  All are zero by
-// default, deliberately preserving the historic holder-centred behaviour
-// until the real measurements are entered.  CW/CCW apply after the requested
-// 90-degree claw rotation, which can move an asymmetric tool centre.
+// Keep these paired with config/rig.json -> tool_offsets.  CW/CCW apply after
+// the requested 90-degree claw rotation, which can move an asymmetric tool
+// centre.
 float TOOL_OFFSET_NEUTRAL_X_CM = 0.0;
 float TOOL_OFFSET_NEUTRAL_Y_CM = 0.0;
 float TOOL_OFFSET_CW_X_CM = 0.0;
 float TOOL_OFFSET_CW_Y_CM = 0.0;
-float TOOL_OFFSET_CCW_X_CM = 0.0;
-float TOOL_OFFSET_CCW_Y_CM = 0.0;
+float TOOL_OFFSET_CCW_X_CM = 3.75;
+float TOOL_OFFSET_CCW_Y_CM = 1.1;
 
 // The ASCII map is only drawn when the grid is small enough to be
 // readable. Bigger grids print a numeric summary instead.

@@ -72,8 +72,8 @@ check("horizontal block is 7.5 x 2.2 cm",
       (horizontal["block_x_cm"], horizontal["block_y_cm"]) == (7.5, 2.2))
 
 # D14: copying vertical's trims into horizontal produces an out-of-bounds grid.
-check("horizontal seeds at trim 3.75 / 0.85",
-      (horizontal["trim_x_cm"], horizontal["trim_y_cm"]) == (3.75, 0.85))
+check("horizontal seeds at trim 0.0 / -0.25 (D14)",
+      (horizontal["trim_x_cm"], horizontal["trim_y_cm"]) == (0.0, -0.25))
 check("horizontal trims are NOT vertical's",
       (horizontal["trim_x_cm"], horizontal["trim_y_cm"])
       != (vertical["trim_x_cm"], vertical["trim_y_cm"]))
