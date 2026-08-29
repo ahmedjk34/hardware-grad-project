@@ -185,6 +185,17 @@ def min_evidence_frame_cells(spec) -> int:
 # a second, vertically shifted calibration by accident.
 MIN_WINDOW_COVERAGE = 0.95
 
+# A cell can remain plainly visible while a fixed colour threshold captures
+# only part of its ink.  This happens in the live rig capture on the dim side
+# of the sheet: magenta fills remain near 100%, while valid green fills fall as
+# low as 24% (and to roughly 2% in the deliberately severe shadow regression).
+# Such a fragment must not steer the homography (its contour centre can be
+# biased), but pixels of the expected chessboard colour inside a
+# homography-predicted footprint are still evidence that the physical cell
+# exists.  This is only a coverage vote inside an already fitted lattice: the
+# window still needs 95% support and paper/gantry occlusions contribute zero.
+MIN_PREDICTED_INK_COVERAGE = 0.015
+
 # How far a blob's long/short ratio may sit from the printed 3.41 and still be
 # treated as a cell. Only used when sampling colour, where there is no lattice
 # to fall back on and a mis-sampled wall would silently poison a calibration.
@@ -1059,7 +1070,66 @@ def _largest_solid_block(full):
     return best
 
 
-def _choose_windows(coords, found, need_i, need_j, image_size, matrix):
+def _predicted_ink_cells(coords, found, matrix, spec, green, magenta):
+    """Confirm weak cells from pixels without letting them bend the fit.
+
+    The fitted lattice comes exclusively from geometrically whole contours.
+    Here it is used as a measuring stencil over the two colour masks.  This
+    recovers underlit/fragmented ink, while a paper-coloured occluder contributes
+    no expected-colour pixels and therefore remains a real hole.
+    """
+    full = {coords[index] for index in coords if found[index]["full"]}
+    if not full:
+        return set()
+
+    even_green = sum(
+        (((i + j) % 2 == 0) == (found[index]["color"] == "green"))
+        for index, (i, j) in coords.items()
+        if found[index]["full"]
+    ) >= len(full) / 2
+    i_values = [key[0] for key in full]
+    j_values = [key[1] for key in full]
+    half = np.float32([
+        [-spec.fill_x / 2, -spec.fill_y / 2],
+        [spec.fill_x / 2, -spec.fill_y / 2],
+        [spec.fill_x / 2, spec.fill_y / 2],
+        [-spec.fill_x / 2, spec.fill_y / 2],
+    ])
+    if not spec.short_is_x:
+        half = half[:, ::-1].copy()
+
+    supported = set(full)
+    height, width = green.shape
+    for i in range(min(i_values), max(i_values) + 1):
+        for j in range(min(j_values), max(j_values) + 1):
+            key = (i, j)
+            if key in supported:
+                continue
+            quad = cv2.perspectiveTransform(
+                (half + np.float32(key)).reshape(-1, 1, 2), matrix
+            ).reshape(-1, 2)
+            x, y, w, h = cv2.boundingRect(quad.astype(np.float32))
+            x0, y0 = max(0, x), max(0, y)
+            x1, y1 = min(width, x + w), min(height, y + h)
+            if x0 >= x1 or y0 >= y1:
+                continue
+            stencil = np.zeros((y1 - y0, x1 - x0), np.uint8)
+            local_quad = np.rint(quad - np.float32([x0, y0])).astype(np.int32)
+            cv2.fillConvexPoly(stencil, local_quad, 1)
+            footprint = int(np.count_nonzero(stencil))
+            if footprint == 0:
+                continue
+            expected_green = (((i + j) % 2 == 0) == even_green)
+            ink = green if expected_green else magenta
+            coverage = np.count_nonzero(
+                ink[y0:y1, x0:x1] & stencil.astype(bool)) / footprint
+            if coverage >= MIN_PREDICTED_INK_COVERAGE:
+                supported.add(key)
+    return supported
+
+
+def _choose_windows(coords, found, need_i, need_j, image_size, matrix,
+                    observed_cells=None):
     """Return every strongly supported window on the bottom-left row span.
 
     An oversized physical sheet can contain more than one overlapping 10x6
@@ -1078,6 +1148,7 @@ def _choose_windows(coords, found, need_i, need_j, image_size, matrix):
     full = {coords[i]: i for i in coords if found[i]["full"]}
     if not full:
         return []
+    observed_cells = set(full) if observed_cells is None else set(observed_cells)
     width, height = image_size
     bottom_left = np.array([0.0, height], dtype=float)
     i_values = [key[0] for key in full]
@@ -1098,17 +1169,17 @@ def _choose_windows(coords, found, need_i, need_j, image_size, matrix):
         for j0 in range(min(j_values), max(j_values) - need_j + 2):
             block = [(i0 + di, j0 + dj)
                      for di in range(need_i) for dj in range(need_j)]
-            observed = sum(key in full for key in block)
+            observed = sum(key in observed_cells for key in block)
             if observed < minimum:
                 continue
 
             # Missing cells may be isolated shadow failures, never an absent
             # strip.  Requiring all rows/columns and nearly all of each makes a
             # regular patch of scene clutter unable to borrow the lattice fit.
-            row_counts = [sum((i0 + di, j0 + dj) in full
+            row_counts = [sum((i0 + di, j0 + dj) in observed_cells
                               for di in range(need_i))
                           for dj in range(need_j)]
-            col_counts = [sum((i0 + di, j0 + dj) in full
+            col_counts = [sum((i0 + di, j0 + dj) in observed_cells
                               for dj in range(need_j))
                           for di in range(need_i)]
             if (min(row_counts) < need_i - 1
@@ -1258,12 +1329,13 @@ def detect_color_grids(frame: np.ndarray, spec: ColorGridSpec | None = None, *,
         source = found if subset is None else [found[i] for i in subset]
         return [np.asarray(rect["box"], dtype=np.float32) / scale for rect in source]
 
-    required_components = (min_evidence_frame_cells(spec) if evidence
-                           else spec.cols * spec.rows)
+    # Strong contours only establish the lattice; weak expected-colour pixels
+    # can confirm the rest after that lattice is fitted.  Requiring one strong
+    # component per final cell here made the later recovery stage unreachable
+    # on otherwise obvious, unevenly lit sheets.
+    required_components = min_evidence_frame_cells(spec)
     if len(found) < required_components:
-        needed = (f"evidence frame needs at least {required_components}"
-                  if evidence else
-                  f"{spec.cols}x{spec.rows} grid needs at least {spec.cols * spec.rows}")
+        needed = f"lattice fit needs at least {required_components}"
         raise ColorGridError(
             f"only {len(found)} coloured blocks visible; the {needed}"
             + (". Is the sheet in frame, and is the camera's white balance sane?"
@@ -1342,7 +1414,10 @@ def detect_color_grids(frame: np.ndarray, spec: ColorGridSpec | None = None, *,
             lattice=boxes(full_indices))
 
     need_i, need_j = spec.lattice_counts
-    windows = _choose_windows(coords, found, need_i, need_j, work_size, matrix)
+    predicted_ink = _predicted_ink_cells(
+        coords, found, matrix, spec, green, magenta)
+    windows = _choose_windows(
+        coords, found, need_i, need_j, work_size, matrix, predicted_ink)
     if not windows and evidence:
         evidence_window = _choose_evidence_window(
             coords, found, need_i, need_j, work_size, matrix, spec)

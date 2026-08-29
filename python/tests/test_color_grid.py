@@ -163,6 +163,32 @@ horizontal_choices = detect_color_grids(horizontal_image, horizontal_spec, proce
 check("horizontal sheet retains operator-selectable overlapping windows",
       len(horizontal_choices) > 1,
       f"{len(horizontal_choices)} choices")
+
+# Leave only a tiny, correctly coloured island in three cells.  Those islands
+# are too small to be geometry anchors, but the already-fitted horizontal
+# lattice must still confirm that ink is physically present rather than turn
+# the cells into holes.  This protects the same dim-ink recovery used by the
+# live vertical capture without baking a vertical-only axis assumption into it.
+horizontal_dim = horizontal_image.copy()
+for key in ((2, 5), (3, 8), (4, 11)):
+    cx, cy = (round(value) for value in horizontal_centres[key])
+    half_w = round(horizontal_spec.block_x_cm * 14.0 / 2)
+    half_h = round(horizontal_spec.block_y_cm * 14.0 / 2)
+    ink = tuple(int(value) for value in horizontal_dim[cy, cx])
+    cv2.rectangle(horizontal_dim, (cx - half_w, cy - half_h),
+                  (cx + half_w, cy + half_h), PAPER_BGR, -1)
+    cv2.rectangle(horizontal_dim, (cx - max(1, half_w // 5),
+                                   cy - max(1, half_h // 5)),
+                  (cx + max(1, half_w // 5),
+                   cy + max(1, half_h // 5)), ink, -1)
+horizontal_dim_choices = detect_color_grids(
+    horizontal_dim, horizontal_spec, process_width=0)
+check("horizontal mode recovers weak ink without bending the fit",
+      len(horizontal_dim_choices) > 1
+      and all(choice.metrics.window_observed == 64
+              for choice in horizontal_dim_choices),
+      f"{len(horizontal_dim_choices)} choices with "
+      f"{[choice.metrics.window_observed for choice in horizontal_dim_choices]}")
 horizontal_workspace = WorkspaceMap.from_grid(
     horizontal_grid, horizontal.workspace_corners(horizontal_grid, "firmware"),
     horizontal_image.shape[1::-1], {"test": "horizontal"})
@@ -584,8 +610,12 @@ except ColorGridError as exc:
 # it.  It is an 11-column physical sheet, so there must be two overlapping
 # 10-column choices.  The absolute-left choice loses one underlit edge contour;
 # the larger lattice still constrains it, and both choices must be exposed.
-live_raw = Path(__file__).resolve().parents[1] / "captures" / "live_feed_no_grid.png"
-if live_raw.exists():
+capture_dir = Path(__file__).resolve().parents[1] / "captures"
+live_raw = next((path for path in (
+    capture_dir / "RAW.png",
+    capture_dir / "live_feed_no_grid.png",
+) if path.exists()), None)
+if live_raw is not None:
     raw = cv2.imread(str(live_raw))
     try:
         choices = detect_color_grids(raw, spec, process_width=0)
@@ -634,7 +664,7 @@ if live_raw.exists():
     except ColorGridError as exc:
         check("raw live capture multi-window detection", False, str(exc))
 else:
-    print("skip  live_feed_no_grid.png: not present (captures/ is gitignored)")
+    print("skip  RAW.png: not present (captures/ is gitignored)")
 
 
 # --- 9. older training captures, when they are there ------------------------
