@@ -229,8 +229,10 @@ bool servoIsOpen = false;
 // SECTION 1C - AUXILIARY STEPPER CONFIGURATION (28BYJ-48 + ULN2003)
 // ============================================================
 //
-// A fourth, independent motor - not part of the X/Y/Z rig. It only
-// jogs +/-90 degrees on command (R / RR), no homing, no limits.
+// A fourth, independent motor - not part of the X/Y/Z rig. `A <degrees>`
+// gives it a signed RELATIVE jog; positive is CW and negative is CCW. There
+// is no home switch or mechanical angle reading, so this is never an absolute
+// physical angle. R/RR are grid latches, not aux-stepper commands.
 //
 // ULN2003 connections:
 //   IN1 / BLACK -> pin 38
@@ -247,8 +249,13 @@ const int AUX_STEPPER_IN4 = 37;
 // Approximate number of steps for one output-shaft revolution.
 const int AUX_STEPPER_STEPS_PER_REV = 2048;
 
-// A quarter turn - what R / RR actually move.
+// A quarter turn, used by the build's neutral/CW/CCW placement states.
 const int AUX_STEPPER_QUARTER_TURN = AUX_STEPPER_STEPS_PER_REV / 4;
+
+// One manual command is deliberately capped at one turn. The aux mechanism
+// has no limit switch, so a larger move must be consciously split into
+// separate commands rather than silently winding cables or hardware forever.
+const int AUX_STEPPER_MAX_MANUAL_DEGREES = 360;
 
 const int AUX_STEPPER_SPEED_RPM = 10;
 
@@ -264,6 +271,12 @@ Stepper auxStepper(
 // Net position in steps, relative to power-on. Purely informational -
 // this motor has no limits or homing to keep it honest.
 long auxStepperPos = 0;
+
+// Current angular position reduced to one revolution around the assumed
+// power-on neutral. Unlike auxStepperPos, a full 360-degree manual jog lands
+// back at zero here. Build rotation uses this so it need not undo a pointless
+// whole turn before a pick.
+long auxAngleSteps = 0;
 
 // ============================================================
 // SECTION 2 - MOTION TUNING
@@ -833,8 +846,11 @@ const int8_t ROT_NONE = 0;
 const int8_t ROT_CW = +1;  // "R"
 const int8_t ROT_CCW = -1; // "RR"
 
-// Where the claw is RIGHT NOW, relative to neutral.
+// Where the claw is RIGHT NOW, relative to neutral. A manual angle that is
+// not exactly 0/+90/-90 has no calibrated tool offset, so it is marked
+// unknown until a build returns it to neutral.
 int8_t clawRotation = ROT_NONE;
+bool clawRotationKnown = true;
 
 // ============================================================
 // SECTION 7 - STEP COUNTER / POSITION CONFIGURATION
@@ -1044,6 +1060,7 @@ const char CMD_MOVE_Z_POS = 'U'; // Z+  (top limit switch, pin 29)
 const char CMD_SERVO_OPEN = 'O';
 const char CMD_SERVO_CLOSE = 'C';
 const char CMD_SERVO_ANGLE = 'V'; // V <angle> (0..180 degrees)
+const char CMD_AUX_STEPPER_ANGLE = 'A'; // A <degrees> (-360..360, relative)
 
 // R and RR are the GRID MODE LATCH, not a claw jog. R selects the vertical
 // grid, RR the horizontal one; neither moves the aux stepper. RR is handled in
@@ -1319,6 +1336,22 @@ void handleLine(char *line)
     }
     break;
 
+  case CMD_AUX_STEPPER_ANGLE:
+    if (parseSignedDegree(line + 1, &a)
+        && a >= -AUX_STEPPER_MAX_MANUAL_DEGREES
+        && a <= AUX_STEPPER_MAX_MANUAL_DEGREES)
+    {
+      rotateAuxStepperDegrees(a);
+    }
+    else
+    {
+      statBadCommands++;
+      Serial.println();
+      Serial.println(F("  ERROR - use:  A <degrees>   where degrees is -360..360"));
+      Serial.println(F("  Positive is CW; negative is CCW; this is relative, not absolute."));
+    }
+    break;
+
   case CMD_BUILD:
     handleBuildCommand(line + 1);
     break;
@@ -1485,6 +1518,47 @@ uint8_t parseNumbers(const char *s, long *out, uint8_t maxCount, uint8_t *endInd
     *endIndex = i;
   }
   return found;
+}
+
+// `parseNumbers()` deliberately treats '-' as a separator because G/S/B use
+// non-negative coordinates. The manual aux-stepper command is the one place
+// a signed value is meaningful, so keep its stricter parser separate.
+bool parseSignedDegree(const char *s, long *out)
+{
+  uint8_t i = 0;
+  while (s[i] == ' ' || s[i] == '\t')
+  {
+    i++;
+  }
+
+  bool negative = false;
+  if (s[i] == '+' || s[i] == '-')
+  {
+    negative = (s[i] == '-');
+    i++;
+  }
+  if (s[i] < '0' || s[i] > '9')
+  {
+    return false;
+  }
+
+  long value = 0;
+  while (s[i] >= '0' && s[i] <= '9')
+  {
+    value = value * 10 + (s[i] - '0');
+    i++;
+  }
+  while (s[i] == ' ' || s[i] == '\t')
+  {
+    i++;
+  }
+  if (s[i] != '\0')
+  {
+    return false;
+  }
+
+  *out = negative ? -value : value;
+  return true;
 }
 
 // Kept for G and S, which want exactly two numbers.

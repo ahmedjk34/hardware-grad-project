@@ -182,6 +182,14 @@ HOME_OK = [
     "FULL RESET COMPLETE - X/Y at origin, Z on its top switch.",
 ]
 
+# ``0`` homes only the X/Y axes. That is the deliberately small motion a
+# horizontal-mode request needs before its RR latch.
+HOME_XY_OK = [
+    "",
+    "  Homing X/Y...",
+    "  AT ORIGIN. Position = X 0 / Y 0",
+]
+
 GOTO_OK = [
     "",
     "=== GOTO CELL [3,5] ===",
@@ -235,12 +243,13 @@ DEFAULT_REPLIES = {"S": GRID_RESIZED, "B": BUILD_OK, "0+": HOME_OK, "G": GOTO_OK
                    "RR": MODE_LATCHED, "R": MODE_ALREADY}
 
 
-def fake_rig(replies=None, acks=True, timeout=10, cfg=None, banner=None, **kwargs):
+def fake_rig(replies=None, acks=True, timeout=10, cfg=None, banner=None,
+             mode=None, **kwargs):
     """A connected Rig talking to a FakeSerial. Returns (rig, fake)."""
     script = {"banner": banner or BANNER, "replies": replies or DEFAULT_REPLIES}
     fake = FakeSerial(script, acks=acks)
     link.serial.Serial = lambda *a, **k: fake  # the whole point of the fake
-    rig = link.Rig(cfg=cfg or CFG)
+    rig = link.Rig(cfg=cfg or CFG, mode=mode)
     rig.connect(timeout=timeout, **kwargs)
     return rig, fake
 
@@ -319,6 +328,19 @@ rig.close()
 
 rig, fake = fake_rig(home=True)
 check("connect(home=True) homes", "0+" in fake.written, str(fake.written))
+rig.close()
+
+# An explicit horizontal session has to home X/Y before it can send RR. The
+# order is physical safety, not cosmetic: the firmware rejects RR otherwise.
+rig, fake = fake_rig(
+    replies={"0": HOME_XY_OK, "RR": MODE_LATCHED, "S": GRID_RESIZED},
+    mode="horizontal",
+    home_before_configure=True,
+)
+check("horizontal connect homes X/Y before RR and S",
+      fake.written == ["0", "RR", "S 3 15"], str(fake.written))
+check("horizontal connect selects its requested grid",
+      rig.grid.mode == "horizontal" and (rig.cols, rig.rows) == (3, 15))
 rig.close()
 
 # A board still running the pre-ack firmware: no READY ever arrives. Must give

@@ -312,7 +312,7 @@ class Rig:
                 home: bool = False, home_before_configure: bool = False) -> None:
         """Open the port, wait out the reboot, and put the board in a known state.
 
-        Three steps, in order:
+        Four steps, in order:
 
         1. read until `@0 READY` — that line is the last thing `setup()` prints,
            so it ends the banner exactly. Before the acks existed this meant
