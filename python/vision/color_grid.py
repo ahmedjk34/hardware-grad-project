@@ -111,12 +111,32 @@ MAGENTA_OPPONENT_MIN = 0.055
 GREEN_CHANNEL_SPREAD_MIN = 10
 MAGENTA_CHANNEL_SPREAD_MIN = 12
 
+# Channel-ordering classifier, for an uncorrected rig camera where the yellow
+# cast has pulled the paper and the green ink to nearly the same hue AND left
+# the paper more saturated than the ink, so neither a hue window nor a
+# saturation floor can separate them. What still holds under any single global
+# cast is the ORDER of the channels: the green ink is the only material whose
+# green channel is the largest; magenta is the only one whose green channel is
+# the smallest with both others clearly above it. Margins are in 8-bit counts.
+CHANNEL_ORDER_GREEN_MARGIN = 4
+CHANNEL_ORDER_MAGENTA_B_MARGIN = 6
+CHANNEL_ORDER_MAGENTA_R_MARGIN = 4
+
 # The bright quantile that :func:`white_balance` drives to neutral. High enough
 # to land on the sheet's white paper, low enough not to chase one specular
 # highlight. Estimated on a subsampled frame; the scaling is applied to all of it.
 WHITE_PATCH_QUANTILE = 0.92
 _BALANCE_STRIDE = 8
 _BALANCE_DEADBAND = 0.02        # below this the cast is not worth a pass over the frame
+
+# Illumination flattening: divide the frame by a heavily blurred copy of itself,
+# per channel, then re-mean. This removes the low-frequency part of a colour
+# cast AND lens vignetting in one pass, which is what lets ink survive on the
+# rig camera, where an uncorrected yellow cast leaves the paper MORE saturated
+# than the green ink and at nearly the same hue. It is a coarse stand-in for a
+# real `colourcal` matrix, not a replacement for one.
+_FLATTEN_BLUR_FRACTION = 0.18   # sigma as a fraction of the short frame side
+_FLATTEN_MIN_SIGMA = 9.0
 
 # A block whose observed area is at least this fraction of the area the lattice
 # predicts for it is whole. The captures put real cells at 0.93-1.03 and every
@@ -712,6 +732,34 @@ def white_balance(frame: np.ndarray,
     return cv2.LUT(frame, np.ascontiguousarray(table.T.reshape(1, 256, 3)))
 
 
+def flatten_illumination(frame: np.ndarray,
+                         blur_fraction: float = _FLATTEN_BLUR_FRACTION) -> np.ndarray:
+    """Divide out the low-frequency lighting/cast, per channel, and re-mean.
+
+    ``blurred`` is a very soft Gaussian: everything slower than a cell. Dividing
+    by it turns "ink on cast-tinted, unevenly lit paper" into "ink on flat
+    neutral paper", which is the difference between the rig camera's green ink
+    being findable and not. High-frequency detail (the ink itself, the printed
+    gaps) is untouched because it is not in the blur.
+
+    Cheap enough for a live Pi frame: one separable blur plus a divide on the
+    working-resolution image.
+    """
+    if frame is None or frame.ndim != 3:
+        return frame
+    short_side = min(frame.shape[:2])
+    sigma = max(_FLATTEN_MIN_SIGMA, blur_fraction * short_side)
+    blurred = cv2.GaussianBlur(frame.astype(np.float32), (0, 0),
+                               sigmaX=sigma, sigmaY=sigma)
+    blurred = np.maximum(blurred, 1.0)
+    ratio = frame.astype(np.float32) / blurred
+    # Re-mean each channel to the frame's own mid so downstream Value floors and
+    # the overlay still see a normally exposed image.
+    target = float(np.mean(frame))
+    flat = ratio * target
+    return np.clip(flat, 0, 255).astype(np.uint8)
+
+
 @dataclass(frozen=True)
 class ColorRegionStats:
     """Robust colour measurements for one projected artwork subregion.
@@ -783,18 +831,47 @@ def lab_distance(first: ColorRegionStats, second: ColorRegionStats) -> float:
         - np.asarray(second.lab, dtype=np.float32)))
 
 
+def channel_order_masks(frame: np.ndarray, min_value: int = MIN_VALUE
+                        ) -> tuple[np.ndarray, np.ndarray]:
+    """Cast-invariant green/magenta masks from the ORDER of the BGR channels.
+
+    Green ink is the only sheet material whose green channel is the maximum;
+    magenta is the only one whose green channel is the minimum with both blue
+    and red clearly above it. Paper - even a strongly yellow-cast paper that a
+    hue window and a saturation floor both mistake for green ink - has blue as
+    its maximum and green above red, so it is neither. This survives any single
+    global colour cast, which is exactly the failure mode of an uncalibrated
+    rig camera.
+    """
+    b, g, r = (channel.astype(np.int16) for channel in cv2.split(frame))
+    value = np.maximum.reduce((b, g, r))
+    lit = value >= min_value
+    other_max = np.maximum(b, r)
+    green = (g >= b) & (g >= r) & ((g - other_max) >= CHANNEL_ORDER_GREEN_MARGIN) & lit
+    magenta = (((b - g) >= CHANNEL_ORDER_MAGENTA_B_MARGIN)
+               & ((r - g) >= CHANNEL_ORDER_MAGENTA_R_MARGIN) & lit)
+    return green, magenta
+
+
 def color_masks(frame: np.ndarray, *, min_saturation: int = MIN_SATURATION,
                 min_value: int = MIN_VALUE, green_hue=GREEN_HUE,
                 magenta_hue=MAGENTA_HUE,
                 use_opponent: bool = True,
-                balance: bool = True) -> tuple[np.ndarray, np.ndarray]:
+                balance: bool = True,
+                flatten: bool = False,
+                channel_order: bool = False) -> tuple[np.ndarray, np.ndarray]:
     """Return the (green, magenta) boolean masks for one BGR frame.
 
     Hue plus a saturation floor, not brightness: the two inks stay a long way
     apart in hue under any light, while their brightness does not. ``balance``
     neutralises the camera's colour cast first — see :func:`white_balance` for
-    why that is not optional in practice.
+    why that is not optional in practice. ``flatten`` additionally divides out
+    the low-frequency lighting/cast (:func:`flatten_illumination`) first.
+    ``channel_order`` unions in :func:`channel_order_masks`, the cast-invariant
+    classifier for a camera that has not been colour-calibrated yet.
     """
+    if flatten:
+        frame = flatten_illumination(frame)
     raw = frame
     balanced = white_balance(frame) if balance else frame
     hsv = cv2.cvtColor(balanced, cv2.COLOR_BGR2HSV)
@@ -802,6 +879,11 @@ def color_masks(frame: np.ndarray, *, min_saturation: int = MIN_SATURATION,
     strong = (sat >= min_saturation) & (val >= min_value)
     green = (hue >= green_hue[0]) & (hue <= green_hue[1]) & strong
     magenta = (hue >= magenta_hue[0]) & (hue <= magenta_hue[1]) & strong
+
+    if channel_order:
+        order_green, order_magenta = channel_order_masks(raw, min_value)
+        green = green | order_green
+        magenta = magenta | order_magenta
 
     # A second, illumination-invariant vote.  Use the raw frame so a global
     # white-patch estimate cannot amplify one shadow differently from another.
@@ -1429,6 +1511,8 @@ def detect_color_grids(frame: np.ndarray, spec: ColorGridSpec | None = None, *,
                        recovery_fill_range=RECOVERY_FILL_RANGE,
                        neighbour_hops=(1,),
                        balance: bool = True,
+                       flatten: bool = False,
+                       channel_order: bool = False,
                        edge_margin: float = DEFAULT_EDGE_MARGIN,
                        max_windows: int = MAX_WINDOWS,
                        evidence: bool = False) -> tuple[ColorGridCalibration, ...]:
@@ -1459,7 +1543,8 @@ def detect_color_grids(frame: np.ndarray, spec: ColorGridSpec | None = None, *,
     green, magenta = color_masks(working, min_saturation=min_saturation,
                                  min_value=min_value, green_hue=green_hue,
                                  magenta_hue=magenta_hue,
-                                 use_opponent=use_opponent, balance=balance)
+                                 use_opponent=use_opponent, balance=balance,
+                                 flatten=flatten, channel_order=channel_order)
     close_size = round(component_close * scale) if component_close else 0
     found = _components(green, magenta, min_area * scale * scale, work_size,
                         close_size=close_size)

@@ -154,6 +154,11 @@ class CombinedGridCalibration:
     inferred_orientation: str = "unknown"
     orientation_confidence: float = 0.0
     requested_mode: str | None = None
+    # How many of the 80 lattice sites must physically support the page plane
+    # before `workspace_corners()` will hand back a calibration. Defaults to the
+    # module's `MIN_PAGE_PLANE_OBSERVATIONS`; a caller can lower it for a
+    # tightly-framed rig where the outer ring is always partly cropped.
+    page_plane_min: int = MIN_PAGE_PLANE_OBSERVATIONS
     is_combined = True
 
     @property
@@ -266,13 +271,29 @@ class CombinedGridCalibration:
             raise ColorGridError(
                 "the combined sheet is registered directly to holder home; "
                 "use the firmware home convention")
-        if self.lattice.metrics.window_observed < MIN_PAGE_PLANE_OBSERVATIONS:
+        observed = self.lattice.metrics.window_observed
+        shape = self.lattice.metrics.lattice_shape
+        if observed < self.page_plane_min:
+            short = self.page_plane_min - observed
             raise ColorGridError(
-                "orientation was decoded from a cropped partial sheet, but the "
-                "holder envelope cannot be calibrated until at least "
-                f"{MIN_PAGE_PLANE_OBSERVATIONS}/80 lattice sites support the "
-                "page plane; move the camera back or use evidence-assisted "
-                "calibration across multiple fixed-camera frames",
+                f"only {observed}/80 lattice sites support the page plane "
+                f"(need {self.page_plane_min}; {short} more) — the fitted "
+                f"extent is {shape[0]}x{shape[1]} of 8x10. Move the camera back "
+                "so the whole A2 page is in frame with a white margin and "
+                "nothing lying across it, calibrate the camera colour first "
+                "(camera_studio.py 'colourcal'), or pool frames with the "
+                "evidence-assisted route",
+                stage="window",
+                calibration=self,
+            )
+        # A low count that still clears the gate must at least span the page:
+        # eight columns and ten rows have to be represented, or the homography
+        # is being trusted from one clustered corner.
+        if observed < MIN_PAGE_PLANE_OBSERVATIONS and shape != (8, 10):
+            raise ColorGridError(
+                f"the {observed}/80 supporting sites only span {shape[0]}x{shape[1]} "
+                "of the 8x10 page; the envelope corners would be an "
+                "extrapolation. Get the whole page in frame",
                 stage="window",
                 calibration=self,
             )
@@ -421,7 +442,8 @@ def _beige_distance(sample: ColorRegionStats, paper: ColorRegionStats) -> float:
 
 
 def _decode_patterns(frame: np.ndarray, lattice: ColorGridCalibration,
-                     method: str, requested_mode: str):
+                     method: str, requested_mode: str,
+                     page_plane_min: int = MIN_PAGE_PLANE_OBSERVATIONS):
     """Decode the two perpendicular fiducial families without shared votes."""
     sample_frame = white_balance(frame)
     inset = SUBREGION_INSET_CM
@@ -751,6 +773,7 @@ def _decode_patterns(frame: np.ndarray, lattice: ColorGridCalibration,
         inferred_orientation=inferred_orientation,
         orientation_confidence=orientation_confidence,
         requested_mode=requested_mode,
+        page_plane_min=page_plane_min,
     )
     votes = calibration.orientation_votes
     detail = (f"vertical={votes['vertical']}, horizontal={votes['horizontal']}, "
@@ -850,10 +873,21 @@ def _error_rank(error: ColorGridError):
 def detect_combined_grids(frame: np.ndarray, *,
                           process_width: int = DEFAULT_PROCESS_WIDTH,
                           evidence: bool = False,
-                          requested_mode: str = "vertical"):
-    """Decode only ``requested_mode`` using progressively safer fallbacks."""
+                          requested_mode: str = "vertical",
+                          page_plane_min: int = MIN_PAGE_PLANE_OBSERVATIONS,
+                          min_saturation: int | None = None):
+    """Decode only ``requested_mode`` using progressively safer fallbacks.
+
+    ``page_plane_min`` is how many of the 80 fiducials must physically support
+    the page plane before the result can produce workspace corners; lower it
+    for a rig that can never get the outer ring fully in frame. ``min_saturation``
+    overrides the faded/flattened passes' ink floor for a badly cast camera
+    that has not been colour-calibrated yet.
+    """
     if requested_mode not in ("vertical", "horizontal"):
         raise ValueError("requested_mode must be 'vertical' or 'horizontal'")
+    faded_sat = 18 if min_saturation is None else int(min_saturation)
+    flat_sat = 12 if min_saturation is None else int(min_saturation)
     errors = []
     passes = (
         ("full bars", frame, combined_fiducial_spec(), {
@@ -865,7 +899,7 @@ def detect_combined_grids(frame: np.ndarray, *,
         }),
         ("relaxed faded bars", frame, combined_fiducial_spec(), {
             "min_area": COMBINED_MIN_AREA,
-            "min_saturation": 18,
+            "min_saturation": faded_sat,
             "green_hue": RELAXED_GREEN_HUE,
             "magenta_hue": RELAXED_MAGENTA_HUE,
             "component_close": RELAXED_BAR_CLOSE_PX,
@@ -888,7 +922,44 @@ def detect_combined_grids(frame: np.ndarray, *,
             "recovery_fill_range": (0.22, 2.00),
             "balance": False,
         }),
+        # Cast-invariant channel-ordering passes, tried LAST: classify each
+        # pixel by which BGR channel is largest/smallest rather than by
+        # hue+saturation. This is what lets the ink survive on an uncorrected
+        # rig frame, where the yellow-cast paper is more saturated than, and
+        # nearly the same hue as, the green ink. Geometry and colour parity
+        # remain the safety gates. They run after the hue-based passes so a
+        # genuinely clean-but-faded print still takes the stripe path.
+        ("channel-order bars", frame, combined_fiducial_spec(), {
+            "min_area": COMBINED_MIN_AREA,
+            "min_saturation": faded_sat,
+            "green_hue": RELAXED_GREEN_HUE,
+            "magenta_hue": RELAXED_MAGENTA_HUE,
+            "component_close": RELAXED_BAR_CLOSE_PX,
+            "neighbour_hops": (1, 2),
+            "channel_order": True,
+        }),
+        ("channel-order faint bars", frame, combined_fiducial_spec(), {
+            "min_area": max(48, COMBINED_MIN_AREA // 2),
+            "min_saturation": flat_sat,
+            "green_hue": RELAXED_GREEN_HUE,
+            "magenta_hue": RELAXED_MAGENTA_HUE,
+            "component_close": RELAXED_BAR_CLOSE_PX,
+            "neighbour_hops": (1, 2, 3),
+            "channel_order": True,
+            "flatten": True,
+        }),
     )
+    # Run every pass and keep the strongest result rather than returning on the
+    # first that does not raise: "full bars" often fits a weak, half-page
+    # lattice on a cast frame that a later channel-order pass would cover
+    # completely. Strength is (page-plane support, then fitted extent area).
+    best = None
+
+    def strength(lattices):
+        m = lattices[0].metrics
+        return (m.window_observed, m.lattice_shape[0] * m.lattice_shape[1],
+                len(lattices))
+
     for method, candidate, spec, options in passes:
         try:
             found = detect_color_grids(
@@ -898,39 +969,50 @@ def detect_combined_grids(frame: np.ndarray, *,
                 # Combined targets may be camera-cropped. The lattice stage is
                 # allowed to extrapolate an 8x10 homography from a broad partial
                 # view; the decoder above still counts only fully visible,
-                # locally ink-supported fiducials. Legacy calibration sheets
-                # retain their strict full-window behavior.
+                # locally ink-supported fiducials.
                 evidence=True,
                 # The combined page fills the frame by design and has its own
-                # 76/80 page-plane gate; the aggressive frame-border margin is a
+                # page-plane gate; the aggressive frame-border margin is a
                 # legacy-plain-sheet tool and would eat the outer fiducial ring.
                 edge_margin=0.0,
                 **options,
             )
             if method == "dark centre stripes":
                 found = tuple(_promote_stripes(item) for item in found)
-            return tuple(_decode_patterns(frame, item, method, requested_mode)
-                         for item in found)
+            decoded = tuple(_decode_patterns(frame, item, method, requested_mode,
+                                             page_plane_min)
+                            for item in found)
+            if best is None or strength(found) > strength(best[1]):
+                best = (decoded, found)
+            # A pass that already supports the page plane is as good as it gets.
+            if found[0].metrics.window_observed >= page_plane_min:
+                break
         except ColorGridError as exc:
             errors.append(exc)
+    if best is not None:
+        return best[0]
     raise max(errors, key=_error_rank)
 
 
 def detect_printed_grids(frame: np.ndarray, legacy_spec: ColorGridSpec, *,
                          process_width: int = DEFAULT_PROCESS_WIDTH,
                          edge_margin: float = DEFAULT_EDGE_MARGIN,
+                         page_plane_min: int = MIN_PAGE_PLANE_OBSERVATIONS,
+                         min_saturation: int | None = None,
                          evidence: bool = False):
     """Detect the combined target first, retaining both legacy sheet formats.
 
     ``edge_margin`` applies only to the legacy plain-sheet path: it is the
     fraction of a cell's own size that a whole cell must keep clear of the
-    frame border. The combined A2 target keeps its own page-plane gate.
+    frame border. ``page_plane_min`` and ``min_saturation`` tune the combined
+    A2 path for a tightly-framed or badly-cast rig camera.
     """
     combined_error = None
     try:
         return detect_combined_grids(
             frame, process_width=process_width, evidence=evidence,
-            requested_mode=legacy_spec.mode)
+            requested_mode=legacy_spec.mode,
+            page_plane_min=page_plane_min, min_saturation=min_saturation)
     except ColorGridError as exc:
         combined_error = exc
     try:
@@ -952,11 +1034,14 @@ def detect_printed_grids(frame: np.ndarray, legacy_spec: ColorGridSpec, *,
 def detect_printed_grid(frame: np.ndarray, legacy_spec: ColorGridSpec, *,
                         process_width: int = DEFAULT_PROCESS_WIDTH,
                         edge_margin: float = DEFAULT_EDGE_MARGIN,
+                        page_plane_min: int = MIN_PAGE_PLANE_OBSERVATIONS,
+                        min_saturation: int | None = None,
                         evidence: bool = False,
                         window_index: int = 0):
     calibrations = detect_printed_grids(
         frame, legacy_spec, process_width=process_width,
-        edge_margin=edge_margin, evidence=evidence)
+        edge_margin=edge_margin, page_plane_min=page_plane_min,
+        min_saturation=min_saturation, evidence=evidence)
     if not 0 <= window_index < len(calibrations):
         raise ColorGridError(
             f"grid window {window_index + 1} was requested but only "

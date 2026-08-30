@@ -106,9 +106,17 @@ def parse_args():
                         help="initial detected grid window, 1-based (default: 1)")
     parser.add_argument("--edge-margin", type=float, default=DEFAULT_EDGE_MARGIN,
                         metavar="F",
-                        help="how far a whole cell must stay from the frame "
-                             "border, as a fraction of its own size (default: "
-                             f"{DEFAULT_EDGE_MARGIN}); 0 keeps every visible cell")
+                        help="legacy plain sheet: how far a whole cell must stay "
+                             "from the frame border, as a fraction of its own "
+                             f"size (default: {DEFAULT_EDGE_MARGIN}); 0 keeps every cell")
+    parser.add_argument("--page-plane-min", type=int, default=None, metavar="N",
+                        help="combined A2 target: fiducials that must support the "
+                             "page plane before it can calibrate (default 76/80); "
+                             "lower it for a rig that always crops the outer ring")
+    parser.add_argument("--min-saturation", type=int, default=None, metavar="S",
+                        help="combined A2 target: ink saturation floor for the "
+                             "faded passes; lower it (e.g. 8) for a strong "
+                             "uncorrected camera cast")
     parser.add_argument("--process-width", type=int, default=0,
                         help="detection working width; 0 uses the full frame "
                              "(default: 0 for stills, 1024 for the camera)")
@@ -117,6 +125,16 @@ def parse_args():
     parser.add_argument("--display-scale", type=float, default=1.0)
     parser.add_argument("--opencv-threads", type=int, default=2)
     return parser.parse_args()
+
+
+def combined_kwargs(args):
+    """Combined-A2 knobs, passed only when the operator overrode a default."""
+    kwargs = {}
+    if args.min_saturation is not None:
+        kwargs["min_saturation"] = args.min_saturation
+    if args.page_plane_min is not None:
+        kwargs["page_plane_min"] = args.page_plane_min
+    return kwargs
 
 
 def report(calibration, grid, convention):
@@ -207,7 +225,7 @@ def run_still(args, spec, grid):
     try:
         calibrations = detect_printed_grids(
             frame, spec, process_width=args.process_width,
-            edge_margin=args.edge_margin)
+            edge_margin=args.edge_margin, **combined_kwargs(args))
         if ui["selection"] >= len(calibrations):
             raise ColorGridError(
                 f"grid window {args.grid_window} requested, but only "
@@ -406,7 +424,7 @@ def run_camera(args, spec, grid):
                 try:
                     calibrations = detect_printed_grids(
                         view, spec, process_width=process_width,
-                        edge_margin=args.edge_margin)
+                        edge_margin=args.edge_margin, **combined_kwargs(args))
                     ui["calibrations"] = calibrations
                     if ui["selection"] < len(calibrations):
                         calibration = calibrations[ui["selection"]]

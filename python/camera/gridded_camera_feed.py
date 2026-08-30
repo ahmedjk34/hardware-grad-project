@@ -127,7 +127,8 @@ PAPER_OVERLAY_WIDTH = 1024
 
 
 def analyze_paper_grid(frame, spec, process_width=PAPER_OVERLAY_WIDTH,
-                       edge_margin=DEFAULT_EDGE_MARGIN):
+                       edge_margin=DEFAULT_EDGE_MARGIN,
+                       page_plane_min=None, min_saturation=None):
     """AnalysisWorker adapter for the printed sheet.
 
     Returns one ``(calibration, error)`` pair. AnalysisWorker turns whatever an
@@ -135,9 +136,14 @@ def analyze_paper_grid(frame, spec, process_width=PAPER_OVERLAY_WIDTH,
     a generic message — so the specific "move the sheet" sentence is returned as
     a value instead of raised, and survives the trip back to the UI intact.
     """
+    kwargs = {}
+    if page_plane_min is not None:
+        kwargs["page_plane_min"] = page_plane_min
+    if min_saturation is not None:
+        kwargs["min_saturation"] = min_saturation
     try:
         return ((detect_printed_grids(frame, spec, process_width=process_width,
-                                      edge_margin=edge_margin), None),)
+                                      edge_margin=edge_margin, **kwargs), None),)
     except ColorGridError as exc:
         return ((None, exc),)
 
@@ -151,11 +157,14 @@ class PaperGridTracker:
 
     def __init__(self, spec, *, max_hz=PAPER_GRID_HZ,
                  process_width=PAPER_OVERLAY_WIDTH,
-                 edge_margin=DEFAULT_EDGE_MARGIN):
+                 edge_margin=DEFAULT_EDGE_MARGIN,
+                 page_plane_min=None, min_saturation=None):
         self.spec = spec
         self.enabled = False
         self.process_width = process_width
         self.edge_margin = edge_margin
+        self.page_plane_min = page_plane_min
+        self.min_saturation = min_saturation
         self._worker = AnalysisWorker(analyze_paper_grid, max_hz=max_hz,
                                       name="paper-grid")
         self._calibration = None
@@ -191,7 +200,9 @@ class PaperGridTracker:
         if self.enabled:
             self._worker.submit(frame, sequence, generation, spec=self.spec,
                                 process_width=self.process_width,
-                                edge_margin=self.edge_margin)
+                                edge_margin=self.edge_margin,
+                                page_plane_min=self.page_plane_min,
+                                min_saturation=self.min_saturation)
 
     def poll(self, generation):
         """Adopt the newest result that belongs to the current map geometry."""
@@ -372,6 +383,12 @@ def parse_args():
                         help="printed-sheet: clear space a whole cell must keep "
                              "from the frame border, as a fraction of its own "
                              f"size (default: {DEFAULT_EDGE_MARGIN}; 0 disables)")
+    parser.add_argument("--page-plane-min", type=int, default=None, metavar="N",
+                        help="combined A2 target: fiducials needed to support the "
+                             "page plane before it calibrates (default 76/80)")
+    parser.add_argument("--min-saturation", type=int, default=None, metavar="S",
+                        help="combined A2 target: ink saturation floor for the "
+                             "faded passes; lower (e.g. 8) for a strong camera cast")
     parser.add_argument("--paper-hz", type=float, default=PAPER_GRID_HZ,
                         help=f"printed-sheet detection rate (default: {PAPER_GRID_HZ})")
     parser.add_argument("--analysis-hz", type=float, default=10.0)
@@ -655,7 +672,9 @@ def main():
         "message": "ready",
     }
     paper = PaperGridTracker(paper_spec, max_hz=args.paper_hz,
-                             edge_margin=args.edge_margin)
+                             edge_margin=args.edge_margin,
+                             page_plane_min=args.page_plane_min,
+                             min_saturation=args.min_saturation)
     evidence = PrintedGridEvidence(paper_spec)
 
     def on_mouse(event, point):
