@@ -280,10 +280,18 @@ X/Y envelope are refused, never silently clipped.
 The current combined sheet measures the page plane independently of either
 block layout. It uses 6.0 x 2.2 cm fiducial bars, 0.8 cm X gaps and 1.6 cm Y
 gaps on a 59.4 x 42.0 cm A2 page, with the lattice starting 0.8 cm from page
-left and 4.8 cm from page bottom. These numbers and the physical artwork are a
-pair: changing one requires reprinting and updating `combined_grid.py` in the
-same change. Beige is visual-only; detection must be supported by the
-chromatic green/magenta parts because beige can disappear into paper.
+left and 4.8 cm from page bottom. Each 6.0 cm bar is split across X as 2.2 +
+1.6 + 2.2 cm. Dark same-colour centre thirds encode vertical; five 1.6 cm row
+intervals with beige outer thirds and a white centre encode horizontal when
+bracketed by valid opposite-colour rows. These numbers and the physical
+artwork are a pair: changing one requires reprinting and updating
+`combined_grid.py` in the same change. Beige carries horizontal-orientation
+information, but it must never establish the lattice alone: gray evidence is
+accepted only after and beside the chromatic lattice/stripe evidence.
+The horizontal 1.6 cm center may be inferred when it cannot be classified, but
+only from both locally paper-referenced beige outer thirds, their valid
+opposite-colour row neighbors, and sheet-wide agreement on the five alternating
+encoded intervals. Such observations are reported as `H~`, not direct `H`.
 
 The physical lower-left page corner is the holder-home reference. The combined
 route therefore accepts only the `firmware` home convention. It yields the

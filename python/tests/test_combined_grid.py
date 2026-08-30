@@ -30,6 +30,7 @@ from vision.combined_grid import (
     detect_combined_grids,
     detect_printed_grid,
 )
+from vision.color_grid_overlay import draw_color_grid
 
 
 GREEN = (72, 124, 100)      # supplied artwork's muted olive, BGR
@@ -37,6 +38,7 @@ MAGENTA = (150, 72, 157)    # supplied artwork's muted purple, BGR
 DARK_GREEN = (0, 85, 34)
 DARK_MAGENTA = (128, 0, 128)
 PAPER = (255, 255, 255)
+BEIGE = (227, 227, 234)
 PX_PER_CM = 12.0
 failed = False
 
@@ -48,7 +50,8 @@ def check(name, condition, detail=""):
     failed |= not condition
 
 
-def render_target(warp=None, out_size=None, fade=0.0):
+def render_target(warp=None, out_size=None, fade=0.0, encoding="combined",
+                  beige_fade=0.0, missing_horizontal_center=False):
     width = round(PAGE_WIDTH_CM * PX_PER_CM)
     height = round(PAGE_HEIGHT_CM * PX_PER_CM)
     image = np.full((height, width, 3), PAPER, np.uint8)
@@ -74,7 +77,8 @@ def render_target(warp=None, out_size=None, fade=0.0):
             )
             stripe_x0 = x0 + 2.2
             stripe_x1 = stripe_x0 + 1.6
-            stripe = DARK_GREEN if is_green else DARK_MAGENTA
+            stripe = ((DARK_GREEN if is_green else DARK_MAGENTA)
+                      if encoding in ("vertical", "combined") else colour)
             cv2.rectangle(
                 image,
                 (round(stripe_x0 * PX_PER_CM), height - round(y1 * PX_PER_CM)),
@@ -83,6 +87,37 @@ def render_target(warp=None, out_size=None, fade=0.0):
                 stripe,
                 -1,
             )
+            # Every other 1.6 cm row interval is an encoded horizontal band:
+            # beige outer thirds and a white centre. The neighboring chromatic
+            # rows are still required, so gray can never establish the target.
+            if encoding in ("horizontal", "combined") and row % 2 == 0 \
+                    and row + 1 < FIDUCIAL_ROWS:
+                gap_y0 = y1
+                gap_y1 = y0 + pitch_y
+                beige = tuple(round((1 - beige_fade) * value
+                                    + beige_fade * paper)
+                              for value, paper in zip(BEIGE, PAPER))
+                for gap_x0, gap_x1 in ((x0, x0 + 2.2),
+                                       (x0 + 3.8, x1)):
+                    cv2.rectangle(
+                        image,
+                        (round(gap_x0 * PX_PER_CM),
+                         height - round(gap_y1 * PX_PER_CM)),
+                        (round(gap_x1 * PX_PER_CM) - 1,
+                         height - round(gap_y0 * PX_PER_CM) - 1),
+                        beige,
+                        -1,
+                    )
+                if missing_horizontal_center:
+                    cv2.rectangle(
+                        image,
+                        (round((x0 + 2.2) * PX_PER_CM),
+                         height - round(gap_y1 * PX_PER_CM)),
+                        (round((x0 + 3.8) * PX_PER_CM) - 1,
+                         height - round(gap_y0 * PX_PER_CM) - 1),
+                        beige,
+                        -1,
+                    )
     if warp is None:
         return image
     size = out_size or (width, height)
@@ -91,6 +126,7 @@ def render_target(warp=None, out_size=None, fade=0.0):
 
 rig_data = load_rig_config()
 legacy = ColorGridSpec.from_config(rig_data, mode="vertical")
+legacy_horizontal = ColorGridSpec.from_config(rig_data, mode="horizontal")
 
 # The printable vector and detector constants are one physical contract.
 asset = Path(__file__).resolve().parents[2] / "plans" / "assets" / \
@@ -99,11 +135,16 @@ root = ET.parse(asset).getroot()
 namespace = {"svg": "http://www.w3.org/2000/svg"}
 bars = [node for node in root.findall("svg:rect", namespace)
         if node.get("width") == "6" and node.get("height") == "2.2"]
+beige_regions = [node for node in root.findall("svg:rect", namespace)
+                 if node.get("width") == "2.2"
+                 and node.get("height") == "1.6"]
 check("canonical SVG is A2 landscape",
       root.get("width") == f"{PAGE_WIDTH_CM:g}cm"
       and root.get("height") == f"{PAGE_HEIGHT_CM:g}cm")
 check("canonical SVG carries the detector's 8x10 lattice",
       len(bars) == FIDUCIAL_COLS * FIDUCIAL_ROWS, f"{len(bars)} bars")
+check("canonical SVG carries 40 beige/white/beige horizontal bands",
+      len(beige_regions) == 80, f"{len(beige_regions)} beige outer thirds")
 check("canonical SVG retains the configured fiducial origin",
       np.isclose(min(float(node.get("x")) for node in bars), FIDUCIAL_LEFT_CM)
       and np.isclose(min(float(node.get("y")) for node in bars), PAGE_HEIGHT_CM - (
@@ -111,13 +152,82 @@ check("canonical SVG retains the configured fiducial origin",
           + FIDUCIAL_ROWS * FIDUCIAL_BLOCK_Y_CM
           + (FIDUCIAL_ROWS - 1) * FIDUCIAL_GAP_Y_CM)))
 
-image = render_target()
+image = render_target(encoding="combined")
 found = detect_printed_grid(image, legacy, process_width=0)
 check("combined target is selected before the legacy detector",
       isinstance(found, CombinedGridCalibration), found.describe())
 check("all 80 chromatic fiducials are measured",
       len(found.found_cells) == 80 and found.metrics.parity_agreement == 1.0,
       found.describe())
+check("combined synthetic target decodes both orientation layers",
+      found.orientations == ("vertical", "horizontal"), found.describe())
+check("every fiducial has an internal pattern signature",
+      len(found.patterns) == 80
+      and all(len(pattern.thirds) == 3 for pattern in found.patterns),
+      found.patterns[0].signature)
+check("clear horizontal centers use primary beige detection",
+      not any(pattern.horizontal_inferred for pattern in found.patterns))
+
+muted_beige = render_target(encoding="combined", beige_fade=0.70)
+muted_fit = detect_printed_grid(
+    muted_beige, legacy_horizontal, process_width=0)
+check("primary detector keeps very muted beige outer thirds",
+      "horizontal" in muted_fit.orientations
+      and muted_fit.inferred_horizontal_cells == 0,
+      muted_fit.describe())
+
+# If the difficult 1.6 cm center becomes indistinguishable from its off-white
+# neighbors, the two beige outer thirds plus alternating opposite-color rows
+# reconstruct it. The annotation marks this H~ rather than pretending it was
+# directly measured.
+missing_centers = render_target(
+    encoding="combined", beige_fade=0.35,
+    missing_horizontal_center=True)
+filled_fit = detect_printed_grid(
+    missing_centers, legacy_horizontal, process_width=0)
+inferred = sum(pattern.horizontal_inferred for pattern in filled_fit.patterns)
+check("horizontal center blanks are filled from outer thirds and neighbors",
+      "horizontal" in filled_fit.orientations and inferred >= 64
+      and "H~" in filled_fit.pattern_label(0, 0),
+      f"{inferred}/80 inferred; {filled_fit.describe()}")
+
+# Single-layer variants make mode validation observable: a requested mode is
+# accepted only if its own internal composition has sheet-level consensus.
+vertical_only = render_target(encoding="vertical")
+vertical_fit = detect_printed_grid(
+    vertical_only, legacy, process_width=0)
+check("vertical-only thirds pass vertical mode",
+      vertical_fit.orientations == ("vertical",), vertical_fit.describe())
+try:
+    detect_printed_grid(vertical_only, legacy_horizontal, process_width=0)
+    check("vertical-only thirds refuse horizontal mode", False)
+except ColorGridError as exc:
+    check("vertical-only thirds refuse horizontal mode",
+          exc.stage == "orientation"
+          and "detected vertical" in str(exc)
+          and "requested horizontal" in str(exc), str(exc))
+
+horizontal_only = render_target(encoding="horizontal")
+horizontal_fit = detect_printed_grid(
+    horizontal_only, legacy_horizontal, process_width=0)
+check("horizontal-only thirds pass horizontal mode",
+      horizontal_fit.orientations == ("horizontal",), horizontal_fit.describe())
+try:
+    detect_printed_grid(horizontal_only, legacy, process_width=0)
+    check("horizontal-only thirds refuse vertical mode", False)
+except ColorGridError as exc:
+    check("horizontal-only thirds refuse vertical mode",
+          exc.stage == "orientation"
+          and "detected horizontal" in str(exc)
+          and "requested vertical" in str(exc), str(exc))
+
+annotated = image.copy()
+draw_color_grid(annotated, found, labels=True, shade=0.0)
+check("annotated output includes decoded per-cell patterns",
+      np.count_nonzero(annotated != image) > 1000
+      and "V" in found.pattern_label(0, 0)
+      and "H" in found.pattern_label(0, 0),
+      found.pattern_label(0, 0))
 
 mode_corners = {}
 for mode in ("vertical", "horizontal"):
@@ -161,16 +271,17 @@ h, w = image.shape[:2]
 src = np.float32(((0, 0), (w, 0), (w, h), (0, h)))
 dst = np.float32(((30, 45), (w - 25, 10), (w - 55, h - 25), (45, h - 5)))
 matrix = cv2.getPerspectiveTransform(src, dst)
-warped = render_target(matrix, (w, h))
+warped = render_target(matrix, (w, h), encoding="combined")
 tilted = detect_combined_grids(warped, process_width=0)[0]
 check("combined target survives perspective",
-      len(tilted.found_cells) == 80 and tilted.metrics.residual_px < 1.0,
+      len(tilted.found_cells) == 80 and tilted.metrics.residual_px < 1.0
+      and tilted.orientations == ("vertical", "horizontal"),
       tilted.describe())
 
 # A poor printer can reduce the muted fill almost to paper while leaving the
 # saturated centre accents recognizable. This must exercise the independent
 # stripe fallback rather than merely lower a global saturation threshold.
-faded = render_target(fade=0.93)
+faded = render_target(fade=0.93, encoding="combined")
 faded = cv2.GaussianBlur(faded, (5, 5), 1.2)
 faded_found = detect_combined_grids(faded, process_width=0)[0]
 check("dark stripes recover an almost desaturated print",
@@ -181,7 +292,7 @@ check("dark stripes recover an almost desaturated print",
 # Compound camera abuse: illumination falloff, channel cast, sensor noise,
 # blur, JPEG artifacts and a smaller source image. The target need not use the
 # same fallback on every OpenCV build; it must still pass the safety gates.
-abused = render_target(fade=0.68)
+abused = render_target(fade=0.68, encoding="combined")
 height, width = abused.shape[:2]
 yy, xx = np.mgrid[:height, :width]
 illumination = 0.38 + 0.62 * (0.55 * xx / width + 0.45 * yy / height)
@@ -201,7 +312,8 @@ abused_found = detect_combined_grids(abused, process_width=0)[0]
 check("combined target survives compound print/camera degradation",
       abused_found.metrics.window_observed == 80
       and len(abused_found.found_cells) >= 78
-      and abused_found.metrics.parity_agreement == 1.0,
+      and abused_found.metrics.parity_agreement == 1.0
+      and abused_found.orientations == ("vertical", "horizontal"),
       abused_found.describe())
 
 # The user's supplied PNG is an optional local capture rather than a committed
@@ -215,8 +327,14 @@ if capture.exists():
     check("supplied combined artwork fits all fiducials",
           len(detected.found_cells) == 80
           and detected.metrics.parity_agreement == 1.0
-          and detected.metrics.residual_px < 1.0,
+          and detected.metrics.residual_px < 1.0
+          and detected.orientations == ("vertical", "horizontal"),
           detected.describe())
+    for requested in ("vertical", "horizontal"):
+        matched = detect_combined_grids(
+            real, process_width=0, requested_mode=requested)[0]
+        check(f"supplied artwork satisfies requested {requested} mode",
+              requested in matched.orientations, matched.describe())
 else:
     print("skip  supplied combined artwork: captures file not present")
 

@@ -89,16 +89,26 @@ def draw_color_grid(frame: np.ndarray, calibration: ColorGridCalibration, *,
             # Grow the text with the cells. A fixed 0.36 is right on a 640-wide
             # preview and unreadable on a 2048-wide capture, and this overlay is
             # used at both.
-            scale = min(1.2, max(0.36, span / 60))
+            combined = getattr(calibration, "is_combined", False)
+            scale = (min(0.62, max(0.28, span / 150)) if combined
+                     else min(1.2, max(0.36, span / 60)))
             for (col, row), quad in quads.items():
-                prefix = "F" if getattr(calibration, "is_combined", False) else ""
-                text = f"{prefix}{col},{row}"
+                text = (calibration.pattern_label(col, row) if combined
+                        else f"{col},{row}")
                 (width, height), _ = cv2.getTextSize(text, FONT, scale, 1)
                 x, y = quad.mean(axis=0)
                 colour = ORIGIN_COLOR if (col, row) == (0, 0) else MAPPED_COLOR
                 _stamp(frame, text,
                        (round(x - width / 2), round(y + height / 2)), colour,
                        scale)
+
+    if getattr(calibration, "is_combined", False):
+        outline = _quad(calibration.outline())
+        x = int(outline[:, 0].min())
+        top = int(outline[:, 1].min())
+        y = top - 8 if top >= 28 else top + 22
+        _stamp(frame, f"ORIENTATION: {calibration.orientation}",
+               (x, y), OUTLINE_COLOR, 0.55)
 
     hovered = calibration.cell_at(hover) if hover is not None else None
     if hovered is not None:
@@ -168,6 +178,8 @@ def status_text(calibration: ColorGridCalibration | None, error: str | None = No
     metrics = calibration.metrics
     if getattr(calibration, "is_combined", False):
         return (f"combined sheet: {metrics.full_cells} fiducials, "
+                f"orientation {calibration.orientation}, "
+                f"H~ {calibration.inferred_horizontal_cells}, "
                 f"residual {metrics.residual_px:.2f} px, "
                 f"parity {metrics.parity_agreement * 100:.0f}%")
     return (f"paper grid: {metrics.full_cells} whole cells, "

@@ -321,8 +321,9 @@ def draw_paper_evidence(frame, evidence, *, detail=False):
                 _dashed_polyline(frame, quad, WARN_COLOR)
             if detail:
                 centre = tuple(round(value) for value in calibration.cell_center(col, row))
-                prefix = "F" if getattr(calibration, "is_combined", False) else ""
-                label = f"{prefix}{col},{row}"
+                label = (calibration.pattern_label(col, row)
+                         if getattr(calibration, "is_combined", False)
+                         else f"{col},{row}")
                 cv2.putText(frame, label, centre,
                             cv2.FONT_HERSHEY_SIMPLEX, 0.32,
                             (20, 20, 20), 3, cv2.LINE_AA)

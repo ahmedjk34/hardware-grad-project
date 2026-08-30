@@ -129,6 +129,15 @@ def report(calibration, grid, convention):
         f"       processing size {metrics.processing_size[0]}x{metrics.processing_size[1]}"
         f" of {metrics.input_size[0]}x{metrics.input_size[1]}",
     ]
+    if getattr(calibration, "is_combined", False):
+        votes = calibration.orientation_votes
+        lines.append(
+            f"       decoded orientation {calibration.orientation}; "
+            f"votes vertical={votes['vertical']}/80, "
+            f"horizontal={votes['horizontal']}/80; "
+            f"inferred horizontal centers="
+            f"{calibration.inferred_horizontal_cells}/80"
+        )
     corners = calibration.workspace_corners(grid, convention)
     lines.append(f"Envelope corners ({convention} home convention):")
     for name, point in zip(("home [0,0]", "far-X/home-Y", "far-X/far-Y",

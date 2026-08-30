@@ -691,6 +691,77 @@ def white_balance(frame: np.ndarray,
     return cv2.LUT(frame, np.ascontiguousarray(table.T.reshape(1, 256, 3)))
 
 
+@dataclass(frozen=True)
+class ColorRegionStats:
+    """Robust colour measurements for one projected artwork subregion.
+
+    The three representations are intentionally retained together. HSV
+    saturation separates ink from neutral paper, Lab distance survives modest
+    exposure changes, and normalized opponent channels remain useful in deep
+    shadows where hue becomes noisy.
+    """
+
+    bgr: tuple[float, float, float]
+    hsv: tuple[float, float, float]
+    lab: tuple[float, float, float]
+    green_opponent: float
+    magenta_opponent: float
+    strength: float
+    pixels: int
+
+
+def sample_color_region(frame: np.ndarray, polygon) -> ColorRegionStats:
+    """Measure a projected polygon with channel, HSV and Lab robust medians."""
+    points = np.asarray(polygon, dtype=np.float32).round().astype(np.int32)
+    x, y, width, height = cv2.boundingRect(points)
+    x0, y0 = max(0, x), max(0, y)
+    x1, y1 = min(frame.shape[1], x + width), min(frame.shape[0], y + height)
+    if x1 <= x0 or y1 <= y0:
+        pixels = np.empty((0, 3), np.uint8)
+    else:
+        local = points - np.int32((x0, y0))
+        mask = np.zeros((y1 - y0, x1 - x0), np.uint8)
+        cv2.fillConvexPoly(mask, local, 255, cv2.LINE_AA)
+        pixels = frame[y0:y1, x0:x1][mask >= 192]
+    if len(pixels) < 9:
+        raise ColorGridError(
+            "an internal fiducial subregion projects to too few pixels; move "
+            "the camera closer or use a higher-resolution frame",
+            stage="orientation",
+        )
+    bgr = np.median(pixels.astype(np.float32), axis=0)
+    hsv_pixels = cv2.cvtColor(pixels.reshape(-1, 1, 3), cv2.COLOR_BGR2HSV)
+    lab_pixels = cv2.cvtColor(pixels.reshape(-1, 1, 3), cv2.COLOR_BGR2LAB)
+    hsv = np.median(hsv_pixels.astype(np.float32), axis=0).reshape(3)
+    lab = np.median(lab_pixels.astype(np.float32), axis=0).reshape(3)
+    b, g, r = (float(value) for value in bgr)
+    total = b + g + r + 12.0
+    green_opponent = (g - (r + b) * 0.5) / total
+    magenta_opponent = ((r + b) * 0.5 - g) / total
+    spread = (max(b, g, r) - min(b, g, r)) / max(max(b, g, r), 12.0)
+    lab_chroma = float(np.linalg.norm(lab[1:] - 128.0)) / 100.0
+    strength = float(np.clip(
+        0.45 * hsv[1] / 255.0 + 0.30 * spread + 0.25 * lab_chroma,
+        0.0, 1.5,
+    ))
+    return ColorRegionStats(
+        bgr=tuple(float(value) for value in bgr),
+        hsv=tuple(float(value) for value in hsv),
+        lab=tuple(float(value) for value in lab),
+        green_opponent=green_opponent,
+        magenta_opponent=magenta_opponent,
+        strength=strength,
+        pixels=int(len(pixels)),
+    )
+
+
+def lab_distance(first: ColorRegionStats, second: ColorRegionStats) -> float:
+    """Euclidean OpenCV-Lab distance between two robust region samples."""
+    return float(np.linalg.norm(
+        np.asarray(first.lab, dtype=np.float32)
+        - np.asarray(second.lab, dtype=np.float32)))
+
+
 def color_masks(frame: np.ndarray, *, min_saturation: int = MIN_SATURATION,
                 min_value: int = MIN_VALUE, green_hue=GREEN_HUE,
                 magenta_hue=MAGENTA_HUE,

@@ -32,20 +32,39 @@ an **8 × 10 fiducial lattice**, not as 80 machine blocks:
 | property | value |
 | --- | --- |
 | page | 59.4 × 42.0 cm, A2 landscape |
-| fiducial bar | 6.0 × 2.2 cm |
+| fiducial bar | 6.0 × 2.2 cm, X thirds 2.2 + 1.6 + 2.2 cm |
 | fiducial gaps | 0.8 cm X, 1.6 cm Y |
 | lattice | 8 columns × 10 rows |
 | first outer edge | 0.8 cm from page left, 4.8 cm from page bottom |
 | machine registration | physical lower-left page corner = holder home |
 
-The olive shades use a detector-local wider green hue window. Beige is never a
-required observation because its saturation is too close to white paper after
-printing. Detection first uses the full bars, then retries faded/cracked ink
+The supplied `grad project grid white background.png` is 2245 × 1587 px
+(37.79 px/cm). Away from one-pixel antialiased edges, a composite tile measures
+227–228 px square. Its X runs are approximately 83 px muted chromatic/beige,
+60 px dark chromatic or white, and 83 px muted chromatic/beige. Its Y runs are
+approximately 83 px chromatic, 60 px beige/white/beige, and 83 px opposite
+chromatic. Tiles repeat every 257 px in X (about 0.8 cm white separation) and
+287 px in Y (the extra 60 px is the plain-white 1.6 cm separator). This measured
+raster geometry is the source of the 2.2 + 1.6 + 2.2 cm internal model; it is
+not inferred from the old detector comments.
+
+The olive shades use a detector-local wider green hue window. The exact raster
+is an 8 × 5 array of 6.0 × 6.0 cm composite tiles: two chromatic 2.2 cm bands
+around one 1.6 cm interval. Dark same-colour center thirds in all 80 chromatic
+bars encode vertical. Beige outer thirds with a white center in five sets of
+row intervals encode horizontal, but only when valid opposite-colour rows
+bracket them. The other four intervals are plain-white tile separators.
+
+Detection first uses the full chromatic bars, then retries faded/cracked ink
 with stronger mask closing. If those fills have nearly disappeared, the dark
 centre accents are isolated with separate green and magenta Otsu thresholds
-plus local saturation contrast. The fallback still has to pass the complete
-8 × 10 geometry, alternating-colour parity, aspect and residual gates; it does
-not turn beige or arbitrary dark marks into calibration evidence. All 80
+plus local saturation contrast. After fitting the homography it samples every
+projected subregion and classifies green, purple or beige/gray using normalized
+channel opponents, HSV saturation, Lab prototype distances and locally
+adaptive thresholds. Decisions are aggregated across at least 60% of the 80
+fiducials. Gray alone cannot vote: the fallback still has to pass the complete
+8 × 10 chromatic geometry, alternating-colour parity, aspect and residual
+gates. All 80
 chromatic bars fit one page-coordinate homography; that same
 fit yields the shared 24.3 × 40.0 cm holder envelope for either active mode.
 The resulting `WorkspaceMap` is still saved under the active mode and embeds
@@ -59,6 +78,15 @@ legacy sheets. `PrintedGridEvidence` locks onto whichever target the first
 accepted frame used, so the existing evidence-assisted route works for the
 combined page too without mixing observations from two designs. Overlay labels
 `Fcol,row` name fiducials rather than build cells.
+
+Horizontal decoding uses the nearby 0.8 cm white X gap at the same image row as
+a local paper reference. Both 2.2 cm outer thirds must separate from that paper
+in Lab/density while staying weaker than their chromatic neighbors. The 1.6 cm
+white center is checked directly first. If it is washed out, shadowed or
+overprinted, it may be inferred only when the two outer thirds remain present,
+the adjacent rows carry the expected opposite colors, and the same gap parity
+wins across the sheet's five encoded intervals against its four plain
+separators. Inferred cells are annotated `H~`; directly measured ones are `H`.
 
 ---
 

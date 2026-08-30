@@ -115,15 +115,25 @@ at 100% / actual size, never “fit to page”. Lay the combined A2
 green/magenta/beige calibration page in the work area with its physical
 lower-left page corner at holder home, press `p` to see its 8×10 chromatic
 fiducial lattice, and press `k` to derive the same four corners from one
-complete frame and save them. The beige portions help a human see the second
-orientation but are not required by detection; low-saturation beige is too
-close to white paper under real lighting. The detector automatically retries
+complete frame and save them. The dark colored center thirds encode vertical;
+beige/white/beige intervals bracketed by alternating colored rows encode
+horizontal. The detector automatically retries
 faded or cracked full bars and then their dark centre accents, using separate
-per-colour and local-contrast thresholds for uneven lighting. It still refuses
-a result unless the lattice geometry and alternating colour parity agree. It
+per-colour and local-contrast thresholds for uneven lighting, then classifies
+all projected thirds with relative channels, HSV and Lab. Beige never detects
+the sheet by itself; it contributes only after the chromatic lattice and its
+neighbor stripes agree. It still refuses a result unless the lattice geometry,
+alternating colour parity and requested orientation agree. It
 writes the same
 `config/workspace_map.json`, separately for the active mode. The older
 mode-specific sheets remain supported as a fallback.
+
+The horizontal center-third check is intentionally recoverable. Primary
+detection compares both off-white outer thirds with the nearby white X gap at
+the same row. If the 1.6 cm center cannot be read, five alternating encoded
+intervals plus their opposite-color row neighbors may reconstruct it. The
+overlay marks those reconstructed votes `H~` so they are never confused with a
+direct `H` observation.
 
 If the gantry hides interior cells, use **Evidence-Assisted Printed-Grid
 Calibration** instead: press `e`, press `Space` once for each useful safe

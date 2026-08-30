@@ -31,8 +31,11 @@ chromatic fiducial lattice is defined in `vision/combined_grid.py`: 6.0 × 2.2
 cm bars, 0.8 cm X gaps, 1.6 cm Y gaps, starting 0.8 cm from page left and 4.8
 cm from page bottom. The physical lower-left page corner is placed at holder
 home. One page-plane fit calibrates either mode; the active `MachineGrid` and
-mode-keyed workspace-map entry remain separate. Beige is nonessential visual
-information and calibration must survive its disappearance into white paper.
+mode-keyed workspace-map entry remain separate. Each bar's 2.2 + 1.6 + 2.2 cm
+X subregions encode the dark-center vertical pattern. Five beige/white/beige
+row intervals, each bracketed by opposite chromatic rows, encode horizontal.
+Beige is required orientation evidence for horizontal but is never allowed to
+establish the lattice without the chromatic rows.
 
 The following is the retained legacy-sheet contract. These sheets remain a
 fallback and the evidence-assisted route still uses them.
