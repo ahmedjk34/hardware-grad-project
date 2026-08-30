@@ -133,9 +133,9 @@ else, that is a signal to stop and re-read the plan.
 > `BLOCK_HEIGHT_CM` stays 1.5. Vertical is **6 × 5**, horizontal is **2 × 10**.
 > Vertical trims remain zero; horizontal ships at `trim_y = +1.6 cm` for the
 > pickup-cell registration described in D14. Vertical error offsets ship at
-> `(+0.15, -0.45) cm` for X/Y after incremental correction: the prior
-> `(+0.3, 0.0) cm` was reduced by the newly measured positive-side residual
-> of `(+0.15, +0.45) cm`. The tables below are recomputed
+> `(+0.15, +0.05) cm` for X/Y after incremental correction: the prior
+> `(+0.15, -0.45) cm` was increased by the newly measured `0.5 cm`
+> toward-home Y error. The tables below are recomputed
 > at the shipped calibration. The decision log (D1–D20) and §4–§8 below are the
 > original record and still describe the *mechanism*; only the numbers moved.
 > `python/tests/test_grid.py` `SECTION_3` mirrors the tables here.

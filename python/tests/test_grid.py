@@ -130,23 +130,23 @@ check("one-grid-span allocation is 22.8x34 cm",
       and math.isclose(from_cfg.allocation_height_cm, 34.0))
 check("shipped trims include horizontal pickup registration",
       math.isclose(from_cfg.x_allocation_start_cm, 0.9)
-      and math.isclose(from_cfg.y_allocation_start_cm, 2.55))
+      and math.isclose(from_cfg.y_allocation_start_cm, 3.05))
 check("first blocks begin after the centring shift plus the near gap",
       math.isclose(from_cfg.x_start_cm, 2.5)
-      and math.isclose(from_cfg.y_start_cm, 3.35))
+      and math.isclose(from_cfg.y_start_cm, 3.85))
 check("first physical cell centre",
       all(math.isclose(a, b) for a, b in
-          zip(from_cfg.cell_center_cm(1, 1), (3.6, 6.35))))
+          zip(from_cfg.cell_center_cm(1, 1), (3.6, 6.85))))
 check("last physical cell centre",
       all(math.isclose(a, b) for a, b in
-          zip(from_cfg.cell_center_cm(6, 5), (22.6, 33.55))))
+          zip(from_cfg.cell_center_cm(6, 5), (22.6, 34.05))))
 check("all placement centres remain inside holder travel",
       from_cfg.x_first_center_cm >= 0 and from_cfg.y_first_center_cm >= 0
       and from_cfg.x_last_center_cm <= from_cfg.workspace_width_cm
       and from_cfg.y_last_center_cm <= from_cfg.workspace_height_cm)
 check("block footprint stays inside the last holder centres' overhang budget",
       math.isclose(from_cfg.x_end_cm, 23.7)
-      and math.isclose(from_cfg.y_end_cm, 36.55))
+      and math.isclose(from_cfg.y_end_cm, 37.05))
 
 # ------------------------------------------------------------------
 # The dual-orientation numeric contract
@@ -172,10 +172,10 @@ SECTION_3 = {
         "gap": (1.6, 0.8),
         "pitch": (3.8, 6.8),
         "footprint": (21.20, 33.20),
-        "first_centre": (3.60, 6.35),
-        "last_centre": (22.60, 33.55),
-        "first_edge": (2.50, 3.35),
-        "last_edge": (23.70, 36.55),
+        "first_centre": (3.60, 6.85),
+        "last_centre": (22.60, 34.05),
+        "first_edge": (2.50, 3.85),
+        "last_edge": (23.70, 37.05),
         "cells": 30,
     },
     "horizontal": {

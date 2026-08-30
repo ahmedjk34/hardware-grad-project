@@ -245,12 +245,12 @@ scale, while the firmware needs it to turn cell centres into steps, so those
 centimetre values genuinely have partners on both machines. Change both
 partners in the same commit. Positive trim moves the entire grid away from its
 home/feeder reference; negative trim moves it toward that reference. The
-shipped vertical trims are `0.0` on both axes; horizontal `trim_x` is `+1.6 cm`
+shipped vertical trims are `0.0` on both axes; horizontal `trim_y` is `+1.6 cm`
 for the pickup-cell-to-horizontal-grid registration described above. The
 observed vertical placement corrections are `error_offset_x = +0.15 cm` and
-`error_offset_y = -0.45 cm`. These are cumulative corrections: the prior
-`+0.3/0.0 cm` correction was reduced by the newly measured `0.15/0.45 cm`
-positive-side residual, leaving X at `+0.15 cm` and Y at `-0.45 cm`.
+`error_offset_y = +0.05 cm`. These are cumulative corrections: the prior
+`+0.15/-0.45 cm` correction was increased by the newly measured `0.5 cm`
+toward-home Y error, leaving X at `+0.15 cm` and Y at `+0.05 cm`.
 For any user-marked **error offsetting**, use `error_offset_x_cm` and
 `error_offset_y_cm` (and the paired firmware variables) as an additional
 signed shift exactly like the grid trim.
