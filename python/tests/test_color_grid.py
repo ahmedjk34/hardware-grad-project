@@ -348,7 +348,9 @@ check("[0,0] is still the bottom-left corner cell after the turn",
 
 image, _ = render_sheet(spec, 22, 4)
 try:
-    detect_color_grid(image, spec, process_width=0)
+    # edge_margin=0 isolates the "physically too short" path from the separate
+    # frame-border discard behaviour, which section 8 covers.
+    detect_color_grid(image, spec, process_width=0, edge_margin=0)
     check("a sheet with too few rows is refused", False, "it was accepted")
 except ColorGridError as exc:
     check("a sheet with too few rows is refused",
@@ -614,6 +616,59 @@ try:
           final_status.edge_cells[:2] >= (8, 8), final_status.describe())
 except ColorGridError as exc:
     check("horizontal evidence pooling is accepted", False, str(exc))
+
+
+# --- 7b. multi sub-grid selection and frame-border discard -----------------
+
+from vision.color_grid import DEFAULT_EDGE_MARGIN  # noqa: E402
+
+# An oversized sheet: three spare columns AND three spare rows past the 7x6
+# vertical map. The window search must offer sub-grids shifted on BOTH axes,
+# not just short-axis shifts anchored to one long edge.
+big_image, _big_centres = render_sheet(spec, 10, 9, margin_cm=2.0)
+big_windows = detect_color_grids(big_image, spec, process_width=0, edge_margin=0)
+check("an oversized sheet yields several sub-grid windows",
+      len(big_windows) >= 4, f"{len(big_windows)} windows")
+big_origins = {w.cell_center(0, 0) for w in big_windows}
+_ox = {round(p[0], 1) for p in big_origins}
+_oy = {round(p[1], 1) for p in big_origins}
+check("sub-grid windows are offset on both axes",
+      len(_ox) > 1 and len(_oy) > 1,
+      f"{len(_ox)} distinct X origins, {len(_oy)} distinct Y origins")
+check("window 0 is the one nearest image bottom-left",
+      big_windows[0].cell_center(0, 0)[0] <= min(p[0] for p in big_origins) + 1
+      and big_windows[0].cell_center(0, 0)[1] >= max(p[1] for p in big_origins) - 1,
+      str(big_windows[0].cell_center(0, 0)))
+check("a max_windows cap bounds the choice list",
+      len(detect_color_grids(big_image, spec, process_width=0, edge_margin=0,
+                             max_windows=3)) == 3)
+
+# Exactly the 7x6 map, printed so its outer ring sits ~0.3 cm from the frame
+# edge. At edge_margin=0 it calibrates; at the aggressive default the border
+# cells are discarded and no full window survives.
+tight_image, _tc = render_sheet(spec, spec.cols, spec.rows, margin_cm=0.3)
+tight_ok = detect_color_grid(tight_image, spec, process_width=0, edge_margin=0)
+check("a frame-filling sheet calibrates with the border margin off",
+      len(tight_ok.found_cells) == spec.cols * spec.rows,
+      f"{len(tight_ok.found_cells)} cells")
+try:
+    detect_color_grid(tight_image, spec, process_width=0,
+                      edge_margin=DEFAULT_EDGE_MARGIN)
+    check("the aggressive border margin refuses a frame-filling sheet", False,
+          "it was accepted")
+except ColorGridError as exc:
+    check("the aggressive border margin refuses a frame-filling sheet",
+          exc.stage in ("window", "fit"), str(exc)[:80])
+
+# A sheet with a comfortable border keeps every cell even at the aggressive
+# default: the margin discards cells near the FRAME edge, not interior ones.
+roomy_image, _rc = render_sheet(spec, spec.cols, spec.rows, margin_cm=6.0)
+roomy = detect_color_grid(roomy_image, spec, process_width=0,
+                          edge_margin=DEFAULT_EDGE_MARGIN)
+check("a well-framed sheet keeps every cell at the aggressive default",
+      len(roomy.found_cells) == spec.cols * spec.rows
+      and not any(c.edge_clipped for c in roomy.found_cells.values()),
+      f"{len(roomy.found_cells)} cells")
 
 
 # --- 8. the training captures, when they are there --------------------------

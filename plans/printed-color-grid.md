@@ -105,32 +105,36 @@ measured ones are `H`.
 
 ## The sheet
 
-Each printed cell has the active mode's block footprint with **0.5 cm** of
-white between neighbours: vertical is **2.2 × 7.5 cm**, horizontal is
-**7.5 × 2.2 cm**. Both come from `config/rig.json`, so the paper and the
-machine are describing the same grid. Colours alternate like a
+Each printed cell has the active mode's block footprint with white between
+neighbours — **1.6 cm along X, 0.8 cm along Y**: vertical is **2.2 × 6.0 cm**,
+horizontal is **6.0 × 2.2 cm**. Both come from `config/rig.json`, so the paper
+and the machine are describing the same grid. Colours alternate like a
 chessboard, which costs nothing to print and gives the detector a free
 consistency check: if a cell's colour disagrees with the parity of its index,
 the indices are wrong.
 
 The sheet is deliberately printed **larger than the machine's grid**. An A2
-print holds more cells than the mapped window. Vertical maps 10 × 6; the
-horizontal sheet maps 4 × 16 and is deliberately wider than that mapped extent.
-That surplus is what makes the sheet usable at any camera height without
-reprinting it — and it is why choosing which cells count is half the problem.
+print holds more cells than the mapped window. Vertical maps 7 × 6; the
+horizontal sheet maps 3 × 11. That surplus is what makes the sheet usable at
+any camera height without reprinting it — and it is why choosing which cells
+count, and which of several overlapping mode-sized windows to calibrate on, is
+half the problem.
 
 ### What is not part of the project
 
 * **Partial cells.** Any block clipped by the edge of the paper or the edge of
   the frame. Their centres and sizes are both wrong, so they are excluded from
-  the fit entirely rather than down-weighted.
+  the fit entirely rather than down-weighted. A whole cell that merely comes
+  *near* the frame border is excluded too: `edge_margin` (a fraction of the
+  cell's own size, default 0.5) is how much clear space it must keep. `0`
+  disables that and keeps every visible cell.
 * **The outer white margin.** The sheet has one; the grid does not. The grid
   ends at the outer edge of the last whole block, with no trailing margin, the
   same way the machine's grid ends at the last block edge.
-* **Inner margins are real.** The 0.5 cm between blocks is white paper, not a
-  rounding artefact. `cell_at()` returns `None` there instead of naming the
-  nearer block, because quietly absorbing the gap would widen every cell by a
-  quarter of a gap.
+* **Inner margins are real.** The 1.6 cm (X) / 0.8 cm (Y) between blocks is
+  white paper, not a rounding artefact. `cell_at()` returns `None` there instead
+  of naming the nearer block, because quietly absorbing the gap would widen
+  every cell.
 
 ---
 
@@ -156,21 +160,23 @@ reprinting it — and it is why choosing which cells count is half the problem.
    repeated on the survivors. Both an upper and lower fill bound reject clipped
    and merged cells. Colour parity, measured aspect, mean residual and maximum
    residual are hard acceptance gates rather than status-only measurements.
-5. **Every strongly supported mode-sized window is retained** (10 × 6 vertical,
-   4 × 16 horizontal). The long-axis span
-   is anchored at the lattice edge nearest the bottom-left of the image, while
-   an oversized short axis may produce overlapping horizontal choices. A
-   window needs at least 95% physical coverage and every row/column must remain
-   supported, so one underlit edge cell does not move the calibration but a
-   clipped strip still cannot pass. The operator selects among candidates with
-   `,` / `.` before `k` saves the map; candidate 1 is the absolute-left window.
+5. **Every strongly supported mode-sized window is retained** (7 × 6 vertical,
+   3 × 11 horizontal), swept across **both** axes — an oversized sheet exposes
+   every full copy of the coordinate map it contains, not just short-axis
+   shifts off one anchored edge. A window needs at least 95% physical coverage
+   with every row/column supported, so one underlit edge cell does not move the
+   calibration but a clipped strip cannot pass; `edge_margin` additionally drops
+   any window whose ring hugs the frame border. Windows are ordered by distance
+   from image bottom-left (index 0 = the bottom-left-most) and capped at
+   `max_windows` (16). The operator selects with `,` / `.` (or `--grid-window`)
+   before `k` saves the map.
 
 ### Which axis is X
 
 Never from the image alone. The explicit mode decides which physical side is
-machine X: vertical maps 2.2 cm to X; horizontal maps 7.5 cm to X. The detected
+machine X: vertical maps 2.2 cm to X; horizontal maps 6.0 cm to X. The detected
 short/long lattice axes then follow that declared geometry, whichever way the
-sheet was photographed. `ColorGridSpec.mode` and the 10 × 6 / 4 × 16 complete
+sheet was photographed. `ColorGridSpec.mode` and the 7 × 6 / 3 × 11 complete
 counts cross-check the `MachineGrid` before calibration; a partial sheet never
 causes an orientation guess.
 
@@ -227,15 +233,15 @@ the white balance and gains are tuned and saved.
 **This is worth reading before trusting a saved calibration.**
 
 The sheet prints a real block at every coordinate, coordinate zero included, so
-its 10 × 6 layout is 10 blocks across:
+its 7 × 6 layout is 7 blocks across:
 
 ```text
 sheet X:  |block|gap|block|gap| ... |block|      = 10 x 2.2 + 9 x 0.5 = 26.5 cm
-sheet Y:  same with 7.5/0.5                      =  6 x 7.5 + 5 x 0.5 = 47.5 cm
+sheet Y:  same with 6.0/0.8                      =  6 x 6.0 + 5 x 0.8 = 40.0 cm
 ```
 
 The firmware's coordinate zero is not a block. It is the home *point*, with
-only the 0.5 cm gap between it and cell 1:
+only the gap between it and cell 1:
 
 ```text
 rig X:    |0|gap|block|gap| ... |block|          = 9 x 2.7 = 24.3 cm
@@ -268,6 +274,11 @@ Switch with `--home-convention`, or with `h` in `color_grid_check.py`.
 
 `python/captures/grid_training/` is gitignored, so these are recorded here
 rather than in a test's expected output.
+
+> These captures are of the **pre-6 cm sheet** (2.2 × 7.5 cm blocks, 0.5 cm
+> gaps, 10 × 6 map). They no longer match `ColorGridSpec` and the tests skip
+> them until a new sheet is printed and reshot. The rows below are the old
+> record.
 
 | capture | result |
 | --- | --- |

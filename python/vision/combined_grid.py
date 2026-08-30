@@ -36,6 +36,7 @@ from vision.color_grid import (
     ColorGridCalibration,
     ColorGridError,
     ColorGridSpec,
+    DEFAULT_EDGE_MARGIN,
     DEFAULT_HOME_CONVENTION,
     DEFAULT_PROCESS_WIDTH,
     HOME_CONVENTIONS,
@@ -900,6 +901,10 @@ def detect_combined_grids(frame: np.ndarray, *,
                 # locally ink-supported fiducials. Legacy calibration sheets
                 # retain their strict full-window behavior.
                 evidence=True,
+                # The combined page fills the frame by design and has its own
+                # 76/80 page-plane gate; the aggressive frame-border margin is a
+                # legacy-plain-sheet tool and would eat the outer fiducial ring.
+                edge_margin=0.0,
                 **options,
             )
             if method == "dark centre stripes":
@@ -913,8 +918,14 @@ def detect_combined_grids(frame: np.ndarray, *,
 
 def detect_printed_grids(frame: np.ndarray, legacy_spec: ColorGridSpec, *,
                          process_width: int = DEFAULT_PROCESS_WIDTH,
+                         edge_margin: float = DEFAULT_EDGE_MARGIN,
                          evidence: bool = False):
-    """Detect the combined target first, retaining both legacy sheet formats."""
+    """Detect the combined target first, retaining both legacy sheet formats.
+
+    ``edge_margin`` applies only to the legacy plain-sheet path: it is the
+    fraction of a cell's own size that a whole cell must keep clear of the
+    frame border. The combined A2 target keeps its own page-plane gate.
+    """
     combined_error = None
     try:
         return detect_combined_grids(
@@ -924,7 +935,8 @@ def detect_printed_grids(frame: np.ndarray, legacy_spec: ColorGridSpec, *,
         combined_error = exc
     try:
         return detect_color_grids(
-            frame, legacy_spec, process_width=process_width, evidence=evidence)
+            frame, legacy_spec, process_width=process_width,
+            edge_margin=edge_margin, evidence=evidence)
     except ColorGridError as legacy_error:
         # A plain legacy sheet can form a chromatic lattice of the combined
         # target's shape and then fail only its woven-orientation decode. When
@@ -939,10 +951,12 @@ def detect_printed_grids(frame: np.ndarray, legacy_spec: ColorGridSpec, *,
 
 def detect_printed_grid(frame: np.ndarray, legacy_spec: ColorGridSpec, *,
                         process_width: int = DEFAULT_PROCESS_WIDTH,
+                        edge_margin: float = DEFAULT_EDGE_MARGIN,
                         evidence: bool = False,
                         window_index: int = 0):
     calibrations = detect_printed_grids(
-        frame, legacy_spec, process_width=process_width, evidence=evidence)
+        frame, legacy_spec, process_width=process_width,
+        edge_margin=edge_margin, evidence=evidence)
     if not 0 <= window_index < len(calibrations):
         raise ColorGridError(
             f"grid window {window_index + 1} was requested but only "

@@ -164,6 +164,20 @@ MAX_RESIDUAL_SHORT_SIDE = 0.45
 # affordable on the Pi. Pass ``process_width=0`` to work at full resolution.
 DEFAULT_PROCESS_WIDTH = 1024
 
+# How much clear space a whole cell must keep between its own projected edge and
+# the frame border, as a fraction of that cell's own projected size. A cell that
+# comes closer than this - or crosses the border - is treated as clipped and can
+# neither anchor the fit nor count toward a window's coverage. The default is
+# deliberately aggressive: a sheet photographed to the frame edge loses its
+# outermost ring rather than calibrating off half-visible blocks. Pass
+# ``edge_margin=0`` to keep only the hard "contour actually overruns" test.
+DEFAULT_EDGE_MARGIN = 0.5
+
+# Upper bound on how many overlapping mode-sized windows a single detection
+# offers the operator to cycle through. They are ranked bottom-left-first, so
+# the cut only drops the farthest, least likely alternatives.
+MAX_WINDOWS = 16
+
 # A single evidence frame is allowed to have gantry-shaped holes.  Twelve
 # cells is enough to establish both lattice axes and reject scene clutter; it
 # is deliberately *not* enough to save a workspace map on its own.  That
@@ -176,13 +190,13 @@ def min_evidence_frame_cells(spec) -> int:
     """Whole cells needed to fit one evidence frame for this sheet layout."""
     return math.ceil(MIN_EVIDENCE_FRAME_FRACTION * spec.cols * spec.rows)
 
-# A complete 10x6 window may lose one or two cells to a lighting falloff at the
+# A mode-sized window may lose one or two cells to a lighting falloff at the
 # edge of the sheet without losing its geometry: the homography is supported by
 # the rest of the larger lattice.  This is deliberately much stricter than the
-# evidence mode.  Every row and column must still contain observations, and the
-# selected row span must touch the physical lattice edge nearest image
-# bottom-left (see ``_choose_windows``), so a clipped extra border cannot become
-# a second, vertically shifted calibration by accident.
+# evidence mode.  Every row and column must still contain observations, and
+# nearly all of each.  ``_choose_windows`` returns every window that clears this
+# on both axes; the frame-border ``edge_margin`` (below) is what stops a
+# half-visible outer ring from anchoring one.
 MIN_WINDOW_COVERAGE = 0.95
 
 # A cell can remain plainly visible while a fixed colour threshold captures
@@ -348,6 +362,7 @@ class PrintedCell:
     fill: float                         # observed area / lattice-predicted area
     full: bool
     cell: tuple[int, int] | None = None  # [col,row] once a window is chosen
+    edge_clipped: bool = False           # too close to the frame border to trust
 
 
 @dataclass
@@ -1112,28 +1127,53 @@ def _fit(coords, found, keep):
     return matrix, float(error.mean()), float(error.max())
 
 
-def _score_fullness(coords, found, matrix, spec,
-                    fill_range=(FULL_CELL_FILL, MAX_FULL_CELL_FILL)):
+def _score_fullness(coords, found, matrix, spec, image_size=None,
+                    fill_range=(FULL_CELL_FILL, MAX_FULL_CELL_FILL),
+                    edge_margin=DEFAULT_EDGE_MARGIN):
     """Mark each assigned rectangle full or partial against the fitted lattice.
 
     Local by construction: the predicted footprint at one corner of a tilted
     sheet is smaller than at the other, and comparing each block only with its
     own prediction is what lets a single threshold work across the frame.
+
+    When ``image_size`` is given, a cell whose *full* projected footprint comes
+    within ``edge_margin`` of its own size of the frame border - or crosses it -
+    is flagged ``edge_clipped`` and cannot be full. That is stricter than the
+    ``clipped`` flag from :func:`_components`, which only fires once the observed
+    contour itself runs off the array.
     """
     half = np.float32([[-spec.fill_x / 2, -spec.fill_y / 2],
                        [spec.fill_x / 2, -spec.fill_y / 2],
                        [spec.fill_x / 2, spec.fill_y / 2],
                        [-spec.fill_x / 2, spec.fill_y / 2]])
+    cell_box = np.float32([[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]])
     if not spec.short_is_x:
         half = half[:, ::-1].copy()
+        cell_box = cell_box[:, ::-1].copy()
+    check_edges = image_size is not None and edge_margin > 0
+    if check_edges:
+        width, height = image_size
     for index, (i, j) in coords.items():
         quad = cv2.perspectiveTransform(
             (half + np.float32([i, j])).reshape(-1, 1, 2), matrix).reshape(-1, 2)
         predicted = abs(cv2.contourArea(quad.astype(np.float32)))
         rect = found[index]
         rect["fill"] = rect["area"] / predicted if predicted > 0 else 0.0
+
+        edge_clipped = False
+        if check_edges:
+            cq = cv2.perspectiveTransform(
+                (cell_box + np.float32([i, j])).reshape(-1, 1, 2),
+                matrix).reshape(-1, 2)
+            margin_x = edge_margin * (cq[:, 0].max() - cq[:, 0].min())
+            margin_y = edge_margin * (cq[:, 1].max() - cq[:, 1].min())
+            edge_clipped = bool(
+                cq[:, 0].min() < margin_x or cq[:, 1].min() < margin_y
+                or cq[:, 0].max() > width - margin_x
+                or cq[:, 1].max() > height - margin_y)
+        rect["edge_clipped"] = edge_clipped
         rect["full"] = (fill_range[0] <= rect["fill"] <= fill_range[1]
-                        and not rect["clipped"])
+                        and not rect["clipped"] and not edge_clipped)
 
 
 def _largest_solid_block(full):
@@ -1227,20 +1267,20 @@ def _predicted_ink_cells(coords, found, matrix, spec, green, magenta):
 
 def _choose_windows(coords, found, need_i, need_j, image_size, matrix,
                     observed_cells=None):
-    """Return every strongly supported window on the bottom-left row span.
+    """Return every strongly supported mode-sized window in the fitted lattice.
 
-    An oversized physical sheet can contain more than one overlapping 10x6
-    calibration grid.  The old detector silently chose the first *perfect*
-    window, which made a single underlit edge cell both hide the absolute-left
-    choice and move the calibration one column.  Here the larger fitted lattice
-    supplies the geometry and each window supplies independent coverage.
+    An oversized physical sheet contains more than one overlapping copy of the
+    mode's coordinate map.  The larger fitted lattice supplies the geometry and
+    each candidate window supplies its own coverage: a window needs at least
+    95% physical coverage, at most one missing observation per row and column,
+    and observations on every boundary.
 
-    The long-axis span is still unambiguous: it must touch the lattice edge
-    whose projected corner is nearest image bottom-left.  Alternatives are
-    therefore horizontal/short-axis shifts only.  A window needs at least 95%
-    physical coverage, at most one missing observation per row and column, and
-    observations on every boundary.  Those constraints admit the raw rig
-    capture's 59/60 left window without admitting its clipped seventh row.
+    Every window that clears those gates is returned, swept across BOTH axes -
+    not just short-axis shifts off one anchored long edge - so the operator can
+    pick any sub-grid of an oversized sheet.  They are ordered by the distance
+    from image bottom-left to the window corner nearest it, so index 0 stays the
+    bottom-left-most choice the single-window callers have always taken, and the
+    later indices are the shifted alternatives.
     """
     full = {coords[i]: i for i in coords if found[i]["full"]}
     if not full:
@@ -1251,15 +1291,6 @@ def _choose_windows(coords, found, need_i, need_j, image_size, matrix,
     i_values = [key[0] for key in full]
     j_values = [key[1] for key in full]
 
-    # The nearest observed lattice point establishes only the long-axis edge.
-    # Its short-axis coordinate must remain free, otherwise an 11-column sheet
-    # could never expose both overlapping 10-column choices.
-    nearest_key = min(
-        full,
-        key=lambda key: float(np.linalg.norm(
-            np.asarray(found[full[key]]["center"]) - bottom_left)),
-    )
-    anchor_j = nearest_key[1]
     minimum = math.ceil(MIN_WINDOW_COVERAGE * need_i * need_j - 1e-9)
     choices = []
     for i0 in range(min(i_values), max(i_values) - need_i + 2):
@@ -1295,8 +1326,6 @@ def _choose_windows(coords, found, need_i, need_j, image_size, matrix,
             corner_index = int(np.argmin(np.linalg.norm(projected - bottom_left,
                                                          axis=1)))
             corner = corners[corner_index]
-            if corner[1] != anchor_j:
-                continue
             distance = float(np.linalg.norm(projected[corner_index] - bottom_left))
             choices.append((distance, -observed, (i0, j0), corner, observed))
 
@@ -1400,6 +1429,8 @@ def detect_color_grids(frame: np.ndarray, spec: ColorGridSpec | None = None, *,
                        recovery_fill_range=RECOVERY_FILL_RANGE,
                        neighbour_hops=(1,),
                        balance: bool = True,
+                       edge_margin: float = DEFAULT_EDGE_MARGIN,
+                       max_windows: int = MAX_WINDOWS,
                        evidence: bool = False) -> tuple[ColorGridCalibration, ...]:
     """Find every strongly supported grid window in ``frame``.
 
@@ -1470,14 +1501,21 @@ def detect_color_grids(frame: np.ndarray, spec: ColorGridSpec | None = None, *,
         raise ColorGridError("not enough whole blocks to fit the sheet",
                              stage="fit", candidates=boxes(),
                              lattice=boxes(coords))
-    _score_fullness(coords, found, matrix, spec, full_fill_range)
+    # First pass has no edge check: the refit below needs whole-cell anchors,
+    # and an aggressive margin on a still-rough matrix could starve it.
+    _score_fullness(coords, found, matrix, spec, None, full_fill_range,
+                    edge_margin=0.0)
     matrix, mean_error, max_error = _fit(coords, found, lambda i: found[i]["full"])
     if matrix is None:
         raise ColorGridError(
             "no whole cells: every block in view is clipped by the paper edge, "
             "the frame edge, or something lying across the sheet",
             stage="fit", candidates=boxes(), lattice=boxes(coords))
-    _score_fullness(coords, found, matrix, spec, full_fill_range)
+    # Second pass, on the refined matrix, is the authoritative one: it drives
+    # _choose_windows, the ink-recovery stencil, the metrics and every returned
+    # cell. The frame-border margin belongs here.
+    _score_fullness(coords, found, matrix, spec, work_size, full_fill_range,
+                    edge_margin=edge_margin)
 
     metrics.residual_px = mean_error / scale
     metrics.max_residual_px = max_error / scale
@@ -1532,6 +1570,8 @@ def detect_color_grids(frame: np.ndarray, spec: ColorGridSpec | None = None, *,
         coords, found, matrix, spec, green, magenta)
     windows = _choose_windows(
         coords, found, need_i, need_j, work_size, matrix, predicted_ink)
+    if max_windows and len(windows) > max_windows:
+        windows = windows[:max_windows]
     if not windows and evidence:
         evidence_window = _choose_evidence_window(
             coords, found, need_i, need_j, work_size, matrix, spec)
@@ -1592,6 +1632,7 @@ def detect_color_grids(frame: np.ndarray, spec: ColorGridSpec | None = None, *,
                 fill=rect.get("fill", 0.0),
                 full=bool(rect.get("full", False)),
                 cell=(col, row) if inside and rect.get("full") else None,
+                edge_clipped=bool(rect.get("edge_clipped", False)),
             ))
         cells.sort(key=lambda c: (c.cell is None, c.cell or (0, 0)))
         candidate_metrics = replace(
@@ -1621,6 +1662,8 @@ def detect_color_grid(frame: np.ndarray, spec: ColorGridSpec | None = None, *,
                       recovery_fill_range=RECOVERY_FILL_RANGE,
                       neighbour_hops=(1,),
                       balance: bool = True,
+                      edge_margin: float = DEFAULT_EDGE_MARGIN,
+                      max_windows: int = MAX_WINDOWS,
                       evidence: bool = False,
                       window_index: int = 0) -> ColorGridCalibration:
     """Find one printed-grid window, selected from all valid candidates.
@@ -1638,6 +1681,7 @@ def detect_color_grid(frame: np.ndarray, spec: ColorGridSpec | None = None, *,
         full_fill_range=full_fill_range,
         recovery_fill_range=recovery_fill_range,
         neighbour_hops=neighbour_hops, balance=balance,
+        edge_margin=edge_margin, max_windows=max_windows,
         evidence=evidence,
     )
     if not 0 <= window_index < len(calibrations):

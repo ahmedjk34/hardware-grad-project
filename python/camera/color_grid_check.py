@@ -62,6 +62,7 @@ from rig.config import CONFIG_PATH, GRID_MODES, load as load_rig_config  # noqa:
 from rig.grid import MachineGrid  # noqa: E402
 from vision.camera_source import LatestFramePump, open_camera  # noqa: E402
 from vision.color_grid import (  # noqa: E402
+    DEFAULT_EDGE_MARGIN,
     DEFAULT_HOME_CONVENTION,
     HOME_CONVENTIONS,
     ColorGridError,
@@ -103,6 +104,11 @@ def parse_args():
                              f"(default: {DEFAULT_HOME_CONVENTION})")
     parser.add_argument("--grid-window", type=int, default=1, metavar="N",
                         help="initial detected grid window, 1-based (default: 1)")
+    parser.add_argument("--edge-margin", type=float, default=DEFAULT_EDGE_MARGIN,
+                        metavar="F",
+                        help="how far a whole cell must stay from the frame "
+                             "border, as a fraction of its own size (default: "
+                             f"{DEFAULT_EDGE_MARGIN}); 0 keeps every visible cell")
     parser.add_argument("--process-width", type=int, default=0,
                         help="detection working width; 0 uses the full frame "
                              "(default: 0 for stills, 1024 for the camera)")
@@ -200,7 +206,8 @@ def run_still(args, spec, grid):
           "convention": args.home_convention, "selection": args.grid_window - 1}
     try:
         calibrations = detect_printed_grids(
-            frame, spec, process_width=args.process_width)
+            frame, spec, process_width=args.process_width,
+            edge_margin=args.edge_margin)
         if ui["selection"] >= len(calibrations):
             raise ColorGridError(
                 f"grid window {args.grid_window} requested, but only "
@@ -398,7 +405,8 @@ def run_camera(args, spec, grid):
                 last_detect = now
                 try:
                     calibrations = detect_printed_grids(
-                        view, spec, process_width=process_width)
+                        view, spec, process_width=process_width,
+                        edge_margin=args.edge_margin)
                     ui["calibrations"] = calibrations
                     if ui["selection"] < len(calibrations):
                         calibration = calibrations[ui["selection"]]
@@ -441,6 +449,9 @@ def main():
             or args.detect_hz <= 0 or args.grid_window <= 0):
         print("display-scale, opencv-threads and detect-hz must be positive",
               file=sys.stderr)
+        return 1
+    if not 0 <= args.edge_margin <= 1:
+        print("edge-margin must be between 0 and 1", file=sys.stderr)
         return 1
     cv2.setNumThreads(args.opencv_threads)
 

@@ -44,8 +44,8 @@ A printed sheet of alternating **green** and **magenta** blocks on white paper.
 
 | property | value | why |
 | --- | --- | --- |
-| cell size | vertical **2.2 × 7.5 cm**; horizontal **7.5 × 2.2 cm** | that mode's own `grid.modes.<mode>.block_x_cm` × `block_y_cm` |
-| inner margin | **0.5 cm** between any two blocks | that mode's `gap_x_cm` / `gap_y_cm` |
+| cell size | vertical **2.2 × 7.5 cm**; horizontal **7.5 × 2.2 cm** — obsolete; now **2.2 × 6.0** / **6.0 × 2.2** | that mode's own `grid.modes.<mode>.block_x_cm` × `block_y_cm` |
+| inner margin | now **1.6 cm along X, 0.8 cm along Y** (was 0.5 / 0.5) | that mode's `gap_x_cm` / `gap_y_cm` |
 | colours | strong green and strong magenta, alternating like a chessboard | far apart in hue; the alternation is a free consistency check |
 | size | **larger than the grid**, deliberately | so it works at any camera height without reprinting |
 
@@ -83,11 +83,18 @@ pass.
 
 ### R3 — Margins
 
-- The **inner** 0.5 cm margins are real white paper and must be reproduced by
-  the virtual grid. A pixel in a gap belongs to no cell.
+- The **inner** margins (1.6 cm along X, 0.8 cm along Y) are real white paper
+  and must be reproduced by the virtual grid. A pixel in a gap belongs to no
+  cell.
 - The **outer** margin of the sheet is not part of the project and is never
   measured. The grid ends at the outer edge of the last whole block, with no
   trailing margin — the same way the machine's grid ends at the last block edge.
+- The detector additionally discards any whole cell that sits closer than
+  `edge_margin` (a fraction of that cell's own size; default 0.5) to the
+  **frame** border, so a sheet photographed to the edge loses its outer ring
+  rather than calibrating off half-visible blocks. `edge_margin=0` keeps every
+  visible cell. This is legacy-plain-sheet only; the combined A2 target keeps
+  its own 76/80 page-plane gate.
 
 **Accept when:** `cell_at()` returns `None` inside an inner margin, and
 `outline()` traces the outer edges of the corner blocks rather than a
@@ -95,17 +102,32 @@ pitch-sized border.
 
 ### R4 — Grid size and origin
 
-Vertical is **10 columns × 6 rows** (`0..9`, `0..5`); horizontal is **4 columns
-× 16 rows** (`0..3`, `0..15`). Both are the complete coordinate map including
+Vertical is **7 columns × 6 rows** (`0..6`, `0..5`); horizontal is **3 columns
+× 11 rows** (`0..2`, `0..10`). Both are the complete coordinate map including
 zero, matching the active firmware layout. A sheet starts at `[0,0]` with **no
 outer margin**, with inner margins between every pair of neighbours.
 
-`[0,0]` is the cell nearest the **bottom-left of the image**. Both indices
-increase away from that corner.
+`[0,0]` of the **selected window** is the cell nearest the **bottom-left of the
+image**. Both indices increase away from that corner.
 
-**Accept when:** exactly 60 vertical or 64 horizontal cells are mapped,
-`[0,0]` is the bottom-left corner cell, and raising either index moves away
-from it.
+**Accept when:** exactly 42 vertical or 33 horizontal cells are mapped in the
+selected window, its `[0,0]` is the bottom-left corner cell of that window, and
+raising either index moves away from it.
+
+### R4a — Every sub-grid of an oversized sheet is offered
+
+The printed sheet is deliberately larger than its mapped extent. When it holds
+more than one full copy of the mode's coordinate map, `detect_color_grids()`
+returns **every** strongly supported window — swept across both axes, not just
+short-axis shifts off one anchored edge — ordered so index 0 is the window
+nearest image bottom-left and later indices are the shifted alternatives, up to
+`max_windows` (default 16). `detect_color_grid(..., window_index=n)` and the
+`,` / `.` keys in `color_grid_check.py` select among them; `k` calibrates the
+selected one.
+
+**Accept when:** an oversized sheet yields multiple windows differing on both
+axes, index 0 is the bottom-left-most, and a `--grid-window` / `,` `.` choice
+is the window that gets saved.
 
 ### R5 — Which axis is X
 
@@ -184,7 +206,7 @@ interior cells virtually.
 **Accept when:** `e` starts a fresh session, Space accepts one frame, and `k`
 writes the ordinary mode-keyed `workspace_map.json` only after at least two
 accepted frames (each later frame overlapping four earlier physical cells), at
-least 60% of that mode's physical cells (36/60 vertical; 39/64 horizontal), all
+least 60% of that mode's physical cells (26/42 vertical; 20/33 horizontal), all
 four corner regions, at least half of each short edge and 30% of each long edge,
 <=2 px mean / <=6 px max merged residual and <=3 px cross-frame spread.
 Physical cells are solid green; virtual cells are amber and dashed. `x`
@@ -227,7 +249,7 @@ a future reader will otherwise assume the current answer was obvious.
 The spec said *"only calibrate on the vertical"* and also *"the 7.5 cm is on
 the Y side"*, and the two filenames appear to say the opposite of each other.
 
-Resolved by geometry, not by the filename. A 10 × 6 grid needs **6 whole cells
+Resolved by geometry, not by the filename. A 7 × 6 grid needs **6 whole cells
 along the 7.5 cm axis**. `original_image_VERTICAL.jpeg` has 7; the horizontal
 one has 5. Only one of the two can hold the grid at all, and it is the one the
 spec named. The rule *"the 7.5 cm side is Y"* is what the code implements; the
@@ -237,12 +259,12 @@ filenames are not consulted.
 
 **The single most important thing in this document.**
 
-The sheet prints a real 2.2 × 7.5 cm block at coordinate zero. The firmware
-does not: its zero is the home *point*, with only a 0.5 cm gap before cell 1.
+The sheet prints a real 2.2 × 6.0 cm block at coordinate zero. The firmware
+does not: its zero is the home *point*, with only the gap before cell 1.
 
 ```text
 sheet X = 10 × 2.2 + 9 × 0.5 = 26.5 cm      rig X = 9 × 2.7 = 24.3 cm
-sheet Y =  6 × 7.5 + 5 × 0.5 = 47.5 cm      rig Y = 5 × 8.0 = 40.0 cm
+sheet Y =  6 × 6.0 + 5 × 0.8 = 40.0 cm      rig Y = 5 × 6.8 = 34.0 cm  (trim 0)
 ```
 
 So the printed grid is one block wider on X and one block taller on Y than the
@@ -265,7 +287,7 @@ trims say, not by a fixed number — which is why
 `tests/test_color_grid.py` derives the expected offset from the grid rather
 than hard-coding it.
 
-### A3 — Which 10 × 6 window of an oversized sheet
+### A3 — Which mode-sized window of an oversized sheet
 
 The sheet holds far more cells than the grid needs. Resolved by taking the
 block of whole cells whose corner is nearest the **bottom-left of the image**,
@@ -303,7 +325,7 @@ homographies, and on one real frame from the rig.
 | R1 detect and fit | done — 1.13 px mean residual on the training capture |
 | R2 whole cells only | done — partials excluded; short frames refused |
 | R3 margins | done — inner margins return `None`, outer never measured |
-| R4 10 × 6 / 4 × 16, `[0,0]` bottom-left | done |
+| R4 7 × 6 / 3 × 11, `[0,0]` bottom-left; R4a all sub-grids offered | done |
 | R5 axis from explicit mode + cell size | done — survives a 90° input rotation |
 | R6 modular core | done |
 | R7 verification tool | done — live path **not verified on hardware** |

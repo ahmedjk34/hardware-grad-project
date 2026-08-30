@@ -164,14 +164,31 @@ def draw_color_grid(frame: np.ndarray, calibration: ColorGridCalibration, *,
 
 
 def draw_grid_alternatives(frame: np.ndarray, calibrations, selected_index: int):
-    """Outline every non-selected valid window and label its selection number."""
+    """Outline every valid sub-grid window so the operator can pick one.
+
+    Non-selected windows are thin and dashed-looking in the alternate colour
+    with their ``,``/``.`` selection number; the selected one gets a bold
+    outline in the mapped colour so it reads as the current choice. A count is
+    stamped top-right when there is more than one.
+    """
+    total = len(calibrations)
     for index, calibration in enumerate(calibrations):
         if index == selected_index:
             continue
         outline = _quad(calibration.outline())
-        cv2.polylines(frame, [outline], True, ALTERNATE_COLOR, 2, cv2.LINE_AA)
+        cv2.polylines(frame, [outline], True, ALTERNATE_COLOR, 1, cv2.LINE_AA)
         x, y = outline.mean(axis=0).astype(int)
-        _stamp(frame, f"GRID {index + 1}", (x - 28, y), ALTERNATE_COLOR, 0.5)
+        _stamp(frame, f"{index + 1}", (x - 6, y), ALTERNATE_COLOR, 0.6)
+
+    if 0 <= selected_index < total:
+        outline = _quad(calibrations[selected_index].outline())
+        cv2.polylines(frame, [outline], True, MAPPED_COLOR, 3, cv2.LINE_AA)
+
+    if total > 1:
+        text = f"GRID {selected_index + 1}/{total}  (, .)"
+        (tw, _), _ = cv2.getTextSize(text, FONT, 0.5, 1)
+        _stamp(frame, text, (frame.shape[1] - tw - 10, 20),
+               ALTERNATE_COLOR, 0.5)
 
 
 def draw_candidates(frame: np.ndarray, error, *, labels=True):

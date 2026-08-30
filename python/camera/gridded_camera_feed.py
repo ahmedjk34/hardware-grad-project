@@ -81,6 +81,7 @@ from rig.workspace import CORNER_NAMES, WORKSPACE_MAP_PATH, WorkspaceMap  # noqa
 from vision.block_detector import detect_blocks  # noqa: E402
 from vision.analysis_worker import AnalysisWorker  # noqa: E402
 from vision.color_grid import (  # noqa: E402
+    DEFAULT_EDGE_MARGIN,
     DEFAULT_HOME_CONVENTION,
     HOME_CONVENTIONS,
     ColorGridError,
@@ -125,7 +126,8 @@ PAPER_GRID_HZ = 3.0
 PAPER_OVERLAY_WIDTH = 1024
 
 
-def analyze_paper_grid(frame, spec, process_width=PAPER_OVERLAY_WIDTH):
+def analyze_paper_grid(frame, spec, process_width=PAPER_OVERLAY_WIDTH,
+                       edge_margin=DEFAULT_EDGE_MARGIN):
     """AnalysisWorker adapter for the printed sheet.
 
     Returns one ``(calibration, error)`` pair. AnalysisWorker turns whatever an
@@ -134,7 +136,8 @@ def analyze_paper_grid(frame, spec, process_width=PAPER_OVERLAY_WIDTH):
     a value instead of raised, and survives the trip back to the UI intact.
     """
     try:
-        return ((detect_printed_grids(frame, spec, process_width=process_width), None),)
+        return ((detect_printed_grids(frame, spec, process_width=process_width,
+                                      edge_margin=edge_margin), None),)
     except ColorGridError as exc:
         return ((None, exc),)
 
@@ -147,10 +150,12 @@ class PaperGridTracker:
     """
 
     def __init__(self, spec, *, max_hz=PAPER_GRID_HZ,
-                 process_width=PAPER_OVERLAY_WIDTH):
+                 process_width=PAPER_OVERLAY_WIDTH,
+                 edge_margin=DEFAULT_EDGE_MARGIN):
         self.spec = spec
         self.enabled = False
         self.process_width = process_width
+        self.edge_margin = edge_margin
         self._worker = AnalysisWorker(analyze_paper_grid, max_hz=max_hz,
                                       name="paper-grid")
         self._calibration = None
@@ -185,7 +190,8 @@ class PaperGridTracker:
     def submit(self, frame, sequence, generation):
         if self.enabled:
             self._worker.submit(frame, sequence, generation, spec=self.spec,
-                                process_width=self.process_width)
+                                process_width=self.process_width,
+                                edge_margin=self.edge_margin)
 
     def poll(self, generation):
         """Adopt the newest result that belongs to the current map geometry."""
@@ -361,6 +367,11 @@ def parse_args():
                         default=DEFAULT_HOME_CONVENTION,
                         help="where the machine origin sits on the printed sheet "
                              f"(default: {DEFAULT_HOME_CONVENTION})")
+    parser.add_argument("--edge-margin", type=float, default=DEFAULT_EDGE_MARGIN,
+                        metavar="F",
+                        help="printed-sheet: clear space a whole cell must keep "
+                             "from the frame border, as a fraction of its own "
+                             f"size (default: {DEFAULT_EDGE_MARGIN}; 0 disables)")
     parser.add_argument("--paper-hz", type=float, default=PAPER_GRID_HZ,
                         help=f"printed-sheet detection rate (default: {PAPER_GRID_HZ})")
     parser.add_argument("--analysis-hz", type=float, default=10.0)
@@ -643,7 +654,8 @@ def main():
         "evidence_capture": False,
         "message": "ready",
     }
-    paper = PaperGridTracker(paper_spec, max_hz=args.paper_hz)
+    paper = PaperGridTracker(paper_spec, max_hz=args.paper_hz,
+                             edge_margin=args.edge_margin)
     evidence = PrintedGridEvidence(paper_spec)
 
     def on_mouse(event, point):
