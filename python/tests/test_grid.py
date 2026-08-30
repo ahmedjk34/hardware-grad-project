@@ -129,24 +129,24 @@ check("one-grid-span allocation is 22.8x34 cm",
       math.isclose(from_cfg.allocation_width_cm, 22.8)
       and math.isclose(from_cfg.allocation_height_cm, 34.0))
 check("shipped trims include horizontal pickup registration",
-      math.isclose(from_cfg.x_allocation_start_cm, 1.25)
-      and math.isclose(from_cfg.y_allocation_start_cm, 3.45))
+      math.isclose(from_cfg.x_allocation_start_cm, 1.05)
+      and math.isclose(from_cfg.y_allocation_start_cm, 3.0))
 check("first blocks begin after the centring shift plus the near gap",
-      math.isclose(from_cfg.x_start_cm, 2.85)
-      and math.isclose(from_cfg.y_start_cm, 4.25))
+      math.isclose(from_cfg.x_start_cm, 2.65)
+      and math.isclose(from_cfg.y_start_cm, 3.8))
 check("first physical cell centre",
       all(math.isclose(a, b) for a, b in
-          zip(from_cfg.cell_center_cm(1, 1), (3.95, 7.25))))
+          zip(from_cfg.cell_center_cm(1, 1), (3.75, 6.8))))
 check("last physical cell centre",
       all(math.isclose(a, b) for a, b in
-          zip(from_cfg.cell_center_cm(6, 5), (22.95, 34.45))))
+          zip(from_cfg.cell_center_cm(6, 5), (22.75, 34.0))))
 check("all placement centres remain inside holder travel",
       from_cfg.x_first_center_cm >= 0 and from_cfg.y_first_center_cm >= 0
       and from_cfg.x_last_center_cm <= from_cfg.workspace_width_cm
       and from_cfg.y_last_center_cm <= from_cfg.workspace_height_cm)
 check("block footprint stays inside the last holder centres' overhang budget",
-      math.isclose(from_cfg.x_end_cm, 24.05)
-      and math.isclose(from_cfg.y_end_cm, 37.45))
+      math.isclose(from_cfg.x_end_cm, 23.85)
+      and math.isclose(from_cfg.y_end_cm, 37.0))
 
 # ------------------------------------------------------------------
 # The dual-orientation numeric contract
@@ -172,10 +172,10 @@ SECTION_3 = {
         "gap": (1.6, 0.8),
         "pitch": (3.8, 6.8),
         "footprint": (21.20, 33.20),
-        "first_centre": (3.95, 7.25),
-        "last_centre": (22.95, 34.45),
-        "first_edge": (2.85, 4.25),
-        "last_edge": (24.05, 37.45),
+        "first_centre": (3.75, 6.80),
+        "last_centre": (22.75, 34.00),
+        "first_edge": (2.65, 3.80),
+        "last_edge": (23.85, 37.00),
         "cells": 30,
     },
     "horizontal": {
@@ -184,10 +184,10 @@ SECTION_3 = {
         "gap": (1.6, 0.8),
         "pitch": (7.6, 3.0),
         "footprint": (13.60, 29.20),
-        "first_centre": (10.75, 6.90),
-        "last_centre": (18.35, 33.90),
-        "first_edge": (7.75, 5.80),
-        "last_edge": (21.35, 35.00),
+        "first_centre": (9.15, 8.50),
+        "last_centre": (16.75, 35.50),
+        "first_edge": (6.15, 7.40),
+        "last_edge": (19.75, 36.60),
         "cells": 20,
     },
 }
@@ -250,8 +250,8 @@ def fits(mode, cols, rows):
         return False
 
 check("a 4th horizontal column cannot fit at shipped trim", not fits("horizontal", 4, 10))
-check("a 3rd horizontal column cannot fit at shipped trim", not fits("horizontal", 3, 10))
-check("horizontal Y has room past the printed 10 rows", fits("horizontal", 2, 13))
+check("a 3rd horizontal column still fits at shipped trim", fits("horizontal", 3, 10))
+check("horizontal Y has no room past the printed 10 rows", not fits("horizontal", 2, 13))
 check("a 14th horizontal row cannot fit at shipped trim", not fits("horizontal", 2, 14))
 check("a 7th vertical column cannot fit at shipped trim", not fits("vertical", 7, 5))
 check("a 7th vertical row cannot fit at shipped trim", not fits("vertical", 6, 7))
@@ -310,7 +310,7 @@ except ValueError as exc:
           "X block edges" in str(exc), str(exc))
 
 check("horizontal at the shipped trims is accepted",
-      horizontal_at(1.6, 0.0).mode == "horizontal")
+      horizontal_at(0.0, 1.6).mode == "horizontal")
 
 # Vertical keeps its half-block budget (block_x/2 = 1.1, block_y/2 = 3.0).
 check("vertical's budget is half a block on each axis",

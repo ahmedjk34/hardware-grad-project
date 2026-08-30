@@ -554,13 +554,13 @@ const bool SOFT_LIMIT_VERBOSE = true;
 // Coordinate 0 is the feeder-block centre / home reference.  The signed trims
 // move a mode's whole allocation away from (+) or toward (-) the home
 // switches. The vertical allocation is centred in travel. The horizontal
-// allocation has a deliberate +1.6 cm X registration shift: after pickup, the
+// allocation has a deliberate +1.6 cm Y registration shift: after pickup, the
 // top 2.2 cm of the vertical feeder cell is the horizontal [0,0] reference,
 // with the 1.6 cm separation between the two 2.2 cm reference regions. This
 // is a GRID TRIM, not a holder-to-tool offset. HORIZONTAL'S TRIMS ARE STILL
 // NOT VERTICAL'S AND MUST NOT BE COPIED FROM THEM.
 //
-// PHYSICAL RR REGISTRATION (X axis, positive away from X home):
+// PHYSICAL RR REGISTRATION (Y axis, positive away from Y home):
 //
 //   vertical pickup [0,0]       1.6 cm       horizontal [0,0] reference
 //   |<-------- 2.2 cm -------->|<-------->|<-------- 2.2 cm -------->|
@@ -616,14 +616,14 @@ float GRID_GAP_Y_CM[GRID_MODE_COUNT] = {0.8, 0.8};
 // Signed whole-allocation shift, per mode. Not copied between modes - see above.
 // Vertical is centred; horizontal is registered +1.6 cm in X from the
 // vertical pickup cell as documented above. Keep paired with config/rig.json.
-float GRID_TRIM_X_CM[GRID_MODE_COUNT] = {0.0, 1.6};
-float GRID_TRIM_Y_CM[GRID_MODE_COUNT] = {0.0, 0.0};
+float GRID_TRIM_X_CM[GRID_MODE_COUNT] = {0.0, 0.0};
+float GRID_TRIM_Y_CM[GRID_MODE_COUNT] = {0.0, 1.6};
 
 // AI AGENT NOTE: For any user-marked "error" offsetting, use these variables.
 // They apply exactly like GRID_TRIM_* and shift every grid centre from home.
 // Keep these paired with config/rig.json and start new error calibration at 0.
-float GRID_ERROR_OFFSET_X_CM[GRID_MODE_COUNT] = {0.5, 0.0};
-float GRID_ERROR_OFFSET_Y_CM[GRID_MODE_COUNT] = {0.45, 0.0};
+float GRID_ERROR_OFFSET_X_CM[GRID_MODE_COUNT] = {0.3, 0.0};
+float GRID_ERROR_OFFSET_Y_CM[GRID_MODE_COUNT] = {0.0, 0.0};
 
 // How far past the travel limit this mode lets a placed block's own EDGE sit.
 // This is NOT a trim: it moves nothing. It is the budget gridGeometryFits()

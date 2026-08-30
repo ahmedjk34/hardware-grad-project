@@ -152,16 +152,16 @@ Worked out for both at the shipped calibration (including trims and error offset
 
 | mode | axis | block | gap | pitch | count | footprint | centres | block edges |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| vertical | X | 2.2 | 1.6 | 3.8 | **6** | 21.20 | 3.95 → 22.95 | 2.85 → 24.05 |
-| vertical | Y | 6.0 | 0.8 | 6.8 | **5** | 33.20 | 7.25 → 34.45 | 4.25 → 37.45 |
-| horizontal | X | 6.0 | 1.6 | 7.6 | **2** | 13.60 | 10.75 → 18.35 | 7.75 → 21.35 |
-| horizontal | Y | 2.2 | 0.8 | 3.0 | **10** | 29.20 | 6.90 → 33.90 | 5.80 → 35.00 |
+| vertical | X | 2.2 | 1.6 | 3.8 | **6** | 21.20 | 3.75 → 22.75 | 2.65 → 23.85 |
+| vertical | Y | 6.0 | 0.8 | 6.8 | **5** | 33.20 | 6.80 → 34.00 | 3.80 → 37.00 |
+| horizontal | X | 6.0 | 1.6 | 7.6 | **2** | 13.60 | 9.15 → 16.75 | 6.15 → 19.75 |
+| horizontal | Y | 2.2 | 0.8 | 3.0 | **10** | 29.20 | 8.50 → 35.50 | 7.40 → 36.60 |
 
 The vertical allocation is centred in travel (`trim_x = trim_y = 0`). The
-horizontal allocation ships with `trim_x = +1.6 cm`: after pickup, the top
+horizontal allocation ships with `trim_y = +1.6 cm`: after pickup, the top
 2.2 cm of the vertical feeder `[0,0]` cell is the horizontal `[0,0]`
 reference, with a 1.6 cm separation between the two 2.2 cm reference regions.
-This is a mode-specific grid registration shift, positive away from X home;
+This is a mode-specific grid registration shift, positive away from Y home;
 it is not a tool offset and must not be added to `tool_offsets.ccw`.
 **Horizontal's trims are still not vertical's and must not be copied from
 them.**
@@ -247,9 +247,11 @@ partners in the same commit. Positive trim moves the entire grid away from its
 home/feeder reference; negative trim moves it toward that reference. The
 shipped vertical trims are `0.0` on both axes; horizontal `trim_x` is `+1.6 cm`
 for the pickup-cell-to-horizontal-grid registration described above. The
-observed vertical placement corrections are `error_offset_x = +0.5 cm` and
-`error_offset_y = +0.45 cm`, moving placements away from home because the
-previous positions were measured too close to home.
+observed vertical placement corrections are `error_offset_x = +0.3 cm` and
+`error_offset_y = 0.0 cm`. These are incremental corrections: the prior
+`+0.5/+0.45 cm` correction was reduced by the newly measured `0.2/0.45 cm`
+positive-side residual, leaving the X correction at `+0.3 cm` and cancelling
+the Y correction.
 For any user-marked **error offsetting**, use `error_offset_x_cm` and
 `error_offset_y_cm` (and the paired firmware variables) as an additional
 signed shift exactly like the grid trim.
