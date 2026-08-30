@@ -635,27 +635,51 @@ def sample_ink_colors(frame: np.ndarray, *, min_saturation: int = MIN_SATURATION
         raise ColorGridError("a three-channel BGR frame is required")
     height, width = frame.shape[:2]
     balanced = white_balance(frame)
-    green, magenta = color_masks(balanced, min_saturation=min_saturation,
-                                 min_value=min_value, balance=False)
 
-    # Only sample things shaped like a printed cell. Under a bad enough cast the
-    # wall behind the rig lands inside the magenta window, and it is far larger
-    # than every real cell put together — averaging it in would measure the wall
-    # and call it ink. Shape is what tells them apart.
-    found = _components(green, magenta, MIN_COMPONENT_AREA, (width, height))
-    keep = [rect for rect in found
-            if SHEET_ASPECT_RANGE[0]
-            <= rect["long_len"] / max(rect["short_len"], 1e-6)
-            <= SHEET_ASPECT_RANGE[1]]
-    if keep:
-        areas = np.array([rect["area"] for rect in keep])
-        median = float(np.median(areas))
-        keep = [rect for rect, area in zip(keep, areas)
-                if 0.5 * median <= area <= 1.8 * median]
+    def cell_blobs(**mask_kwargs):
+        """Cell-shaped green/magenta blobs, filtered to one modal area."""
+        g, m = color_masks(balanced, min_value=min_value, balance=False,
+                           **mask_kwargs)
+        # Only sample things shaped like a printed cell. Under a bad enough cast
+        # the wall behind the rig lands inside the magenta window, far larger
+        # than every real cell put together — averaging it in would measure the
+        # wall and call it ink. Shape is what tells them apart.
+        blobs = [rect for rect in _components(g, m, MIN_COMPONENT_AREA,
+                                              (width, height))
+                 if SHEET_ASPECT_RANGE[0]
+                 <= rect["long_len"] / max(rect["short_len"], 1e-6)
+                 <= SHEET_ASPECT_RANGE[1]]
+        # Reject outliers against each ink's OWN modal area, not a shared one:
+        # under a cast one ink often fragments into smaller pieces than the
+        # other, and a shared median would then drop every blob of the weaker
+        # colour and leave the sampler with two of the three materials.
+        kept = []
+        for colour in ("green", "magenta"):
+            same = [rect for rect in blobs if rect["color"] == colour]
+            if not same:
+                continue
+            median = float(np.median([rect["area"] for rect in same]))
+            kept += [rect for rect in same
+                     if 0.5 * median <= rect["area"] <= 1.8 * median]
+        return kept
+
+    # First the plain hue window. If a strong camera cast has hidden one ink
+    # entirely - which is exactly the frame `colourcal` exists to fix, so it
+    # cannot just be refused - fall back to the cast-invariant channel-order
+    # classifier at a low saturation floor.
+    keep = cell_blobs(min_saturation=min_saturation)
+    inks = {rect["color"] for rect in keep}
+    if inks < {"green", "magenta"}:
+        recovered = cell_blobs(min_saturation=max(6, min_saturation // 4),
+                               channel_order=True)
+        if len({rect["color"] for rect in recovered}) >= len(inks):
+            keep = recovered
     if not keep:
         raise ColorGridError(
             "nothing on the sheet is shaped like a printed cell; is the sheet "
-            "in frame, and is it roughly in focus?")
+            "in frame, roughly in focus, and filling most of the view? A "
+            "strong uncorrected camera cast can also hide it — try `wb` first, "
+            "or point the camera at a few big solid green/magenta swatches")
 
     cores = {}
     for name in ("green", "magenta"):
@@ -670,26 +694,68 @@ def sample_ink_colors(frame: np.ndarray, *, min_saturation: int = MIN_SATURATION
 
     ink = np.zeros((height, width), np.uint8)
     cv2.fillPoly(ink, [rect["box"].astype(np.int32) for rect in keep], 255)
-    # The margins: a ring around the ink that is itself not ink, and that looks
-    # like paper rather than like whatever the sheet is lying on.
-    ring = cv2.dilate(ink, np.ones((9, 9), np.uint8), iterations=1).astype(bool)
+    ink_bool = ink.astype(bool)
+    # The margins: a ring around the ink that is itself not ink. A wider ring
+    # than the paper needs, so the warm "beige" band that the combined target
+    # prints between perpendicular fiducials falls inside it too.
+    ring = cv2.dilate(ink, np.ones((15, 15), np.uint8), iterations=1).astype(bool)
     hsv = cv2.cvtColor(balanced, cv2.COLOR_BGR2HSV)
-    pale = (hsv[:, :, 1] < min_saturation) & (hsv[:, :, 2] >= min_value)
-    paper_core = ring & ~ink.astype(bool) & pale
+    sat, val = hsv[:, :, 1], hsv[:, :, 2]
+    pale = (sat < min_saturation) & (val >= min_value)
+    outside = ring & ~ink_bool & (val >= min_value)
+    paper_core = outside & pale
+    # Beige: pale but not neutral, and warm (red clearly the strongest channel
+    # in BOTH the raw and the balanced frame, so a cast cannot fake it). The
+    # combined sheet's off-white lanes; a distinct tone from true paper.
+    b_raw, g_raw, r_raw = (frame[:, :, i].astype(np.int16) for i in range(3))
+    b_bal, g_bal, r_bal = (balanced[:, :, i].astype(np.int16) for i in range(3))
+    warm = ((r_raw - b_raw) >= 10) & (r_raw >= g_raw) & ((r_bal - b_bal) >= 4)
+    beige_core = outside & warm & (sat < min_saturation + 12)
     green_core, magenta_core = cores["green"], cores["magenta"]
 
     colors, counts, spread = {}, {}, {}
-    for name, mask in (("green", green_core), ("magenta", magenta_core),
-                       ("paper", paper_core)):
+
+    def take(name, mask, floor=min_pixels):
         pixels = frame[mask]
-        if len(pixels) < min_pixels:
-            continue
+        if len(pixels) < floor:
+            return
         values = pixels.astype(np.float64)
         mean = values.mean(axis=0)
         colors[name] = tuple(float(v) for v in mean)
         counts[name] = int(len(values))
         spread[name] = float(np.sqrt(np.mean(np.sum((values - mean) ** 2, axis=1))))
-    if len(colors) < 2:
+
+    for name, mask in (("green", green_core), ("magenta", magenta_core),
+                       ("paper", paper_core)):
+        take(name, mask)
+
+    # Best-effort EXTRA correspondences. Each printed fiducial has a dark accent
+    # third and two muted "off-white-ish" thirds blended toward the paper, and
+    # the combined sheet prints a warm beige lane. More non-degenerate colour
+    # pairs make the 3x3 fit a real least squares rather than an exactly
+    # determined one. Only kept when they are meaningfully different from a
+    # colour already sampled - a duplicate adds nothing and can rank-degrade the
+    # matrix, and a flat solid swatch legitimately has no sub-tones.
+    def take_distinct(name, mask, floor):
+        take(name, mask, floor)
+        if name not in colors:
+            return
+        here = np.array(colors[name])
+        if any(float(np.linalg.norm(here - np.array(colors[other]))) < 8.0
+               for other in colors if other != name):
+            del colors[name], counts[name], spread[name]
+
+    take_distinct("beige", beige_core, min_pixels)
+    for base, core in (("green", green_core), ("magenta", magenta_core)):
+        core_vals = val[core]
+        if core_vals.size < 4 * min_pixels:
+            continue
+        dark_cut = float(np.percentile(core_vals, 35))
+        muted_cut = float(np.percentile(core_vals, 60))
+        take_distinct(f"{base}_dark", core & (val <= dark_cut), min_pixels // 2)
+        take_distinct(f"{base}_muted", core & (val >= muted_cut), min_pixels // 2)
+
+    if len({n for n in colors if n in ("green", "magenta", "paper")}) < 2:
         raise ColorGridError(
             f"only found {', '.join(colors) or 'nothing'} on the sheet; at least "
             f"two of green ink, magenta ink and paper have to be visible")

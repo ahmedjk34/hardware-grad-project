@@ -107,25 +107,36 @@ frame, not touch any edge.
 
 ### 2. Colour — the one that matters
 
-Take a **phone photo of the exact same printed sheet** in even light. Then:
+Take a **phone photo of the exact same printed sheet** in even light — e.g.
+`python/captures/COLOR_SAMPLE.jpeg`. Point the **rig camera** at that same sheet,
+filling most of the frame and roughly in focus, then:
 
 ```
-colourmode matrix       # full linear 3x3 — nine numbers from three colours
-colourcal /path/to/phone_photo.jpg
+colourmode matrix       # full linear 3x3
+colourcal captures/COLOR_SAMPLE.jpeg
 colourinfo              # read the residual and any warnings
 ```
 
-`colourcal` measures green ink, magenta ink and white paper in *both* images and
-solves the transform that maps the rig camera's version onto the phone's. `matrix`
-mode is the strongest fit; if `colourinfo` complains the matrix is implausible,
-fall back to `colourmode affine` then `colourmode gain` and re-run.
+`colourcal` measures the sheet's colours in the **live rig frame** and in the
+reference photo and solves the transform between them. The sampler now pulls up
+to eight tones from the combined target — `green`, `green_dark`, `green_muted`,
+`magenta`, `magenta_dark`, `magenta_muted`, the warm `beige` lane and `paper` —
+and pairs whichever appear in both images. More tones ⇒ a better-conditioned
+`matrix` fit. It only needs the rig frame to show **any two** of green / magenta
+/ paper cleanly; it falls back to a cast-invariant channel-order classifier at a
+low saturation floor when the plain hue window has lost one ink.
 
-If you have no phone photo, `wb` (white-balance off the sheet's own paper) is the
-fallback — but on this cast it is weak; expect to still need most of the sensor
-changes below.
+If `colourcal` still errors that not enough colours were found in the live frame:
 
-After the fit, `colour on` (it auto-enables) and eyeball the preview: the green
-ink should read green, the paper should read white.
+- run `wb` first (needs only the paper) — that rough correction often makes the
+  ink visible enough for a follow-up `colourcal`;
+- or `colourmode gain` (needs one shared colour) / `colourmode affine` (two),
+  apply it, then re-run `colourcal matrix` on the now-corrected preview;
+- or point the rig camera at a page of a few **big solid** green / magenta /
+  white swatches (5 cm+) instead of the fine woven target.
+
+After the fit, `colour on` (it auto-enables). Eyeball the preview: green ink
+reads green, paper reads white.
 
 ### 3. Sensor — stop the camera fighting you
 
