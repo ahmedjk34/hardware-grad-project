@@ -129,24 +129,24 @@ check("one-grid-span allocation is 22.8x34 cm",
       math.isclose(from_cfg.allocation_width_cm, 22.8)
       and math.isclose(from_cfg.allocation_height_cm, 34.0))
 check("shipped trims include horizontal pickup registration",
-      math.isclose(from_cfg.x_allocation_start_cm, 0.55)
-      and math.isclose(from_cfg.y_allocation_start_cm, 2.6))
+      math.isclose(from_cfg.x_allocation_start_cm, 1.25)
+      and math.isclose(from_cfg.y_allocation_start_cm, 3.45))
 check("first blocks begin after the centring shift plus the near gap",
-      math.isclose(from_cfg.x_start_cm, 2.15)
-      and math.isclose(from_cfg.y_start_cm, 3.4))
+      math.isclose(from_cfg.x_start_cm, 2.85)
+      and math.isclose(from_cfg.y_start_cm, 4.25))
 check("first physical cell centre",
       all(math.isclose(a, b) for a, b in
-          zip(from_cfg.cell_center_cm(1, 1), (3.25, 6.4))))
+          zip(from_cfg.cell_center_cm(1, 1), (3.95, 7.25))))
 check("last physical cell centre",
       all(math.isclose(a, b) for a, b in
-          zip(from_cfg.cell_center_cm(6, 5), (22.25, 33.6))))
+          zip(from_cfg.cell_center_cm(6, 5), (22.95, 34.45))))
 check("all placement centres remain inside holder travel",
       from_cfg.x_first_center_cm >= 0 and from_cfg.y_first_center_cm >= 0
       and from_cfg.x_last_center_cm <= from_cfg.workspace_width_cm
       and from_cfg.y_last_center_cm <= from_cfg.workspace_height_cm)
 check("block footprint stays inside the last holder centres' overhang budget",
-      math.isclose(from_cfg.x_end_cm, 23.35)
-      and math.isclose(from_cfg.y_end_cm, 36.6))
+      math.isclose(from_cfg.x_end_cm, 24.05)
+      and math.isclose(from_cfg.y_end_cm, 37.45))
 
 # ------------------------------------------------------------------
 # The dual-orientation numeric contract
@@ -172,10 +172,10 @@ SECTION_3 = {
         "gap": (1.6, 0.8),
         "pitch": (3.8, 6.8),
         "footprint": (21.20, 33.20),
-        "first_centre": (3.25, 6.40),
-        "last_centre": (22.25, 33.60),
-        "first_edge": (2.15, 3.40),
-        "last_edge": (23.35, 36.60),
+        "first_centre": (3.95, 7.25),
+        "last_centre": (22.95, 34.45),
+        "first_edge": (2.85, 4.25),
+        "last_edge": (24.05, 37.45),
         "cells": 30,
     },
     "horizontal": {

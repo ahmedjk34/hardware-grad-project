@@ -560,6 +560,18 @@ const bool SOFT_LIMIT_VERBOSE = true;
 // is a GRID TRIM, not a holder-to-tool offset. HORIZONTAL'S TRIMS ARE STILL
 // NOT VERTICAL'S AND MUST NOT BE COPIED FROM THEM.
 //
+// PHYSICAL RR REGISTRATION (X axis, positive away from X home):
+//
+//   vertical pickup [0,0]       1.6 cm       horizontal [0,0] reference
+//   |<-------- 2.2 cm -------->|<-------->|<-------- 2.2 cm -------->|
+//
+// The horizontal reference is the upper 2.2 cm region of the vertical
+// pickup-cell relationship, not the bare home point. RR only latches the
+// mode; the next B picks up neutral, moves using the shifted horizontal
+// centres, rotates 90 degrees CCW, then places. B 0 0 remains a no-op.
+// `GRID_GAP_X_CM = 1.6` is still the repeated cell gap and is unrelated to
+// this whole-grid registration trim.
+//
 // The horizontal X registration trim changes the X edges but remains inside
 // the zero-overhang budget. Both modes still need real-stack measurement
 // before trusting the last horizontal row of 10.
@@ -610,8 +622,8 @@ float GRID_TRIM_Y_CM[GRID_MODE_COUNT] = {0.0, 0.0};
 // AI AGENT NOTE: For any user-marked "error" offsetting, use these variables.
 // They apply exactly like GRID_TRIM_* and shift every grid centre from home.
 // Keep these paired with config/rig.json and start new error calibration at 0.
-float GRID_ERROR_OFFSET_X_CM[GRID_MODE_COUNT] = {-0.2, 0.0};
-float GRID_ERROR_OFFSET_Y_CM[GRID_MODE_COUNT] = {-0.4, 0.0};
+float GRID_ERROR_OFFSET_X_CM[GRID_MODE_COUNT] = {0.5, 0.0};
+float GRID_ERROR_OFFSET_Y_CM[GRID_MODE_COUNT] = {0.45, 0.0};
 
 // How far past the travel limit this mode lets a placed block's own EDGE sit.
 // This is NOT a trim: it moves nothing. It is the budget gridGeometryFits()

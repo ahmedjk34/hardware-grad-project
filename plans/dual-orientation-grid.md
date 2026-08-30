@@ -133,8 +133,9 @@ else, that is a signal to stop and re-read the plan.
 > `BLOCK_HEIGHT_CM` stays 1.5. Vertical is **6 × 5**, horizontal is **2 × 10**.
 > Vertical trims remain zero; horizontal ships at `trim_x = +1.6 cm` for the
 > pickup-cell registration described in D14. Vertical error offsets ship at
-> `(-0.2, -0.4) cm` for X/Y. The tables below
-> are recomputed at trim 0. The decision log (D1–D20) and §4–§8 below are the
+> `(+0.5, +0.45) cm` for X/Y, moving placements away from home because the
+> measured positions were too close to home. The tables below are recomputed
+> at the shipped calibration. The decision log (D1–D20) and §4–§8 below are the
 > original record and still describe the *mechanism*; only the numbers moved.
 > `python/tests/test_grid.py` `SECTION_3` mirrors the tables here.
 
@@ -155,8 +156,8 @@ footprint  = count * block + (count - 1) * gap
 
 | axis | block | gap | pitch | count | footprint | centres | block edges |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| X | 2.2 | 1.6 | 3.8 | **6** | 21.20 | 3.25 → 22.25 | 2.15 → 23.35 |
-| Y | 6.0 | 0.8 | 6.8 | **5** | 33.20 | 6.40 → 33.60 | 3.40 → 36.60 |
+| X | 2.2 | 1.6 | 3.8 | **6** | 21.20 | 3.95 → 22.95 | 2.85 → 24.05 |
+| Y | 6.0 | 0.8 | 6.8 | **5** | 33.20 | 7.25 → 34.45 | 4.25 → 37.45 |
 
 30 build cells; 7 × 6 addressable including the zero lanes. Block edges beyond
 travel are **expected and safe** — the holder only needs to reach each *centre*,
@@ -186,6 +187,31 @@ shift is a property of how each grid sits relative to the pickup point. A
 positive `trim_x` on the horizontal grid that keeps its last *centre* legal
 still pushes the last block *edge* past the X wall, and `gridGeometryFits`
 catches that only through the per-mode zero overhang budget. This is R2.
+
+**Pickup-cell registration (current hardware behavior).** The feeder is a
+vertical pickup cell, not a bare mathematical point. After the block is picked
+up and the claw is rotated for `RR`, the upper 2.2 cm region of the vertical
+`[0,0]` pickup cell is the horizontal `[0,0]` reference, with 1.6 cm between
+the two 2.2 cm reference regions:
+
+```text
+positive X / away from X home →
+
+vertical pickup [0,0]       1.6 cm       horizontal [0,0] reference
+┌──────────────────────┐                 ┌──────────────────────┐
+│       2.2 cm         │<--------------->│       2.2 cm          │
+│   pickup reference   │                 │   RR reference       │
+└──────────────────────┘                 └──────────────────────┘
+```
+
+That whole-layout relationship is represented by
+`horizontal.trim_x_cm = +1.6`, not by `gap_x_cm` and not by
+`tool_offsets.ccw`. `RR` only latches the mode. A build homes at the feeder,
+picks up neutral, travels using the shifted horizontal centres, rotates 90°
+CCW at the target, and releases. `B 0 0 <level>` remains an inert sentinel and
+does not physically test this reference. If later measurement places the
+registration on Y, move the correction to `horizontal.trim_y_cm`; never hide
+it inside the rotation/tool offset.
 
 **Tolerance note.** The shipped horizontal X registration remains inside its
 zero-overhang budget. Measure a real stack before trusting the last row of

@@ -152,8 +152,8 @@ Worked out for both at the shipped calibration (including trims and error offset
 
 | mode | axis | block | gap | pitch | count | footprint | centres | block edges |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| vertical | X | 2.2 | 1.6 | 3.8 | **6** | 21.20 | 3.25 → 22.25 | 2.15 → 23.35 |
-| vertical | Y | 6.0 | 0.8 | 6.8 | **5** | 33.20 | 6.40 → 33.60 | 3.40 → 36.60 |
+| vertical | X | 2.2 | 1.6 | 3.8 | **6** | 21.20 | 3.95 → 22.95 | 2.85 → 24.05 |
+| vertical | Y | 6.0 | 0.8 | 6.8 | **5** | 33.20 | 7.25 → 34.45 | 4.25 → 37.45 |
 | horizontal | X | 6.0 | 1.6 | 7.6 | **2** | 13.60 | 10.75 → 18.35 | 7.75 → 21.35 |
 | horizontal | Y | 2.2 | 0.8 | 3.0 | **10** | 29.20 | 6.90 → 33.90 | 5.80 → 35.00 |
 
@@ -165,6 +165,62 @@ This is a mode-specific grid registration shift, positive away from X home;
 it is not a tool offset and must not be added to `tool_offsets.ccw`.
 **Horizontal's trims are still not vertical's and must not be copied from
 them.**
+
+#### Pickup-cell registration diagram — do not remove
+
+The feeder/pickup area is physically a vertical block cell. When the build is
+switched to `RR`, the horizontal layout does not use the bare home point as its
+visual reference. Its reference is registered from the upper 2.2 cm region of
+the vertical pickup cell. Along the affected X direction, the relationship is:
+
+```text
+                         positive X / away from X home →
+
+        vertical pickup cell [0,0]       horizontal grid reference
+        ┌──────────────────────┐         ┌──────────────────────┐
+        │                      │         │                      │
+        │       2.2 cm         │ 1.6 cm  │       2.2 cm          │
+        │   vertical pickup    │<------->│ horizontal [0,0]     │
+        │       region         │         │ reference region     │
+        └──────────────────────┘         └──────────────────────┘
+
+        The horizontal registration shift is +1.6 cm in X.
+```
+
+This `1.6 cm` is not the ordinary cell gap. `gap_x_cm = 1.6` remains the
+repeat spacing component between horizontal cells and the gap before positive
+cell 1. `horizontal.trim_x_cm = +1.6` is a separate registration of the whole
+horizontal allocation relative to the feeder. Do not replace one with the
+other, and do not add this 1.6 cm to the CCW arm offset.
+
+The physical build sequence is:
+
+```text
+1. Home X/Y at the vertical feeder reference.
+2. Pick up the block while the claw is neutral.
+3. Move to the horizontal target using the horizontal grid coordinates.
+4. Rotate the claw 90 degrees CCW for RR mode.
+5. Lower and release at the shifted horizontal grid location.
+```
+
+`RR` itself only latches the coordinate system; it does not move the claw or
+apply the shift immediately. The shift is applied when horizontal cell centres
+are calculated for a build. `B 0 0 <level>` remains a no-op calibration
+sentinel; it does not pick up a block or physically move to the horizontal
+reference.
+
+The correction categories must remain separate:
+
+```text
+horizontal.trim_x_cm       = registration between feeder and RR grid
+tool_offsets.ccw.x_cm       = holder-to-block-centre geometry after rotation
+error_offset_x_cm           = measured whole-grid placement error
+gap_x_cm                    = repeated spacing between cells
+```
+
+The same separation applies on Y. If a future measurement shows that the
+pickup registration is actually along Y, use `horizontal.trim_y_cm` instead;
+do not silently move the correction into `tool_offsets`.
 
 Each mode also declares `max_edge_overhang_x_cm` / `_y_cm`: the budget the
 block **edges** are checked against, on both machines. It is not a trim and
@@ -191,8 +247,9 @@ partners in the same commit. Positive trim moves the entire grid away from its
 home/feeder reference; negative trim moves it toward that reference. The
 shipped vertical trims are `0.0` on both axes; horizontal `trim_x` is `+1.6 cm`
 for the pickup-cell-to-horizontal-grid registration described above. The
-observed vertical placement corrections are `error_offset_x = -0.2 cm` and
-`error_offset_y = -0.4 cm`, correcting the observed positive-side error.
+observed vertical placement corrections are `error_offset_x = +0.5 cm` and
+`error_offset_y = +0.45 cm`, moving placements away from home because the
+previous positions were measured too close to home.
 For any user-marked **error offsetting**, use `error_offset_x_cm` and
 `error_offset_y_cm` (and the paired firmware variables) as an additional
 signed shift exactly like the grid trim.
