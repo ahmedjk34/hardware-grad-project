@@ -553,17 +553,16 @@ const bool SOFT_LIMIT_VERBOSE = true;
 //
 // Coordinate 0 is the feeder-block centre / home reference.  The signed trims
 // move a mode's whole allocation away from (+) or toward (-) the home
-// switches.  Both trims ship at 0.0: the block/gap change made the old
-// measured +1.1 / +3.75 vertical shifts obsolete, so every allocation is
-// centred in travel until the feeder-centre-to-build-grid offset is
-// re-measured on the rig (per mode).  The horizontal grid is expected to want
-// a negative trim_x once measured - operators report its [0,0] sitting about
-// 1.6 cm from the pickup point.  HORIZONTAL'S TRIMS ARE STILL NOT VERTICAL'S
-// AND MUST NOT BE COPIED FROM THEM.
+// switches. The vertical allocation is centred in travel. The horizontal
+// allocation has a deliberate +1.6 cm X registration shift: after pickup, the
+// top 2.2 cm of the vertical feeder cell is the horizontal [0,0] reference,
+// with the 1.6 cm separation between the two 2.2 cm reference regions. This
+// is a GRID TRIM, not a holder-to-tool offset. HORIZONTAL'S TRIMS ARE STILL
+// NOT VERTICAL'S AND MUST NOT BE COPIED FROM THEM.
 //
-// Neither grid is flush with a wall at trim 0, so both have slack to absorb
-// per-block error - but measure a real stack before trusting the last row of
-// horizontal's 10.
+// The horizontal X registration trim changes the X edges but remains inside
+// the zero-overhang budget. Both modes still need real-stack measurement
+// before trusting the last horizontal row of 10.
 //
 // Targets are computed as absolute physical cell centres and rounded only
 // once, so sub-step rounding error never accumulates between cells.
@@ -603,16 +602,16 @@ float GRID_GAP_X_CM[GRID_MODE_COUNT] = {1.6, 1.6};
 float GRID_GAP_Y_CM[GRID_MODE_COUNT] = {0.8, 0.8};
 
 // Signed whole-allocation shift, per mode. Not copied between modes - see above.
-// Both ship at 0.0 (allocation centred in travel) pending a rig re-measurement
-// of the feeder-centre-to-build-grid offset; keep paired with config/rig.json.
-float GRID_TRIM_X_CM[GRID_MODE_COUNT] = {0.0, 0.0};
+// Vertical is centred; horizontal is registered +1.6 cm in X from the
+// vertical pickup cell as documented above. Keep paired with config/rig.json.
+float GRID_TRIM_X_CM[GRID_MODE_COUNT] = {0.0, 1.6};
 float GRID_TRIM_Y_CM[GRID_MODE_COUNT] = {0.0, 0.0};
 
 // AI AGENT NOTE: For any user-marked "error" offsetting, use these variables.
 // They apply exactly like GRID_TRIM_* and shift every grid centre from home.
 // Keep these paired with config/rig.json and start new error calibration at 0.
-float GRID_ERROR_OFFSET_X_CM[GRID_MODE_COUNT] = {0.0, 0.0};
-float GRID_ERROR_OFFSET_Y_CM[GRID_MODE_COUNT] = {0.0, 0.0};
+float GRID_ERROR_OFFSET_X_CM[GRID_MODE_COUNT] = {-0.2, 0.0};
+float GRID_ERROR_OFFSET_Y_CM[GRID_MODE_COUNT] = {-0.4, 0.0};
 
 // How far past the travel limit this mode lets a placed block's own EDGE sit.
 // This is NOT a trim: it moves nothing. It is the budget gridGeometryFits()

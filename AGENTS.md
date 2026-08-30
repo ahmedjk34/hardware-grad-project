@@ -148,22 +148,23 @@ last centre = first centre + (count − 1) × pitch
 footprint   = count × block + (count − 1) × gap
 ```
 
-Worked out for both, at the shipped `trim = 0` (allocation centred in travel):
+Worked out for both at the shipped calibration (including trims and error offsets):
 
 | mode | axis | block | gap | pitch | count | footprint | centres | block edges |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| vertical | X | 2.2 | 1.6 | 3.8 | **6** | 21.20 | 3.45 → 22.45 | 2.35 → 23.55 |
-| vertical | Y | 6.0 | 0.8 | 6.8 | **5** | 33.20 | 6.80 → 34.00 | 3.80 → 37.00 |
-| horizontal | X | 6.0 | 1.6 | 7.6 | **2** | 13.60 | 9.15 → 16.75 | 6.15 → 19.75 |
+| vertical | X | 2.2 | 1.6 | 3.8 | **6** | 21.20 | 3.25 → 22.25 | 2.15 → 23.35 |
+| vertical | Y | 6.0 | 0.8 | 6.8 | **5** | 33.20 | 6.40 → 33.60 | 3.40 → 36.60 |
+| horizontal | X | 6.0 | 1.6 | 7.6 | **2** | 13.60 | 10.75 → 18.35 | 7.75 → 21.35 |
 | horizontal | Y | 2.2 | 0.8 | 3.0 | **10** | 29.20 | 6.90 → 33.90 | 5.80 → 35.00 |
 
-**Both `trim_x` / `trim_y` ship at `0.0`.** The block/gap change made the old
-measured `+1.1` / `+3.75` vertical shifts obsolete, so each allocation is
-centred in travel until the feeder-centre-to-build-grid offset is re-measured
-on the rig, per mode. Operators report the horizontal grid's `[0,0]` sitting
-about `1.6 cm` from the pickup point, so expect its measured `trim_x` to be
-negative. **Horizontal's trims are still not vertical's and must not be copied
-from them.**
+The vertical allocation is centred in travel (`trim_x = trim_y = 0`). The
+horizontal allocation ships with `trim_x = +1.6 cm`: after pickup, the top
+2.2 cm of the vertical feeder `[0,0]` cell is the horizontal `[0,0]`
+reference, with a 1.6 cm separation between the two 2.2 cm reference regions.
+This is a mode-specific grid registration shift, positive away from X home;
+it is not a tool offset and must not be added to `tool_offsets.ccw`.
+**Horizontal's trims are still not vertical's and must not be copied from
+them.**
 
 Each mode also declares `max_edge_overhang_x_cm` / `_y_cm`: the budget the
 block **edges** are checked against, on both machines. It is not a trim and
@@ -188,12 +189,13 @@ scale, while the firmware needs it to turn cell centres into steps, so those
 centimetre values genuinely have partners on both machines. Change both
 partners in the same commit. Positive trim moves the entire grid away from its
 home/feeder reference; negative trim moves it toward that reference. The
-shipped trims are `0.0` on both axes and both modes, pending a rig
-re-measurement of the feeder-centre-to-build-grid shift; they are not
-holder-to-tool offsets.
+shipped vertical trims are `0.0` on both axes; horizontal `trim_x` is `+1.6 cm`
+for the pickup-cell-to-horizontal-grid registration described above. The
+observed vertical placement corrections are `error_offset_x = -0.2 cm` and
+`error_offset_y = -0.4 cm`, correcting the observed positive-side error.
 For any user-marked **error offsetting**, use `error_offset_x_cm` and
 `error_offset_y_cm` (and the paired firmware variables) as an additional
-signed shift exactly like the grid trim. Both start at zero.
+signed shift exactly like the grid trim.
 
 ### 3b. Grid NUMBERING — the convention, not the count
 

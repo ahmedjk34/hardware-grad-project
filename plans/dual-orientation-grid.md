@@ -37,7 +37,7 @@ quietly working around it.
 | D11 | `rig.json` gains `grid.modes.{vertical,horizontal}`, each **self-contained**. | See D12. |
 | D12 | Each mode declares `block_x_cm` and `block_y_cm` outright. There is no shared `block_width`/`block_length` that gets swapped. | A swap has to be performed identically in the firmware, in `MachineGrid`, and in the camera overlay. Three chances to get a sign or an axis backwards. Declaring both per mode removes the operation entirely. |
 | D13 | Trims, error offsets and gaps are **per mode per axis**. | X and Y were already separate. Mode is the missing dimension. |
-| D14 | Horizontal seeds at `trim_x = 0.0`, `trim_y = -0.25`. **Do not copy vertical's trims.** | Copying produces an out-of-bounds grid that the current validator accepts — see R2 in §6. |
+| D14 | Horizontal ships at `trim_x = +1.6 cm`, `trim_y = 0.0`; vertical trims remain zero. **Do not copy vertical's trims.** | The horizontal origin is registered from the pickup cell: after pickup, the top 2.2 cm of vertical `[0,0]` is horizontal `[0,0]`, separated by 1.6 cm. This is a grid-registration trim, not a tool offset. |
 | D15 | `tool_offsets` stays **separate** from trims and keeps its `neutral`/`cw`/`ccw` shape. `cw` has no grid/build route but stays in the schema. | Trim moves cell *centres* (grid layout). Tool offset moves the *holder* for a given centre (claw asymmetry). Conflating them makes calibration unfalsifiable — two knobs that both look like "shift everything". |
 | D16 | `S <cols> <rows>` survives, **scoped to the active mode** and revalidated against that mode's geometry. | Keeps the bring-up path and the reconnect handshake. |
 | D17 | One `config/workspace_map.json`, with both calibrations under keyed modes. Old flat files migrate into `modes.vertical` on read. | Keeps the two calibrations visibly in sync in one artifact. |
@@ -130,9 +130,10 @@ else, that is a signal to stop and re-read the plan.
 
 > **Superseded geometry (block/gap change).** The block plan is now
 > **2.2 × 6.0 cm** with gaps **1.6 cm along X, 0.8 cm along Y** in both modes;
-> `BLOCK_HEIGHT_CM` stays 1.5. Vertical is **6 × 5**, horizontal is **2 × 10**,
-> and both `GRID_TRIM_*` ship at **0.0** (allocation centred in travel) pending
-> a per-mode rig re-measurement of the feeder-centre shift. The tables below
+> `BLOCK_HEIGHT_CM` stays 1.5. Vertical is **6 × 5**, horizontal is **2 × 10**.
+> Vertical trims remain zero; horizontal ships at `trim_x = +1.6 cm` for the
+> pickup-cell registration described in D14. Vertical error offsets ship at
+> `(-0.2, -0.4) cm` for X/Y. The tables below
 > are recomputed at trim 0. The decision log (D1–D20) and §4–§8 below are the
 > original record and still describe the *mechanism*; only the numbers moved.
 > `python/tests/test_grid.py` `SECTION_3` mirrors the tables here.
@@ -144,32 +145,32 @@ The firmware model:
 ```text
 pitch      = block + gap
 allocation = count * pitch
-start      = (travel - allocation) / 2 + trim
+start      = (travel - allocation) / 2 + trim + error_offset
 firstCentre= start + gap + block/2
 lastCentre = firstCentre + (count - 1) * pitch
 footprint  = count * block + (count - 1) * gap
 ```
 
-### Vertical — 6 × 5, at trim 0
+### Vertical — 6 × 5, shipped calibration
 
 | axis | block | gap | pitch | count | footprint | centres | block edges |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| X | 2.2 | 1.6 | 3.8 | **6** | 21.20 | 3.45 → 22.45 | 2.35 → 23.55 |
-| Y | 6.0 | 0.8 | 6.8 | **5** | 33.20 | 6.80 → 34.00 | 3.80 → 37.00 |
+| X | 2.2 | 1.6 | 3.8 | **6** | 21.20 | 3.25 → 22.25 | 2.15 → 23.35 |
+| Y | 6.0 | 0.8 | 6.8 | **5** | 33.20 | 6.40 → 33.60 | 3.40 → 36.60 |
 
 30 build cells; 7 × 6 addressable including the zero lanes. Block edges beyond
 travel are **expected and safe** — the holder only needs to reach each *centre*,
 and the held block overhangs. Vertical keeps a half-block overhang budget
 (`1.1` / `3.0`).
 
-### Horizontal — 2 × 10, at trim 0
+### Horizontal — 2 × 10, shipped calibration
 
-X and Y swap their block dimensions. Both trims ship at `0.0`; overhang budget
-is zero on both axes.
+X and Y swap their block dimensions. Horizontal has `trim_x = +1.6 cm` for
+the pickup-cell registration; overhang budget is zero on both axes.
 
 | axis | block | gap | pitch | count | footprint | centres | block edges |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| X | 6.0 | 1.6 | 7.6 | **2** | 13.60 | 9.15 → 16.75 | 6.15 → 19.75 |
+| X | 6.0 | 1.6 | 7.6 | **2** | 13.60 | 10.75 → 18.35 | 7.75 → 21.35 |
 | Y | 2.2 | 0.8 | 3.0 | **10** | 29.20 | 6.90 → 33.90 | 5.80 → 35.00 |
 
 20 build cells; 3 × 11 addressable including the zero lanes.
@@ -186,9 +187,9 @@ positive `trim_x` on the horizontal grid that keeps its last *centre* legal
 still pushes the last block *edge* past the X wall, and `gridGeometryFits`
 catches that only through the per-mode zero overhang budget. This is R2.
 
-**Tolerance note.** Neither grid is flush with a wall at trim 0, so both have
-slack to absorb per-block error — but measure a real stack before trusting the
-last row of horizontal's 10.
+**Tolerance note.** The shipped horizontal X registration remains inside its
+zero-overhang budget. Measure a real stack before trusting the last row of
+horizontal's 10.
 
 ---
 
