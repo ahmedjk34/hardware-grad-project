@@ -215,11 +215,17 @@ class ColorGridError(Exception):
     colour blobs it did find, and ``stage`` says how far it got.
     """
 
-    def __init__(self, message, *, stage="detect", candidates=(), lattice=()):
+    def __init__(self, message, *, stage="detect", candidates=(), lattice=(),
+                 calibration=None):
         super().__init__(message)
         self.stage = stage
         self.candidates = tuple(candidates)   # Nx4x2 boxes, input-frame pixels
         self.lattice = tuple(lattice)         # the subset that joined a lattice
+        # Orientation can fail only *after* a sound geometric calibration and
+        # all internal stripes have been decoded.  Keeping that non-authorized
+        # calibration on the exception lets diagnostic tools annotate the
+        # conflicting signatures without accidentally returning it as usable.
+        self.calibration = calibration
 
 
 @dataclass(frozen=True)
@@ -932,7 +938,8 @@ def _prepare_lattice_candidates(found, aspect_range=LATTICE_ASPECT_RANGE):
     return eligible
 
 
-def _walk_from(start, found, eligible, short_ratio, long_ratio, centers):
+def _walk_from(start, found, eligible, short_ratio, long_ratio, centers,
+               neighbour_hops=(1,)):
     """One local neighbour walk, rooted at a particular plausible cell."""
     allowed = np.zeros(len(found), dtype=bool)
     allowed[eligible] = True
@@ -945,10 +952,14 @@ def _walk_from(start, found, eligible, short_ratio, long_ratio, centers):
         i, j = coords[index]
         step_short = rect["short_len"] * short_ratio
         step_long = rect["long_len"] * long_ratio
-        hops = (((1, 0), rect["short_axis"] * step_short),
-                ((-1, 0), -rect["short_axis"] * step_short),
-                ((0, 1), rect["long_axis"] * step_long),
-                ((0, -1), -rect["long_axis"] * step_long))
+        hops = []
+        for hop in neighbour_hops:
+            hops.extend((
+                ((hop, 0), rect["short_axis"] * step_short * hop),
+                ((-hop, 0), -rect["short_axis"] * step_short * hop),
+                ((0, hop), rect["long_axis"] * step_long * hop),
+                ((0, -hop), -rect["long_axis"] * step_long * hop),
+            ))
         for (di, dj), offset in hops:
             target = (i + di, j + dj)
             if target in taken:
@@ -1046,7 +1057,8 @@ def _recover_lattice(coords, found, eligible, spec,
 
 
 def _walk_lattice(found, spec, aspect_range=LATTICE_ASPECT_RANGE,
-                  recovery_fill_range=RECOVERY_FILL_RANGE):
+                  recovery_fill_range=RECOVERY_FILL_RANGE,
+                  neighbour_hops=(1,)):
     """Fit the strongest lattice hypothesis, then recover disconnected cells.
 
     Index ``i`` counts along the short cell side and ``j`` along the long one.
@@ -1068,7 +1080,9 @@ def _walk_lattice(found, spec, aspect_range=LATTICE_ASPECT_RANGE,
     hypotheses = []
     seen = set()
     for start in seeds:
-        walked = _walk_from(start, found, eligible, short_ratio, long_ratio, centers)
+        walked = _walk_from(
+            start, found, eligible, short_ratio, long_ratio, centers,
+            neighbour_hops)
         identity = frozenset(walked)
         if len(walked) < 4 or identity in seen:
             continue
@@ -1384,6 +1398,7 @@ def detect_color_grids(frame: np.ndarray, spec: ColorGridSpec | None = None, *,
                        lattice_aspect_range=LATTICE_ASPECT_RANGE,
                        full_fill_range=(FULL_CELL_FILL, MAX_FULL_CELL_FILL),
                        recovery_fill_range=RECOVERY_FILL_RANGE,
+                       neighbour_hops=(1,),
                        balance: bool = True,
                        evidence: bool = False) -> tuple[ColorGridCalibration, ...]:
     """Find every strongly supported grid window in ``frame``.
@@ -1436,8 +1451,12 @@ def detect_color_grids(frame: np.ndarray, spec: ColorGridSpec | None = None, *,
                if len(found) < 8 else ""),
             stage="segment", candidates=boxes())
 
+    if (not neighbour_hops or any(int(hop) != hop or hop < 1
+                                  for hop in neighbour_hops)):
+        raise ValueError("neighbour_hops must contain positive integers")
     coords = _walk_lattice(
-        found, spec, lattice_aspect_range, recovery_fill_range)
+        found, spec, lattice_aspect_range, recovery_fill_range,
+        tuple(int(hop) for hop in neighbour_hops))
     metrics.assigned = len(coords)
     if len(coords) < 4:
         raise ColorGridError(
@@ -1600,6 +1619,7 @@ def detect_color_grid(frame: np.ndarray, spec: ColorGridSpec | None = None, *,
                       lattice_aspect_range=LATTICE_ASPECT_RANGE,
                       full_fill_range=(FULL_CELL_FILL, MAX_FULL_CELL_FILL),
                       recovery_fill_range=RECOVERY_FILL_RANGE,
+                      neighbour_hops=(1,),
                       balance: bool = True,
                       evidence: bool = False,
                       window_index: int = 0) -> ColorGridCalibration:
@@ -1616,7 +1636,8 @@ def detect_color_grid(frame: np.ndarray, spec: ColorGridSpec | None = None, *,
         use_opponent=use_opponent, component_close=component_close,
         lattice_aspect_range=lattice_aspect_range,
         full_fill_range=full_fill_range,
-        recovery_fill_range=recovery_fill_range, balance=balance,
+        recovery_fill_range=recovery_fill_range,
+        neighbour_hops=neighbour_hops, balance=balance,
         evidence=evidence,
     )
     if not 0 <= window_index < len(calibrations):

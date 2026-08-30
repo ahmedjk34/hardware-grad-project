@@ -119,11 +119,17 @@ def report(calibration, grid, convention):
     sheet_description = getattr(calibration, "target_description", None)
     if sheet_description is None:
         sheet_description = calibration.spec.describe()
+    lattice_summary = (
+        f"{metrics.components} colour blobs, {metrics.assigned} assigned; "
+        f"8x10 projected map, {len(calibration.found_cells)} physically found"
+        if getattr(calibration, "is_combined", False) else
+        f"{metrics.components} colour blobs, {metrics.assigned} on the lattice, "
+        f"{metrics.lattice_shape[0]}x{metrics.lattice_shape[1]} whole"
+    )
     lines = [
         f"Sheet: {sheet_description}",
         f"Fit:   {calibration.describe()}",
-        f"       {metrics.components} colour blobs, {metrics.assigned} on the lattice, "
-        f"{metrics.lattice_shape[0]}x{metrics.lattice_shape[1]} whole",
+        f"       {lattice_summary}",
         f"       measured cell aspect {metrics.measured_aspect:.3f} "
         f"(printed {max(calibration.spec.block_x_cm, calibration.spec.block_y_cm) / min(calibration.spec.block_x_cm, calibration.spec.block_y_cm):.3f})",
         f"       processing size {metrics.processing_size[0]}x{metrics.processing_size[1]}"
@@ -133,16 +139,32 @@ def report(calibration, grid, convention):
         votes = calibration.orientation_votes
         lines.append(
             f"       decoded orientation {calibration.orientation}; "
-            f"votes vertical={votes['vertical']}/80, "
-            f"horizontal={votes['horizontal']}/80; "
-            f"inferred horizontal centers="
-            f"{calibration.inferred_horizontal_cells}/80"
+            f"cells vertical={votes['vertical']}, "
+            f"horizontal={votes['horizontal']}, "
+            f"ambiguous={votes['ambiguous']}; "
+            f"confidence={calibration.orientation_confidence * 100:.1f}%"
         )
-    corners = calibration.workspace_corners(grid, convention)
-    lines.append(f"Envelope corners ({convention} home convention):")
-    for name, point in zip(("home [0,0]", "far-X/home-Y", "far-X/far-Y",
-                            "home-X/far-Y"), corners):
-        lines.append(f"       {name:>14}  ({point[0]:8.2f}, {point[1]:8.2f}) px")
+        lines.append(
+            f"       measured patterns={len(calibration.patterns)}/160; "
+            f"unobserved/partial={calibration.unobserved_patterns}; "
+            f"fallback horizontal centers="
+            f"{calibration.inferred_horizontal_cells}"
+        )
+        requested_count = votes[grid.mode]
+        lines.append(
+            f"       requested {grid.mode} layer: present "
+            f"({requested_count} exclusive fiducials)"
+        )
+    try:
+        corners = calibration.workspace_corners(grid, convention)
+    except ColorGridError as exc:
+        lines.append(f"Envelope: NOT CALIBRATABLE FROM THIS FRAME — {exc}")
+    else:
+        lines.append(f"Envelope corners ({convention} home convention):")
+        for name, point in zip(("home [0,0]", "far-X/home-Y", "far-X/far-Y",
+                                "home-X/far-Y"), corners):
+            lines.append(
+                f"       {name:>14}  ({point[0]:8.2f}, {point[1]:8.2f}) px")
     for line in lines:
         print(line)
 
@@ -188,7 +210,14 @@ def run_still(args, spec, grid):
         # line and a blank window do not.
         print(f"REFUSED at the {exc.stage} stage: {exc}", file=sys.stderr)
         display = frame.copy()
-        draw_candidates(display, exc)
+        failed_calibration = getattr(exc, "calibration", None)
+        if failed_calibration is not None:
+            # Geometry and stripe decoding succeeded; only mode authorization
+            # failed. Show the actual mutually exclusive signatures instead of
+            # degrading this into a generic contour-failure picture.
+            draw_color_grid(display, failed_calibration, labels=True, shade=0.0)
+        else:
+            draw_candidates(display, exc)
         if args.save:
             args.save.parent.mkdir(parents=True, exist_ok=True)
             cv2.imwrite(str(args.save), display)

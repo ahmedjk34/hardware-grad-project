@@ -120,20 +120,23 @@ beige/white/beige intervals bracketed by alternating colored rows encode
 horizontal. The detector automatically retries
 faded or cracked full bars and then their dark centre accents, using separate
 per-colour and local-contrast thresholds for uneven lighting, then classifies
-all projected thirds with relative channels, HSV and Lab. Beige never detects
-the sheet by itself; it contributes only after the chromatic lattice and its
-neighbor stripes agree. It still refuses a result unless the lattice geometry,
-alternating colour parity and requested orientation agree. It
+all projected thirds with relative channels, HSV and Lab. The woven artwork
+contains 80 muted/dark/muted vertical patterns and 80 separate
+colour/beige/opposite-colour horizontal bridges. Every physical pattern gets
+one class only; a beige bridge is never copied as a second vote onto either
+neighboring bar. Beige never detects the sheet by itself; both chromatic end
+thirds and the sheet-wide alternating parity must agree. It still refuses a
+result unless the lattice geometry, colour parity and requested orientation
+layer agree. It
 writes the same
 `config/workspace_map.json`, separately for the active mode. The older
 mode-specific sheets remain supported as a fallback.
 
-The horizontal center-third check is intentionally recoverable. Primary
-detection compares both off-white outer thirds with the nearby white X gap at
-the same row. If the 1.6 cm center cannot be read, five alternating encoded
-intervals plus their opposite-color row neighbors may reconstruct it. The
-overlay marks those reconstructed votes `H~` so they are never confused with a
-direct `H` observation.
+The horizontal beige middle is intentionally recoverable. Primary detection
+compares it with the nearby white centre lane. If one 1.6 cm middle cannot be
+read, other directly measured bridges first establish the five alternating
+encoded intervals; only then may its two opposite-colour ends fill the blank.
+The overlay marks that result `H~`, never direct `H`.
 
 If the gantry hides interior cells, use **Evidence-Assisted Printed-Grid
 Calibration** instead: press `e`, press `Space` once for each useful safe

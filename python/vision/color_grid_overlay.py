@@ -67,19 +67,38 @@ def draw_color_grid(frame: np.ndarray, calibration: ColorGridCalibration, *,
         for col in range(spec.cols):
             quads[(col, row)] = _quad(calibration.cell_quad(col, row))
 
+    combined = getattr(calibration, "is_combined", False)
+    measured_bar_keys = ({pattern.cell for pattern in calibration.patterns
+                          if pattern.kind == "bar"}
+                         if combined else set(quads))
+
     if shade > 0:
         tinted = frame.copy()
         for key, quad in quads.items():
+            if key not in measured_bar_keys:
+                continue
             color = ORIGIN_COLOR if key == (0, 0) else MAPPED_COLOR
             cv2.fillPoly(tinted, [quad], color)
         cv2.addWeighted(tinted, shade, frame, 1 - shade, 0, frame)
 
     for key, quad in quads.items():
-        colour = ORIGIN_COLOR if key == (0, 0) else MAPPED_COLOR
+        if key not in measured_bar_keys:
+            colour = PARTIAL_COLOR
+        else:
+            colour = ORIGIN_COLOR if key == (0, 0) else MAPPED_COLOR
         cv2.polylines(frame, [quad], True, colour, 1, cv2.LINE_AA)
 
     cv2.polylines(frame, [_quad(calibration.outline())], True, OUTLINE_COLOR, 2,
                   cv2.LINE_AA)
+
+    if combined:
+        for pattern in calibration.patterns:
+            if pattern.kind != "bridge":
+                continue
+            colour = (OUTLINE_COLOR if pattern.orientation == "horizontal"
+                      else PARTIAL_COLOR)
+            cv2.polylines(frame, [_quad(pattern.quad)], True, colour, 1,
+                          cv2.LINE_AA)
 
     if labels:
         sample = quads[(0, 0)]
@@ -89,10 +108,11 @@ def draw_color_grid(frame: np.ndarray, calibration: ColorGridCalibration, *,
             # Grow the text with the cells. A fixed 0.36 is right on a 640-wide
             # preview and unreadable on a 2048-wide capture, and this overlay is
             # used at both.
-            combined = getattr(calibration, "is_combined", False)
             scale = (min(0.62, max(0.28, span / 150)) if combined
                      else min(1.2, max(0.36, span / 60)))
             for (col, row), quad in quads.items():
+                if combined and (col, row) not in measured_bar_keys:
+                    continue
                 text = (calibration.pattern_label(col, row) if combined
                         else f"{col},{row}")
                 (width, height), _ = cv2.getTextSize(text, FONT, scale, 1)
@@ -102,13 +122,35 @@ def draw_color_grid(frame: np.ndarray, calibration: ColorGridCalibration, *,
                        (round(x - width / 2), round(y + height / 2)), colour,
                        scale)
 
+            if combined:
+                for pattern in calibration.patterns:
+                    if pattern.kind != "bridge":
+                        continue
+                    quad = _quad(pattern.quad)
+                    colour = (OUTLINE_COLOR if pattern.orientation == "horizontal"
+                              else PARTIAL_COLOR)
+                    text = pattern.signature
+                    (width, height), _ = cv2.getTextSize(
+                        text, FONT, max(0.25, scale * 0.82), 1)
+                    x, y = quad.mean(axis=0)
+                    _stamp(frame, text,
+                           (round(x - width / 2), round(y + height / 2)),
+                           colour, max(0.25, scale * 0.82))
+
     if getattr(calibration, "is_combined", False):
-        outline = _quad(calibration.outline())
-        x = int(outline[:, 0].min())
-        top = int(outline[:, 1].min())
-        y = top - 8 if top >= 28 else top + 22
-        _stamp(frame, f"ORIENTATION: {calibration.orientation}",
-               (x, y), OUTLINE_COLOR, 0.55)
+        votes = calibration.orientation_votes
+        requested = (f"  MODE {calibration.requested_mode.upper()}"
+                     if calibration.requested_mode else "")
+        header = (f"ORIENTATION: {calibration.orientation}  "
+                  f"V/H/? {votes['vertical']}/{votes['horizontal']}/"
+                  f"{votes['ambiguous']}  "
+                  f"{calibration.orientation_confidence * 100:.1f}%"
+                  f"{requested}")
+        header_scale = min(
+            0.55, max(0.30, frame.shape[1] / max(len(header) * 18.0, 1.0)))
+        _stamp(frame, header,
+               (8, max(20, round(24 * header_scale / 0.55))),
+               OUTLINE_COLOR, header_scale)
 
     hovered = calibration.cell_at(hover) if hover is not None else None
     if hovered is not None:
@@ -177,9 +219,11 @@ def status_text(calibration: ColorGridCalibration | None, error: str | None = No
         return f"paper grid: {error or 'not detected'}"
     metrics = calibration.metrics
     if getattr(calibration, "is_combined", False):
-        return (f"combined sheet: {metrics.full_cells} fiducials, "
+        votes = calibration.orientation_votes
+        return (f"combined sheet: {len(calibration.patterns)} measured patterns, "
                 f"orientation {calibration.orientation}, "
-                f"H~ {calibration.inferred_horizontal_cells}, "
+                f"V/H/? {votes['vertical']}/{votes['horizontal']}/"
+                f"{votes['ambiguous']}, H~ {calibration.inferred_horizontal_cells}, "
                 f"residual {metrics.residual_px:.2f} px, "
                 f"parity {metrics.parity_agreement * 100:.0f}%")
     return (f"paper grid: {metrics.full_cells} whole cells, "

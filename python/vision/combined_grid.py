@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
-"""Detect and decode the one-sheet target carrying both grid orientations.
+"""Detect and decode the woven one-sheet orientation target.
 
-The A2 artwork is not merely an alternating 8 x 10 colour lattice. Each
-6.0 x 2.2 cm chromatic bar is split across X as 2.2 + 1.6 + 2.2 cm: muted
-green/purple outer regions and a darker same-colour centre encode the vertical
-block orientation. Five pairs of neighbouring chromatic rows have a 1.6 cm
-interval whose outer 2.2 cm regions are beige/gray while its centre 1.6 cm is
-white; those beige/white/beige intervals encode the horizontal orientation.
-The remaining four row intervals are plain white separators.
+Pixel inspection of the supplied 2245 x 1587 PNG shows an exact 37.79 px/cm
+raster.  Every 6.0 x 2.2 cm chromatic bar is split along its long axis into
+2.2 + 1.6 + 2.2 cm runs (about 83 + 60 + 83 pixels): muted ink, dark ink,
+muted ink.  Those are the vertical-pattern fiducials.  Each paired row is
+separated by 1.6 cm of gray/beige in its two 2.2 cm outer lanes and white in
+its 1.6 cm centre lane.  Read perpendicular to the chromatic bars, each outer
+lane is therefore muted colour + beige + the opposite muted colour: a separate
+horizontal-pattern fiducial.  The four other row intervals are plain paper.
 
-Geometry is still established only by chromatic evidence. Orientation is a
-second, sheet-level decision combining that geometry and colour parity with
-the internal chromatic and gray subregions. Gray is therefore meaningful but
-can never establish a sheet by itself.
+This is a woven design, not one fiducial voting twice.  The 8 x 10 chromatic
+lattice supplies geometry; 80 bar patterns and 80 perpendicular bridge
+patterns carry mutually exclusive orientation classifications.  Beige is a
+real part of the horizontal signature, but beige alone can never establish a
+sheet or a horizontal vote: both coloured end thirds must also agree.
 
 The fiducial lattice describes page centimetres, not either block layout.  One
 homography therefore measures the shared 24.3 x 40.0 cm holder plane; the
@@ -77,8 +79,11 @@ CENTER_THIRD_CM = 1.6
 INTERNAL_GAP_CM = 1.6
 SUBREGION_INSET_CM = 0.16
 MIN_ORIENTATION_VOTE_FRACTION = 0.60
-VERTICAL_SCORE_MIN = 0.68
-HORIZONTAL_SCORE_MIN = 0.72
+ORIENTATION_SCORE_MIN = 0.64
+ORIENTATION_MARGIN_MIN = 0.12
+BEIGE_ROW_CONTRAST_MIN = 0.10
+MIN_VISIBLE_PATTERN_FRACTION = 0.20
+MIN_PAGE_PLANE_OBSERVATIONS = 76  # 95% of the 8x10 geometry lattice
 
 
 def combined_fiducial_spec() -> ColorGridSpec:
@@ -111,27 +116,29 @@ def combined_stripe_spec() -> ColorGridSpec:
 
 @dataclass(frozen=True)
 class FiducialPattern:
-    """Decoded thirds and orientation votes for one chromatic fiducial."""
+    """One complete physical fiducial and its single decoded class."""
 
+    fiducial_id: str
     cell: tuple[int, int]
     thirds: tuple[str, str, str]
-    gap_thirds: tuple[str, str, str] | None
+    quad: np.ndarray
     vertical_score: float
     horizontal_score: float
-    horizontal_inferred: bool = False
+    orientation: str
+    confidence: float
+    inferred: bool = False
+    kind: str = "bar"
 
     @property
     def signature(self) -> str:
-        codes = {"green": "G", "purple": "P", "gray": "B"}
-        bar = "".join(codes[label] for label in self.thirds)
-        gap = ("".join(codes[label] for label in self.gap_thirds)
-               if self.gap_thirds else "---")
-        horizontal = ("H~" if self.horizontal_inferred
-                      else "H" if self.horizontal_score >= HORIZONTAL_SCORE_MIN
-                      else "-")
-        votes = (("V" if self.vertical_score >= VERTICAL_SCORE_MIN else "-")
-                 + horizontal)
-        return f"{bar}/{gap}:{votes}"
+        codes = {"green": "G", "purple": "P", "gray": "B",
+                 "unknown": "?"}
+        parts = "-".join(codes.get(label, "?") for label in self.thirds)
+        prefix = {"vertical": "V", "horizontal": "H"}.get(
+            self.orientation, "?")
+        if self.inferred and prefix != "?":
+            prefix += "~"
+        return f"{prefix}: {parts}"
 
 
 @dataclass
@@ -141,41 +148,63 @@ class CombinedGridCalibration:
     lattice: ColorGridCalibration
     method: str = "full bars"
     patterns: tuple[FiducialPattern, ...] = ()
-    orientations: tuple[str, ...] = ()
+    inferred_orientation: str = "unknown"
+    orientation_confidence: float = 0.0
+    requested_mode: str | None = None
     is_combined = True
 
     @property
     def target_description(self):
-        orientation = "+".join(self.orientations) or "undecoded"
         return (
             "combined A2 target, 8x10 chromatic fiducials, "
-            f"internal orientation encoding {orientation}"
+            f"internal orientation encoding {self.orientation}"
         )
 
     @property
     def orientation(self):
-        return "+".join(self.orientations) or "unknown"
+        return self.inferred_orientation
+
+    @property
+    def orientations(self):
+        """Orientation classes present, retained for older UI consumers."""
+        if self.orientation == "mixed":
+            return ("vertical", "horizontal")
+        return ((self.orientation,) if self.orientation in
+                ("vertical", "horizontal") else ())
 
     @property
     def orientation_votes(self):
         return {
-            "vertical": sum(pattern.vertical_score >= VERTICAL_SCORE_MIN
+            "vertical": sum(pattern.orientation == "vertical"
                             for pattern in self.patterns),
-            "horizontal": sum(pattern.horizontal_score >= HORIZONTAL_SCORE_MIN
+            "horizontal": sum(pattern.orientation == "horizontal"
                               for pattern in self.patterns),
+            "ambiguous": sum(pattern.orientation == "unknown"
+                             for pattern in self.patterns),
         }
 
     @property
     def inferred_horizontal_cells(self):
-        return sum(pattern.horizontal_inferred for pattern in self.patterns)
+        return sum(pattern.orientation == "horizontal" and pattern.inferred
+                   for pattern in self.patterns)
+
+    @property
+    def ambiguous_cells(self):
+        return self.orientation_votes["ambiguous"]
+
+    @property
+    def unobserved_patterns(self):
+        # 80 long-axis bars plus 80 perpendicular outer-lane bridges.
+        return max(0, 160 - len(self.patterns))
 
     @property
     def pattern_map(self):
-        return {pattern.cell: pattern for pattern in self.patterns}
+        return {pattern.cell: pattern for pattern in self.patterns
+                if pattern.kind == "bar"}
 
     def pattern_label(self, col: int, row: int) -> str:
         pattern = self.pattern_map.get((col, row))
-        return (f"F{col},{row} {pattern.signature}" if pattern
+        return (f"{pattern.signature}" if pattern
                 else f"F{col},{row} ?")
 
     @property
@@ -236,6 +265,16 @@ class CombinedGridCalibration:
             raise ColorGridError(
                 "the combined sheet is registered directly to holder home; "
                 "use the firmware home convention")
+        if self.lattice.metrics.window_observed < MIN_PAGE_PLANE_OBSERVATIONS:
+            raise ColorGridError(
+                "orientation was decoded from a cropped partial sheet, but the "
+                "holder envelope cannot be calibrated until at least "
+                f"{MIN_PAGE_PLANE_OBSERVATIONS}/80 lattice sites support the "
+                "page plane; move the camera back or use evidence-assisted "
+                "calibration across multiple fixed-camera frames",
+                stage="window",
+                calibration=self,
+            )
         if not grid.has_physical_scale:
             raise ColorGridError("mapping to the envelope needs a scaled MachineGrid")
         if (grid.workspace_width_cm > PAGE_WIDTH_CM
@@ -273,7 +312,10 @@ class CombinedGridCalibration:
             f"{count}/80 cells, residual "
             f"{m.residual_px:.2f} px (max {m.max_residual_px:.2f}), "
             f"parity {m.parity_agreement * 100:.0f}%, orientation "
-            f"{self.orientation}, {self.method}"
+            f"{self.orientation} ({self.orientation_confidence * 100:.1f}%; "
+            f"V/H/? {self.orientation_votes['vertical']}/"
+            f"{self.orientation_votes['horizontal']}/"
+            f"{self.orientation_votes['ambiguous']}), {self.method}"
         )
 
 
@@ -317,297 +359,423 @@ def _classify_region(sample: ColorRegionStats, threshold: float,
         "purple": float(np.linalg.norm(lab - magenta_lab)),
         "gray": float(np.linalg.norm(lab - gray_lab)),
     }
-    if (sample.strength < threshold
-            or (distances["gray"] + 4.0 < min(distances["green"],
-                                               distances["purple"])
-                and sample.strength < threshold * 1.45)):
+    nearest_ink = min(distances["green"], distances["purple"])
+    # A live green print can have less HSV saturation than the surrounding
+    # blue-cast paper.  Low saturation is therefore supporting evidence for
+    # neutral, never a veto on an ink prototype that is much closer in Lab.
+    if (distances["gray"] + 3.0 < nearest_ink
+            and (sample.strength < threshold * 1.7
+                 or distances["gray"] < nearest_ink * 0.72)):
         return "gray"
 
     # Relative channel relationships survive a multiplicative shadow better
     # than hue. Lab distance resolves weak/tinted samples where both opponent
     # scores are close to zero.
     opponent_margin = sample.green_opponent - sample.magenta_opponent
-    if opponent_margin > 0.012:
+    if opponent_margin > 0.012 and distances["green"] <= distances["purple"] + 8:
         return "green"
-    if opponent_margin < -0.012:
+    if opponent_margin < -0.012 and distances["purple"] <= distances["green"] + 8:
         return "purple"
     return min(("green", "purple"), key=distances.get)
 
 
+def _complete_quad(frame: np.ndarray, quad, border: float = 2.0) -> bool:
+    """True only when a projected physical fiducial is wholly measurable."""
+    points = np.asarray(quad, dtype=np.float32)
+    height, width = frame.shape[:2]
+    return bool(
+        abs(cv2.contourArea(points)) >= 24.0
+        and np.all(points[:, 0] >= border)
+        and np.all(points[:, 1] >= border)
+        and np.all(points[:, 0] <= width - 1 - border)
+        and np.all(points[:, 1] <= height - 1 - border)
+    )
+
+
+def _ink_distance(sample: ColorRegionStats, paper: ColorRegionStats) -> float:
+    """Local paper-normalized ink evidence in the range 0..1."""
+    lab = lab_distance(sample, paper)
+    luma = abs(float(sample.lab[0]) - float(paper.lab[0]))
+    chroma = abs(sample.green_opponent - paper.green_opponent)
+    chroma += abs(sample.magenta_opponent - paper.magenta_opponent)
+    return float(np.clip(
+        0.50 * (lab - 1.5) / 22.0
+        + 0.25 * (luma - 0.5) / 20.0
+        + 0.25 * chroma / 0.16,
+        0.0, 1.0,
+    ))
+
+
+def _beige_distance(sample: ColorRegionStats, paper: ColorRegionStats) -> float:
+    """Neutral ink versus adjacent white paper, without an absolute RGB."""
+    lab = lab_distance(sample, paper)
+    dark = float(paper.lab[0]) - float(sample.lab[0])
+    neutrality = 1.0 - min(1.0, sample.strength / max(paper.strength + 0.16, 0.20))
+    return float(np.clip(
+        0.48 * (lab - 0.8) / 12.0
+        + 0.34 * (dark - 0.3) / 11.0
+        + 0.18 * neutrality,
+        0.0, 1.0,
+    ))
+
+
 def _decode_patterns(frame: np.ndarray, lattice: ColorGridCalibration,
                      method: str, requested_mode: str | None):
-    """Decode all internal thirds and return a mode-validated calibration."""
-    # Use the same white-patch normalization that established the chromatic
-    # lattice. Region decisions remain relative/local below, but removing the
-    # global cast first keeps neutral beige from being mislabeled as purple.
+    """Decode the two perpendicular fiducial families without shared votes."""
     sample_frame = white_balance(frame)
     inset = SUBREGION_INSET_CM
-    half_width = FIDUCIAL_BLOCK_X_CM / 2
-    center_left = -half_width + OUTER_THIRD_CM
-    center_right = half_width - OUTER_THIRD_CM
+    half_x = FIDUCIAL_BLOCK_X_CM / 2
+    half_y = FIDUCIAL_BLOCK_Y_CM / 2
+    centre_left = -half_x + OUTER_THIRD_CM
+    centre_right = half_x - OUTER_THIRD_CM
     x_ranges = (
-        (-half_width + inset, center_left - inset),
-        (center_left + inset, center_right - inset),
-        (center_right + inset, half_width - inset),
+        (-half_x + inset, centre_left - inset),
+        (centre_left + inset, centre_right - inset),
+        (centre_right + inset, half_x - inset),
     )
-    bar_y = (-FIDUCIAL_BLOCK_Y_CM / 2 + inset,
-             FIDUCIAL_BLOCK_Y_CM / 2 - inset)
-    gap_y = (FIDUCIAL_BLOCK_Y_CM / 2 + inset,
-             FIDUCIAL_BLOCK_Y_CM / 2 + INTERNAL_GAP_CM - inset)
+    bar_y = (-half_y + inset, half_y - inset)
+    gap_y = (half_y + inset, half_y + INTERNAL_GAP_CM - inset)
 
+    # Horizontal bars: the three long-axis regions are one vertical-pattern
+    # fiducial.  Projected bars outside the frame (including the user's clipped
+    # bottom row) are intentionally absent, not virtually counted.
     bar_samples = {}
+    bar_paper = {}
+    bar_quads = {}
     for row in range(FIDUCIAL_ROWS):
         for col in range(FIDUCIAL_COLS):
-            bar_samples[(col, row)] = tuple(
-                sample_color_region(
-                    sample_frame,
-                    _region_quad(lattice, col, row, x0, x1, *bar_y),
-                )
-                for x0, x1 in x_ranges
-            )
-    gap_samples = {}
-    paper_samples = {}
+            cell = (col, row)
+            quad = _region_quad(
+                lattice, col, row, -half_x, half_x, -half_y, half_y)
+            if not _complete_quad(sample_frame, quad):
+                continue
+            thirds = tuple(sample_color_region(
+                sample_frame, _region_quad(lattice, col, row, x0, x1, *bar_y))
+                for x0, x1 in x_ranges)
+            paper_x = ((half_x + inset,
+                        half_x + FIDUCIAL_GAP_X_CM - inset)
+                       if col < FIDUCIAL_COLS - 1 else
+                       (-half_x - FIDUCIAL_GAP_X_CM + inset,
+                        -half_x - inset))
+            paper_quad = _region_quad(
+                lattice, col, row, *paper_x, *bar_y)
+            if not _complete_quad(sample_frame, paper_quad, border=0.5):
+                continue
+            bar_samples[cell] = thirds
+            bar_paper[cell] = sample_color_region(sample_frame, paper_quad)
+            bar_quads[cell] = quad
+
+    # Perpendicular outer lanes: colour + beige + opposite colour.  Sample all
+    # nine row intervals first; beige contrast identifies which alternating
+    # parity contains the five real bridges and which four are plain separators.
+    bridge_raw = {}
+    bridge_paper = {}
+    bridge_quads = {}
+    lane_ranges = (
+        ("L", -half_x + inset, centre_left - inset),
+        ("R", centre_right + inset, half_x - inset),
+    )
+    upper_y = (FIDUCIAL_GAP_Y_CM + half_y + inset,
+               FIDUCIAL_GAP_Y_CM + 3 * half_y - inset)
     for row in range(FIDUCIAL_ROWS - 1):
         for col in range(FIDUCIAL_COLS):
-            gap_samples[(col, row)] = tuple(
-                sample_color_region(
-                    sample_frame,
-                    _region_quad(lattice, col, row, x0, x1, *gap_y),
+            for lane, x0, x1 in lane_ranges:
+                key = (col, row, lane)
+                quad = _region_quad(
+                    lattice, col, row, x0, x1, -half_y, upper_y[1])
+                if not _complete_quad(sample_frame, quad):
+                    continue
+                thirds = (
+                    sample_color_region(sample_frame, _region_quad(
+                        lattice, col, row, x0, x1, *bar_y)),
+                    sample_color_region(sample_frame, _region_quad(
+                        lattice, col, row, x0, x1, *gap_y)),
+                    sample_color_region(sample_frame, _region_quad(
+                        lattice, col, row, x0, x1, *upper_y)),
                 )
-                for x0, x1 in x_ranges
-            )
-            # The 0.8 cm X interval beside a fiducial is unprinted paper at
-            # exactly the same Y and almost the same illumination. It is a far
-            # safer beige reference than a global RGB constant or page corner.
-            if col < FIDUCIAL_COLS - 1:
-                paper_x = (half_width + inset,
-                           half_width + FIDUCIAL_GAP_X_CM - inset)
-            else:
-                paper_x = (-half_width - FIDUCIAL_GAP_X_CM + inset,
-                           -half_width - inset)
-            paper_samples[(col, row)] = sample_color_region(
-                sample_frame,
-                _region_quad(lattice, col, row, *paper_x, *gap_y),
-            )
+                paper_x = (centre_left + inset, centre_right - inset)
+                paper_quad = _region_quad(
+                    lattice, col, row, *paper_x, *gap_y)
+                if not _complete_quad(sample_frame, paper_quad, border=0.5):
+                    continue
+                bridge_raw[key] = thirds
+                bridge_paper[key] = sample_color_region(sample_frame, paper_quad)
+                bridge_quads[key] = quad
 
-    found = lattice.found_cells
-    parity_votes = [
-        (((col + row) % 2 == 0) == (cell.color == "green"))
-        for (col, row), cell in found.items()
-    ]
-    even_is_green = sum(parity_votes) >= len(parity_votes) / 2
-
-    def expected_color(cell):
-        col, row = cell
-        green = (((col + row) % 2 == 0) == even_is_green)
-        return "green" if green else "purple"
-
-    green_samples, magenta_samples = [], []
-    for cell, thirds in bar_samples.items():
-        observed = found.get(cell)
-        target = observed.color if observed is not None else None
-        if target == "green":
-            green_samples.extend((thirds[0], thirds[2]))
-        elif target == "magenta":
-            magenta_samples.extend((thirds[0], thirds[2]))
-    all_gap = [sample for thirds in gap_samples.values() for sample in thirds]
-    all_samples = [sample for thirds in bar_samples.values() for sample in thirds]
-    all_samples.extend(all_gap)
-    all_samples.extend(paper_samples.values())
-    threshold = _strength_threshold(all_samples)
-    if not green_samples or not magenta_samples or not all_gap:
+    minimum_visible = int(np.ceil(
+        MIN_VISIBLE_PATTERN_FRACTION * FIDUCIAL_COLS * FIDUCIAL_ROWS))
+    if len(bar_samples) < minimum_visible:
         raise ColorGridError(
-            "the chromatic lattice was fitted, but too few internal green, "
-            "purple and gray regions remain to decode its orientation",
+            f"the lattice fit extrapolates correctly, but only {len(bar_samples)} "
+            f"complete chromatic fiducials are measurable; {minimum_visible} "
+            "are required (frame-edge partials do not count)",
             stage="orientation",
+            lattice=[cell.quad for cell in lattice.cells if cell.full],
         )
-    neutral_pool = sorted(all_gap + list(paper_samples.values()),
-                          key=lambda sample: sample.strength)
-    neutral_pool = neutral_pool[:max(8, len(neutral_pool) // 2)]
-    prototypes = (_median_lab(green_samples), _median_lab(magenta_samples),
-                  _median_lab(neutral_pool))
 
-    classes = {
-        cell: tuple(_classify_region(sample, threshold, *prototypes)
-                    for sample in thirds)
-        for cell, thirds in bar_samples.items()
-    }
-    gap_classes = {
-        cell: tuple(_classify_region(sample, threshold, *prototypes)
-                    for sample in thirds)
-        for cell, thirds in gap_samples.items()
-    }
+    # Parity supplies two camera-adapted ink clusters.  Naming the cluster with
+    # the larger Lab a*/magenta-opponent response purple avoids fixed hue or RGB
+    # assumptions and keeps the nearly gray live green cluster usable.
+    parity_samples = {0: [], 1: []}
+    for (col, row), thirds in bar_samples.items():
+        parity_samples[(col + row) % 2].extend(thirds)
+    if not all(parity_samples.values()):
+        raise ColorGridError(
+            "complete fiducials cover only one colour parity; expose more of "
+            "the checkerboard before decoding orientation",
+            stage="orientation",
+            lattice=[cell.quad for cell in lattice.cells if cell.full],
+        )
+    parity_lab = {key: _median_lab(value)
+                  for key, value in parity_samples.items()}
+    purple_parity = max(parity_lab, key=lambda key: parity_lab[key][1])
+    green_samples = parity_samples[1 - purple_parity]
+    purple_samples = parity_samples[purple_parity]
+    neutral_samples = list(bar_paper.values()) + list(bridge_paper.values())
+    all_samples = green_samples + purple_samples + neutral_samples
+    all_samples.extend(sample for thirds in bridge_raw.values()
+                       for sample in thirds)
+    threshold = _strength_threshold(all_samples)
+    prototypes = (_median_lab(green_samples), _median_lab(purple_samples),
+                  _median_lab(neutral_samples))
 
-    vertical_scores = {}
-    for cell, thirds in bar_samples.items():
-        expected = expected_color(cell)
-        labels = classes[cell]
-        center_match = float(labels[1] == expected)
-        side_compatible = sum(label in (expected, "gray")
-                              for label in (labels[0], labels[2])) / 2.0
+    def classify(thirds):
+        return tuple(_classify_region(sample, threshold, *prototypes)
+                     for sample in thirds)
+
+    def signature_scores(thirds, labels, paper):
+        coloured = ("green", "purple")
+        outer_coloured = float(labels[0] in coloured and labels[2] in coloured)
+        same_outer = float(outer_coloured and labels[0] == labels[2])
+        opposite_outer = float(outer_coloured and labels[0] != labels[2])
+        centre_same = float(labels[1] in coloured and labels[1] == labels[0]
+                            and labels[1] == labels[2])
+        centre_neutral = float(labels[1] == "gray")
         side_strength = (thirds[0].strength + thirds[2].strength) / 2.0
-        strength_delta = thirds[1].strength - side_strength
-        accent_lab = (lab_distance(thirds[1], thirds[0])
-                      + lab_distance(thirds[1], thirds[2])) / 2.0
-        accent = (0.60 * np.clip((strength_delta - 0.025) / 0.24, 0, 1)
-                  + 0.40 * np.clip((accent_lab - 2.0) / 28.0, 0, 1))
-        # The outer thirds are intentionally gray-mixed ink and can become
-        # neutral on a faded print. The same-colour centre plus a measurable
-        # local accent is mandatory; gray-compatible sides are supporting
-        # evidence, never a substitute for that chromatic centre.
-        vertical_scores[cell] = float(
-            0.45 * center_match + 0.15 * side_compatible + 0.40 * accent)
+        strength_accent = float(np.clip(
+            (thirds[1].strength - side_strength - 0.012) / 0.16, 0, 1))
+        lab_accent = float(np.clip(
+            ((lab_distance(thirds[1], thirds[0])
+              + lab_distance(thirds[1], thirds[2])) / 2.0 - 2.0) / 24.0,
+            0, 1))
+        # Darkness by itself is not enough: the centre must retain the same
+        # chromatic class as both muted outer thirds.
+        accent = centre_same * (0.58 * strength_accent + 0.42 * lab_accent)
+        ink = float(np.mean([_ink_distance(sample, paper)
+                             for sample in thirds]))
+        vertical = float(
+            0.28 * same_outer + 0.22 * centre_same
+            + 0.38 * accent + 0.12 * ink)
+        beige = _beige_distance(thirds[1], paper)
+        # Beige must modulate the direct horizontal score. Otherwise a plain
+        # white separator between two opposite-colour rows is indistinguishable
+        # from the encoded bridge and every interval would falsely vote H.
+        horizontal_direct = float(
+            (0.45 + 0.55 * beige)
+            * (0.48 * opposite_outer + 0.26 * centre_neutral
+               + 0.26 * min(1.0, (_ink_distance(thirds[0], paper)
+                                  + _ink_distance(thirds[2], paper)) / 1.2)))
+        return vertical, horizontal_direct, beige, opposite_outer, centre_neutral
 
-    gap_direct_scores = {}
-    gap_beige_scores = {}
-    gap_anchor_scores = {}
-    for cell, thirds in gap_samples.items():
-        labels = gap_classes[cell]
-        gray_fraction = sum(label == "gray" for label in labels) / 3.0
-        paper = paper_samples[cell]
-        outer_lab = (np.asarray(thirds[0].lab) + np.asarray(thirds[2].lab)) / 2.0
-        center_lab = np.asarray(thirds[1].lab)
-        paper_lab = np.asarray(paper.lab)
+    def exclusive(vertical, horizontal):
+        best = max(vertical, horizontal)
+        margin = abs(vertical - horizontal)
+        if best < ORIENTATION_SCORE_MIN or margin < ORIENTATION_MARGIN_MIN:
+            return "unknown", float(np.clip(best * margin, 0, 1))
+        orientation = "vertical" if vertical > horizontal else "horizontal"
+        confidence = float(np.clip(0.55 * best + 0.45 * margin, 0, 1))
+        return orientation, confidence
 
-        # Primary beige detector: both outer thirds must differ from nearby
-        # paper, yet remain much less chromatic than the colored rows. Lab
-        # distance catches tint, L catches near-neutral ink density, and HSV /
-        # opponent strength supplies the neutrality term.
-        outer_deltas = [
-            np.linalg.norm(np.asarray(thirds[0].lab) - paper_lab),
-            np.linalg.norm(np.asarray(thirds[2].lab) - paper_lab),
-        ]
-        outer_delta = float(np.mean(outer_deltas))
-        weaker_outer_delta = float(min(outer_deltas))
-        outer_dark = float(paper_lab[0] - outer_lab[0])
-        col, row = cell
-        lower = classes[(col, row)]
-        upper = classes[(col, row + 1)]
-        colored_anchor = (
-            sum(label == expected_color((col, row)) for label in lower)
-            + sum(label == expected_color((col, row + 1)) for label in upper)
-        ) / 6.0
-        neighbor_strength = float(np.mean([
-            sample.strength
-            for neighbor in (bar_samples[(col, row)],
-                             bar_samples[(col, row + 1)])
-            for sample in neighbor
-        ]))
-        outer_strength = (thirds[0].strength + thirds[2].strength) / 2.0
-        neutrality = float(np.clip(
-            1.0 - outer_strength / max(neighbor_strength * 0.85, 0.08), 0, 1))
-        beige_separation = float(
-            0.45 * np.clip((outer_delta - 1.5) / 14.0, 0, 1)
-            + 0.25 * np.clip((weaker_outer_delta - 1.5) / 14.0, 0, 1)
-            + 0.30 * np.clip((outer_dark - 0.5) / 14.0, 0, 1))
-        # Neutrality can confirm off-white ink, but blank white paper must stay
-        # zero no matter how perfectly neutral it is.
-        beige = beige_separation * (0.75 + 0.25 * neutrality)
-        center_delta = float(np.linalg.norm(center_lab - paper_lab))
-        center_blank = float(np.clip(1.0 - (center_delta - 1.0) / 11.0, 0, 1))
-        direct = float(
-            0.35 * beige + 0.35 * center_blank
-            + 0.20 * colored_anchor + 0.10 * gray_fraction)
-        gap_beige_scores[cell] = beige
-        gap_anchor_scores[cell] = colored_anchor
-        gap_direct_scores[cell] = direct
+    patterns = []
+    valid_bars = set()
+    for cell, thirds in sorted(bar_samples.items(), key=lambda item: item[0][::-1]):
+        labels = list(classify(thirds))
+        ink_evidence = [_ink_distance(sample, bar_paper[cell])
+                        for sample in thirds]
+        # A sparse/evidence homography may project unobserved lattice sites onto
+        # visible blank paper. They are virtual geometry, not ambiguous physical
+        # fiducials. At least two thirds must carry locally normalized ink.
+        observed = cell in lattice.found_cells
+        if (not observed
+                and (sum(label in ("green", "purple") for label in labels) < 2
+                     or sum(value >= 0.16 for value in ink_evidence) < 2)):
+            continue
+        expected = ("purple" if (cell[0] + cell[1]) % 2 == purple_parity
+                    else "green")
+        # When geometry physically observed this bar, a gray label in one
+        # blurred third is a missing colour measurement, not proof that the
+        # printed checkerboard changed parity. Retain the raw score evidence,
+        # but fill its categorical signature from the two agreeing thirds and
+        # the sheet-wide alternating parity.
+        if observed and sum(label == expected for label in labels) >= 1:
+            labels = [expected if label == "gray" else label for label in labels]
+        labels = tuple(labels)
+        vertical, horizontal, _beige, _opposite, _neutral = signature_scores(
+            thirds, labels, bar_paper[cell])
+        orientation, confidence = exclusive(vertical, horizontal)
+        valid_bars.add(cell)
+        patterns.append(FiducialPattern(
+            fiducial_id=f"V[{cell[0]},{cell[1]}]",
+            cell=cell,
+            thirds=labels,
+            quad=bar_quads[cell],
+            vertical_score=vertical,
+            horizontal_score=horizontal,
+            orientation=orientation,
+            confidence=confidence,
+            kind="bar",
+        ))
 
-    # Structural fallback. The artwork has five encoded row intervals and four
-    # plain separators, so the encoded gaps occupy one alternating parity. If
-    # that parity has a strong sheet-wide beige separation, a washed-out,
-    # shadowed or overprinted 1.6 cm center may be filled in from its two outer
-    # thirds and its opposite-colour neighbors. No outer beige or no chromatic
-    # anchors means no inference.
-    row_beige = {
-        row: float(np.median([
-            gap_beige_scores[(col, row)] for col in range(FIDUCIAL_COLS)
-        ]))
-        for row in range(FIDUCIAL_ROWS - 1)
-    }
-    parity_strength = {
+    bridge_features = {}
+    for key, thirds in bridge_raw.items():
+        labels = classify(thirds)
+        bridge_features[key] = (
+            labels,
+            *signature_scores(thirds, labels, bridge_paper[key]),
+        )
+    row_beige = {}
+    for row in range(FIDUCIAL_ROWS - 1):
+        values = [feature[3] for key, feature in bridge_features.items()
+                  if key[1] == row]
+        if values:
+            row_beige[row] = float(np.median(values))
+    parity_beige = {
         parity: float(np.median([
-            score for row, score in row_beige.items() if row % 2 == parity
+            value for row, value in row_beige.items() if row % 2 == parity
         ]))
         for parity in (0, 1)
+        if any(row % 2 == parity for row in row_beige)
     }
-    encoded_parity = max(parity_strength, key=parity_strength.get)
-    other_parity = 1 - encoded_parity
-    structural = (parity_strength[encoded_parity] >= 0.42
-                  and parity_strength[encoded_parity]
-                  >= parity_strength[other_parity] + 0.16)
+    encoded_parity = (max(parity_beige, key=parity_beige.get)
+                      if parity_beige else 0)
+    other_value = parity_beige.get(1 - encoded_parity, 0.0)
+    encoded_value = parity_beige.get(encoded_parity, 0.0)
+    structural = (encoded_value >= 0.12
+                  and encoded_value >= other_value + BEIGE_ROW_CONTRAST_MIN)
 
-    gap_scores = {}
-    gap_inferred = {}
-    for cell, direct in gap_direct_scores.items():
-        col, row = cell
-        fallback = 0.0
-        if structural and row % 2 == encoded_parity:
-            fallback = float(
-                0.55 * gap_beige_scores[cell]
-                + 0.30 * gap_anchor_scores[cell]
-                + 0.15)
-        gap_scores[cell] = max(direct, fallback)
-        gap_inferred[cell] = (direct < HORIZONTAL_SCORE_MIN
-                              <= fallback)
-
-    horizontal_by_cell = {(col, row): 0.0
-                          for row in range(FIDUCIAL_ROWS)
-                          for col in range(FIDUCIAL_COLS)}
-    gap_by_cell = {}
-    inferred_by_cell = {}
-    for (col, row), score in gap_scores.items():
-        if score < HORIZONTAL_SCORE_MIN:
+    # A weak individual beige middle may be filled only after other lanes have
+    # established the alternating beige parity. Coloured, opposite end thirds
+    # remain mandatory. This is the requested "fill in the blank" fallback.
+    for key, thirds in sorted(bridge_raw.items(),
+                              key=lambda item: (item[0][1], item[0][0], item[0][2])):
+        col, row, lane = key
+        if row % 2 != encoded_parity:
             continue
-        for neighbor in ((col, row), (col, row + 1)):
-            if score > horizontal_by_cell[neighbor]:
-                horizontal_by_cell[neighbor] = score
-                gap_by_cell[neighbor] = gap_classes[(col, row)]
-                inferred_by_cell[neighbor] = gap_inferred[(col, row)]
-
-    patterns = tuple(
-        FiducialPattern(
+        # Both complete chromatic bars are physical anchors. This rejects a
+        # bridge that merely has one narrow lane inside the image while the
+        # full bottom bar is clipped by the camera edge.
+        if (col, row) not in valid_bars or (col, row + 1) not in valid_bars:
+            continue
+        labels, _vertical, _direct, beige, _opposite, _centre_neutral = \
+            bridge_features[key]
+        labels = list(labels)
+        expected_lower = ("purple" if (col + row) % 2 == purple_parity
+                          else "green")
+        expected_upper = ("purple" if (col + row + 1) % 2 == purple_parity
+                          else "green")
+        if labels[0] == "gray":
+            labels[0] = expected_lower
+        if labels[2] == "gray":
+            labels[2] = expected_upper
+        labels = tuple(labels)
+        vertical, direct, beige, opposite, centre_neutral = signature_scores(
+            thirds, labels, bridge_paper[key])
+        fallback = 0.0
+        if structural and opposite:
+            fallback = float(
+                0.50 * opposite + 0.12 * centre_neutral
+                + 0.20 * min(1.0, encoded_value / 0.35)
+                + 0.08 * beige + 0.10)
+        horizontal = max(direct, fallback)
+        inferred = direct < ORIENTATION_SCORE_MIN <= fallback
+        orientation, confidence = exclusive(vertical, horizontal)
+        patterns.append(FiducialPattern(
+            fiducial_id=f"H[{col},{row // 2},{lane}]",
             cell=(col, row),
-            thirds=classes[(col, row)],
-            gap_thirds=gap_by_cell.get((col, row)),
-            vertical_score=vertical_scores[(col, row)],
-            horizontal_score=horizontal_by_cell[(col, row)],
-            horizontal_inferred=inferred_by_cell.get((col, row), False),
-        )
-        for row in range(FIDUCIAL_ROWS)
-        for col in range(FIDUCIAL_COLS)
-    )
-    required = int(np.ceil(MIN_ORIENTATION_VOTE_FRACTION * len(patterns)))
-    vertical_votes = sum(pattern.vertical_score >= VERTICAL_SCORE_MIN
-                         for pattern in patterns)
-    horizontal_votes = sum(pattern.horizontal_score >= HORIZONTAL_SCORE_MIN
-                           for pattern in patterns)
-    orientations = tuple(
-        mode for mode, votes in (("vertical", vertical_votes),
-                                 ("horizontal", horizontal_votes))
-        if votes >= required
-    )
-    if not orientations:
-        raise ColorGridError(
-            "the 8x10 chromatic lattice is valid, but its internal thirds do "
-            f"not encode a supported orientation (vertical votes "
-            f"{vertical_votes}/80, horizontal votes {horizontal_votes}/80)",
-            stage="orientation",
-            lattice=[cell.quad for cell in lattice.cells if cell.full],
-        )
-    if requested_mode is not None and requested_mode not in orientations:
-        detected = "+".join(orientations)
-        raise ColorGridError(
-            f"detected {detected} block orientation, but requested "
-            f"{requested_mode} block orientation",
-            stage="orientation",
-            lattice=[cell.quad for cell in lattice.cells if cell.full],
-        )
-    return CombinedGridCalibration(
+            thirds=labels,
+            quad=bridge_quads[key],
+            vertical_score=vertical,
+            horizontal_score=horizontal,
+            orientation=orientation,
+            confidence=confidence,
+            inferred=inferred and orientation == "horizontal",
+            kind="bridge",
+        ))
+
+    bar_patterns = [pattern for pattern in patterns if pattern.kind == "bar"]
+    bridge_patterns = [pattern for pattern in patterns if pattern.kind == "bridge"]
+    vertical_votes = sum(pattern.orientation == "vertical"
+                         for pattern in bar_patterns)
+    horizontal_votes = sum(pattern.orientation == "horizontal"
+                           for pattern in bridge_patterns)
+    vertical_support = vertical_votes / max(1, len(bar_patterns))
+    horizontal_support = horizontal_votes / max(1, len(bridge_patterns))
+    has_vertical = (len(bar_patterns) >= minimum_visible
+                    and vertical_support >= MIN_ORIENTATION_VOTE_FRACTION)
+    has_horizontal = (len(bridge_patterns) >= minimum_visible
+                      and horizontal_support >= MIN_ORIENTATION_VOTE_FRACTION)
+    if has_vertical and has_horizontal:
+        inferred_orientation = "mixed"
+        support = min(vertical_support, horizontal_support)
+        winning = [pattern for pattern in patterns
+                   if pattern.orientation in ("vertical", "horizontal")]
+    elif has_vertical:
+        inferred_orientation = "vertical"
+        support = vertical_support
+        winning = [pattern for pattern in patterns
+                   if pattern.orientation == "vertical"]
+    elif has_horizontal:
+        inferred_orientation = "horizontal"
+        support = horizontal_support
+        winning = [pattern for pattern in patterns
+                   if pattern.orientation == "horizontal"]
+    else:
+        inferred_orientation = "unknown"
+        support = max(vertical_support, horizontal_support)
+        winning = []
+    mean_confidence = (float(np.mean([pattern.confidence for pattern in winning]))
+                       if winning else 0.0)
+    orientation_confidence = float(
+        np.clip(0.62 * support + 0.38 * mean_confidence, 0, 1))
+    calibration = CombinedGridCalibration(
         lattice=lattice,
         method=method,
-        patterns=patterns,
-        orientations=orientations,
+        patterns=tuple(patterns),
+        inferred_orientation=inferred_orientation,
+        orientation_confidence=orientation_confidence,
+        requested_mode=requested_mode,
     )
+    votes = calibration.orientation_votes
+    detail = (f"vertical={votes['vertical']}, horizontal={votes['horizontal']}, "
+              f"ambiguous={votes['ambiguous']}, confidence="
+              f"{orientation_confidence * 100:.1f}%")
+    if inferred_orientation == "unknown":
+        raise ColorGridError(
+            "the 8x10 chromatic lattice is valid, but its mutually exclusive "
+            f"internal signatures are ambiguous ({detail})",
+            stage="orientation",
+            lattice=[cell.quad for cell in lattice.cells if cell.full],
+            calibration=calibration,
+        )
+    # A pure opposite sheet is a mismatch.  The supplied woven sheet is
+    # intentionally ``mixed`` and is valid for either requested calibration
+    # mode only because each requested family independently reached consensus;
+    # no fiducial has voted for both.
+    requested_present = (
+        requested_mode == inferred_orientation
+        or (inferred_orientation == "mixed"
+            and ((requested_mode == "vertical" and has_vertical)
+                 or (requested_mode == "horizontal" and has_horizontal)))
+    )
+    if requested_mode is not None and not requested_present:
+        raise ColorGridError(
+            f"detected {inferred_orientation} block orientation, but requested "
+            f"{requested_mode} block orientation ({detail})",
+            stage="orientation",
+            lattice=[cell.quad for cell in lattice.cells if cell.full],
+            calibration=calibration,
+        )
+    return calibration
 
 
 def _strong_stripe_frame(frame: np.ndarray) -> np.ndarray:
@@ -694,6 +862,7 @@ def detect_combined_grids(frame: np.ndarray, *,
             "green_hue": COMBINED_GREEN_HUE,
             "magenta_hue": MAGENTA_HUE,
             "component_close": FULL_BAR_CLOSE_PX,
+            "neighbour_hops": (1, 2),
         }),
         ("relaxed faded bars", frame, combined_fiducial_spec(), {
             "min_area": COMBINED_MIN_AREA,
@@ -701,6 +870,7 @@ def detect_combined_grids(frame: np.ndarray, *,
             "green_hue": RELAXED_GREEN_HUE,
             "magenta_hue": RELAXED_MAGENTA_HUE,
             "component_close": RELAXED_BAR_CLOSE_PX,
+            "neighbour_hops": (1, 2),
         }),
         ("dark centre stripes", _strong_stripe_frame(frame), combined_stripe_spec(), {
             "min_area": max(40, COMBINED_MIN_AREA // 2),
@@ -709,6 +879,7 @@ def detect_combined_grids(frame: np.ndarray, *,
             "magenta_hue": RELAXED_MAGENTA_HUE,
             "use_opponent": False,
             "component_close": FULL_BAR_CLOSE_PX,
+            "neighbour_hops": (1, 2),
             "lattice_aspect_range": STRIPE_ASPECT_RANGE,
             # The relative-saturation stencil intentionally keeps only the
             # stripe cores. Blur and dot gain can therefore shrink or expand
@@ -725,7 +896,12 @@ def detect_combined_grids(frame: np.ndarray, *,
                 candidate,
                 spec,
                 process_width=process_width,
-                evidence=evidence,
+                # Combined targets may be camera-cropped. The lattice stage is
+                # allowed to extrapolate an 8x10 homography from a broad partial
+                # view; the decoder above still counts only fully visible,
+                # locally ink-supported fiducials. Legacy calibration sheets
+                # retain their strict full-window behavior.
+                evidence=True,
                 **options,
             )
             if method == "dark centre stripes":
@@ -784,7 +960,9 @@ class PrintedGridEvidence:
         self._kind = None
         self._method = None
         self._patterns = ()
-        self._orientations = ()
+        self._orientation = "unknown"
+        self._orientation_confidence = 0.0
+        self._requested_mode = None
         self._evidence = PaperGridEvidence(legacy_spec)
 
     @property
@@ -793,8 +971,12 @@ class PrintedGridEvidence:
         if calibration is None:
             return None
         return (CombinedGridCalibration(
-                    calibration, self._method or "full bars",
-                    self._patterns, self._orientations)
+                    lattice=calibration,
+                    method=self._method or "full bars",
+                    patterns=self._patterns,
+                    inferred_orientation=self._orientation,
+                    orientation_confidence=self._orientation_confidence,
+                    requested_mode=self._requested_mode)
                 if self._kind == "combined" else calibration)
 
     @property
@@ -809,7 +991,9 @@ class PrintedGridEvidence:
         self._kind = None
         self._method = None
         self._patterns = ()
-        self._orientations = ()
+        self._orientation = "unknown"
+        self._orientation_confidence = 0.0
+        self._requested_mode = None
         self._evidence = PaperGridEvidence(self.legacy_spec)
 
     def add(self, calibration):
@@ -820,7 +1004,9 @@ class PrintedGridEvidence:
             if combined:
                 self._method = calibration.method
                 self._patterns = calibration.patterns
-                self._orientations = calibration.orientations
+                self._orientation = calibration.orientation
+                self._orientation_confidence = calibration.orientation_confidence
+                self._requested_mode = calibration.requested_mode
                 self._evidence = PaperGridEvidence(calibration.spec)
         elif self._kind != kind:
             raise ColorGridError(

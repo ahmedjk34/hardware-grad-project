@@ -55,7 +55,7 @@ def main() -> int:
             for line in read_available(port):
                 print(line)
 
-            print("Enter an integer angle from 0 to 180 degrees, or q to quit.")
+            print("Enter an integer angle from 0 to 180 degrees (O uses 30 degrees), or q to quit.")
             while True:
                 try:
                     raw = input("Servo angle> ").strip().lower()

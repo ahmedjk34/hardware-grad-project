@@ -23,7 +23,7 @@ What the firmware understands (build_test_v1)
       col/row may be 0 for calibration; B 0 0 <level> is a no-op
     Z             the Z / block-level calibration table
     U / D         jog Z up / down
-    O / C         gripper open / close
+    O / C         gripper open (30°) / close (90°)
     A <degrees>   auxiliary stepper relative turn, -360..360; +CW / -CCW
     R / RR        select vertical / horizontal grid; no physical rotation
 

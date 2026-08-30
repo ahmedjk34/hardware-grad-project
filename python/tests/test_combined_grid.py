@@ -99,23 +99,18 @@ def render_target(warp=None, out_size=None, fade=0.0, encoding="combined",
                               for value, paper in zip(BEIGE, PAPER))
                 for gap_x0, gap_x1 in ((x0, x0 + 2.2),
                                        (x0 + 3.8, x1)):
+                    # Erase a quarter of the difficult 1.6 cm beige middles.
+                    # Other lanes establish the encoded row parity, after
+                    # which opposite-colour end thirds may fill these blanks.
+                    lane_beige = (PAPER if missing_horizontal_center
+                                  and (col + row) % 4 == 0 else beige)
                     cv2.rectangle(
                         image,
                         (round(gap_x0 * PX_PER_CM),
                          height - round(gap_y1 * PX_PER_CM)),
                         (round(gap_x1 * PX_PER_CM) - 1,
                          height - round(gap_y0 * PX_PER_CM) - 1),
-                        beige,
-                        -1,
-                    )
-                if missing_horizontal_center:
-                    cv2.rectangle(
-                        image,
-                        (round((x0 + 2.2) * PX_PER_CM),
-                         height - round(gap_y1 * PX_PER_CM)),
-                        (round((x0 + 3.8) * PX_PER_CM) - 1,
-                         height - round(gap_y0 * PX_PER_CM) - 1),
-                        beige,
+                        lane_beige,
                         -1,
                     )
     if warp is None:
@@ -159,20 +154,29 @@ check("combined target is selected before the legacy detector",
 check("all 80 chromatic fiducials are measured",
       len(found.found_cells) == 80 and found.metrics.parity_agreement == 1.0,
       found.describe())
-check("combined synthetic target decodes both orientation layers",
-      found.orientations == ("vertical", "horizontal"), found.describe())
-check("every fiducial has an internal pattern signature",
-      len(found.patterns) == 80
-      and all(len(pattern.thirds) == 3 for pattern in found.patterns),
+check("combined synthetic target is reported as mixed",
+      found.orientation == "mixed", found.describe())
+check("160 distinct fiducials have exclusive three-part signatures",
+      len(found.patterns) == 160
+      and all(len(pattern.thirds) == 3 for pattern in found.patterns)
+      and all(pattern.orientation in ("vertical", "horizontal", "unknown")
+              for pattern in found.patterns)
+      and found.orientation_votes == {
+          "vertical": 80, "horizontal": 80, "ambiguous": 0},
       found.patterns[0].signature)
-check("clear horizontal centers use primary beige detection",
-      not any(pattern.horizontal_inferred for pattern in found.patterns))
+check("no physical fiducial can vote for both orientations",
+      all(not (pattern.vertical_score >= 0.64
+                   and pattern.horizontal_score >= 0.64)
+              for pattern in found.patterns))
+check("clear beige centers use primary horizontal detection",
+      found.inferred_horizontal_cells == 0)
 
 muted_beige = render_target(encoding="combined", beige_fade=0.70)
 muted_fit = detect_printed_grid(
     muted_beige, legacy_horizontal, process_width=0)
 check("primary detector keeps very muted beige outer thirds",
-      "horizontal" in muted_fit.orientations
+      muted_fit.orientation == "mixed"
+      and muted_fit.orientation_votes["horizontal"] == 80
       and muted_fit.inferred_horizontal_cells == 0,
       muted_fit.describe())
 
@@ -185,10 +189,11 @@ missing_centers = render_target(
     missing_horizontal_center=True)
 filled_fit = detect_printed_grid(
     missing_centers, legacy_horizontal, process_width=0)
-inferred = sum(pattern.horizontal_inferred for pattern in filled_fit.patterns)
+inferred = filled_fit.inferred_horizontal_cells
 check("horizontal center blanks are filled from outer thirds and neighbors",
-      "horizontal" in filled_fit.orientations and inferred >= 64
-      and "H~" in filled_fit.pattern_label(0, 0),
+      filled_fit.orientation == "mixed" and inferred >= 16
+      and any(pattern.signature.startswith("H~:")
+              for pattern in filled_fit.patterns),
       f"{inferred}/80 inferred; {filled_fit.describe()}")
 
 # Single-layer variants make mode validation observable: a requested mode is
@@ -197,7 +202,10 @@ vertical_only = render_target(encoding="vertical")
 vertical_fit = detect_printed_grid(
     vertical_only, legacy, process_width=0)
 check("vertical-only thirds pass vertical mode",
-      vertical_fit.orientations == ("vertical",), vertical_fit.describe())
+      vertical_fit.orientation == "vertical"
+      and vertical_fit.orientation_votes["vertical"] == 80
+      and vertical_fit.orientation_votes["horizontal"] == 0,
+      vertical_fit.describe())
 try:
     detect_printed_grid(vertical_only, legacy_horizontal, process_width=0)
     check("vertical-only thirds refuse horizontal mode", False)
@@ -211,7 +219,10 @@ horizontal_only = render_target(encoding="horizontal")
 horizontal_fit = detect_printed_grid(
     horizontal_only, legacy_horizontal, process_width=0)
 check("horizontal-only thirds pass horizontal mode",
-      horizontal_fit.orientations == ("horizontal",), horizontal_fit.describe())
+      horizontal_fit.orientation == "horizontal"
+      and horizontal_fit.orientation_votes["vertical"] == 0
+      and horizontal_fit.orientation_votes["horizontal"] == 80,
+      horizontal_fit.describe())
 try:
     detect_printed_grid(horizontal_only, legacy, process_width=0)
     check("horizontal-only thirds refuse vertical mode", False)
@@ -226,7 +237,8 @@ draw_color_grid(annotated, found, labels=True, shade=0.0)
 check("annotated output includes decoded per-cell patterns",
       np.count_nonzero(annotated != image) > 1000
       and "V" in found.pattern_label(0, 0)
-      and "H" in found.pattern_label(0, 0),
+      and any(pattern.signature.startswith("H:")
+              for pattern in found.patterns),
       found.pattern_label(0, 0))
 
 mode_corners = {}
@@ -275,7 +287,8 @@ warped = render_target(matrix, (w, h), encoding="combined")
 tilted = detect_combined_grids(warped, process_width=0)[0]
 check("combined target survives perspective",
       len(tilted.found_cells) == 80 and tilted.metrics.residual_px < 1.0
-      and tilted.orientations == ("vertical", "horizontal"),
+      and tilted.orientation == "mixed"
+      and tilted.orientation_votes["ambiguous"] == 0,
       tilted.describe())
 
 # A poor printer can reduce the muted fill almost to paper while leaving the
@@ -313,7 +326,8 @@ check("combined target survives compound print/camera degradation",
       abused_found.metrics.window_observed == 80
       and len(abused_found.found_cells) >= 78
       and abused_found.metrics.parity_agreement == 1.0
-      and abused_found.orientations == ("vertical", "horizontal"),
+      and abused_found.orientation == "mixed"
+      and abused_found.orientation_votes["ambiguous"] == 0,
       abused_found.describe())
 
 # The user's supplied PNG is an optional local capture rather than a committed
@@ -323,12 +337,24 @@ capture = Path(__file__).resolve().parents[1] / "captures" / \
     "grad project grid white background.png"
 if capture.exists():
     real = cv2.imread(str(capture))
+    # Exact source-raster geometry: first bar starts at x=31, with 83 px muted,
+    # 60 px dark and 84 px muted after inclusive raster rounding. Its paired
+    # perpendicular bridge is 83 px colour, 60 px beige and 83 px colour.
+    check("supplied PNG retains measured 2.2+1.6+2.2 stripe boundaries",
+          np.all(real[50, 32:113] == GREEN)
+          and np.all(real[50, 115:173] == DARK_GREEN)
+          and np.all(real[50, 175:257] == GREEN)
+          and np.all(real[32:113, 50] == GREEN)
+          and np.all(real[115:173, 50] == BEIGE)
+          and np.all(real[175:256, 50] == MAGENTA))
     detected = detect_combined_grids(real, process_width=0)[0]
     check("supplied combined artwork fits all fiducials",
           len(detected.found_cells) == 80
           and detected.metrics.parity_agreement == 1.0
           and detected.metrics.residual_px < 1.0
-          and detected.orientations == ("vertical", "horizontal"),
+          and detected.orientation == "mixed"
+          and detected.orientation_votes == {
+              "vertical": 80, "horizontal": 80, "ambiguous": 0},
           detected.describe())
     for requested in ("vertical", "horizontal"):
         matched = detect_combined_grids(
@@ -337,5 +363,32 @@ if capture.exists():
               requested in matched.orientations, matched.describe())
 else:
     print("skip  supplied combined artwork: captures file not present")
+
+# The two camera captures contain six complete rows and a seventh row clipped
+# by the bottom image edge. The partial lattice may establish/extrapolate the
+# 8x10 homography, but only the 48 complete bars and their 48 complete woven
+# bridges may vote. LIVE_WITH_GRID also proves existing UI lines do not poison
+# the local colour measurements.
+captures = Path(__file__).resolve().parents[1] / "captures"
+for live_name in ("LIVE_RAW.png", "LIVE_WITH_GRID.png"):
+    live_path = captures / live_name
+    if not live_path.exists():
+        print(f"skip  {live_name}: capture not present")
+        continue
+    live = cv2.imread(str(live_path))
+    live_fit = detect_combined_grids(live, process_width=0)[0]
+    bar_patterns = [pattern for pattern in live_fit.patterns
+                    if pattern.kind == "bar"]
+    check(f"{live_name} recovers every complete visible fiducial",
+          live_fit.metrics.lattice_shape == (FIDUCIAL_COLS, FIDUCIAL_ROWS)
+          and live_fit.orientation == "mixed"
+          and live_fit.orientation_votes == {
+              "vertical": 48, "horizontal": 48, "ambiguous": 0},
+          live_fit.describe())
+    check(f"{live_name} disqualifies the clipped bottom row",
+          len(bar_patterns) == 48
+          and all(np.max(pattern.quad[:, 1]) <= live.shape[0] - 3
+                  for pattern in bar_patterns),
+          f"{len(bar_patterns)} complete bars")
 
 raise SystemExit(1 if failed else 0)
