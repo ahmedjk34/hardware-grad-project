@@ -144,12 +144,16 @@ def report(calibration, grid, convention):
             f"ambiguous={votes['ambiguous']}; "
             f"confidence={calibration.orientation_confidence * 100:.1f}%"
         )
-        lines.append(
-            f"       measured patterns={len(calibration.patterns)}/160; "
-            f"unobserved/partial={calibration.unobserved_patterns}; "
-            f"fallback horizontal centers="
-            f"{calibration.inferred_horizontal_cells}"
+        pattern_line = (
+            f"       measured {grid.mode} patterns="
+            f"{len(calibration.patterns)}/80; "
+            f"unobserved/partial={calibration.unobserved_patterns}"
         )
+        if grid.mode == "horizontal":
+            pattern_line += (
+                f"; fallback beige middles="
+                f"{calibration.inferred_horizontal_cells}")
+        lines.append(pattern_line)
         requested_count = votes[grid.mode]
         lines.append(
             f"       requested {grid.mode} layer: present "

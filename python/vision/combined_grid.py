@@ -12,9 +12,11 @@ horizontal-pattern fiducial.  The four other row intervals are plain paper.
 
 This is a woven design, not one fiducial voting twice.  The 8 x 10 chromatic
 lattice supplies geometry; 80 bar patterns and 80 perpendicular bridge
-patterns carry mutually exclusive orientation classifications.  Beige is a
-real part of the horizontal signature, but beige alone can never establish a
-sheet or a horizontal vote: both coloured end thirds must also agree.
+patterns carry mutually exclusive orientation classifications. The requested
+mode selects exactly one family for aggregation, reporting and overlay; the
+inactive family is never returned. Beige is a real part of the horizontal
+signature, but beige alone can never establish a sheet or a horizontal vote:
+both coloured end thirds must also agree.
 
 The fiducial lattice describes page centimetres, not either block layout.  One
 homography therefore measures the shared 24.3 x 40.0 cm holder plane; the
@@ -167,8 +169,6 @@ class CombinedGridCalibration:
     @property
     def orientations(self):
         """Orientation classes present, retained for older UI consumers."""
-        if self.orientation == "mixed":
-            return ("vertical", "horizontal")
         return ((self.orientation,) if self.orientation in
                 ("vertical", "horizontal") else ())
 
@@ -194,8 +194,8 @@ class CombinedGridCalibration:
 
     @property
     def unobserved_patterns(self):
-        # 80 long-axis bars plus 80 perpendicular outer-lane bridges.
-        return max(0, 160 - len(self.patterns))
+        # One mode exposes one 80-fiducial family at a time.
+        return max(0, 80 - len(self.patterns))
 
     @property
     def pattern_map(self):
@@ -420,7 +420,7 @@ def _beige_distance(sample: ColorRegionStats, paper: ColorRegionStats) -> float:
 
 
 def _decode_patterns(frame: np.ndarray, lattice: ColorGridCalibration,
-                     method: str, requested_mode: str | None):
+                     method: str, requested_mode: str):
     """Decode the two perpendicular fiducial families without shared votes."""
     sample_frame = white_balance(frame)
     inset = SUBREGION_INSET_CM
@@ -689,9 +689,12 @@ def _decode_patterns(frame: np.ndarray, lattice: ColorGridCalibration,
         horizontal = max(direct, fallback)
         inferred = direct < ORIENTATION_SCORE_MIN <= fallback
         orientation, confidence = exclusive(vertical, horizontal)
+        pair_index = (row - encoded_parity) // 2
+        horizontal_row = pair_index * 2 + (1 if lane == "R" else 0)
+        logical_cell = (col, horizontal_row)
         patterns.append(FiducialPattern(
-            fiducial_id=f"H[{col},{row // 2},{lane}]",
-            cell=(col, row),
+            fiducial_id=f"H[{logical_cell[0]},{logical_cell[1]}]",
+            cell=logical_cell,
             thirds=labels,
             quad=bridge_quads[key],
             vertical_score=vertical,
@@ -714,25 +717,28 @@ def _decode_patterns(frame: np.ndarray, lattice: ColorGridCalibration,
                     and vertical_support >= MIN_ORIENTATION_VOTE_FRACTION)
     has_horizontal = (len(bridge_patterns) >= minimum_visible
                       and horizontal_support >= MIN_ORIENTATION_VOTE_FRACTION)
-    if has_vertical and has_horizontal:
-        inferred_orientation = "mixed"
-        support = min(vertical_support, horizontal_support)
-        winning = [pattern for pattern in patterns
-                   if pattern.orientation in ("vertical", "horizontal")]
+    # Mode is a decoder selector, not a post-decode label. Both pattern
+    # families may be sampled internally because they share one homography and
+    # colour model, but callers receive only the requested family's cells.
+    # Consequently one run can never report or draw both V and H patterns.
+    if requested_mode == "vertical":
+        selected_patterns = bar_patterns
+        requested_present = has_vertical
+        support = vertical_support
+    else:
+        selected_patterns = bridge_patterns
+        requested_present = has_horizontal
+        support = horizontal_support
+    winning = [pattern for pattern in selected_patterns
+               if pattern.orientation == requested_mode]
+    if requested_present:
+        inferred_orientation = requested_mode
     elif has_vertical:
         inferred_orientation = "vertical"
-        support = vertical_support
-        winning = [pattern for pattern in patterns
-                   if pattern.orientation == "vertical"]
     elif has_horizontal:
         inferred_orientation = "horizontal"
-        support = horizontal_support
-        winning = [pattern for pattern in patterns
-                   if pattern.orientation == "horizontal"]
     else:
         inferred_orientation = "unknown"
-        support = max(vertical_support, horizontal_support)
-        winning = []
     mean_confidence = (float(np.mean([pattern.confidence for pattern in winning]))
                        if winning else 0.0)
     orientation_confidence = float(
@@ -740,7 +746,7 @@ def _decode_patterns(frame: np.ndarray, lattice: ColorGridCalibration,
     calibration = CombinedGridCalibration(
         lattice=lattice,
         method=method,
-        patterns=tuple(patterns),
+        patterns=tuple(selected_patterns),
         inferred_orientation=inferred_orientation,
         orientation_confidence=orientation_confidence,
         requested_mode=requested_mode,
@@ -757,17 +763,7 @@ def _decode_patterns(frame: np.ndarray, lattice: ColorGridCalibration,
             lattice=[cell.quad for cell in lattice.cells if cell.full],
             calibration=calibration,
         )
-    # A pure opposite sheet is a mismatch.  The supplied woven sheet is
-    # intentionally ``mixed`` and is valid for either requested calibration
-    # mode only because each requested family independently reached consensus;
-    # no fiducial has voted for both.
-    requested_present = (
-        requested_mode == inferred_orientation
-        or (inferred_orientation == "mixed"
-            and ((requested_mode == "vertical" and has_vertical)
-                 or (requested_mode == "horizontal" and has_horizontal)))
-    )
-    if requested_mode is not None and not requested_present:
+    if not requested_present:
         raise ColorGridError(
             f"detected {inferred_orientation} block orientation, but requested "
             f"{requested_mode} block orientation ({detail})",
@@ -853,8 +849,10 @@ def _error_rank(error: ColorGridError):
 def detect_combined_grids(frame: np.ndarray, *,
                           process_width: int = DEFAULT_PROCESS_WIDTH,
                           evidence: bool = False,
-                          requested_mode: str | None = None):
-    """Return every valid target placement using progressively safer fallbacks."""
+                          requested_mode: str = "vertical"):
+    """Decode only ``requested_mode`` using progressively safer fallbacks."""
+    if requested_mode not in ("vertical", "horizontal"):
+        raise ValueError("requested_mode must be 'vertical' or 'horizontal'")
     errors = []
     passes = (
         ("full bars", frame, combined_fiducial_spec(), {

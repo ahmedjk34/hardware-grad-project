@@ -124,7 +124,9 @@ all projected thirds with relative channels, HSV and Lab. The woven artwork
 contains 80 muted/dark/muted vertical patterns and 80 separate
 colour/beige/opposite-colour horizontal bridges. Every physical pattern gets
 one class only; a beige bridge is never copied as a second vote onto either
-neighboring bar. Beige never detects the sheet by itself; both chromatic end
+neighboring bar. The active `--mode` selects which family is returned and
+drawn: vertical shows only V patterns, horizontal only H patterns. Beige never
+detects the sheet by itself; both chromatic end
 thirds and the sheet-wide alternating parity must agree. It still refuses a
 result unless the lattice geometry, colour parity and requested orientation
 layer agree. It

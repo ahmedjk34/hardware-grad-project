@@ -154,28 +154,44 @@ check("combined target is selected before the legacy detector",
 check("all 80 chromatic fiducials are measured",
       len(found.found_cells) == 80 and found.metrics.parity_agreement == 1.0,
       found.describe())
-check("combined synthetic target is reported as mixed",
-      found.orientation == "mixed", found.describe())
-check("160 distinct fiducials have exclusive three-part signatures",
-      len(found.patterns) == 160
+check("vertical mode reports only vertical patterns",
+      found.orientation == "vertical", found.describe())
+check("vertical mode exposes exactly its 80 three-part fiducials",
+      len(found.patterns) == 80
       and all(len(pattern.thirds) == 3 for pattern in found.patterns)
-      and all(pattern.orientation in ("vertical", "horizontal", "unknown")
+      and all(pattern.kind == "bar" and pattern.orientation == "vertical"
               for pattern in found.patterns)
       and found.orientation_votes == {
-          "vertical": 80, "horizontal": 80, "ambiguous": 0},
+          "vertical": 80, "horizontal": 0, "ambiguous": 0},
       found.patterns[0].signature)
-check("no physical fiducial can vote for both orientations",
-      all(not (pattern.vertical_score >= 0.64
-                   and pattern.horizontal_score >= 0.64)
-              for pattern in found.patterns))
+horizontal_found = detect_printed_grid(image, legacy_horizontal, process_width=0)
+check("horizontal mode reports only horizontal patterns",
+      horizontal_found.orientation == "horizontal"
+      and len(horizontal_found.patterns) == 80
+      and all(pattern.kind == "bridge"
+              and pattern.orientation == "horizontal"
+              for pattern in horizontal_found.patterns)
+      and horizontal_found.orientation_votes == {
+          "vertical": 0, "horizontal": 80, "ambiguous": 0},
+      horizontal_found.describe())
+expected_cells = {(col, row) for col in range(FIDUCIAL_COLS)
+                  for row in range(FIDUCIAL_ROWS)}
+check("both modes expose the same logical 8x10 cell addresses",
+      {pattern.cell for pattern in found.patterns} == expected_cells
+      and {pattern.cell for pattern in horizontal_found.patterns}
+      == expected_cells)
+check("the two mode runs never expose the other pattern family",
+      not any(pattern.kind == "bridge" for pattern in found.patterns)
+      and not any(pattern.kind == "bar"
+                  for pattern in horizontal_found.patterns))
 check("clear beige centers use primary horizontal detection",
-      found.inferred_horizontal_cells == 0)
+      horizontal_found.inferred_horizontal_cells == 0)
 
 muted_beige = render_target(encoding="combined", beige_fade=0.70)
 muted_fit = detect_printed_grid(
     muted_beige, legacy_horizontal, process_width=0)
 check("primary detector keeps very muted beige outer thirds",
-      muted_fit.orientation == "mixed"
+      muted_fit.orientation == "horizontal"
       and muted_fit.orientation_votes["horizontal"] == 80
       and muted_fit.inferred_horizontal_cells == 0,
       muted_fit.describe())
@@ -191,7 +207,7 @@ filled_fit = detect_printed_grid(
     missing_centers, legacy_horizontal, process_width=0)
 inferred = filled_fit.inferred_horizontal_cells
 check("horizontal center blanks are filled from outer thirds and neighbors",
-      filled_fit.orientation == "mixed" and inferred >= 16
+      filled_fit.orientation == "horizontal" and inferred >= 16
       and any(pattern.signature.startswith("H~:")
               for pattern in filled_fit.patterns),
       f"{inferred}/80 inferred; {filled_fit.describe()}")
@@ -234,12 +250,18 @@ except ColorGridError as exc:
 
 annotated = image.copy()
 draw_color_grid(annotated, found, labels=True, shade=0.0)
-check("annotated output includes decoded per-cell patterns",
+check("vertical annotation contains only vertical signatures",
       np.count_nonzero(annotated != image) > 1000
       and "V" in found.pattern_label(0, 0)
-      and any(pattern.signature.startswith("H:")
-              for pattern in found.patterns),
+      and not any(pattern.signature.startswith("H")
+                  for pattern in found.patterns),
       found.pattern_label(0, 0))
+horizontal_annotated = image.copy()
+draw_color_grid(horizontal_annotated, horizontal_found, labels=True, shade=0.0)
+check("horizontal annotation contains only horizontal signatures",
+      np.count_nonzero(horizontal_annotated != image) > 1000
+      and all(pattern.signature.startswith("H")
+              for pattern in horizontal_found.patterns))
 
 mode_corners = {}
 for mode in ("vertical", "horizontal"):
@@ -287,7 +309,13 @@ warped = render_target(matrix, (w, h), encoding="combined")
 tilted = detect_combined_grids(warped, process_width=0)[0]
 check("combined target survives perspective",
       len(tilted.found_cells) == 80 and tilted.metrics.residual_px < 1.0
-      and tilted.orientation == "mixed"
+      and tilted.orientation == "vertical"
+      and tilted.orientation_votes == {
+          "vertical": 80, "horizontal": 0, "ambiguous": 0}
+      and detect_combined_grids(
+          warped, process_width=0, requested_mode="horizontal"
+      )[0].orientation_votes == {
+          "vertical": 0, "horizontal": 80, "ambiguous": 0}
       and tilted.orientation_votes["ambiguous"] == 0,
       tilted.describe())
 
@@ -322,12 +350,16 @@ ok, encoded = cv2.imencode(".jpg", abused, [cv2.IMWRITE_JPEG_QUALITY, 50])
 assert ok
 abused = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
 abused_found = detect_combined_grids(abused, process_width=0)[0]
+abused_horizontal = detect_combined_grids(
+    abused, process_width=0, requested_mode="horizontal")[0]
 check("combined target survives compound print/camera degradation",
       abused_found.metrics.window_observed == 80
       and len(abused_found.found_cells) >= 78
       and abused_found.metrics.parity_agreement == 1.0
-      and abused_found.orientation == "mixed"
-      and abused_found.orientation_votes["ambiguous"] == 0,
+      and abused_found.orientation_votes == {
+          "vertical": 80, "horizontal": 0, "ambiguous": 0}
+      and abused_horizontal.orientation_votes == {
+          "vertical": 0, "horizontal": 80, "ambiguous": 0},
       abused_found.describe())
 
 # The user's supplied PNG is an optional local capture rather than a committed
@@ -348,27 +380,32 @@ if capture.exists():
           and np.all(real[115:173, 50] == BEIGE)
           and np.all(real[175:256, 50] == MAGENTA))
     detected = detect_combined_grids(real, process_width=0)[0]
-    check("supplied combined artwork fits all fiducials",
+    check("supplied artwork fits all vertical-mode fiducials",
           len(detected.found_cells) == 80
           and detected.metrics.parity_agreement == 1.0
           and detected.metrics.residual_px < 1.0
-          and detected.orientation == "mixed"
+          and detected.orientation == "vertical"
           and detected.orientation_votes == {
-              "vertical": 80, "horizontal": 80, "ambiguous": 0},
+              "vertical": 80, "horizontal": 0, "ambiguous": 0},
           detected.describe())
     for requested in ("vertical", "horizontal"):
         matched = detect_combined_grids(
             real, process_width=0, requested_mode=requested)[0]
         check(f"supplied artwork satisfies requested {requested} mode",
-              requested in matched.orientations, matched.describe())
+              matched.orientation == requested
+              and len(matched.patterns) == 80
+              and matched.orientation_votes[requested] == 80
+              and matched.orientation_votes[
+                  "horizontal" if requested == "vertical" else "vertical"] == 0,
+              matched.describe())
 else:
     print("skip  supplied combined artwork: captures file not present")
 
 # The two camera captures contain six complete rows and a seventh row clipped
 # by the bottom image edge. The partial lattice may establish/extrapolate the
-# 8x10 homography, but only the 48 complete bars and their 48 complete woven
-# bridges may vote. LIVE_WITH_GRID also proves existing UI lines do not poison
-# the local colour measurements.
+# 8x10 homography, but each mode may expose only its own 48 complete visible
+# patterns. LIVE_WITH_GRID also proves existing UI lines do not poison the
+# local colour measurements.
 captures = Path(__file__).resolve().parents[1] / "captures"
 for live_name in ("LIVE_RAW.png", "LIVE_WITH_GRID.png"):
     live_path = captures / live_name
@@ -377,18 +414,23 @@ for live_name in ("LIVE_RAW.png", "LIVE_WITH_GRID.png"):
         continue
     live = cv2.imread(str(live_path))
     live_fit = detect_combined_grids(live, process_width=0)[0]
-    bar_patterns = [pattern for pattern in live_fit.patterns
-                    if pattern.kind == "bar"]
-    check(f"{live_name} recovers every complete visible fiducial",
+    live_horizontal = detect_combined_grids(
+        live, process_width=0, requested_mode="horizontal")[0]
+    check(f"{live_name} recovers every complete visible pattern per mode",
           live_fit.metrics.lattice_shape == (FIDUCIAL_COLS, FIDUCIAL_ROWS)
-          and live_fit.orientation == "mixed"
           and live_fit.orientation_votes == {
-              "vertical": 48, "horizontal": 48, "ambiguous": 0},
-          live_fit.describe())
+              "vertical": 48, "horizontal": 0, "ambiguous": 0}
+          and live_horizontal.orientation_votes == {
+              "vertical": 0, "horizontal": 48, "ambiguous": 0}
+          and all(pattern.kind == "bar" for pattern in live_fit.patterns)
+          and all(pattern.kind == "bridge"
+                  for pattern in live_horizontal.patterns),
+          f"V {live_fit.describe()}; H {live_horizontal.describe()}")
     check(f"{live_name} disqualifies the clipped bottom row",
-          len(bar_patterns) == 48
+          len(live_fit.patterns) == 48
+          and len(live_horizontal.patterns) == 48
           and all(np.max(pattern.quad[:, 1]) <= live.shape[0] - 3
-                  for pattern in bar_patterns),
-          f"{len(bar_patterns)} complete bars")
+                  for pattern in live_fit.patterns),
+          f"{len(live_fit.patterns)} complete vertical patterns")
 
 raise SystemExit(1 if failed else 0)

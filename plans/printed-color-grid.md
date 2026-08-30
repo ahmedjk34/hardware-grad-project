@@ -64,10 +64,13 @@ projected subregion and classifies green, purple or beige/gray using normalized
 channel opponents, HSV saturation, Lab prototype distances and locally
 adaptive thresholds. Each physical pattern is assigned exactly one of
 vertical, horizontal or unknown; horizontal bridge evidence is never copied
-onto either neighboring chromatic bar. Decisions are aggregated independently
-over the 80 bars and 80 bridges. The complete target therefore reports
-`mixed: V=80, H=80, ?=0`, not `vertical+horizontal` with duplicate votes. Gray
-alone cannot vote: the fallback still has to pass the complete
+onto either neighboring chromatic bar. The selected calibration mode chooses
+one family before aggregation and output. Vertical mode returns only the 80
+bars (`80/0/0`); horizontal mode returns only the 80 bridges (`0/80/0`). The
+inactive family may support shared colour normalization internally but is not
+counted, labelled or drawn. The two selected views expose the same logical
+8 × 10 cell addresses. Gray alone cannot vote: the fallback still has to pass
+the complete
 8 × 10 chromatic geometry, alternating-colour parity, aspect and residual
 gates. All 80
 chromatic bars fit one page-coordinate homography; that same

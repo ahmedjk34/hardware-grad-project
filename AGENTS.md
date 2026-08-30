@@ -286,9 +286,11 @@ vertical-pattern fiducials, while the two perpendicular outer lanes in each of
 the 40 paired-row intervals are 80 separate colour/beige/opposite-colour
 horizontal-pattern fiducials. A decoded fiducial is exactly one of vertical,
 horizontal or unknown; the same chromatic bar must never inherit the vote of a
-neighboring beige interval. The full artwork therefore reports `mixed` with
-80 vertical and 80 horizontal cells, not `vertical+horizontal` with two votes
-on each of 80 cells. These numbers and the physical artwork are a pair:
+neighboring beige interval. The active mode selects the one family decoded and
+returned: vertical reports `V/H/? = 80/0/0`, horizontal reports `0/80/0`.
+Both expose the same logical 8x10 `(col,row)` address set. Neither overlays nor
+counts may contain the inactive family. These numbers and the physical artwork
+are a pair:
 changing one requires reprinting and updating `combined_grid.py` in the same
 change. Beige carries horizontal-orientation information, but it must never
 establish the lattice alone: both opposite-colour end thirds are mandatory.

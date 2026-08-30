@@ -210,6 +210,10 @@ const bool EN_INACTIVE_LEVEL = HIGH;
 
 const int SERVO_PIN = 6;
 
+// The feeder is calibrated for a tighter opening when both X/Y home switches
+// are physically active. Everywhere else, keep the wider pickup/release
+// margin. The home-switch check is made at the instant O/openServo() runs.
+const int SERVO_HOME_OPEN_ANGLE = 0;
 const int SERVO_OPEN_ANGLE = 30;
 const int SERVO_CLOSE_ANGLE = 90;
 
@@ -1809,13 +1813,17 @@ void disableMotors()
 
 void openServo()
 {
-  gripperServo.write(SERVO_OPEN_ANGLE);
+  const bool atFeederHome = isLimitHitAt(homeLimitIndexOf(AXIS_X)) &&
+                            isLimitHitAt(homeLimitIndexOf(AXIS_Y));
+  const int openAngle = atFeederHome ? SERVO_HOME_OPEN_ANGLE : SERVO_OPEN_ANGLE;
+
+  gripperServo.write(openAngle);
   servoIsOpen = true;
   statServoOpens++;
 
   Serial.println();
   Serial.print(F("SERVO: OPEN ("));
-  Serial.print(SERVO_OPEN_ANGLE);
+  Serial.print(openAngle);
   Serial.println(F(" deg)"));
 }
 
@@ -1834,7 +1842,7 @@ void closeServo()
 void setServoAngle(int angle)
 {
   gripperServo.write(angle);
-  servoIsOpen = (angle == SERVO_OPEN_ANGLE);
+  servoIsOpen = (angle == SERVO_HOME_OPEN_ANGLE || angle == SERVO_OPEN_ANGLE);
 
   Serial.println();
   Serial.print(F("SERVO: ANGLE ("));

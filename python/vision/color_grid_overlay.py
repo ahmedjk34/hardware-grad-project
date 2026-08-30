@@ -68,11 +68,13 @@ def draw_color_grid(frame: np.ndarray, calibration: ColorGridCalibration, *,
             quads[(col, row)] = _quad(calibration.cell_quad(col, row))
 
     combined = getattr(calibration, "is_combined", False)
+    show_bar_family = (not combined
+                       or getattr(calibration, "requested_mode", None) != "horizontal")
     measured_bar_keys = ({pattern.cell for pattern in calibration.patterns
                           if pattern.kind == "bar"}
                          if combined else set(quads))
 
-    if shade > 0:
+    if shade > 0 and show_bar_family:
         tinted = frame.copy()
         for key, quad in quads.items():
             if key not in measured_bar_keys:
@@ -81,12 +83,13 @@ def draw_color_grid(frame: np.ndarray, calibration: ColorGridCalibration, *,
             cv2.fillPoly(tinted, [quad], color)
         cv2.addWeighted(tinted, shade, frame, 1 - shade, 0, frame)
 
-    for key, quad in quads.items():
-        if key not in measured_bar_keys:
-            colour = PARTIAL_COLOR
-        else:
-            colour = ORIGIN_COLOR if key == (0, 0) else MAPPED_COLOR
-        cv2.polylines(frame, [quad], True, colour, 1, cv2.LINE_AA)
+    if show_bar_family:
+        for key, quad in quads.items():
+            if key not in measured_bar_keys:
+                colour = PARTIAL_COLOR
+            else:
+                colour = ORIGIN_COLOR if key == (0, 0) else MAPPED_COLOR
+            cv2.polylines(frame, [quad], True, colour, 1, cv2.LINE_AA)
 
     cv2.polylines(frame, [_quad(calibration.outline())], True, OUTLINE_COLOR, 2,
                   cv2.LINE_AA)
@@ -110,17 +113,19 @@ def draw_color_grid(frame: np.ndarray, calibration: ColorGridCalibration, *,
             # used at both.
             scale = (min(0.62, max(0.28, span / 150)) if combined
                      else min(1.2, max(0.36, span / 60)))
-            for (col, row), quad in quads.items():
-                if combined and (col, row) not in measured_bar_keys:
-                    continue
-                text = (calibration.pattern_label(col, row) if combined
-                        else f"{col},{row}")
-                (width, height), _ = cv2.getTextSize(text, FONT, scale, 1)
-                x, y = quad.mean(axis=0)
-                colour = ORIGIN_COLOR if (col, row) == (0, 0) else MAPPED_COLOR
-                _stamp(frame, text,
-                       (round(x - width / 2), round(y + height / 2)), colour,
-                       scale)
+            if show_bar_family:
+                for (col, row), quad in quads.items():
+                    if combined and (col, row) not in measured_bar_keys:
+                        continue
+                    text = (calibration.pattern_label(col, row) if combined
+                            else f"{col},{row}")
+                    (width, height), _ = cv2.getTextSize(text, FONT, scale, 1)
+                    x, y = quad.mean(axis=0)
+                    colour = (ORIGIN_COLOR if (col, row) == (0, 0)
+                              else MAPPED_COLOR)
+                    _stamp(frame, text,
+                           (round(x - width / 2), round(y + height / 2)), colour,
+                           scale)
 
             if combined:
                 for pattern in calibration.patterns:

@@ -16,8 +16,9 @@ The script reads the port, the board FQBN and the sketch path out of
 
 Board is an Arduino MEGA 2560. Serial is **9600 baud**. Multi-character
 commands need a newline; single digits do not. `V <angle>` sets the gripper
-servo to an arbitrary angle from 0 to 180 degrees. The `O` command opens the
-gripper to its calibrated open position of **30 degrees**; `C` closes it at
+servo to an arbitrary angle from 0 to 180 degrees. The `O` command checks the
+X/Y home switches: when both are active at the feeder it opens to **0 degrees**;
+otherwise it opens to the wider **30-degree** position. `C` closes it at
 90 degrees.
 
 The auxiliary 28BYJ-48 stepper uses these ULN2003 connections:
