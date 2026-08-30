@@ -622,8 +622,8 @@ float GRID_TRIM_Y_CM[GRID_MODE_COUNT] = {0.0, 1.6};
 // AI AGENT NOTE: For any user-marked "error" offsetting, use these variables.
 // They apply exactly like GRID_TRIM_* and shift every grid centre from home.
 // Keep these paired with config/rig.json and start new error calibration at 0.
-float GRID_ERROR_OFFSET_X_CM[GRID_MODE_COUNT] = {0.3, 0.0};
-float GRID_ERROR_OFFSET_Y_CM[GRID_MODE_COUNT] = {0.0, 0.0};
+float GRID_ERROR_OFFSET_X_CM[GRID_MODE_COUNT] = {0.15, 0.0};
+float GRID_ERROR_OFFSET_Y_CM[GRID_MODE_COUNT] = {-0.45, 0.0};
 
 // How far past the travel limit this mode lets a placed block's own EDGE sit.
 // This is NOT a trim: it moves nothing. It is the budget gridGeometryFits()

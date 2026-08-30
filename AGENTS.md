@@ -152,8 +152,8 @@ Worked out for both at the shipped calibration (including trims and error offset
 
 | mode | axis | block | gap | pitch | count | footprint | centres | block edges |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| vertical | X | 2.2 | 1.6 | 3.8 | **6** | 21.20 | 3.75 → 22.75 | 2.65 → 23.85 |
-| vertical | Y | 6.0 | 0.8 | 6.8 | **5** | 33.20 | 6.80 → 34.00 | 3.80 → 37.00 |
+| vertical | X | 2.2 | 1.6 | 3.8 | **6** | 21.20 | 3.60 → 22.60 | 2.50 → 23.70 |
+| vertical | Y | 6.0 | 0.8 | 6.8 | **5** | 33.20 | 6.35 → 33.55 | 3.35 → 36.55 |
 | horizontal | X | 6.0 | 1.6 | 7.6 | **2** | 13.60 | 9.15 → 16.75 | 6.15 → 19.75 |
 | horizontal | Y | 2.2 | 0.8 | 3.0 | **10** | 29.20 | 8.50 → 35.50 | 7.40 → 36.60 |
 
@@ -247,11 +247,10 @@ partners in the same commit. Positive trim moves the entire grid away from its
 home/feeder reference; negative trim moves it toward that reference. The
 shipped vertical trims are `0.0` on both axes; horizontal `trim_x` is `+1.6 cm`
 for the pickup-cell-to-horizontal-grid registration described above. The
-observed vertical placement corrections are `error_offset_x = +0.3 cm` and
-`error_offset_y = 0.0 cm`. These are incremental corrections: the prior
-`+0.5/+0.45 cm` correction was reduced by the newly measured `0.2/0.45 cm`
-positive-side residual, leaving the X correction at `+0.3 cm` and cancelling
-the Y correction.
+observed vertical placement corrections are `error_offset_x = +0.15 cm` and
+`error_offset_y = -0.45 cm`. These are cumulative corrections: the prior
+`+0.3/0.0 cm` correction was reduced by the newly measured `0.15/0.45 cm`
+positive-side residual, leaving X at `+0.15 cm` and Y at `-0.45 cm`.
 For any user-marked **error offsetting**, use `error_offset_x_cm` and
 `error_offset_y_cm` (and the paired firmware variables) as an additional
 signed shift exactly like the grid trim.
