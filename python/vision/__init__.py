@@ -13,5 +13,6 @@ fisheye        the 160-degree fisheye -> rectilinear correction
 overlays       shared OpenCV drawing helpers (grids, info boxes)
 block_detector segment the work surface's blocks out of one frame
 color_grid     find the printed two-colour calibration sheet and fit a grid
+combined_grid  detect the one-page target shared by both machine-grid modes
 color_grid_overlay  draw that fitted sheet, and the envelope it calibrates to
 """

@@ -91,7 +91,8 @@ def draw_color_grid(frame: np.ndarray, calibration: ColorGridCalibration, *,
             # used at both.
             scale = min(1.2, max(0.36, span / 60))
             for (col, row), quad in quads.items():
-                text = f"{col},{row}"
+                prefix = "F" if getattr(calibration, "is_combined", False) else ""
+                text = f"{prefix}{col},{row}"
                 (width, height), _ = cv2.getTextSize(text, FONT, scale, 1)
                 x, y = quad.mean(axis=0)
                 colour = ORIGIN_COLOR if (col, row) == (0, 0) else MAPPED_COLOR
@@ -165,6 +166,10 @@ def status_text(calibration: ColorGridCalibration | None, error: str | None = No
     if calibration is None:
         return f"paper grid: {error or 'not detected'}"
     metrics = calibration.metrics
+    if getattr(calibration, "is_combined", False):
+        return (f"combined sheet: {metrics.full_cells} fiducials, "
+                f"residual {metrics.residual_px:.2f} px, "
+                f"parity {metrics.parity_agreement * 100:.0f}%")
     return (f"paper grid: {metrics.full_cells} whole cells, "
             f"window {metrics.window_index + 1}/{metrics.window_candidates} "
             f"({metrics.window_observed}/{calibration.spec.cols * calibration.spec.rows}), "

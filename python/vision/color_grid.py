@@ -692,7 +692,9 @@ def white_balance(frame: np.ndarray,
 
 
 def color_masks(frame: np.ndarray, *, min_saturation: int = MIN_SATURATION,
-                min_value: int = MIN_VALUE,
+                min_value: int = MIN_VALUE, green_hue=GREEN_HUE,
+                magenta_hue=MAGENTA_HUE,
+                use_opponent: bool = True,
                 balance: bool = True) -> tuple[np.ndarray, np.ndarray]:
     """Return the (green, magenta) boolean masks for one BGR frame.
 
@@ -706,30 +708,36 @@ def color_masks(frame: np.ndarray, *, min_saturation: int = MIN_SATURATION,
     hsv = cv2.cvtColor(balanced, cv2.COLOR_BGR2HSV)
     hue, sat, val = cv2.split(hsv)
     strong = (sat >= min_saturation) & (val >= min_value)
-    green = (hue >= GREEN_HUE[0]) & (hue <= GREEN_HUE[1]) & strong
-    magenta = (hue >= MAGENTA_HUE[0]) & (hue <= MAGENTA_HUE[1]) & strong
+    green = (hue >= green_hue[0]) & (hue <= green_hue[1]) & strong
+    magenta = (hue >= magenta_hue[0]) & (hue <= magenta_hue[1]) & strong
 
     # A second, illumination-invariant vote.  Use the raw frame so a global
     # white-patch estimate cannot amplify one shadow differently from another.
     # Adding a small denominator pedestal suppresses quantisation noise in very
     # dark near-black pixels.
-    b, g, r = np.moveaxis(raw.astype(np.float32), 2, 0)
-    total = b + g + r + 12.0
-    spread = np.maximum.reduce((b, g, r)) - np.minimum.reduce((b, g, r))
-    weak_chroma = sat >= max(8, min_saturation // 2)
-    green |= (((g - r) / total >= GREEN_OPPONENT_MIN)
-              & (spread >= GREEN_CHANNEL_SPREAD_MIN)
-              & weak_chroma & (hue >= GREEN_HUE[0] - 8)
-              & (hue <= GREEN_HUE[1] + 8))
-    magenta |= ((((r + b) * 0.5 - g) / total >= MAGENTA_OPPONENT_MIN)
-                & (spread >= MAGENTA_CHANNEL_SPREAD_MIN)
-                & weak_chroma & (hue >= MAGENTA_HUE[0] - 8))
+    if use_opponent:
+        b, g, r = np.moveaxis(raw.astype(np.float32), 2, 0)
+        total = b + g + r + 12.0
+        spread = np.maximum.reduce((b, g, r)) - np.minimum.reduce((b, g, r))
+        weak_chroma = sat >= max(8, min_saturation // 2)
+        green |= (((g - r) / total >= GREEN_OPPONENT_MIN)
+                  & (spread >= GREEN_CHANNEL_SPREAD_MIN)
+                  & weak_chroma & (hue >= green_hue[0] - 8)
+                  & (hue <= green_hue[1] + 8))
+        magenta |= ((((r + b) * 0.5 - g) / total >= MAGENTA_OPPONENT_MIN)
+                    & (spread >= MAGENTA_CHANNEL_SPREAD_MIN)
+                    & weak_chroma & (hue >= magenta_hue[0] - 8))
     return green, magenta
 
 
-def _components(green, magenta, min_area, size):
+def _components(green, magenta, min_area, size, close_size=0):
     """Rotated rectangles for every colour blob, with a global axis sense."""
-    mask = cv2.morphologyEx((green | magenta).astype(np.uint8) * 255,
+    mask = (green | magenta).astype(np.uint8) * 255
+    if close_size:
+        close_size = max(3, int(close_size) | 1)
+        close_kernel = np.ones((close_size, close_size), np.uint8)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, close_kernel, iterations=1)
+    mask = cv2.morphologyEx(mask,
                             cv2.MORPH_OPEN, _OPEN_KERNEL, iterations=2)
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     width, height = size
@@ -788,7 +796,7 @@ def _components(green, magenta, min_area, size):
     return found
 
 
-def _prepare_lattice_candidates(found):
+def _prepare_lattice_candidates(found, aspect_range=LATTICE_ASPECT_RANGE):
     """Mark cell-like components and give their axes one robust global sense.
 
     The colour mask intentionally over-detects.  The live scene can contain a
@@ -801,7 +809,7 @@ def _prepare_lattice_candidates(found):
     for index, rect in enumerate(found):
         aspect = rect["long_len"] / max(rect["short_len"], 1e-6)
         rect["plausible"] = (
-            LATTICE_ASPECT_RANGE[0] <= aspect <= LATTICE_ASPECT_RANGE[1]
+            aspect_range[0] <= aspect <= aspect_range[1]
             and rect.get("color_purity", 1.0) >= MIN_COLOR_PURITY
         )
         if rect["plausible"] and not rect["clipped"]:
@@ -910,7 +918,8 @@ def _predicted_cell_area(matrix, key, spec):
     return abs(cv2.contourArea(quad.astype(np.float32)))
 
 
-def _recover_lattice(coords, found, eligible, spec):
+def _recover_lattice(coords, found, eligible, spec,
+                     fill_range=RECOVERY_FILL_RANGE):
     """Attach physical cells missed by the local walk using grid-space residuals."""
     coords = dict(coords)
     for _ in range(RECOVERY_PASSES):
@@ -945,7 +954,7 @@ def _recover_lattice(coords, found, eligible, spec):
                 continue
             predicted = _predicted_cell_area(matrix, key, spec)
             fill = found[index]["area"] / predicted if predicted > 0 else 0.0
-            if not (RECOVERY_FILL_RANGE[0] <= fill <= RECOVERY_FILL_RANGE[1]):
+            if not (fill_range[0] <= fill <= fill_range[1]):
                 continue
             proposals.append((error + abs(fill - 1.0) * 0.08, index, key))
 
@@ -965,7 +974,8 @@ def _recover_lattice(coords, found, eligible, spec):
     return coords
 
 
-def _walk_lattice(found, spec):
+def _walk_lattice(found, spec, aspect_range=LATTICE_ASPECT_RANGE,
+                  recovery_fill_range=RECOVERY_FILL_RANGE):
     """Fit the strongest lattice hypothesis, then recover disconnected cells.
 
     Index ``i`` counts along the short cell side and ``j`` along the long one.
@@ -974,7 +984,7 @@ def _walk_lattice(found, spec):
     expanded through the fitted homography, and ranked by physical coverage,
     chessboard parity and fit quality.
     """
-    eligible = _prepare_lattice_candidates(found)
+    eligible = _prepare_lattice_candidates(found, aspect_range)
     seeds = [index for index in eligible if found[index]["seed"]]
     if not seeds:
         return {}
@@ -992,7 +1002,8 @@ def _walk_lattice(found, spec):
         if len(walked) < 4 or identity in seen:
             continue
         seen.add(identity)
-        recovered = _recover_lattice(walked, found, eligible, spec)
+        recovered = _recover_lattice(
+            walked, found, eligible, spec, recovery_fill_range)
         matrix, mean_error, _max_error = _fit(recovered, found, lambda _index: True)
         if matrix is None:
             continue
@@ -1016,7 +1027,8 @@ def _fit(coords, found, keep):
     return matrix, float(error.mean()), float(error.max())
 
 
-def _score_fullness(coords, found, matrix, spec):
+def _score_fullness(coords, found, matrix, spec,
+                    fill_range=(FULL_CELL_FILL, MAX_FULL_CELL_FILL)):
     """Mark each assigned rectangle full or partial against the fitted lattice.
 
     Local by construction: the predicted footprint at one corner of a tilted
@@ -1035,7 +1047,7 @@ def _score_fullness(coords, found, matrix, spec):
         predicted = abs(cv2.contourArea(quad.astype(np.float32)))
         rect = found[index]
         rect["fill"] = rect["area"] / predicted if predicted > 0 else 0.0
-        rect["full"] = (FULL_CELL_FILL <= rect["fill"] <= MAX_FULL_CELL_FILL
+        rect["full"] = (fill_range[0] <= rect["fill"] <= fill_range[1]
                         and not rect["clipped"])
 
 
@@ -1294,6 +1306,13 @@ def detect_color_grids(frame: np.ndarray, spec: ColorGridSpec | None = None, *,
                        min_area: int = MIN_COMPONENT_AREA,
                        min_saturation: int = MIN_SATURATION,
                        min_value: int = MIN_VALUE,
+                       green_hue=GREEN_HUE,
+                       magenta_hue=MAGENTA_HUE,
+                       use_opponent: bool = True,
+                       component_close: int = 0,
+                       lattice_aspect_range=LATTICE_ASPECT_RANGE,
+                       full_fill_range=(FULL_CELL_FILL, MAX_FULL_CELL_FILL),
+                       recovery_fill_range=RECOVERY_FILL_RANGE,
                        balance: bool = True,
                        evidence: bool = False) -> tuple[ColorGridCalibration, ...]:
     """Find every strongly supported grid window in ``frame``.
@@ -1321,8 +1340,12 @@ def detect_color_grids(frame: np.ndarray, spec: ColorGridSpec | None = None, *,
     metrics.processing_size = work_size
 
     green, magenta = color_masks(working, min_saturation=min_saturation,
-                                 min_value=min_value, balance=balance)
-    found = _components(green, magenta, min_area * scale * scale, work_size)
+                                 min_value=min_value, green_hue=green_hue,
+                                 magenta_hue=magenta_hue,
+                                 use_opponent=use_opponent, balance=balance)
+    close_size = round(component_close * scale) if component_close else 0
+    found = _components(green, magenta, min_area * scale * scale, work_size,
+                        close_size=close_size)
     metrics.components = len(found)
 
     def boxes(subset=None):
@@ -1342,7 +1365,8 @@ def detect_color_grids(frame: np.ndarray, spec: ColorGridSpec | None = None, *,
                if len(found) < 8 else ""),
             stage="segment", candidates=boxes())
 
-    coords = _walk_lattice(found, spec)
+    coords = _walk_lattice(
+        found, spec, lattice_aspect_range, recovery_fill_range)
     metrics.assigned = len(coords)
     if len(coords) < 4:
         raise ColorGridError(
@@ -1356,14 +1380,14 @@ def detect_color_grids(frame: np.ndarray, spec: ColorGridSpec | None = None, *,
         raise ColorGridError("not enough whole blocks to fit the sheet",
                              stage="fit", candidates=boxes(),
                              lattice=boxes(coords))
-    _score_fullness(coords, found, matrix, spec)
+    _score_fullness(coords, found, matrix, spec, full_fill_range)
     matrix, mean_error, max_error = _fit(coords, found, lambda i: found[i]["full"])
     if matrix is None:
         raise ColorGridError(
             "no whole cells: every block in view is clipped by the paper edge, "
             "the frame edge, or something lying across the sheet",
             stage="fit", candidates=boxes(), lattice=boxes(coords))
-    _score_fullness(coords, found, matrix, spec)
+    _score_fullness(coords, found, matrix, spec, full_fill_range)
 
     metrics.residual_px = mean_error / scale
     metrics.max_residual_px = max_error / scale
@@ -1498,6 +1522,13 @@ def detect_color_grid(frame: np.ndarray, spec: ColorGridSpec | None = None, *,
                       min_area: int = MIN_COMPONENT_AREA,
                       min_saturation: int = MIN_SATURATION,
                       min_value: int = MIN_VALUE,
+                      green_hue=GREEN_HUE,
+                      magenta_hue=MAGENTA_HUE,
+                      use_opponent: bool = True,
+                      component_close: int = 0,
+                      lattice_aspect_range=LATTICE_ASPECT_RANGE,
+                      full_fill_range=(FULL_CELL_FILL, MAX_FULL_CELL_FILL),
+                      recovery_fill_range=RECOVERY_FILL_RANGE,
                       balance: bool = True,
                       evidence: bool = False,
                       window_index: int = 0) -> ColorGridCalibration:
@@ -1509,7 +1540,12 @@ def detect_color_grid(frame: np.ndarray, spec: ColorGridSpec | None = None, *,
     """
     calibrations = detect_color_grids(
         frame, spec, process_width=process_width, min_area=min_area,
-        min_saturation=min_saturation, min_value=min_value, balance=balance,
+        min_saturation=min_saturation, min_value=min_value,
+        green_hue=green_hue, magenta_hue=magenta_hue,
+        use_opponent=use_opponent, component_close=component_close,
+        lattice_aspect_range=lattice_aspect_range,
+        full_fill_range=full_fill_range,
+        recovery_fill_range=recovery_fill_range, balance=balance,
         evidence=evidence,
     )
     if not 0 <= window_index < len(calibrations):

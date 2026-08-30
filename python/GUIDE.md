@@ -109,15 +109,27 @@ image and is not evidence that camera and motor cells match. To calibrate:
 4. Hover cells and verify several displayed `G col row` commands with the rig
    before placing a block.
 
-There is a second, faster route. Lay the printed green/magenta calibration
-sheet in the work area, press `p` to see it detected, and press `k` to derive
-the same four corners from one complete frame and save them. It measures a
-hundred printed cell edges instead of asking you to aim at an invisible
-rectangle, and it writes the same `config/workspace_map.json`.
+There is a second, faster route. Print
+[`plans/assets/combined-calibration-grid.svg`](../plans/assets/combined-calibration-grid.svg)
+at 100% / actual size, never “fit to page”. Lay the combined A2
+green/magenta/beige calibration page in the work area with its physical
+lower-left page corner at holder home, press `p` to see its 8×10 chromatic
+fiducial lattice, and press `k` to derive the same four corners from one
+complete frame and save them. The beige portions help a human see the second
+orientation but are not required by detection; low-saturation beige is too
+close to white paper under real lighting. The detector automatically retries
+faded or cracked full bars and then their dark centre accents, using separate
+per-colour and local-contrast thresholds for uneven lighting. It still refuses
+a result unless the lattice geometry and alternating colour parity agree. It
+writes the same
+`config/workspace_map.json`, separately for the active mode. The older
+mode-specific sheets remain supported as a fallback.
 
 If the gantry hides interior cells, use **Evidence-Assisted Printed-Grid
 Calibration** instead: press `e`, press `Space` once for each useful safe
 gantry position, wait for `Evidence: ... READY TO SAVE`, then press `k`. The
+collector supports the combined target and both legacy targets, and locks onto
+the design used by its first accepted frame. The
 preview draws accepted physical cells solid green and inferred-only interior
 cells amber/dashed. It refuses to save unless the physical evidence covers all
 four corners and outer edges, so it never invents a workspace boundary. `x`
@@ -264,11 +276,18 @@ python camera/color_grid_check.py --mode horizontal
 python camera/color_grid_check.py --image IN.jpeg --save OUT.png
 ```
 
-The vertical sheet is 2.2 × 7.5 cm and the horizontal sheet 7.5 × 2.2 cm, both
-with 0.5 cm inner margins and alternating green/magenta cells. It is printed
-larger than the mapped grid on purpose, so the tool picks a mode-sized window
-of **whole** cells (10 × 6 vertical; 4 × 16 horizontal) anchored at the
-bottom-left of the image and ignores everything else.
+The current target is one A2 landscape page for both modes. Its detector uses
+an 8×10 lattice of 6.0 × 2.2 cm chromatic bars, with 0.8 cm X gaps and 1.6 cm
+Y gaps. These are **fiducials**, not block dimensions. Their fitted page plane
+is converted to the 24.3 × 40.0 cm holder envelope, then the active
+`MachineGrid` supplies either the 9×5 vertical cells or 3×15 horizontal cells.
+Labels beginning with `F` are fiducial coordinates, never firmware `B`/`G`
+coordinates. The page's physical lower-left corner must be aligned with holder
+home, and the combined route requires `--home-convention firmware`.
+
+The legacy vertical sheet is 2.2 × 7.5 cm and the legacy horizontal sheet
+7.5 × 2.2 cm, both with 0.5 cm inner margins. For those sheets the tool still
+picks a complete 10×6 or 4×16 whole-cell window as before.
 
 Every mapped cell is tinted and stamped with its `col,row`; whole cells outside
 the chosen window are outlined dull yellow, and cells clipped by the paper edge

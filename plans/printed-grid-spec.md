@@ -26,6 +26,17 @@ in the work area, and let the camera measure it.
 
 ## 2. The physical artefact
 
+The current artefact is one A2 landscape combined target. Its 8 × 10
+chromatic fiducial lattice is defined in `vision/combined_grid.py`: 6.0 × 2.2
+cm bars, 0.8 cm X gaps, 1.6 cm Y gaps, starting 0.8 cm from page left and 4.8
+cm from page bottom. The physical lower-left page corner is placed at holder
+home. One page-plane fit calibrates either mode; the active `MachineGrid` and
+mode-keyed workspace-map entry remain separate. Beige is nonessential visual
+information and calibration must survive its disappearance into white paper.
+
+The following is the retained legacy-sheet contract. These sheets remain a
+fallback and the evidence-assisted route still uses them.
+
 A printed sheet of alternating **green** and **magenta** blocks on white paper.
 
 | property | value | why |

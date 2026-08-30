@@ -270,16 +270,32 @@ X/Y envelope are refused, never silently clipped.
 
 | Where | What |
 | --- | --- |
-| `config/rig.json` -> `grid.modes.<mode>.block_x_cm` / `block_y_cm` / `gap_x_cm` / `gap_y_cm` | what `ColorGridSpec.from_config(mode=...)` expects to see on that sheet |
-| the physical printed sheets | vertical: 2.2 x 7.5 cm; horizontal: 7.5 x 2.2 cm; both with 0.5 cm inner margins |
-| `python/vision/color_grid.py` | detects it; refuses a sheet whose measured geometry disagrees |
+| `python/vision/combined_grid.py` | the current A2 page/fiducial dimensions and page-to-holder registration |
+| the current physical print | A2 landscape; 8 x 10 chromatic fiducials; lower-left page corner is holder home |
+| `config/rig.json` -> `grid.modes.<mode>.*` | applied after the shared page-plane fit; still stored separately per mode |
+| the two legacy physical sheets | vertical: 2.2 x 7.5 cm; horizontal: 7.5 x 2.2 cm; both with 0.5 cm inner margins |
+| `python/vision/color_grid.py` | detects legacy sheets and refuses a measured geometry mismatch |
 | `plans/printed-color-grid.md` | the full treatment, including the layout disagreement below |
 
-The sheet is a **physical artefact carrying a copy of the block geometry**, so
-it belongs on this list even though nothing can push a number onto paper. If
-`grid.block_*_cm` or `grid.gap_*_cm` changes, the sheet is wrong and must be
-reprinted; `ColorGridCalibration._check_geometry_matches` refuses rather than
-calibrating against stale paper.
+The current combined sheet measures the page plane independently of either
+block layout. It uses 6.0 x 2.2 cm fiducial bars, 0.8 cm X gaps and 1.6 cm Y
+gaps on a 59.4 x 42.0 cm A2 page, with the lattice starting 0.8 cm from page
+left and 4.8 cm from page bottom. These numbers and the physical artwork are a
+pair: changing one requires reprinting and updating `combined_grid.py` in the
+same change. Beige is visual-only; detection must be supported by the
+chromatic green/magenta parts because beige can disappear into paper.
+
+The physical lower-left page corner is the holder-home reference. The combined
+route therefore accepts only the `firmware` home convention. It yields the
+same holder-envelope corners for both modes, but `WorkspaceMap.from_grid()`
+still embeds and saves each mode's distinct grid geometry. Changing block or
+gap geometry invalidates the saved mode entry but does not require reprinting
+the combined page.
+
+The paragraphs below describe the retained legacy sheets. A legacy sheet is a
+**physical artefact carrying a copy of block geometry**. If a legacy mode's
+`block_*_cm` or `gap_*_cm` changes, that sheet must be reprinted;
+`ColorGridCalibration._check_geometry_matches` refuses a stale one.
 
 `ColorGridSpec.from_config(mode=...)` reads that mode's `cols + 1` and `rows +
 1`: each sheet prints a real block at **every** coordinate, coordinate zero

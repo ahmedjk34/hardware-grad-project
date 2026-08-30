@@ -9,6 +9,7 @@ an invisible rectangle.
 change is still correct. This document is how it works and what was measured.
 
 Implemented by `python/vision/color_grid.py` (geometry),
+`python/vision/combined_grid.py` (the one-page target and legacy fallback),
 `python/vision/color_grid_overlay.py` (drawing),
 `python/camera/color_grid_check.py` (a tool that does nothing but prove it
 works), the strict `p`/`k` routes in `camera/gridded_camera_feed.py` and
@@ -17,6 +18,47 @@ works), the strict `p`/`k` routes in `camera/gridded_camera_feed.py` and
 gridded feed: `e` starts it, Space accepts a frame and `k` saves once its
 coverage gates pass. See
 [Evidence-Assisted Printed-Grid Calibration](evidence-assisted-printed-grid-calibration.md).
+
+---
+
+## The current one-page target
+
+The current printable artefact is
+[`assets/combined-calibration-grid.svg`](assets/combined-calibration-grid.svg),
+one A2 landscape page carrying both visible
+block orientations. Detection treats its saturated green/magenta portions as
+an **8 × 10 fiducial lattice**, not as 80 machine blocks:
+
+| property | value |
+| --- | --- |
+| page | 59.4 × 42.0 cm, A2 landscape |
+| fiducial bar | 6.0 × 2.2 cm |
+| fiducial gaps | 0.8 cm X, 1.6 cm Y |
+| lattice | 8 columns × 10 rows |
+| first outer edge | 0.8 cm from page left, 4.8 cm from page bottom |
+| machine registration | physical lower-left page corner = holder home |
+
+The olive shades use a detector-local wider green hue window. Beige is never a
+required observation because its saturation is too close to white paper after
+printing. Detection first uses the full bars, then retries faded/cracked ink
+with stronger mask closing. If those fills have nearly disappeared, the dark
+centre accents are isolated with separate green and magenta Otsu thresholds
+plus local saturation contrast. The fallback still has to pass the complete
+8 × 10 geometry, alternating-colour parity, aspect and residual gates; it does
+not turn beige or arbitrary dark marks into calibration evidence. All 80
+chromatic bars fit one page-coordinate homography; that same
+fit yields the shared 24.3 × 40.0 cm holder envelope for either active mode.
+The resulting `WorkspaceMap` is still saved under the active mode and embeds
+that mode's independent block/gap/trim geometry.
+
+The `firmware` home convention is mandatory for the combined target. The
+`printed` convention below belongs only to the legacy real-block sheets.
+
+`detect_printed_grids()` tries this target first and falls back to the two
+legacy sheets. `PrintedGridEvidence` locks onto whichever target the first
+accepted frame used, so the existing evidence-assisted route works for the
+combined page too without mixing observations from two designs. Overlay labels
+`Fcol,row` name fiducials rather than build cells.
 
 ---
 

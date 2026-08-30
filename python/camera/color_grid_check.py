@@ -66,8 +66,8 @@ from vision.color_grid import (  # noqa: E402
     HOME_CONVENTIONS,
     ColorGridError,
     ColorGridSpec,
-    detect_color_grids,
 )
+from vision.combined_grid import detect_printed_grids  # noqa: E402
 from vision.color_grid_overlay import (  # noqa: E402
     draw_candidates,
     draw_color_grid,
@@ -116,8 +116,11 @@ def parse_args():
 def report(calibration, grid, convention):
     """Print the numbers a human needs to decide whether to trust the fit."""
     metrics = calibration.metrics
+    sheet_description = getattr(calibration, "target_description", None)
+    if sheet_description is None:
+        sheet_description = calibration.spec.describe()
     lines = [
-        f"Sheet: {calibration.spec.describe()}",
+        f"Sheet: {sheet_description}",
         f"Fit:   {calibration.describe()}",
         f"       {metrics.components} colour blobs, {metrics.assigned} on the lattice, "
         f"{metrics.lattice_shape[0]}x{metrics.lattice_shape[1]} whole",
@@ -161,7 +164,7 @@ def run_still(args, spec, grid):
     ui = {"labels": True, "rejected": True, "tint": 0, "envelope": True,
           "convention": args.home_convention, "selection": args.grid_window - 1}
     try:
-        calibrations = detect_color_grids(
+        calibrations = detect_printed_grids(
             frame, spec, process_width=args.process_width)
         if ui["selection"] >= len(calibrations):
             raise ColorGridError(
@@ -352,7 +355,7 @@ def run_camera(args, spec, grid):
             if now - last_detect >= interval:
                 last_detect = now
                 try:
-                    calibrations = detect_color_grids(
+                    calibrations = detect_printed_grids(
                         view, spec, process_width=process_width)
                     ui["calibrations"] = calibrations
                     if ui["selection"] < len(calibrations):

@@ -57,12 +57,20 @@ camera to a phone photograph of the same sheet (`colourcal`), and saves the
 result so every other tool inherits it. That matters: the rig's cast has been
 strong enough to make the sheet's green ink invisible to the grid detector.
 
-Calibrating by eye is optional. A printed green/magenta sheet at the rig's own
-cell geometry (7.5 × 2.2 cm cells, 0.5 cm inner margins) can be measured
-instead: press `p` to overlay it and `k` to calibrate from it, in either
+Calibrating by eye is optional. Print the canonical
+[combined A2 target](plans/assets/combined-calibration-grid.svg) at 100% / actual
+size (never “fit to page”). The green/magenta/beige target
+carries both block orientations on one page. Align the physical page's
+lower-left corner with holder home, press `p` to overlay its detected 8×10
+fiducial lattice, and press `k` to calibrate the active mode in either
 `gridded_camera_feed.py` or `rig_build_v1.py`, and check the detection first
 with `camera/color_grid_check.py`. See
 [plans/printed-color-grid.md](plans/printed-color-grid.md).
+
+The two older mode-specific sheets remain detectable as a fallback. The
+combined target always uses the `firmware` home convention; it measures one
+physical holder plane, while `workspace_map.json` still stores separate
+vertical and horizontal entries with their own grid geometry.
 
 When the gantry hides only interior sheet cells, use the non-moving gridded
 feed's **Evidence-Assisted Printed-Grid Calibration**: `e` starts a session,

@@ -85,8 +85,11 @@ from vision.color_grid import (  # noqa: E402
     HOME_CONVENTIONS,
     ColorGridError,
     ColorGridSpec,
-    detect_color_grid,
-    detect_color_grids,
+)
+from vision.combined_grid import (  # noqa: E402
+    PrintedGridEvidence,
+    detect_printed_grid,
+    detect_printed_grids,
 )
 from vision.color_grid_overlay import (  # noqa: E402
     draw_candidates,
@@ -95,7 +98,6 @@ from vision.color_grid_overlay import (  # noqa: E402
     draw_workspace_corners,
     status_text as paper_status_text,
 )
-from vision.grid_evidence import PaperGridEvidence  # noqa: E402
 from vision.camera_source import LatestFramePump, open_camera  # noqa: E402
 from vision.fisheye import INTERPOLATIONS, build_maps, undistort  # noqa: E402
 from vision.overlays import (  # noqa: E402
@@ -132,7 +134,7 @@ def analyze_paper_grid(frame, spec, process_width=PAPER_OVERLAY_WIDTH):
     a value instead of raised, and survives the trip back to the UI intact.
     """
     try:
-        return ((detect_color_grids(frame, spec, process_width=process_width), None),)
+        return ((detect_printed_grids(frame, spec, process_width=process_width), None),)
     except ColorGridError as exc:
         return ((None, exc),)
 
@@ -254,7 +256,7 @@ def paper_workspace_map(view, spec, grid, projection, convention, window_index=0
     is not usable and ``ValueError`` when the corners it implies fall outside
     the frame — both are sentences worth showing an operator verbatim.
     """
-    calibration = detect_color_grid(
+    calibration = detect_printed_grid(
         view, spec, process_width=0, window_index=window_index)
     corners = calibration.workspace_corners(grid, convention)
     workspace = WorkspaceMap.from_grid(grid, corners, view.shape[1::-1], projection)
@@ -319,10 +321,12 @@ def draw_paper_evidence(frame, evidence, *, detail=False):
                 _dashed_polyline(frame, quad, WARN_COLOR)
             if detail:
                 centre = tuple(round(value) for value in calibration.cell_center(col, row))
-                cv2.putText(frame, f"{col},{row}", centre,
+                prefix = "F" if getattr(calibration, "is_combined", False) else ""
+                label = f"{prefix}{col},{row}"
+                cv2.putText(frame, label, centre,
                             cv2.FONT_HERSHEY_SIMPLEX, 0.32,
                             (20, 20, 20), 3, cv2.LINE_AA)
-                cv2.putText(frame, f"{col},{row}", centre,
+                cv2.putText(frame, label, centre,
                             cv2.FONT_HERSHEY_SIMPLEX, 0.32,
                             (100, 255, 100) if (col, row) in observed else WARN_COLOR,
                             1, cv2.LINE_AA)
@@ -639,7 +643,7 @@ def main():
         "message": "ready",
     }
     paper = PaperGridTracker(paper_spec, max_hz=args.paper_hz)
-    evidence = PaperGridEvidence(paper_spec)
+    evidence = PrintedGridEvidence(paper_spec)
 
     def on_mouse(event, point):
         if point is None:
@@ -863,8 +867,8 @@ def main():
             if ui["evidence_capture"]:
                 ui["evidence_capture"] = False
                 try:
-                    found = detect_color_grid(view, paper_spec, process_width=0,
-                                              evidence=True)
+                    found = detect_printed_grid(
+                        view, paper_spec, process_width=0, evidence=True)
                     status = evidence.add(found)
                     ui["message"] = ("evidence accepted: " + status.describe())
                     print("Evidence frame accepted: " + status.describe())
