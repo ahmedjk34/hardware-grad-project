@@ -126,17 +126,34 @@ and pairs whichever appear in both images. More tones ⇒ a better-conditioned
 / paper cleanly; it falls back to a cast-invariant channel-order classifier at a
 low saturation floor when the plain hue window has lost one ink.
 
-If `colourcal` still errors that not enough colours were found in the live frame:
+`colourcal` with no mode now:
 
-- run `wb` first (needs only the paper) — that rough correction often makes the
-  ink visible enough for a follow-up `colourcal`;
-- or `colourmode gain` (needs one shared colour) / `colourmode affine` (two),
-  apply it, then re-run `colourcal matrix` on the now-corrected preview;
-- or point the rig camera at a page of a few **big solid** green / magenta /
-  white swatches (5 cm+) instead of the fine woven target.
+1. Locates the missing ink by **grid structure** — on this camera the olive
+   green reads as neutral grey, invisible to every colour test, so the sampler
+   uses the *magenta* cells to lay out the grid and reads whatever colour sits
+   in the green-cell positions.
+2. Tries `matrix` → `affine` → `gain` and keeps the strongest that is **not
+   implausible** (a negative channel gain, a runaway offset, cross-mix as big
+   as the gains). On a green-blind rig frame the 3×3 always fails those, so it
+   lands on `gain` — a per-channel white balance — and says so:
+   *"matrix/affine looked implausible on this frame, used gain; fix the
+   light/sensor so the green ink is not grey for a full correction."*
 
-After the fit, `colour on` (it auto-enables). Eyeball the preview: green ink
-reads green, paper reads white.
+That `gain` correction is real and worth saving, but it barely touches green.
+**The full fix is upstream:** the light + sensor must stop crushing the green
+channel before capture.
+
+- `sensor` shows what the camera accepted; `redgain` / `bluegain` let you push
+  the sensor's own white balance (start near the equivalent gains `colourcal`
+  printed), and a warmer or more neutral light source will bring the olive back.
+- If green still reads grey, a **more saturated green ink** on the reprint would
+  survive where the current `#647c48` olive cannot.
+- `wb` first (needs only paper) gives a rough correction that can make the ink
+  visible enough for a better follow-up `colourcal`.
+- A page of a few **big solid** green / magenta / white swatches (5 cm+) is an
+  easier `colourcal` subject than the fine woven target.
+
+After the fit, `colour on` (auto-enabled). Eyeball the preview.
 
 ### 3. Sensor — stop the camera fighting you
 

@@ -706,9 +706,10 @@ class Studio:
         Every warning the fit produces is surfaced rather than logged quietly.
         On real rig data the residual ranks the fits backwards — see
         :func:`vision.color_correction.solve_matrix` — so the warnings are the
-        part worth reading.
+        part worth reading. With no explicit ``mode`` the strongest fit that
+        does not look implausible is chosen automatically.
         """
-        mode = mode or self.colour_mode
+        explicit_mode = mode                       # None => auto-pick a mode
         path = Path(reference_path)
         if not path.exists() and not path.is_absolute():
             path = REFERENCE_DIR / path
@@ -722,11 +723,39 @@ class Studio:
         try:
             camera_colors, reference_colors, names = pair_samples(
                 camera_samples, reference_samples)
-            matrix, residual, notes = solve_matrix(camera_colors, reference_colors,
-                                                   mode=mode)
         except ColorCorrectionError as exc:
             raise CommandError(str(exc))
 
+        # Try the requested fit, or - when none was named - matrix, affine, gain
+        # in order and take the first that does not look implausible. On a rig
+        # frame where the camera has crushed the green channel, the full 3x3
+        # scores a perfect residual while turning into a negative-gain, heavy
+        # cross-mix transform; the constrained gain fit is then the honest
+        # answer, and this picks it automatically instead of silently applying
+        # the garbage matrix.
+        order = ([explicit_mode] if explicit_mode
+                 else [m for m in ("matrix", "affine", "gain")])
+        attempts, chosen = [], None
+        for candidate in order:
+            try:
+                m, residual, notes = solve_matrix(
+                    camera_colors, reference_colors, mode=candidate)
+            except ColorCorrectionError as exc:
+                attempts.append((candidate, str(exc)))
+                continue
+            probe = ColorCorrection()
+            probe.set_matrix(m)
+            problems = probe.implausibilities()
+            attempts.append((candidate, problems or "ok"))
+            if chosen is None or (not problems and chosen[3]):
+                chosen = (candidate, m, residual, bool(problems), notes)
+            if not problems:
+                break
+        if chosen is None:
+            detail = "; ".join(f"{c}: {why}" for c, why in attempts)
+            raise CommandError(f"no colour fit succeeded ({detail})")
+
+        mode, matrix, residual, implausible, notes = chosen
         self.colour.set_matrix(matrix, f"{mode} fit against {path.name}")
         self.colour.enabled = True
         self.colour_mode = mode
@@ -737,9 +766,16 @@ class Studio:
         if math.isfinite(red):
             self.colour_status += (f" | equivalent sensor redgain {red:.2f} "
                                    f"bluegain {blue:.2f}")
+        if not explicit_mode and mode != "matrix":
+            self.colour_status += (
+                f" | matrix/affine looked implausible on this frame, used "
+                f"{mode}; fix the light/sensor so the green ink is not grey "
+                f"for a full correction")
         for note in notes:
             self.log.add(False, f"colour: {note}")
-        if notes:
+        if implausible:
+            self.colour_status += " | STILL implausible, see colourinfo"
+        elif notes:
             self.colour_status += f" | {len(notes)} warning(s), see the log"
         return f"{self.colour.describe()} — {self.colour_status}"
 

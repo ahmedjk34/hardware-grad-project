@@ -663,17 +663,16 @@ def sample_ink_colors(frame: np.ndarray, *, min_saturation: int = MIN_SATURATION
                      if 0.5 * median <= rect["area"] <= 1.8 * median]
         return kept
 
-    # First the plain hue window. If a strong camera cast has hidden one ink
-    # entirely - which is exactly the frame `colourcal` exists to fix, so it
-    # cannot just be refused - fall back to the cast-invariant channel-order
-    # classifier at a low saturation floor.
+    # First the plain hue window. If a strong camera cast has hidden one ink -
+    # which is exactly the frame `colourcal` exists to fix, so it cannot just be
+    # refused - ADD (never replace) blobs of the missing colour from the
+    # cast-invariant channel-order classifier at a low saturation floor.
     keep = cell_blobs(min_saturation=min_saturation)
-    inks = {rect["color"] for rect in keep}
-    if inks < {"green", "magenta"}:
-        recovered = cell_blobs(min_saturation=max(6, min_saturation // 4),
-                               channel_order=True)
-        if len({rect["color"] for rect in recovered}) >= len(inks):
-            keep = recovered
+    missing_inks = {"green", "magenta"} - {rect["color"] for rect in keep}
+    if missing_inks:
+        extra = cell_blobs(min_saturation=max(6, min_saturation // 4),
+                           channel_order=True)
+        keep += [rect for rect in extra if rect["color"] in missing_inks]
     if not keep:
         raise ColorGridError(
             "nothing on the sheet is shaped like a printed cell; is the sheet "
@@ -695,6 +694,51 @@ def sample_ink_colors(frame: np.ndarray, *, min_saturation: int = MIN_SATURATION
     ink = np.zeros((height, width), np.uint8)
     cv2.fillPoly(ink, [rect["box"].astype(np.int32) for rect in keep], 255)
     ink_bool = ink.astype(bool)
+
+    # Grid-structure recovery. When one ink is so badly cast that it reads as
+    # neutral grey — the rig camera turns the olive green to (b>g=r), invisible
+    # to every hue window AND to the channel-order test — the OTHER ink's cells
+    # still lay out the grid. The missing ink's cells are then "inside the sheet
+    # the visible ink defines, not that ink, and darker than the paper". This is
+    # deliberately the last resort: it locates the cells by structure and reads
+    # whatever colour is physically there, which is the whole point for a
+    # calibration that has to learn `grey -> green`.
+    hsv0 = cv2.cvtColor(balanced, cv2.COLOR_BGR2HSV)
+    sat0, val0 = hsv0[:, :, 1], hsv0[:, :, 2]
+    for missing, present in (("green", "magenta"), ("magenta", "green")):
+        if cores[missing].any() or not cores[present].any():
+            continue
+        span = int(round(1.4 * math.sqrt(max(1.0, float(np.median(
+            [r["long_len"] * r["short_len"]
+             for r in keep if r["color"] == present]))))))
+        span = max(9, span | 1)
+        sheet = cv2.dilate((cores[present] | ink_bool).astype(np.uint8),
+                           np.ones((span, span), np.uint8), 1)
+        sheet = cv2.erode(sheet, np.ones(((span // 2) | 1,) * 2, np.uint8), 1)
+        inside = sheet.astype(bool)
+        bright = inside & (sat0 < 25) & (val0 > 170)
+        if bright.sum() < min_pixels:
+            continue
+        paper_val = float(np.median(val0[bright]))
+        guess = (inside & ~ink_bool
+                 & (val0 < paper_val - 20) & (sat0 < 70))
+        guess = cv2.erode(guess.astype(np.uint8), np.ones((7, 7), np.uint8),
+                          iterations=2).astype(bool)
+        if guess.sum() < min_pixels:
+            continue
+        cand = frame[guess].astype(np.float64).mean(axis=0)
+        paper_bgr = frame[inside & (sat0 < 18) & (val0 >= paper_val - 6)]
+        other = frame[cores[present]].astype(np.float64).mean(axis=0)
+        # Only accept a structural guess that is a genuinely distinct material:
+        # clearly darker than paper and not just the visible ink again. If it is
+        # not, leave the ink unsampled — an honest two-colour set drives a
+        # constrained gain/affine fit, which is all a green-blind frame supports.
+        if len(paper_bgr) >= min_pixels:
+            if float(np.linalg.norm(cand - paper_bgr.mean(axis=0))) < 14.0:
+                continue
+        if float(np.linalg.norm(cand - other)) < 12.0:
+            continue
+        cores[missing] = guess
     # The margins: a ring around the ink that is itself not ink. A wider ring
     # than the paper needs, so the warm "beige" band that the combined target
     # prints between perpendicular fiducials falls inside it too.
@@ -725,9 +769,17 @@ def sample_ink_colors(frame: np.ndarray, *, min_saturation: int = MIN_SATURATION
         counts[name] = int(len(values))
         spread[name] = float(np.sqrt(np.mean(np.sum((values - mean) ** 2, axis=1))))
 
-    for name, mask in (("green", green_core), ("magenta", magenta_core),
-                       ("paper", paper_core)):
+    take("paper", paper_core)
+    for name, mask in (("green", green_core), ("magenta", magenta_core)):
         take(name, mask)
+        # An ink sample that came out indistinguishable from the paper is not a
+        # measurement of that ink - it is stray near-white pixels the cast
+        # let through. Drop it rather than feed a false correspondence to the
+        # fit; a genuine two-colour set is the honest input for that frame.
+        if (name in colors and "paper" in colors
+                and float(np.linalg.norm(np.array(colors[name])
+                                         - np.array(colors["paper"]))) < 16.0):
+            del colors[name], counts[name], spread[name]
 
     # Best-effort EXTRA correspondences. Each printed fiducial has a dark accent
     # third and two muted "off-white-ish" thirds blended toward the paper, and
