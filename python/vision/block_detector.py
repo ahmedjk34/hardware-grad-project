@@ -495,7 +495,9 @@ def _detect_blocks_native(frame: np.ndarray, *, color_threshold: int,
     # The blocks have one physical size. Derive its image size from isolated
     # rectangles when possible, with a resolution-scaled fallback that matches
     # the supplied captures. Merged rectangles stay out of this estimate.
-    default_length = frame.shape[1] * 0.18
+    # Block plan is 2.2 x 6.0 cm (aspect ~2.73); the short side is unchanged
+    # from the earlier 7.5 cm block, the long side scaled by 6.0 / 7.5.
+    default_length = frame.shape[1] * 0.144
     default_width = frame.shape[1] * 0.052
     records = [(contour, _geometry(frame, contour, hsv)) for contour in contours]
     size_sources = []

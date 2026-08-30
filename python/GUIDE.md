@@ -99,7 +99,7 @@ python camera/gridded_camera_feed.py --mode horizontal
 ```
 
 It opens with an amber **APPROXIMATION ONLY** grid so you can see the configured
-layout immediately (9×5 vertical or 3×15 horizontal). That guess fills the
+layout immediately (6×5 vertical or 2×10 horizontal). That guess fills the
 image and is not evidence that camera and motor cells match. To calibrate:
 
 1. Press `c`.
@@ -173,11 +173,11 @@ The Pi maps pixels through centimetres
 to a logical cell; Arduino alone converts the selected centre to step pulses.
 
 The numbers below are the **vertical** grid's. The horizontal grid swaps which
-block extent lies along which axis and repacks to `3 × 15`; see AGENTS.md §3a
+block extent lies along which axis and repacks to `2 × 10`; see AGENTS.md §3a
 for both tables. A calibration belongs to one mode and never transfers.
 
 Grid pitch is not block size. X pitch is `2.2 + 0.5 = 2.7 cm`; Y pitch is
-`7.5 + 0.5 = 8 cm`. `[0,0]` is the feeder-block centre. The X/Y grid shifts
+`6.0 + 0.8 = 6.8 cm`. `[0,0]` is the feeder-block centre. The X/Y grid shifts
 are half a feeder block: `1.1 cm` X and `3.75 cm` Y. Column centres are
 `2.7..24.3 cm`; row centres are `8, 16, 24, 32, 40 cm` from the feeder centre.
 Positive block footprints occupy `23.8 × 39.5 cm`; their shifted envelope runs
@@ -295,14 +295,14 @@ The current target is one A2 landscape page for both modes. Its detector uses
 an 8×10 lattice of 6.0 × 2.2 cm chromatic bars, with 0.8 cm X gaps and 1.6 cm
 Y gaps. These are **fiducials**, not block dimensions. Their fitted page plane
 is converted to the 24.3 × 40.0 cm holder envelope, then the active
-`MachineGrid` supplies either the 9×5 vertical cells or 3×15 horizontal cells.
+`MachineGrid` supplies either the 6×5 vertical cells or 2×10 horizontal cells.
 Labels beginning with `F` are fiducial coordinates, never firmware `B`/`G`
 coordinates. The page's physical lower-left corner must be aligned with holder
 home, and the combined route requires `--home-convention firmware`.
 
-The legacy vertical sheet is 2.2 × 7.5 cm and the legacy horizontal sheet
-7.5 × 2.2 cm, both with 0.5 cm inner margins. For those sheets the tool still
-picks a complete 10×6 or 4×16 whole-cell window as before.
+The legacy vertical sheet is 2.2 × 6.0 cm and the legacy horizontal sheet
+6.0 × 2.2 cm, with 1.6 cm inner margin along X and 0.8 cm along Y. For those sheets the tool still
+picks a complete 7×6 or 3×11 whole-cell window as before.
 
 Every mapped cell is tinted and stamped with its `col,row`; whole cells outside
 the chosen window are outlined dull yellow, and cells clipped by the paper edge

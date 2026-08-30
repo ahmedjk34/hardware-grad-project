@@ -33,13 +33,13 @@
     O = Servo OPEN   (pin 6)
     C = Servo CLOSE  (pin 6)
 
-    R  = select the VERTICAL grid    (9 x 5, block 2.2 X x 7.5 Y cm)
-    RR = select the HORIZONTAL grid  (3 x 15, block 7.5 X x 2.2 Y cm)
+    R  = select the VERTICAL grid    (6 x 5, block 2.2 X x 6.0 Y cm)
+    RR = select the HORIZONTAL grid  (2 x 10, block 6.0 X x 2.2 Y cm)
       These LATCH a grid layout. NEITHER MOVES ANYTHING. Each is refused
       when it is already true, and both need X/Y homed first. The claw's
       rotation is owned entirely by the build cycle.
       THE CLAW'S PHYSICAL ANGLE IS NOT SENSED. You are trusted to start
-      with it neutral - 7.5 cm jaw axis along Y. If it is not, every
+      with it neutral - 6.0 cm jaw axis along Y. If it is not, every
       placement this session is turned 90 degrees and nothing can tell.
 
     G <col> <row>   = go to grid cell. e.g.  G 3 5   or  G3,5
@@ -523,26 +523,28 @@ const bool SOFT_LIMIT_VERBOSE = true;
 // SECTION 6C - GRID CONFIGURATION
 // ============================================================
 //
-// TWO GRIDS, BOTH REAL.  A block measures 2.2 x 7.5 cm in plan, and it can be
+// TWO GRIDS, BOTH REAL.  A block measures 2.2 x 6.0 cm in plan, and it can be
 // laid either way round.  Which way round it is laid decides how many cells
 // fit, where they sit, and how far the grid has to be trimmed - so it is not
 // one grid with a flag, it is two grids, each with its own complete geometry:
 //
-//   VERTICAL   (mode 0)  block 2.2 X x 7.5 Y      9 cols x  5 rows
-//   HORIZONTAL (mode 1)  block 7.5 X x 2.2 Y      3 cols x 15 rows
+//   VERTICAL   (mode 0)  block 2.2 X x 6.0 Y      6 cols x  5 rows
+//   HORIZONTAL (mode 1)  block 6.0 X x 2.2 Y      2 cols x 10 rows
 //
-// Blocks do NOT touch: adjacent positive cells have a 0.5 cm edge-to-edge gap,
-// and on each axis the same gap separates coordinate 0 from cell 1.
+// Blocks do NOT touch: adjacent positive cells have a gap of 1.6 cm along X
+// and 0.8 cm along Y, and on each axis that same gap separates coordinate 0
+// from cell 1.
 //
-//   vertical    X pitch = 2.2 + 0.5 = 2.7 cm;  9 * 2.7 = 24.3 cm
-//               Y pitch = 7.5 + 0.5 = 8.0 cm;  5 * 8.0 = 40.0 cm
-//   horizontal  X pitch = 7.5 + 0.5 = 8.0 cm;  3 * 8.0 = 24.0 cm
-//               Y pitch = 2.2 + 0.5 = 2.7 cm; 15 * 2.7 = 40.5 cm
+//   vertical    X pitch = 2.2 + 1.6 = 3.8 cm;  6 * 3.8 = 22.8 cm
+//               Y pitch = 6.0 + 0.8 = 6.8 cm;  5 * 6.8 = 34.0 cm
+//   horizontal  X pitch = 6.0 + 1.6 = 7.6 cm;  2 * 7.6 = 15.2 cm
+//               Y pitch = 2.2 + 0.8 = 3.0 cm; 10 * 3.0 = 30.0 cm
 //
-// Both counts are hard geometric maxima against the 24.3 x 40.0 cm holder
-// travel, which is PHYSICAL and does not change with the mode.  A 4th
-// horizontal column needs 4*7.5 + 3*0.5 = 31.5 cm into 24.3; a 16th
-// horizontal row needs 16*2.2 + 15*0.5 = 42.7 cm into 40.0.
+// Every allocation above is smaller than the 24.3 x 40.0 cm holder travel,
+// which is PHYSICAL and does not change with the mode.  The counts are the
+// grids currently printed on paper, not the geometric maxima; against this
+// travel vertical could take 6 X / 6 Y and horizontal 3 X / 13 Y before
+// gridGeometryFits() refuses the next cell.
 //
 // EACH MODE STATES BOTH BLOCK EXTENTS OUTRIGHT.  Nothing here swaps a width
 // for a length.  A swap would have to be performed identically here, in
@@ -551,16 +553,17 @@ const bool SOFT_LIMIT_VERBOSE = true;
 //
 // Coordinate 0 is the feeder-block centre / home reference.  The signed trims
 // move a mode's whole allocation away from (+) or toward (-) the home
-// switches.  Vertical's +1.1 / +3.75 cm are the measured feeder-centre-to-
-// build-grid shifts, so its column centres are 2.7,5.4,...,24.3 cm and its row
-// centres 8,16,...,40 cm.  HORIZONTAL'S TRIMS ARE NOT VERTICAL'S AND MUST NOT
-// BE COPIED FROM THEM: at vertical's +1.1 cm X trim, horizontal's third column
-// would hang 0.95 cm off the end of the machine.
+// switches.  Both trims ship at 0.0: the block/gap change made the old
+// measured +1.1 / +3.75 vertical shifts obsolete, so every allocation is
+// centred in travel until the feeder-centre-to-build-grid offset is
+// re-measured on the rig (per mode).  The horizontal grid is expected to want
+// a negative trim_x once measured - operators report its [0,0] sitting about
+// 1.6 cm from the pickup point.  HORIZONTAL'S TRIMS ARE STILL NOT VERTICAL'S
+// AND MUST NOT BE COPIED FROM THEM.
 //
-// Horizontal's 15 rows are exactly flush: 15*2.2 + 14*0.5 = 40.00 cm into
-// 40.00 cm of travel, at trim_y = -0.25.  There is NO slack to absorb error.
-// A 1 mm per-block error accumulates to 1.5 cm and costs a row - measure the
-// real block width across a stack of 15 before trusting this calibration.
+// Neither grid is flush with a wall at trim 0, so both have slack to absorb
+// per-block error - but measure a real stack before trusting the last row of
+// horizontal's 10.
 //
 // Targets are computed as absolute physical cell centres and rounded only
 // once, so sub-step rounding error never accumulates between cells.
@@ -574,7 +577,7 @@ const bool SOFT_LIMIT_VERBOSE = true;
 //   horizontal, R latches back; see the mode latch further down.
 //
 //   NOTHING SENSES THE CLAW'S PHYSICAL ANGLE.  The operator is trusted to
-//   start with the claw physically neutral (its 7.5 cm jaw axis along Y).
+//   start with the claw physically neutral (its 6.0 cm jaw axis along Y).
 //   If it is not, every placement in this session is turned 90 degrees and no
 //   amount of software can tell.
 //
@@ -586,22 +589,24 @@ const bool SOFT_LIMIT_VERBOSE = true;
 //   choose a smaller centred grid for the ACTIVE mode but cannot squeeze
 //   cells or change their footprint.
 
-const uint8_t GRID_MODE_VERTICAL = 0;   // block standing: 7.5 cm along Y
-const uint8_t GRID_MODE_HORIZONTAL = 1; // block lying:    7.5 cm along X
+const uint8_t GRID_MODE_VERTICAL = 0;   // block standing: 6.0 cm along Y
+const uint8_t GRID_MODE_HORIZONTAL = 1; // block lying:    6.0 cm along X
 const uint8_t GRID_MODE_COUNT = 2;
 
 // The live mode. Compiled default is vertical and every reset returns here.
 uint8_t gridMode = GRID_MODE_VERTICAL;
 
 //                                          { vertical, horizontal }
-float GRID_BLOCK_X_CM[GRID_MODE_COUNT] = {2.2, 7.5};
-float GRID_BLOCK_Y_CM[GRID_MODE_COUNT] = {7.5, 2.2};
-float GRID_GAP_X_CM[GRID_MODE_COUNT] = {0.5, 0.5};
-float GRID_GAP_Y_CM[GRID_MODE_COUNT] = {0.5, 0.5};
+float GRID_BLOCK_X_CM[GRID_MODE_COUNT] = {2.2, 6.0};
+float GRID_BLOCK_Y_CM[GRID_MODE_COUNT] = {6.0, 2.2};
+float GRID_GAP_X_CM[GRID_MODE_COUNT] = {1.6, 1.6};
+float GRID_GAP_Y_CM[GRID_MODE_COUNT] = {0.8, 0.8};
 
 // Signed whole-allocation shift, per mode. Not copied between modes - see above.
-float GRID_TRIM_X_CM[GRID_MODE_COUNT] = {1.1, 0.0};
-float GRID_TRIM_Y_CM[GRID_MODE_COUNT] = {3.75, -0.25};
+// Both ship at 0.0 (allocation centred in travel) pending a rig re-measurement
+// of the feeder-centre-to-build-grid offset; keep paired with config/rig.json.
+float GRID_TRIM_X_CM[GRID_MODE_COUNT] = {0.0, 0.0};
+float GRID_TRIM_Y_CM[GRID_MODE_COUNT] = {0.0, 0.0};
 
 // AI AGENT NOTE: For any user-marked "error" offsetting, use these variables.
 // They apply exactly like GRID_TRIM_* and shift every grid centre from home.
@@ -614,19 +619,18 @@ float GRID_ERROR_OFFSET_Y_CM[GRID_MODE_COUNT] = {0.0, 0.0};
 // measures the block edges against, and it exists because a centre-only check
 // happily accepts a grid whose far block hangs off the machine.
 //
-// Vertical gets half a block on each axis, because its last centre sits
-// exactly ON the travel limit and the held block unavoidably overhangs - that
-// is the shipped, working 9 x 5 grid, whose block edges are 25.4 x 43.75 cm.
-// Horizontal gets zero, because its rows are flush with both walls and any
-// overhang there means the trims are wrong.
+// Vertical gets half a block on each axis (block_x/2 = 1.1, block_y/2 = 3.0),
+// the overhang a full-travel grid would produce and a safe ceiling for the
+// centred grid it ships as.  Horizontal gets zero, because any overhang there
+// means the trims are wrong.
 // Keep paired with config/rig.json -> grid.modes.*.max_edge_overhang_*_cm.
 float GRID_MAX_EDGE_OVERHANG_X_CM[GRID_MODE_COUNT] = {1.1, 0.0};
-float GRID_MAX_EDGE_OVERHANG_Y_CM[GRID_MODE_COUNT] = {3.75, 0.0};
+float GRID_MAX_EDGE_OVERHANG_Y_CM[GRID_MODE_COUNT] = {3.0, 0.0};
 
 // Per mode, so that S applies to the grid the operator is looking at and the
 // other mode keeps whatever count it was given.
-long GRID_COLS[GRID_MODE_COUNT] = {9, 3};
-long GRID_ROWS[GRID_MODE_COUNT] = {5, 15};
+long GRID_COLS[GRID_MODE_COUNT] = {6, 2};
+long GRID_ROWS[GRID_MODE_COUNT] = {5, 10};
 
 // Read these rather than indexing the tables. Everything downstream of here
 // is written against the ACTIVE mode and never mentions the other one.
@@ -2332,8 +2336,8 @@ float xyStepsPerCmOf(uint8_t axis)
 
 // Complete controlled displacement from coordinate 0 to the far edge of the
 // final block. Every positive cell contributes one gap plus one block:
-//   X: 9 * (0.5 + 2.2) = 24.3 cm
-//   Y: 5 * (0.5 + 7.5) = 40.0 cm
+//   vertical X: 6 * (1.6 + 2.2) = 22.8 cm
+//   vertical Y: 5 * (0.8 + 6.0) = 34.0 cm
 float gridAllocationCmOf(uint8_t axis, long count)
 {
   return (float)count * gridPitchCmOf(axis);
@@ -2352,8 +2356,8 @@ float gridBlockFootprintCmOf(uint8_t axis, long count)
 }
 
 // A smaller S-selected allocation is centred inside the holder-travel span.
-// The signed trim then shifts it from the feeder/home reference. With the
-// full 9x5 grid, Y's +3.75 cm feeder shift makes centres 8,16,...,40 cm.
+// The signed trim then shifts it from the feeder/home reference. Both trims
+// ship at 0.0, so the 6x5 vertical grid's Y centres are 6.8,13.6,...,34.0 cm.
 float gridAllocationStartCmOf(uint8_t axis, long count)
 {
   return (xyTravelCmOf(axis) - gridAllocationCmOf(axis, count)) * 0.5
@@ -2393,9 +2397,9 @@ bool gridGeometryFits(uint8_t axis, long count)
   // Half two: and the BLOCKS those centres carry must land on the machine.
   // The centre test alone is not enough. A held block naturally extends past
   // the holder-centre envelope, so "the centre is legal" accepts a grid whose
-  // far block hangs off the end - which is exactly what copying vertical's
-  // +1.1 cm X trim into horizontal produces (third column edge at 25.25 cm,
-  // 0.95 cm past the X limit, from a perfectly legal centre at 21.5 cm).
+  // far block hangs off the end - which is what a positive X trim on the
+  // horizontal grid would produce, pushing its last column edge past the X
+  // limit from a perfectly legal centre.
   // Each mode therefore declares how much edge overhang it will tolerate.
   float overhang = gridMaxEdgeOverhangCmOf(axis);
   if (overhang < 0.0)
@@ -2428,8 +2432,8 @@ long gridCountMaxOf(uint8_t axis)
 
 // Centre of positive cell `index` (1-based), measured from coordinate 0:
 //   centre = allocation_start + gap + block/2 + (index - 1) * pitch
-// Full-grid examples: X1 = 1.1 + 0.5 + 2.2/2 = 2.7 cm;
-//                     Y1 = 3.75 + 0.5 + 7.5/2 = 8.0 cm.
+// Vertical trim-0 examples: X1 = 0.75 + 1.6 + 2.2/2 = 3.45 cm;
+//                           Y1 = 3.0 + 0.8 + 6.0/2 = 6.8 cm.
 float cellCentreCmOf(uint8_t axis, long index)
 {
   long count = gridCountOf(axis);
@@ -2997,7 +3001,7 @@ bool zGoLevel(long level)
 //
 // It was removed rather than kept as an override because a per-block rotation
 // could place a turned block inside a grid whose cells are not shaped for it -
-// a 7.5 cm block laid across a 2.7 cm column pitch, silently, with every
+// a 6.0 cm block laid across a 3.8 cm column pitch, silently, with every
 // number in the geometry check still agreeing. That is the exact failure the
 // two-grid model exists to prevent, so the override had to go with it.
 

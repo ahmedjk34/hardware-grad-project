@@ -128,9 +128,18 @@ else, that is a signal to stop and re-read the plan.
 
 ## 3. The math, verified
 
+> **Superseded geometry (block/gap change).** The block plan is now
+> **2.2 × 6.0 cm** with gaps **1.6 cm along X, 0.8 cm along Y** in both modes;
+> `BLOCK_HEIGHT_CM` stays 1.5. Vertical is **6 × 5**, horizontal is **2 × 10**,
+> and both `GRID_TRIM_*` ship at **0.0** (allocation centred in travel) pending
+> a per-mode rig re-measurement of the feeder-centre shift. The tables below
+> are recomputed at trim 0. The decision log (D1–D20) and §4–§8 below are the
+> original record and still describe the *mechanism*; only the numbers moved.
+> `python/tests/test_grid.py` `SECTION_3` mirrors the tables here.
+
 Travel is physical and **mode-independent**: X = 24.3 cm, Y = 40.0 cm.
 
-The firmware model (`build_test_v1.ino:2045-2125`):
+The firmware model:
 
 ```text
 pitch      = block + gap
@@ -141,49 +150,45 @@ lastCentre = firstCentre + (count - 1) * pitch
 footprint  = count * block + (count - 1) * gap
 ```
 
-### Vertical — 9 × 5, unchanged
+### Vertical — 6 × 5, at trim 0
 
 | axis | block | gap | pitch | count | footprint | centres | block edges |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| X | 2.2 | 0.5 | 2.7 | **9** | 23.80 | 2.70 → 24.30 | 1.60 → 25.40 |
-| Y | 7.5 | 0.5 | 8.0 | **5** | 39.50 | 8.00 → 40.00 | 4.25 → 43.75 |
+| X | 2.2 | 1.6 | 3.8 | **6** | 21.20 | 3.45 → 22.45 | 2.35 → 23.55 |
+| Y | 6.0 | 0.8 | 6.8 | **5** | 33.20 | 6.80 → 34.00 | 3.80 → 37.00 |
 
-45 build cells; 10 × 6 addressable including the zero lanes. The block edges
-exceeding travel is **expected and safe** — the holder only needs to reach each
-*centre*, and the held block overhangs. This is already documented in AGENTS.md §3a.
+30 build cells; 7 × 6 addressable including the zero lanes. Block edges beyond
+travel are **expected and safe** — the holder only needs to reach each *centre*,
+and the held block overhangs. Vertical keeps a half-block overhang budget
+(`1.1` / `3.0`).
 
-### Horizontal — 3 × 15
+### Horizontal — 2 × 10, at trim 0
 
-X and Y swap their block dimensions. `trim_x = 0.0`, `trim_y = -0.25`.
+X and Y swap their block dimensions. Both trims ship at `0.0`; overhang budget
+is zero on both axes.
 
 | axis | block | gap | pitch | count | footprint | centres | block edges |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| X | 7.5 | 0.5 | 8.0 | **3** | 23.50 | 4.40 → 20.40 | 0.65 → 24.15 |
-| Y | 2.2 | 0.5 | 2.7 | **15** | 40.00 | 1.10 → 38.90 | 0.00 → 40.00 |
+| X | 6.0 | 1.6 | 7.6 | **2** | 13.60 | 9.15 → 16.75 | 6.15 → 19.75 |
+| Y | 2.2 | 0.8 | 3.0 | **10** | 29.20 | 6.90 → 33.90 | 5.80 → 35.00 |
 
-45 build cells; 4 × 16 addressable including the zero lanes. The same cell count
-as vertical, by coincidence.
+20 build cells; 3 × 11 addressable including the zero lanes.
 
-**Why these counts are maxima.** 4 columns needs `4 × 7.5 + 3 × 0.5 = 31.5 cm`
-into a 24.3 cm axis — impossible. 16 rows needs
-`16 × 2.2 + 15 × 0.5 = 42.7 cm` into 40.0 cm — impossible.
+**These counts are the printed grids, not maxima.** Against the 24.3 × 40.0 cm
+travel at trim 0, vertical could take a 6th Y row and horizontal a 3rd X column
+/ up to 13 Y rows before `gridGeometryFits` refuses the next cell. A 7th
+vertical column (`7 × 3.8` allocation, last centre 24.35 cm) and a 4th
+horizontal column (`4 × 7.6`, last centre 24.35 cm) are both refused.
 
-**Why 15 rows is exact.** `15 × 2.2 + 14 × 0.5 = 33.0 + 7.0 = 40.00 cm`, into
-40.00 cm of travel. Zero slack at both walls, and the home-to-row-1 gap
-collapses to zero. This is real but unforgiving:
+**Why trims cannot be copied between modes.** Once measured, the feeder-centre
+shift is a property of how each grid sits relative to the pickup point. A
+positive `trim_x` on the horizontal grid that keeps its last *centre* legal
+still pushes the last block *edge* past the X wall, and `gridGeometryFits`
+catches that only through the per-mode zero overhang budget. This is R2.
 
-- at `trim_y = 0.0` the far block overhangs the limit by 0.25 cm
-- at `trim_y = -0.25` it is flush at both ends — **use this**
-- at `trim_y = 3.75` (vertical's value) only 12 rows fit
-
-**Why trims cannot be copied.** At vertical's `trim_x = 1.1`, horizontal's
-columns sit at 1.75 → 25.25, putting column 3's far edge **0.95 cm past the X
-limit** — and `gridGeometryFits` accepts it, because the *centre* at 21.5 is
-legal. This is R2.
-
-**Tolerance warning.** At 15 rows there is no margin to absorb error. A 1 mm
-per-block error accumulates to 1.5 cm and costs a row. Measure the real block
-width across a stack of 15 before trusting the horizontal Y calibration.
+**Tolerance note.** Neither grid is flush with a wall at trim 0, so both have
+slack to absorb per-block error — but measure a real stack before trusting the
+last row of horizontal's 10.
 
 ---
 

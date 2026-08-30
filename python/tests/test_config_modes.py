@@ -59,24 +59,26 @@ check("the build starts vertical (D2)", active_grid_mode(config) == "vertical",
 vertical = grid_geometry(config, "vertical")
 horizontal = grid_geometry(config, "horizontal")
 
-check("vertical is 9 x 5 (D1)",
-      (vertical["cols"], vertical["rows"]) == (9, 5))
-check("horizontal is 3 x 15 (D1)",
-      (horizontal["cols"], horizontal["rows"]) == (3, 15))
+check("vertical is 6 x 5 (D1)",
+      (vertical["cols"], vertical["rows"]) == (6, 5))
+check("horizontal is 2 x 10 (D1)",
+      (horizontal["cols"], horizontal["rows"]) == (2, 10))
 
 # D12: each mode states both block extents outright, and they are the swap of
 # each other only as a matter of physical fact - no code performs that swap.
-check("vertical block is 2.2 x 7.5 cm",
-      (vertical["block_x_cm"], vertical["block_y_cm"]) == (2.2, 7.5))
-check("horizontal block is 7.5 x 2.2 cm",
-      (horizontal["block_x_cm"], horizontal["block_y_cm"]) == (7.5, 2.2))
+check("vertical block is 2.2 x 6.0 cm",
+      (vertical["block_x_cm"], vertical["block_y_cm"]) == (2.2, 6.0))
+check("horizontal block is 6.0 x 2.2 cm",
+      (horizontal["block_x_cm"], horizontal["block_y_cm"]) == (6.0, 2.2))
+check("both modes share the 1.6 X / 0.8 Y gap",
+      (vertical["gap_x_cm"], vertical["gap_y_cm"]) == (1.6, 0.8)
+      and (horizontal["gap_x_cm"], horizontal["gap_y_cm"]) == (1.6, 0.8))
 
-# D14: copying vertical's trims into horizontal produces an out-of-bounds grid.
-check("horizontal seeds at trim 0.0 / -0.25 (D14)",
-      (horizontal["trim_x_cm"], horizontal["trim_y_cm"]) == (0.0, -0.25))
-check("horizontal trims are NOT vertical's",
-      (horizontal["trim_x_cm"], horizontal["trim_y_cm"])
-      != (vertical["trim_x_cm"], vertical["trim_y_cm"]))
+# D14: the trims ship at 0.0 pending a rig re-measurement per mode; horizontal
+# must never simply inherit vertical's once they are measured.
+check("both modes seed at trim 0.0 / 0.0 (D14)",
+      (vertical["trim_x_cm"], vertical["trim_y_cm"]) == (0.0, 0.0)
+      and (horizontal["trim_x_cm"], horizontal["trim_y_cm"]) == (0.0, 0.0))
 
 check("no mode is asked to share the other's numbers",
       all(set(("cols", "rows", "block_x_cm", "block_y_cm", "gap_x_cm", "gap_y_cm",

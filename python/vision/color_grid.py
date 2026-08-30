@@ -232,20 +232,20 @@ class ColorGridError(Exception):
 class ColorGridSpec:
     """The printed sheet's geometry, which is the rig's block geometry.
 
-    ``cols``/``rows`` are the *complete* coordinate map including zero — 10 x 6
-    in vertical mode and 4 x 16 in horizontal — because the sheet prints a real
+    ``cols``/``rows`` are the *complete* coordinate map including zero — 7 x 6
+    in vertical mode and 3 x 11 in horizontal — because the sheet prints a real
     block at every coordinate, coordinate zero included. That is the one place
     the paper and the firmware disagree, and it is why the mapping back onto
     the machine envelope is an explicit convention rather than an assumption.
     See :meth:`ColorGridCalibration.workspace_corners`.
     """
 
-    cols: int = 10
+    cols: int = 7
     rows: int = 6
     block_x_cm: float = 2.2
-    block_y_cm: float = 7.5
-    gap_x_cm: float = 0.5
-    gap_y_cm: float = 0.5
+    block_y_cm: float = 6.0
+    gap_x_cm: float = 1.6
+    gap_y_cm: float = 0.8
     mode: str = "vertical"
 
     @classmethod
@@ -296,12 +296,12 @@ class ColorGridSpec:
 
     @property
     def fill_x(self) -> float:
-        """Block as a fraction of pitch along X: 2.2 / 2.7."""
+        """Block as a fraction of pitch along X: 2.2 / 3.8 (vertical)."""
         return self.block_x_cm / self.pitch_x_cm
 
     @property
     def fill_y(self) -> float:
-        """Block as a fraction of pitch along Y: 7.5 / 8.0."""
+        """Block as a fraction of pitch along Y: 6.0 / 6.8 (vertical)."""
         return self.block_y_cm / self.pitch_y_cm
 
     @property

@@ -922,15 +922,17 @@ def detect_printed_grids(frame: np.ndarray, legacy_spec: ColorGridSpec, *,
             requested_mode=legacy_spec.mode)
     except ColorGridError as exc:
         combined_error = exc
-        if exc.stage == "orientation":
-            raise
     try:
         return detect_color_grids(
             frame, legacy_spec, process_width=process_width, evidence=evidence)
     except ColorGridError as legacy_error:
-        # Prefer the failure that got farther through the pipeline; it produces
-        # the most useful candidate overlay and operator instruction.
-        if _error_rank(combined_error) > _error_rank(legacy_error):
+        # A plain legacy sheet can form a chromatic lattice of the combined
+        # target's shape and then fail only its woven-orientation decode. When
+        # the legacy detector also fails, that combined "orientation" error is
+        # usually the more informative one; otherwise prefer whichever failure
+        # got farther through its own pipeline.
+        if combined_error.stage == "orientation" or (
+                _error_rank(combined_error) > _error_rank(legacy_error)):
             raise combined_error
         raise legacy_error
 

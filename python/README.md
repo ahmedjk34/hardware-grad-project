@@ -68,8 +68,8 @@ opening the camera independently.
 
 `camera/gridded_camera_feed.py` reuses that feed and adds the machine grid from
 the repository-level `config/rig.json`. Positive block rectangles are
-`2.2 × 7.5 cm`, separated by real `0.5 cm` gaps rather than stretched to fill
-pitch-sized cells. Press `c`, then click the four prompted corners of the
+`2.2 × 6.0 cm`, separated by real gaps (`1.6 cm` along X, `0.8 cm` along Y)
+rather than stretched to fill pitch-sized cells. Press `c`, then click the four prompted corners of the
 complete 24.3×40 cm holder-motion envelope in this physical order:
 home/home, far-X/home-Y, far-X/far-Y, home-X/far-Y. During calibration the UI
 shows the next named corner, numbered saved clicks, solid straight edges between
@@ -83,9 +83,10 @@ an approximation. Hovering a calibrated cell shows its `[col,row]`, physical
 centre and matching `G` command.
 
 There are two grids, and which one is live decides every coordinate. The
-`vertical` grid is `9 × 5` (blocks standing, `9 × (2.2 + 0.5) = 24.3 cm` by
-`5 × (7.5 + 0.5) = 40 cm`); the `horizontal` grid is `3 × 15` (blocks lying,
-`3 × (7.5 + 0.5) = 24 cm` by `15 × (2.2 + 0.5) = 40.5 cm`). Including
+`vertical` grid is `6 × 5` (blocks standing, `6 × (2.2 + 1.6) = 22.8 cm` by
+`5 × (6.0 + 0.8) = 34 cm`); the `horizontal` grid is `2 × 10` (blocks lying,
+`2 × (6.0 + 1.6) = 15.2 cm` by `10 × (2.2 + 0.8) = 30 cm`). Both fit inside the
+`24.3 × 40 cm` travel with room to spare at the shipped `trim 0`. Including
 coordinate zero, commands span col `0..cols` and row `0..rows`: `[0,0]` home,
 `[col,0]` X-only, and `[0,row]` Y-only. `MachineGrid.from_config(mode=...)`
 gives you either; `rig.json`'s `grid.active_mode` picks the default.

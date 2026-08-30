@@ -48,47 +48,46 @@ block dimensions:
 - Y: `40 cm = 8250 steps`, so `8250 / 40 = 206.25 steps/cm`
 
 Firmware derives both ratios; neither is hard-coded. The separately observed
-physical build footprint is `24.3 × 43 cm`. The feeder-centre model currently
-predicts outer block edges at `25.4 × 43.75 cm`, which needs physical
-verification; neither measurement changes the `24.3 × 40 cm` holder span.
-The current horizontal-grid CCW tool offset trial is X `+3.75 cm`, Y `+1.40 cm`;
-neutral and CW tool offsets remain zero.
+physical build footprint is `24.3 × 43 cm`; it does not change the `24.3 × 40
+cm` holder span. The current horizontal-grid CCW tool offset trial is X
+`+3.75 cm`, Y `+1.40 cm`; neutral and CW tool offsets remain zero.
 
-A block is `2.2 × 7.5 × 1.5 cm`, and it can be laid either way round. Which
+A block is `2.2 × 6.0 × 1.5 cm`, and it can be laid either way round. Which
 way round decides how many cells fit, so **there are two grids**, each with its
 own complete geometry, its own trims and its own calibration:
 
 | mode | block | grid | coordinate map | select with |
 | --- | --- | --- | --- | --- |
-| vertical | 2.2 X × 7.5 Y cm | `9 × 5` = 45 cells | `10 × 6` | `R` |
-| horizontal | 7.5 X × 2.2 Y cm | `3 × 15` = 45 cells | `4 × 16` | `RR` |
+| vertical | 2.2 X × 6.0 Y cm | `6 × 5` = 30 cells | `7 × 6` | `R` |
+| horizontal | 6.0 X × 2.2 Y cm | `2 × 10` = 20 cells | `3 × 11` | `RR` |
 
-The equal cell count is a coincidence. Blocks are separated by `0.5 cm` on both
-axes in both modes, and `[0,0]` is the feeder-block centre where the claw picks
+Adjacent positive cells are separated by `1.6 cm` along X and `0.8 cm` along Y
+in both modes, and `[0,0]` is the feeder-block centre where the claw picks
 up. There is no trailing outer margin inside a grid span:
 
 ```text
-vertical    X pitch = 2.2 + 0.5 = 2.7 cm;  9 × 2.7 = 24.3 cm
-            Y pitch = 7.5 + 0.5 = 8.0 cm;  5 × 8.0 = 40.0 cm
-horizontal  X pitch = 7.5 + 0.5 = 8.0 cm;  3 × 8.0 = 24.0 cm
-            Y pitch = 2.2 + 0.5 = 2.7 cm; 15 × 2.7 = 40.5 cm
+vertical    X pitch = 2.2 + 1.6 = 3.8 cm;  6 × 3.8 = 22.8 cm
+            Y pitch = 6.0 + 0.8 = 6.8 cm;  5 × 6.8 = 34.0 cm
+horizontal  X pitch = 6.0 + 1.6 = 7.6 cm;  2 × 7.6 = 15.2 cm
+            Y pitch = 2.2 + 0.8 = 3.0 cm; 10 × 3.0 = 30.0 cm
 
-positive footprint  vertical    X: 9 × 2.2 + 8 × 0.5 = 23.8 cm
-                                Y: 5 × 7.5 + 4 × 0.5 = 39.5 cm
-                    horizontal  X: 3 × 7.5 + 2 × 0.5 = 23.5 cm
-                                Y: 15 × 2.2 + 14 × 0.5 = 40.0 cm
+positive footprint  vertical    X: 6 × 2.2 + 5 × 1.6 = 21.2 cm
+                                Y: 5 × 6.0 + 4 × 0.8 = 33.2 cm
+                    horizontal  X: 2 × 6.0 + 1 × 1.6 = 13.6 cm
+                                Y: 10 × 2.2 + 9 × 0.8 = 29.2 cm
 ```
 
-Vertical begins `1.1 cm` on X (half feeder width) and `3.75 cm` on Y (half
-feeder length) from the feeder centre. **Horizontal's trims are `0.0` and
-`-0.25`, and must not be copied from vertical's** — at vertical's X trim the
-third horizontal column hangs `0.95 cm` off the end of the machine. Each mode
-also declares `GRID_MAX_EDGE_OVERHANG_*_CM`, the budget its block *edges* are
-checked against; vertical allows half a block, horizontal allows zero.
+Both `GRID_TRIM_*` ship at `0.0`, so each allocation is centred in travel
+until the feeder-centre-to-build-grid offset is re-measured on the rig, per
+mode. **Horizontal's trims are still not vertical's and must not be copied** —
+a positive X trim there pushes its last column edge off the end of the
+machine. Each mode also declares `GRID_MAX_EDGE_OVERHANG_*_CM`, the budget its
+block *edges* are checked against; vertical allows half a block (`1.1` / `3.0`),
+horizontal allows zero.
 
-Horizontal's 15 rows are exactly flush — `15 × 2.2 + 14 × 0.5 = 40.00 cm` into
-`40.00 cm` of travel — with no slack at either wall. Measure the real block
-width across a stack of 15 before trusting it.
+At trim `0` neither grid is flush with a wall, so both have slack to absorb
+per-block error — but measure a real stack before trusting the last row of
+horizontal's 10.
 
 Commands address col `0..cols` and row `0..rows`: `[0,0]` home, `[col,0]`
 X-only, and `[0,row]` Y-only. `GRID_TRIM_X_CM[]` and `GRID_TRIM_Y_CM[]` shift
@@ -102,28 +101,28 @@ Command `9` draws the complete convention (`H` home, `+` axis-only, `.` a
 positive cell, and `#` the current machine position):
 
 ```text
-  5 | + . . . . . . . . .
-  4 | + . . . . . . . . .
-  3 | + . . . . . . . . .
-  2 | + . . . . . . . . .
-  1 | + . . . . . . . . .
-  0 | H + + + + + + + + +
-      0 1 2 3 4 5 6 7 8 9
+  5 | + . . . . . .
+  4 | + . . . . . .
+  3 | + . . . . . .
+  2 | + . . . . . .
+  1 | + . . . . . .
+  0 | H + + + + + +
+      0 1 2 3 4 5 6
 ```
 
-For the full grid, cell-centre formulas measured from the feeder/home centre
-are:
+For the vertical grid at trim `0`, cell-centre formulas measured from the
+feeder/home centre are:
 
 ```text
-X centre(col) = 1.1 + 0.5 + 2.2/2 + (col - 1) × 2.7
-              = 2.7 + (col - 1) × 2.7
+X centre(col) = 0.75 + 1.6 + 2.2/2 + (col - 1) × 3.8
+              = 3.45 + (col - 1) × 3.8
 
-Y centre(row) = 3.75 + 0.5 + 7.5/2 + (row - 1) × 8.0
-              = 8.0 + (row - 1) × 8.0
+Y centre(row) = 3.0 + 0.8 + 6.0/2 + (row - 1) × 6.8
+              = 6.8 + (row - 1) × 6.8
 ```
 
-Thus first/last centres are X `2.7..24.3 cm` and Y `8.0..40.0 cm`. Final block
-edges are X `25.4 cm` and Y `43.75 cm` from the feeder centre; holder caps
+Thus first/last centres are X `3.45..22.45 cm` and Y `6.8..34.0 cm`. Final block
+edges are X `23.55 cm` and Y `37.0 cm` from the feeder centre; holder caps
 apply to placement centres, not to the held block's far edge.
 Firmware converts each absolute centre once with `round(cm × steps/cm)`; it
 does not accumulate rounded pitch steps from one cell to the next.

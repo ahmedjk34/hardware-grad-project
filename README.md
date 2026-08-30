@@ -18,8 +18,8 @@ The repository is split by platform:
 - **Mounting:** camera ~50 cm above the surface, pointing straight down, roughly centred
 - **Controlled holder displacement:** 24.3 cm X × 40 cm Y
 - **Observed build displacement:** 24.3 cm X × 43 cm Y; extra Y reach is not yet modelled
-- **Current block grid:** 9 × 5 positive cells; coordinates include col 0..9 and row 0..5
-- **Block/gap:** 2.2 cm X × 7.5 cm Y × 1.5 cm Z, with 0.5 cm between cells
+- **Current block grid:** vertical 6 × 5 positive cells (col 0..6, row 0..5); horizontal 2 × 10 (col 0..2, row 0..10)
+- **Block/gap:** 2.2 cm X × 6.0 cm Y × 1.5 cm Z, with 1.6 cm between cells along X and 0.8 cm along Y
 
 ## Getting started
 
@@ -46,7 +46,7 @@ cd python
 ../.venv/bin/python camera/camera_feed.py
 ```
 
-To see the physical 9×5 positive-cell grid on that same feed, run
+To see the physical 6×5 (or 2×10) positive-cell grid on that same feed, run
 `camera/gridded_camera_feed.py`. It shows an amber approximation initially;
 press `c` and click the four prompted 24.3×40 cm holder-envelope corners to save
 the calibrated overlay.

@@ -53,18 +53,19 @@ Switching boards is then a one-line edit to `rig.json`.
 | `build_test_v1.ino` `gridMode` | the live mode; compiled default is vertical |
 | `python/rig/grid.py` | `MachineGrid.from_config(mode=...)` — what the viewers draw |
 
-**There are two grids, not one.** A block is 2.2 × 7.5 cm in plan and can be
+**There are two grids, not one.** A block is 2.2 × 6.0 cm in plan and can be
 laid either way round, and which way round decides how many cells fit and where
 they sit. So each orientation is a complete, separately calibrated grid:
 
 | mode | block | grid | addressable with zero lanes |
 | --- | --- | --- | --- |
-| `vertical` | 2.2 X × 7.5 Y cm | **9 cols × 5 rows = 45 cells** | 10 × 6 |
-| `horizontal` | 7.5 X × 2.2 Y cm | **3 cols × 15 rows = 45 cells** | 4 × 16 |
+| `vertical` | 2.2 X × 6.0 Y cm | **6 cols × 5 rows = 30 cells** | 7 × 6 |
+| `horizontal` | 6.0 X × 2.2 Y cm | **2 cols × 10 rows = 20 cells** | 3 × 11 |
 
-The equal cell count is a coincidence, not a design. Both counts are hard
-geometric maxima against the 24.3 × 40.0 cm holder travel, which is physical
-and does **not** change with the mode — see §3a.
+These counts are the grids currently printed on paper, not geometric maxima:
+at trim 0 the 24.3 × 40.0 cm holder travel would take a 6th vertical Y row, a
+3rd horizontal X column and up to 13 horizontal Y rows before `gridGeometryFits`
+refuses. The travel is physical and does **not** change with the mode — see §3a.
 
 The sketch uses no EEPROM, so nothing survives a reset — and opening the USB
 port resets the board. Every session therefore starts at the compiled default,
@@ -128,15 +129,15 @@ at the active software cap. The live calibration is:
 
 Never hard-code those ratios; firmware derives them from the cap and measured
 displacement. A separate physical observation found a **24.3 × 43 cm build
-footprint**. The feeder-centre model currently predicts physical outer block
-edges at **25.4 × 43.75 cm**, which needs physical verification; neither record
-changes the 24.3 × 40 cm holder-centre motion cap. The measured horizontal
-CCW tool offset is X `+3.75 cm`, Y `+1.40 cm`; neutral and CW remain zero.
+footprint**; it does not change the 24.3 × 40 cm holder-centre motion cap. The
+measured horizontal CCW tool offset is X `+3.75 cm`, Y `+1.40 cm`; neutral and
+CW remain zero.
 
-A block is **2.2 × 7.5 × 1.5 cm**. Which of its two plan dimensions lies along
+A block is **2.2 × 6.0 × 1.5 cm**. Which of its two plan dimensions lies along
 X is what the mode decides. `[0,0]` is the feeder-block centre where the claw
-picks up, and every positive cell has a **0.5 cm gap** before it. The whole
-derivation is the same six lines in both modes:
+picks up, and every positive cell has a gap before it — **1.6 cm along X,
+0.8 cm along Y**, in both modes. The whole derivation is the same six lines in
+both modes:
 
 ```text
 pitch       = block + gap
@@ -147,42 +148,35 @@ last centre = first centre + (count − 1) × pitch
 footprint   = count × block + (count − 1) × gap
 ```
 
-Worked out for both, against the mode-independent 24.3 × 40.0 cm travel:
+Worked out for both, at the shipped `trim = 0` (allocation centred in travel):
 
 | mode | axis | block | gap | pitch | count | footprint | centres | block edges |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| vertical | X | 2.2 | 0.5 | 2.7 | **9** | 23.80 | 2.70 → 24.30 | 1.60 → 25.40 |
-| vertical | Y | 7.5 | 0.5 | 8.0 | **5** | 39.50 | 8.00 → 40.00 | 4.25 → 43.75 |
-| horizontal | X | 7.5 | 0.5 | 8.0 | **3** | 23.50 | 4.40 → 20.40 | 0.65 → 24.15 |
-| horizontal | Y | 2.2 | 0.5 | 2.7 | **15** | 40.00 | 1.10 → 38.90 | 0.00 → 40.00 |
+| vertical | X | 2.2 | 1.6 | 3.8 | **6** | 21.20 | 3.45 → 22.45 | 2.35 → 23.55 |
+| vertical | Y | 6.0 | 0.8 | 6.8 | **5** | 33.20 | 6.80 → 34.00 | 3.80 → 37.00 |
+| horizontal | X | 6.0 | 1.6 | 7.6 | **2** | 13.60 | 9.15 → 16.75 | 6.15 → 19.75 |
+| horizontal | Y | 2.2 | 0.8 | 3.0 | **10** | 29.20 | 6.90 → 33.90 | 5.80 → 35.00 |
 
-Vertical's trims are the measured feeder-centre-to-build-grid shifts, X
-`+1.1 cm` and Y `+3.75 cm` — one half feeder block on each axis, which is what
-makes the feeder-to-row-1 centre distance exactly `3.75 + 0.5 + 3.75 = 8.0 cm`.
-Its final block edges are `25.4 × 43.75 cm` from the feeder centre. That is safe
-because the holder only needs to reach each block's **centre** inside its
-travel envelope; the held block itself overhangs.
+**Both `trim_x` / `trim_y` ship at `0.0`.** The block/gap change made the old
+measured `+1.1` / `+3.75` vertical shifts obsolete, so each allocation is
+centred in travel until the feeder-centre-to-build-grid offset is re-measured
+on the rig, per mode. Operators report the horizontal grid's `[0,0]` sitting
+about `1.6 cm` from the pickup point, so expect its measured `trim_x` to be
+negative. **Horizontal's trims are still not vertical's and must not be copied
+from them.**
 
-**Horizontal's trims are `0.0` and `−0.25`, and must never be copied from
-vertical's.** At vertical's `+1.1 cm` X trim, horizontal's third column would
-sit at 1.75 → 25.25 cm, hanging `0.95 cm` off the end of the machine — from a
-centre at 21.5 cm that is perfectly legal. A centre-only geometry check accepts
-that grid. This is why each mode also declares
-`max_edge_overhang_x_cm` / `_y_cm`: the budget the block **edges** are checked
-against, on both machines.
+Each mode also declares `max_edge_overhang_x_cm` / `_y_cm`: the budget the
+block **edges** are checked against, on both machines. It is not a trim and
+moves nothing.
 
-- vertical allows half a block on each axis (`1.1` / `3.75`), which is exactly
-  the overhang a grid whose last centre sits on the travel limit must have;
-- horizontal allows **zero**, because its rows are flush with both walls.
+- vertical allows half a block on each axis (`1.1` / `3.0` = block_x/2 /
+  block_y/2), the overhang a full-travel grid would produce;
+- horizontal allows **zero** — any overhang there means the trims are wrong.
 
-The budget moves nothing. It is not a trim, and it must not be used as one.
-
-**Horizontal's 15 rows have no margin at all.** `15 × 2.2 + 14 × 0.5 = 40.00 cm`
-into `40.00 cm` of travel, flush at both ends, with the home-to-row-1 gap
-collapsed to zero. A 1 mm per-block error accumulates to 1.5 cm and costs a
-row. Measure the real block width across a stack of 15 before trusting the
-horizontal Y calibration. At `trim_y = 0.0` the far block overhangs by 0.25 cm
-and the grid is refused; at vertical's `trim_y = 3.75` only 12 rows fit.
+**Neither grid is flush with a wall at trim 0**, so both have slack to absorb
+per-block error. Horizontal's Y still has the least margin (10 rows of 3.0 cm
+pitch = 30.0 cm into 40.0 cm): measure a real stack before trusting its last
+row.
 
 The firmware owns the step counts and derives both steps/cm ratios at runtime;
 never hard-code either ratio and do not copy the `4750 × 8250` safety envelope
@@ -194,8 +188,9 @@ scale, while the firmware needs it to turn cell centres into steps, so those
 centimetre values genuinely have partners on both machines. Change both
 partners in the same commit. Positive trim moves the entire grid away from its
 home/feeder reference; negative trim moves it toward that reference. The
-shipped trims are X `+1.1 cm` and Y `+3.75 cm`, the measured
-feeder-centre-to-build-grid shifts; they are not holder-to-tool offsets.
+shipped trims are `0.0` on both axes and both modes, pending a rig
+re-measurement of the feeder-centre-to-build-grid shift; they are not
+holder-to-tool offsets.
 For any user-marked **error offsetting**, use `error_offset_x_cm` and
 `error_offset_y_cm` (and the paired firmware variables) as an additional
 signed shift exactly like the grid trim. Both start at zero.
@@ -273,7 +268,7 @@ X/Y envelope are refused, never silently clipped.
 | `python/vision/combined_grid.py` | the current A2 page/fiducial dimensions and page-to-holder registration |
 | the current physical print | A2 landscape; 8 x 10 chromatic fiducials; lower-left page corner is holder home |
 | `config/rig.json` -> `grid.modes.<mode>.*` | applied after the shared page-plane fit; still stored separately per mode |
-| the two legacy physical sheets | vertical: 2.2 x 7.5 cm; horizontal: 7.5 x 2.2 cm; both with 0.5 cm inner margins |
+| the two legacy physical sheets | vertical: 2.2 x 6.0 cm; horizontal: 6.0 x 2.2 cm; 1.6 cm inner margin along X, 0.8 cm along Y |
 | `python/vision/color_grid.py` | detects legacy sheets and refuses a measured geometry mismatch |
 | `plans/printed-color-grid.md` | the full treatment, including the layout disagreement below |
 
@@ -315,30 +310,30 @@ The paragraphs below describe the retained legacy sheets. A legacy sheet is a
 
 `ColorGridSpec.from_config(mode=...)` reads that mode's `cols + 1` and `rows +
 1`: each sheet prints a real block at **every** coordinate, coordinate zero
-included. The vertical sheet maps the complete 10 x 6 map, not the 9 x 5
-positive one; the horizontal sheet maps 4 x 16, not 3 x 15. Mode is explicit:
+included. The vertical sheet maps the complete 7 x 6 map, not the 6 x 5
+positive one; the horizontal sheet maps 3 x 11, not 2 x 10. Mode is explicit:
 the detector does not infer it from a partial sheet, and it refuses a sheet/map
 count or geometry mismatch.
 
 **The sheet and the firmware do not lay coordinate zero out the same way.** The
-sheet puts a whole 2.2 x 7.5 cm block there; the firmware puts a bare point with
-only the 0.5 cm gap before cell 1. The printed grid is therefore one block wider
-on X and one block taller on Y than the machine's grid, and aligning them is an
-explicit decision, not an assumption:
+sheet puts a whole 2.2 x 6.0 cm block there; the firmware puts a bare point with
+only the gap before cell 1. The printed grid is therefore one block wider on X
+and one block taller on Y than the machine's grid, and aligning them is an
+explicit decision, not an assumption (rig X/Y below are at trim 0):
 
 ```text
-vertical sheet X = 10 x 2.2 + 9 x 0.5 = 26.5 cm   rig X = 9 x 2.7 = 24.3 cm
-vertical sheet Y =  6 x 7.5 + 5 x 0.5 = 47.5 cm   rig Y = 5 x 8.0 = 40.0 cm
-horizontal sheet X = 4 x 7.5 + 3 x 0.5 = 31.5 cm  rig X = 3 x 8.0 = 24.0 cm
-horizontal sheet Y = 16 x 2.2 + 15 x 0.5 = 42.7 cm rig Y = 15 x 2.7 = 40.5 cm
+vertical sheet X = 7 x 2.2 + 6 x 1.6 = 25.0 cm    rig X = 6 x 3.8 = 22.8 cm
+vertical sheet Y = 6 x 6.0 + 5 x 0.8 = 40.0 cm    rig Y = 5 x 6.8 = 34.0 cm
+horizontal sheet X = 3 x 6.0 + 2 x 1.6 = 21.2 cm  rig X = 2 x 7.6 = 15.2 cm
+horizontal sheet Y = 11 x 2.2 + 10 x 0.8 = 32.2 cm rig Y = 10 x 3.0 = 30.0 cm
 ```
 
 `ColorGridCalibration.workspace_corners()` takes a `convention`. The default
 `"firmware"` puts the machine origin at the far corner of printed `[0,0]`, which
-makes printed `[c,r]` coincide exactly with the firmware's `[c,r]` for all 45
+makes printed `[c,r]` coincide exactly with the firmware's `[c,r]` for all
 positive cells. `"printed"` takes the paper at face value and lands every
-positive cell 1.1 cm (X) and 3.75 cm (Y) further from home. Do not add a third
-convention without a row here and a note in the plan.
+positive cell one `block/2 − (pitch − grid.x_start)` further from home on each
+axis. Do not add a third convention without a row here and a note in the plan.
 
 ### 3e. Camera colour correction — one transform, applied in four places
 
