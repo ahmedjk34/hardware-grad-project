@@ -118,25 +118,22 @@ with tempfile.TemporaryDirectory() as directory:
           not vertical_loaded.matches_grid(horizontal)
           and not vertical_loaded.matches_grid(grid, mode="horizontal"))
 
-    # Coordinate zero is an axis target, not another 7.5 x 2.2 cm block. A
-    # block-shaped lane overlaid horizontal [1,1]; the home strips must remain
-    # selectable without touching that positive cell.
+    # Coordinate zero is a REAL block now, not an axis lane. The old gap-wide
+    # strips in negative cm are gone: [c,0] and [0,r] are ordinary cells drawn
+    # by cell_polygon(), and [0,0] is the feeder.
     def bounds(polygon):
         points = np.asarray(polygon, dtype=float)
         return (points[:, 0].min(), points[:, 1].min(),
                 points[:, 0].max(), points[:, 1].max())
 
-    h_first = bounds(horizontal_workspace.cell_polygon(1, 1, image_size))
-    h_col0 = bounds(horizontal_workspace.axis_lane_polygon("row", 1, image_size))
-    h_row0 = bounds(horizontal_workspace.axis_lane_polygon("col", 1, image_size))
-    check("horizontal zero lanes do not overlap cell [1,1]",
-          h_col0[2] <= h_first[0] and h_row0[1] >= h_first[3],
-          f"cell={h_first}, col0={h_col0}, row0={h_row0}")
     for target in ((1, 0), (0, 1), (0, 0)):
         centre = np.mean(horizontal_workspace.target_polygon(*target, image_size), axis=0)
-        check(f"horizontal zero lane {target} remains selectable",
-              horizontal_workspace.cell_at(centre, image_size) is None
-              and horizontal_workspace.axis_lane_at(centre, image_size) == target)
+        check(f"horizontal cell {target} is an ordinary selectable cell",
+              horizontal_workspace.cell_at(centre, image_size) == target,
+              str(horizontal_workspace.cell_at(centre, image_size)))
+    check("target_polygon is just cell_polygon now",
+          np.allclose(horizontal_workspace.target_polygon(0, 0, image_size),
+                      horizontal_workspace.cell_polygon(0, 0, image_size)))
 
     # Flat v2 is the only legacy geometry that may migrate: it was necessarily
     # vertical because no horizontal layout existed when it was written.

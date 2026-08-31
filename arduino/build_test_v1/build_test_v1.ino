@@ -33,8 +33,10 @@
     O = Servo OPEN   (pin 6)
     C = Servo CLOSE  (pin 6)
 
-    R  = select the VERTICAL grid    (6 x 5, block 2.2 X x 6.0 Y cm)
-    RR = select the HORIZONTAL grid  (2 x 10, block 6.0 X x 2.2 Y cm)
+    R  = select the VERTICAL grid    (cols 0..6, rows 0..5,  block 2.2 x 6.0)
+    RR = select the HORIZONTAL grid  (cols 0..2, rows 0..10, block 6.0 x 2.2)
+      The horizontal grid is DERIVED from the vertical one, so its Y gaps
+      alternate 0.8 / 1.6 cm. See SECTION 6C.
       These LATCH a grid layout. NEITHER MOVES ANYTHING. Each is refused
       when it is already true, and both need X/Y homed first. The claw's
       rotation is owned entirely by the build cycle.
@@ -43,13 +45,17 @@
       placement this session is turned 90 degrees and nothing can tell.
 
     G <col> <row>   = go to grid cell. e.g.  G 3 5   or  G3,5
-      col/row may be 0: 0,0 is the ORIGIN (home; a no-op if already there),
-      and 0 on just one axis moves only the other axis, e.g. G 5 0 = X only.
-    S <cols> <rows> = change fixed-pitch grid count live, for the ACTIVE
-      grid only. The other mode keeps the count it was last given.
+      EVERY coordinate is a real block footprint, 0 included, and BOTH axes
+      always move. G 0 0 drives to the FEEDER cell centre.
+      (This changed: 0 used to mean "leave that axis at the origin", so
+      G 5 0 was an X-only move. It is now the cell [5,0].)
+    S <cols> <rows> = change the HIGHEST INDEX live, for the ACTIVE grid
+      only. The other mode keeps the size it was last given.
 
     B <col> <row> <level>   = BUILD one block   <<< NEW
-      BUILD calibration: col/row may be 0; B 0 0 is a no-op.
+      B 0 0 is a no-op: [0,0] is the FEEDER in both modes and is never
+      built on. Every other cell, row 0 and column 0 included, is a real
+      placement.
       There is NO rotation word. The active grid decides how the block is
       laid: vertical places it unrotated, horizontal turns it 90 CCW.
     Z               = print the Z / build calibration table  <<< NEW
@@ -80,10 +86,13 @@
   X in [-4750, 0], Y in [0, +8250]. Grid
   indices hide this sign mess:
 
-      col 1  = nearest the X switch (X = 0 side, the X+ end)
+      col 0  = nearest the X switch (X = 0 side, the X+ end)
       col N  = far end of X travel  (X = -4750 side)
-      row 1  = nearest the Y switch (Y = 0 side)
+      row 0  = nearest the Y switch (Y = 0 side)
       row M  = far end of Y travel  (Y = +8250 side)
+
+  Coordinate 0 is a REAL BLOCK, whose outer edge sits on the home corner -
+  not a bare home point. [0,0] is the feeder. See SECTION 6C.
 
   Generalised in code as: each axis extends from 0 in the direction
   travelEndOf(axis), for axisTravelOf(axis) steps - whether that far
@@ -129,7 +138,10 @@
   BUILD SEQUENCE  (the B command)                        <<< NEW
   ------------------------------------------------------------
     1. Z up to the TOP SWITCH                    (clear of everything)
-    2. X/Y home to the origin                    (the block feeder)
+    2. X/Y home, then out to the FEEDER cell [0,0] centre. That is the
+       VERTICAL [0,0] centre in BOTH modes - the feeder never rotates, it
+       always presents a block standing. It is the cell CENTRE, not raw
+       home, because home is that cell's outer corner.
     3. Return the claw to neutral (including any manual A jog)
     4. Open the claw
     5. Z down to GROUND (into the Z switch - this also re-zeroes Z)
@@ -531,50 +543,103 @@ const bool SOFT_LIMIT_VERBOSE = true;
 //   VERTICAL   (mode 0)  block 2.2 X x 6.0 Y      6 cols x  5 rows
 //   HORIZONTAL (mode 1)  block 6.0 X x 2.2 Y      2 cols x 10 rows
 //
-// Blocks do NOT touch: adjacent positive cells have a gap of 1.6 cm along X
-// and 0.8 cm along Y, and on each axis that same gap separates coordinate 0
-// from cell 1.
+// ------------------------------------------------------------
+//   COORDINATE 0 IS A REAL BLOCK NOW
+// ------------------------------------------------------------
+// It used to be the home POINT, with only a gap before cell 1, and the whole
+// allocation was then CENTRED in the holder travel. Both of those are gone.
+// The lattice is ANCHORED on the home corner and coordinate 0 is a full block
+// footprint, exactly like the printed calibration sheet draws it:
 //
-//   vertical    X pitch = 2.2 + 1.6 = 3.8 cm;  6 * 3.8 = 22.8 cm
-//               Y pitch = 6.0 + 0.8 = 6.8 cm;  5 * 6.8 = 34.0 cm
-//   horizontal  X pitch = 6.0 + 1.6 = 7.6 cm;  2 * 7.6 = 15.2 cm
-//               Y pitch = 2.2 + 0.8 = 3.0 cm; 10 * 3.0 = 30.0 cm
+//   vertical    X: 7 slots (0..6)  7 * 2.2 + 6 * 1.6 = 25.0 cm
+//               Y: 6 slots (0..5)  6 * 6.0 + 5 * 0.8 = 40.0 cm
+//   horizontal  X: 3 slots (0..2)  3 * 6.0 + 2 * 1.6 = 21.2 cm
+//               Y: 11 slots (0..10) 11 * 2.2 + ALTERNATING gaps = 36.2 cm
 //
-// Every allocation above is smaller than the 24.3 x 40.0 cm holder travel,
-// which is PHYSICAL and does not change with the mode.  The counts are the
-// grids currently printed on paper, not the geometric maxima; against this
-// travel vertical could take 6 X / 6 Y and horizontal 3 X / 13 Y before
-// gridGeometryFits() refuses the next cell.
+// GRID_COLS / GRID_ROWS hold the HIGHEST INDEX, not a count, which is why they
+// still read 6/5 and 2/10 - there are 7/6 and 3/11 addressable cells.
+//
+// Slot i of a uniform axis spans [i * pitch, i * pitch + block]. Vertical X
+// wants 25.0 cm inside 24.3 cm of travel: every CENTRE is reachable (col 6 sits
+// at 23.9) and the far edge overhangs 0.7 cm, inside the 1.1 cm budget below.
+// Vertical Y is 40.0 in 40.0 with no slack at all.
+//
+// ------------------------------------------------------------
+//   [0,0] IS THE FEEDER, IN BOTH MODES, AND IS NEVER BUILT ON
+// ------------------------------------------------------------
+// The feeder never rotates: a block is always presented standing, on the
+// VERTICAL [0,0] footprint (X 0..2.2, Y 0..6.0), whichever mode is latched.
+// The claw therefore descends on the vertical [0,0] centre - (1.1, 3.0) cm -
+// for every pick-up, and buildFeederPosition() computes that from the vertical
+// tables directly rather than from the active mode.
+//
+// That kills exactly one cell per mode and no more:
+//     vertical   [0,0]     IS the feeder                     -> refused
+//     horizontal [0,0]     X 0..6.0 x Y 3.8..6.0 overlaps it -> refused
+//     every other row-0 / col-0 cell clears the feeder        -> buildable
+// So B 0 0 stays the inert no-op it always was, while B 0 3 and B 4 0 are now
+// real placements instead of the old "move one axis only" sentinel.
+//
+// ------------------------------------------------------------
+//   THE HORIZONTAL LATTICE IS DERIVED FROM THE VERTICAL ONE
+// ------------------------------------------------------------
+// A horizontal block is a vertical block turned 90 degrees, so its grid is not
+// an independent set of numbers - it is the SAME lattice read at a different
+// density, and deriving it is what stops the two drifting apart:
+//
+//   X  one horizontal column covers two vertical columns plus the gap between
+//      them:  block 6.0 = 2 * 2.2 + 1.6,  pitch 7.6 = 2 * 3.8,  gap 1.6.
+//      Uses vertical columns 0-1, 2-3, 4-5; vertical column 6 is unused.
+//
+//   Y  one vertical row holds two horizontal rows - its lower and its upper
+//      2.2 cm. Horizontal row r is sub-slot (r+1) of that sequence, so row 0
+//      is the UPPER half of vertical row 0 and the grid starts 3.8 cm out.
+//
+// Nothing here swaps an X extent for a Y one: X is derived from X and Y from Y.
+// plans/dual-orientation-grid.md D12 forbids the swap, not the derivation.
+//
+// ------------------------------------------------------------
+//   WHICH IS WHY THE HORIZONTAL Y GAPS ALTERNATE
+// ------------------------------------------------------------
+// Consecutive 2.2 cm horizontal rows are separated either by the MIDDLE of one
+// vertical block or by the GAP between two vertical blocks, and those are not
+// the same distance:
+//
+//   |<-2.2->|<-1.6->|<-2.2->|<-0.8->|<-2.2->|<-1.6->|<-2.2->|<-0.8->|
+//    h row 0  within  h row 1 between  h row 2 within  h row 3 between
+//              a block          blocks          a block         blocks
+//
+//   gap after an EVEN row = 0.8 = GRID_GAP_Y_CM[vertical]
+//   gap after an ODD  row = 1.6 = block_y[vertical] - 2 * block_y[horizontal]
+//
+// Both are derived, never typed in twice. The old code used a single uniform
+// 3.0 cm pitch here; the true mean is 3.4 cm, so it was losing 0.4 cm per row
+// and 4.0 cm - almost two whole blocks - by row 10.
+//
+// The holder travel is 24.3 x 40.0 cm, PHYSICAL and unchanged by the mode.
 //
 // EACH MODE STATES BOTH BLOCK EXTENTS OUTRIGHT.  Nothing here swaps a width
 // for a length.  A swap would have to be performed identically here, in
 // python/rig/grid.py and in the camera overlay - three chances to get an axis
 // backwards, for no gain.  See plans/dual-orientation-grid.md D12.
 //
-// Coordinate 0 is the feeder-block centre / home reference.  The signed trims
-// move a mode's whole allocation away from (+) or toward (-) the home
-// switches. The vertical allocation is centred in travel. The horizontal
-// allocation has a deliberate +1.6 cm Y registration shift: after pickup, the
-// top 2.2 cm of the vertical feeder cell is the horizontal [0,0] reference,
-// with the 1.6 cm separation between the two 2.2 cm reference regions. This
-// is a GRID TRIM, not a holder-to-tool offset. HORIZONTAL'S TRIMS ARE STILL
-// NOT VERTICAL'S AND MUST NOT BE COPIED FROM THEM.
+// The near edge of slot 0 sits ON the home corner: coordinate 0 cm is the
+// outer edge of cell [0,0], the edge facing the home switches. The printed
+// sheet is registered the same way - lay its [0,0] block's outer corner on the
+// holder home point and printed [c,r] is firmware [c,r].
 //
 // PHYSICAL RR REGISTRATION (Y axis, positive away from Y home):
 //
-//   vertical pickup [0,0]       1.6 cm       horizontal [0,0] reference
-//   |<-------- 2.2 cm -------->|<-------->|<-------- 2.2 cm -------->|
+//   |<------ vertical row 0, 6.0 cm ------>|<-0.8->|<-- vertical row 1 ...
+//   |<- 2.2 cm ->|<- 1.6 cm ->|<- 2.2 cm ->|
+//    h row -                   h ROW 0       h row 1 is the lower half of
+//    (unused)                  = the pick-   vertical row 1, 0.8 cm further on
+//                              up cell's
+//                              upper half
 //
-// The horizontal reference is the upper 2.2 cm region of the vertical
-// pickup-cell relationship, not the bare home point. RR only latches the
-// mode; the next B picks up neutral, moves using the shifted horizontal
-// centres, rotates 90 degrees CCW, then places. B 0 0 remains a no-op.
-// `GRID_GAP_X_CM = 1.6` is still the repeated cell gap and is unrelated to
-// this whole-grid registration trim.
-//
-// The horizontal X registration trim changes the X edges but remains inside
-// the zero-overhang budget. Both modes still need real-stack measurement
-// before trusting the last horizontal row of 10.
+// RR only latches the mode; the next B picks up neutral at the vertical [0,0]
+// centre, moves using the derived horizontal centres, rotates 90 degrees CCW,
+// then places. B 0 0 remains a no-op in both modes.
 //
 // Targets are computed as absolute physical cell centres and rounded only
 // once, so sub-step rounding error never accumulates between cells.
@@ -613,17 +678,45 @@ float GRID_BLOCK_Y_CM[GRID_MODE_COUNT] = {6.0, 2.2};
 float GRID_GAP_X_CM[GRID_MODE_COUNT] = {1.6, 1.6};
 float GRID_GAP_Y_CM[GRID_MODE_COUNT] = {0.8, 0.8};
 
-// Signed whole-allocation shift, per mode. Not copied between modes - see above.
-// Vertical is centred; horizontal is registered +1.6 cm in X from the
-// vertical pickup cell as documented above. Keep paired with config/rig.json.
+// ------------------------------------------------------------
+//   THE FOUR OFFSET FAMILIES, AND WHAT EACH ONE IS FOR
+// ------------------------------------------------------------
+//   These used to overlap - the horizontal Y registration lived in a TRIM while
+//   the same physical effect was also partly in a TOOL OFFSET, so tuning either
+//   one moved the grid twice. Each name now has exactly one job:
+//
+//     GRID_BLOCK_* / GRID_GAP_*   the physical lattice. Stated per mode.
+//     GRID_TRIM_*                 moves the WHOLE grid against the home
+//                                 switches. Both modes 0.0. If this is not
+//                                 zero the printed sheet is misregistered -
+//                                 move the paper, do not tune the number.
+//     GRID_ERROR_OFFSET_*         the calibration knob. A CONSTANT per-mode
+//                                 nudge; it cannot fix an error that grows
+//                                 with distance (that is a steps/cm or pitch
+//                                 problem). Start at 0.
+//     TOOL_OFFSET_*               purely mechanical: how far the claw's grip
+//                                 centre sits from the holder centre in each
+//                                 rotation. Nothing to do with the grid.
+//
+//   The horizontal Y registration is NOT in any of these any more. It is
+//   structural - row 0 is the upper 2.2 cm sub-slot of vertical row 0 - and it
+//   is derived in gridLatticeStartCmOf(). Putting 1.6 back in the trim would
+//   double-count it.
+
+// Signed whole-allocation shift, per mode. Not copied between modes - see
+// above. Both zero: the lattice is anchored on the home corner, not centred.
 float GRID_TRIM_X_CM[GRID_MODE_COUNT] = {0.0, 0.0};
-float GRID_TRIM_Y_CM[GRID_MODE_COUNT] = {0.0, 1.6};
+float GRID_TRIM_Y_CM[GRID_MODE_COUNT] = {0.0, 0.0};
 
 // AI AGENT NOTE: For any user-marked "error" offsetting, use these variables.
 // They apply exactly like GRID_TRIM_* and shift every grid centre from home.
 // Keep these paired with config/rig.json and start new error calibration at 0.
-float GRID_ERROR_OFFSET_X_CM[GRID_MODE_COUNT] = {0.15, 0.0};
-float GRID_ERROR_OFFSET_Y_CM[GRID_MODE_COUNT] = {0.05, 0.0};
+//
+// RESET TO ZERO when the grid was re-anchored on the printed sheet. The old
+// 0.15 / 0.05 were measured against the previous CENTRED allocation and mean
+// nothing against this one.
+float GRID_ERROR_OFFSET_X_CM[GRID_MODE_COUNT] = {0.0, 0.0};
+float GRID_ERROR_OFFSET_Y_CM[GRID_MODE_COUNT] = {0.0, 0.0};
 
 // How far past the travel limit this mode lets a placed block's own EDGE sit.
 // This is NOT a trim: it moves nothing. It is the budget gridGeometryFits()
@@ -638,8 +731,10 @@ float GRID_ERROR_OFFSET_Y_CM[GRID_MODE_COUNT] = {0.05, 0.0};
 float GRID_MAX_EDGE_OVERHANG_X_CM[GRID_MODE_COUNT] = {1.1, 0.0};
 float GRID_MAX_EDGE_OVERHANG_Y_CM[GRID_MODE_COUNT] = {3.0, 0.0};
 
-// Per mode, so that S applies to the grid the operator is looking at and the
-// other mode keeps whatever count it was given.
+// THE HIGHEST VALID INDEX, not a count: vertical addresses columns 0..6 and
+// rows 0..5, horizontal columns 0..2 and rows 0..10. gridSlotsOf() adds the
+// one. Per mode, so that S applies to the grid the operator is looking at and
+// the other mode keeps whatever size it was given.
 long GRID_COLS[GRID_MODE_COUNT] = {6, 2};
 long GRID_ROWS[GRID_MODE_COUNT] = {5, 10};
 
@@ -684,9 +779,14 @@ float TOOL_OFFSET_CCW_Y_CM = 1.4;
 const long GRID_MAP_MAX_COLS = 48;
 const long GRID_MAP_MAX_ROWS = 48;
 
-// Last commanded cell. 0 = unknown / not on a cell.
-long curCol = 0;
-long curRow = 0;
+// "Not on a cell at all" - in a gap, or off the grid. It is -1 and NOT 0,
+// because 0 is a real cell now (the feeder). Every index that can come back
+// from positionToIndex() has to be tested against this, never against 0.
+const long GRID_INDEX_NONE = -1;
+
+// Last commanded cell. GRID_INDEX_NONE = unknown / not on a cell.
+long curCol = GRID_INDEX_NONE;
+long curRow = GRID_INDEX_NONE;
 
 // ============================================================
 // SECTION 6D - HOMING CONFIGURATION
@@ -1644,8 +1744,8 @@ void executeMove(uint8_t index)
   // Z is not part of the X/Y grid, so a Z jog leaves the cell alone.
   if (m.axis != AXIS_Z)
   {
-    curCol = 0;
-    curRow = 0;
+    curCol = GRID_INDEX_NONE;
+    curRow = GRID_INDEX_NONE;
   }
 
   Serial.print(F("  Moved "));
@@ -2271,6 +2371,8 @@ bool goToOrigin()
 
   if (okX && okY)
   {
+    // Home is (0,0) cm, which is the outer EDGE of cell [0,0] - and therefore
+    // inside its footprint, so [0,0] is the honest answer here. Not a sentinel.
     curCol = 0;
     curRow = 0;
     Serial.println(F("  AT ORIGIN. Position = X 0 / Y 0"));
@@ -2345,59 +2447,165 @@ float xyStepsPerCmOf(uint8_t axis)
   return (travelCm > 0.0) ? (float)gridTravelOf(axis) / travelCm : 0.0;
 }
 
-// Complete controlled displacement from coordinate 0 to the far edge of the
-// final block. Every positive cell contributes one gap plus one block:
-//   vertical X: 6 * (1.6 + 2.2) = 22.8 cm
-//   vertical Y: 5 * (0.8 + 6.0) = 34.0 cm
-float gridAllocationCmOf(uint8_t axis, long count)
+// ------------------------------------------------------------
+//   THE LATTICE
+// ------------------------------------------------------------
+//   Every axis is a run of `gridSlotsOf()` block footprints starting on the
+//   home corner. Three of the four axes are uniform, so slot i simply sits at
+//   i * pitch. The fourth - horizontal Y - alternates, because it is the
+//   vertical Y lattice read at double density; see SECTION 6C.
+//
+//   Everything else in this file goes through cellCentreCmOf() and
+//   gridSlotBottomCmOf(), so the alternating case is written exactly once.
+
+// Highest index + 1. GRID_COLS/GRID_ROWS hold the highest INDEX.
+long gridSlotsOf(uint8_t axis)
 {
-  return (float)count * gridPitchCmOf(axis);
+  return gridCountOf(axis) + 1;
 }
 
-// The positive-cell footprint excludes only the first home-to-cell-1 gap:
-//   N * block + (N - 1) * gap = N * pitch - gap.
-float gridBlockFootprintCmOf(uint8_t axis, long count)
+// Is this the one axis whose gaps alternate?
+bool gridAxisAlternates(uint8_t axis)
 {
-  if (count < 1)
+  return axis == AXIS_Y && gridMode == GRID_MODE_HORIZONTAL;
+}
+
+// ---- the horizontal Y lattice, derived from the vertical tables ----
+//
+// Read the VERTICAL mode's numbers directly rather than gridBlockCmOf(), which
+// would return the active (horizontal) mode's. Y is derived from Y only.
+
+float verticalPitchYCm()
+{
+  return GRID_BLOCK_Y_CM[GRID_MODE_VERTICAL] + GRID_GAP_Y_CM[GRID_MODE_VERTICAL];
+}
+
+// The 1.6 cm that separates the two halves of one vertical block: what is left
+// of a 6.0 cm block once both 2.2 cm horizontal rows are taken out of it.
+float horizontalYInnerGapCm()
+{
+  return GRID_BLOCK_Y_CM[GRID_MODE_VERTICAL]
+       - 2.0 * GRID_BLOCK_Y_CM[GRID_MODE_HORIZONTAL];
+}
+
+// How far the first slot sits from the home corner. Zero everywhere except
+// horizontal Y, where row 0 is the UPPER half of vertical row 0 and so starts
+// one block-minus-a-row out: 6.0 - 2.2 = 3.8 cm.
+float gridLatticeStartCmOf(uint8_t axis)
+{
+  float start = 0.0;
+  if (gridAxisAlternates(axis))
+  {
+    start = GRID_BLOCK_Y_CM[GRID_MODE_VERTICAL]
+          - GRID_BLOCK_Y_CM[GRID_MODE_HORIZONTAL];
+  }
+  return start + gridTrimCmOf(axis);
+}
+
+// Near edge of slot `index`, measured from the home switch corner.
+float gridSlotBottomCmOf(uint8_t axis, long index)
+{
+  if (index < 0)
+  {
+    return gridLatticeStartCmOf(axis);
+  }
+  if (!gridAxisAlternates(axis))
+  {
+    return gridLatticeStartCmOf(axis) + (float)index * gridPitchCmOf(axis);
+  }
+
+  // Horizontal row r is sub-slot (r+1) of the vertical lattice: even sub-slots
+  // are the lower half of a vertical row, odd ones the upper half. The lattice
+  // start already carries the "upper half" offset, so an EVEN row adds it and
+  // an ODD row (a lower half) takes it back off.
+  long whole = (index + 1) / 2; // how many complete vertical rows below us
+  float bottom = (float)whole * verticalPitchYCm();
+  if ((index % 2) == 0)
+  {
+    bottom += GRID_BLOCK_Y_CM[GRID_MODE_VERTICAL]
+            - GRID_BLOCK_Y_CM[GRID_MODE_HORIZONTAL];
+  }
+  return bottom + gridTrimCmOf(axis);
+}
+
+// The gap between slot `index - 1` and slot `index`. Uniform axes always
+// answer gridGapCmOf(); horizontal Y alternates 0.8 / 1.6.
+float gridGapBeforeSlotCmOf(uint8_t axis, long index)
+{
+  if (index < 1)
   {
     return 0.0;
   }
-  return (float)count * gridBlockCmOf(axis)
-       + (float)(count - 1) * gridGapCmOf(axis);
+  if (!gridAxisAlternates(axis))
+  {
+    return gridGapCmOf(axis);
+  }
+  // Odd index = a lower half following an upper half = the between-blocks gap.
+  return (index % 2) ? GRID_GAP_Y_CM[GRID_MODE_VERTICAL]
+                     : horizontalYInnerGapCm();
 }
 
-// A smaller S-selected allocation is centred inside the holder-travel span.
-// The signed trim then shifts it from the feeder/home reference. Both trims
-// ship at 0.0, so the 6x5 vertical grid's Y centres are 6.8,13.6,...,34.0 cm.
-float gridAllocationStartCmOf(uint8_t axis, long count)
-{
-  return (xyTravelCmOf(axis) - gridAllocationCmOf(axis, count)) * 0.5
-       + gridTrimCmOf(axis);
-}
-
-float gridBlockStartCmOf(uint8_t axis, long count)
-{
-  return gridAllocationStartCmOf(axis, count) + gridGapCmOf(axis);
-}
-
+// Home corner to the FAR edge of the last slot. This is the whole grid, blocks
+// and internal gaps together: vertical 25.0 x 40.0, horizontal 21.2 x 40.0 cm
+// (the horizontal Y figure includes its 3.8 cm lattice start).
 float gridBlockEndCmOf(uint8_t axis, long count)
 {
-  return gridBlockStartCmOf(axis, count) + gridBlockFootprintCmOf(axis, count);
+  if (count < 0)
+  {
+    return gridLatticeStartCmOf(axis);
+  }
+  return gridSlotBottomCmOf(axis, count) + gridBlockCmOf(axis);
 }
 
+// Near edge of slot 0.
+float gridBlockStartCmOf(uint8_t axis, long count)
+{
+  (void)count;
+  return gridSlotBottomCmOf(axis, 0);
+}
+
+// Blocks plus the gaps between them - the same span as above, measured from
+// the first block edge rather than from home.
+float gridBlockFootprintCmOf(uint8_t axis, long count)
+{
+  if (count < 0)
+  {
+    return 0.0;
+  }
+  return gridBlockEndCmOf(axis, count) - gridBlockStartCmOf(axis, count);
+}
+
+// Kept as the name the reports use. With the lattice anchored rather than
+// centred there is no separate "allocation" any more: it is the footprint plus
+// however far the lattice starts from home.
+float gridAllocationCmOf(uint8_t axis, long count)
+{
+  return gridBlockEndCmOf(axis, count);
+}
+
+float gridAllocationStartCmOf(uint8_t axis, long count)
+{
+  (void)count;
+  return gridLatticeStartCmOf(axis);
+}
+
+// `count` is the HIGHEST INDEX the grid uses, so 0 is a legal one-slot axis.
 bool gridGeometryFits(uint8_t axis, long count)
 {
-  if (count < 1 || xyStepsPerCmOf(axis) <= 0.0
+  if (count < 0 || xyStepsPerCmOf(axis) <= 0.0
       || gridBlockCmOf(axis) <= 0.0 || gridGapCmOf(axis) < 0.0)
   {
     return false;
   }
+  if (gridAxisAlternates(axis) && horizontalYInnerGapCm() < 0.0)
+  {
+    // Two horizontal rows have to fit inside one vertical block.
+    return false;
+  }
   const float slack = 0.0001;
   float travelCm = xyTravelCmOf(axis);
-  float firstCentre = gridAllocationStartCmOf(axis, count)
-                    + gridGapCmOf(axis) + gridBlockCmOf(axis) * 0.5;
-  float lastCentre = firstCentre
-                   + (float)(count - 1) * gridPitchCmOf(axis);
+  float firstCentre = gridSlotBottomCmOf(axis, 0) + gridBlockCmOf(axis) * 0.5;
+  float lastCentre = gridSlotBottomCmOf(axis, count) + gridBlockCmOf(axis) * 0.5;
 
   // Half one: the holder must be able to reach every placement centre.
   if (firstCentre < -slack || lastCentre > travelCm + slack)
@@ -2422,36 +2630,41 @@ bool gridGeometryFits(uint8_t axis, long count)
   return nearEdge >= -overhang - slack && farEdge <= travelCm + overhang + slack;
 }
 
+// The highest INDEX this axis can carry. -1 means not even slot 0 fits.
 long gridCountMaxOf(uint8_t axis)
 {
   float pitch = gridPitchCmOf(axis);
   if (xyTravelCmOf(axis) <= 0.0 || pitch <= 0.0)
   {
-    return 0;
+    return -1;
+  }
+  // Alternating axes step by half a vertical pitch, so bound the search on the
+  // smaller of the two - never overestimate how many slots could be tried.
+  float step = gridAxisAlternates(axis) ? (verticalPitchYCm() * 0.5) : pitch;
+  if (step <= 0.0)
+  {
+    return -1;
   }
   long plausible = (long)ceil((xyTravelCmOf(axis)
                               + 2.0 * fabs(gridTrimCmOf(axis))
-                              + 2.0 * pitch) / pitch);
-  long maximum = 0;
-  for (long count = 1; count <= plausible; count++)
+                              + 2.0 * pitch) / step);
+  long maximum = -1;
+  for (long index = 0; index <= plausible; index++)
   {
-    if (gridGeometryFits(axis, count))
-      maximum = count;
+    if (gridGeometryFits(axis, index))
+      maximum = index;
   }
   return maximum;
 }
 
-// Centre of positive cell `index` (1-based), measured from coordinate 0:
-//   centre = allocation_start + gap + block/2 + (index - 1) * pitch
-// Vertical trim-0 examples: X1 = 0.75 + 1.6 + 2.2/2 = 3.45 cm;
-//                           Y1 = 3.0 + 0.8 + 6.0/2 = 6.8 cm.
+// Centre of cell `index` (0-based; slot 0 is a real block), measured from the
+// home switch corner. Vertical trim-0 examples:
+//   X0 = 1.1, X1 = 4.9, ... X6 = 23.9 cm
+//   Y0 = 3.0, Y1 = 9.8, ... Y5 = 37.0 cm
+// Horizontal Y alternates: 4.9, 7.9, 11.7, 14.7, ... 38.9 cm.
 float cellCentreCmOf(uint8_t axis, long index)
 {
-  long count = gridCountOf(axis);
-  return gridAllocationStartCmOf(axis, count)
-       + gridGapCmOf(axis)
-       + gridBlockCmOf(axis) * 0.5
-       + ((float)index - 1.0) * gridPitchCmOf(axis);
+  return gridSlotBottomCmOf(axis, index) + gridBlockCmOf(axis) * 0.5;
 }
 
 float toolOffsetCmOf(uint8_t axis, int8_t rotation)
@@ -2495,15 +2708,37 @@ bool cellTargetPosition(uint8_t axis, long index, int8_t rotation,
   return true;
 }
 
-// Centre-to-centre pitch converted through the per-axis calibration.
-float gridPitchStepsOf(uint8_t axis)
+// Centre-to-centre pitch, averaged over the alternation where there is one.
+// Horizontal Y has NO single pitch - its centres step 3.0, 3.8, 3.0, 3.8 - so
+// this is the mean (3.4 cm) and is for REPORTING ONLY. Nothing that positions
+// the machine may use it; go through gridSlotBottomCmOf() instead.
+float gridMeanPitchCmOf(uint8_t axis)
 {
-  return gridPitchCmOf(axis) * xyStepsPerCmOf(axis);
+  if (!gridAxisAlternates(axis))
+  {
+    return gridPitchCmOf(axis);
+  }
+  return gridBlockCmOf(axis)
+       + 0.5 * (GRID_GAP_Y_CM[GRID_MODE_VERTICAL] + horizontalYInnerGapCm());
 }
 
-// Which physical block footprint the HOLDER/tool position falls in. Gaps and
-// centred leftover strips deliberately return 0. Adding the active tool offset
-// converts the holder counter back into the actual placement-centre frame.
+float gridPitchStepsOf(uint8_t axis)
+{
+  return gridMeanPitchCmOf(axis) * xyStepsPerCmOf(axis);
+}
+
+// Which physical block footprint the HOLDER/tool position falls in. Adding the
+// active tool offset converts the holder counter back into the actual
+// placement-centre frame.
+//
+// Returns GRID_INDEX_NONE for a position in a gap or off the grid entirely.
+// That sentinel is -1 rather than 0, because 0 is a REAL cell now - the feeder
+// - and reporting "in a gap" as "on the feeder" would be a lie the operator
+// could act on.
+//
+// A scan, not a division: the horizontal Y lattice has no single pitch to
+// divide by. Eleven float compares on a MEGA is nothing, and it is the same
+// code for both the uniform and the alternating axes.
 long positionToIndex(uint8_t axis, long pos, int8_t rotation)
 {
   long count = gridCountOf(axis);
@@ -2512,33 +2747,26 @@ long positionToIndex(uint8_t axis, long pos, int8_t rotation)
 
   if (mag < 0 || mag > gridTravelOf(axis) || scale <= 0.0)
   {
-    return 0;
+    return GRID_INDEX_NONE;
   }
 
   float cm = (float)mag / scale + toolOffsetCmOf(axis, rotation);
-  float allocationStart = gridAllocationStartCmOf(axis, count);
-  float start = gridBlockStartCmOf(axis, count);
-  float end = gridBlockEndCmOf(axis, count);
   float halfStepCm = 0.5 / scale;
-  if (cm < start - halfStepCm || cm > end + halfStepCm)
-  {
-    return 0;
-  }
+  float block = gridBlockCmOf(axis);
 
-  float relative = cm - allocationStart;
-  float pitch = gridPitchCmOf(axis);
-  long idx = (long)ceil((relative - halfStepCm) / pitch);
-  if (idx < 1 || idx > count)
+  for (long index = 0; index <= count; index++)
   {
-    return 0;
+    float bottom = gridSlotBottomCmOf(axis, index);
+    if (cm < bottom - halfStepCm)
+    {
+      return GRID_INDEX_NONE; // past it already: we are in the gap below
+    }
+    if (cm <= bottom + block + halfStepCm)
+    {
+      return index;
+    }
   }
-  float withinSlot = relative - (float)(idx - 1) * pitch;
-  if (withinSlot < gridGapCmOf(axis) - halfStepCm
-      || withinSlot > pitch + halfStepCm)
-  {
-    return 0;
-  }
-  return idx;
+  return GRID_INDEX_NONE;
 }
 
 bool gridReady()
@@ -2559,8 +2787,85 @@ bool gridReady()
   return true;
 }
 
-// 0 is a real coordinate here: [0,0] is the ORIGIN, and 0 on one axis alone
-// means "leave that axis at the origin" - see gotoCellForRotation().
+// ============================================================
+// THE FEEDER
+// ============================================================
+//
+// The feeder does not rotate. A block is always presented STANDING, on the
+// VERTICAL [0,0] footprint, whichever grid is latched - so the pick-up point is
+// read out of the vertical tables directly and does NOT move when RR is sent.
+//
+// Note this is the vertical [0,0] CENTRE (1.1, 3.0 cm), not raw home (0,0).
+// Home is the outer corner of that cell; descending there would grip the block
+// by its corner.
+
+float feederCentreCmOf(uint8_t axis)
+{
+  float block = (axis == AXIS_X) ? GRID_BLOCK_X_CM[GRID_MODE_VERTICAL]
+                                 : GRID_BLOCK_Y_CM[GRID_MODE_VERTICAL];
+  float trim = (axis == AXIS_X)
+                   ? GRID_TRIM_X_CM[GRID_MODE_VERTICAL]
+                         + GRID_ERROR_OFFSET_X_CM[GRID_MODE_VERTICAL]
+                   : GRID_TRIM_Y_CM[GRID_MODE_VERTICAL]
+                         + GRID_ERROR_OFFSET_Y_CM[GRID_MODE_VERTICAL];
+  return trim + block * 0.5;
+}
+
+// Holder step target for the pick-up. The claw is ALWAYS neutral here, so the
+// neutral tool offset is the right one regardless of the latched mode.
+bool feederTargetPosition(uint8_t axis, long *targetPosition)
+{
+  float holderCm = feederCentreCmOf(axis) - toolOffsetCmOf(axis, ROT_NONE);
+  float scale = xyStepsPerCmOf(axis);
+  const float slack = 0.0001;
+
+  if (scale <= 0.0 || holderCm < -slack || holderCm > xyTravelCmOf(axis) + slack)
+  {
+    return false;
+  }
+  long mag = lround(holderCm * scale);
+  if (mag < 0 || mag > gridTravelOf(axis))
+  {
+    return false;
+  }
+  *targetPosition = mag * (long)gridDirOf(axis);
+  return true;
+}
+
+// Home, then walk out to the feeder cell centre. Every pick-up goes here.
+bool goToFeeder()
+{
+  long targetX = 0;
+  long targetY = 0;
+  if (!feederTargetPosition(AXIS_X, &targetX)
+      || !feederTargetPosition(AXIS_Y, &targetY))
+  {
+    Serial.println(F("  ERROR - the feeder cell is outside the X/Y travel."));
+    return false;
+  }
+  if (!goToOrigin())
+  {
+    return false;
+  }
+  if (!moveAxisTo(AXIS_Y, targetY) || !moveAxisTo(AXIS_X, targetX))
+  {
+    Serial.println(F("  ERROR - a limit stopped the move to the feeder."));
+    return false;
+  }
+  curCol = 0;
+  curRow = 0;
+  return true;
+}
+
+// [0,0] is the FEEDER in both modes and is never built on; every other cell,
+// including the rest of row 0 and column 0, is a real placement.
+bool cellIsFeeder(long col, long row)
+{
+  return col == 0 && row == 0;
+}
+
+// 0 is a real coordinate AND a real block footprint. It no longer means
+// "leave that axis alone" - B 0 3 and B 4 0 are ordinary placements now.
 bool cellInRange(long col, long row)
 {
   if (col < 0 || col > gridColsNow() || row < 0 || row > gridRowsNow())
@@ -2585,15 +2890,16 @@ void setGridSize(long cols, long rows)
     return;
   }
 
-  if (cols < 1 || rows < 1 ||
+  // These are HIGHEST INDEX, not counts, so 0 is a legal (single-cell) axis.
+  if (cols < 0 || rows < 0 ||
       cols > gridCountMaxOf(AXIS_X) || rows > gridCountMaxOf(AXIS_Y) ||
       !gridGeometryFits(AXIS_X, cols) || !gridGeometryFits(AXIS_Y, rows))
   {
-    Serial.print(F("  ERROR - grid must be 1.."));
+    Serial.print(F("  ERROR - highest col index must be 0.."));
     Serial.print(gridCountMaxOf(AXIS_X));
-    Serial.print(F(" cols and 1.."));
+    Serial.print(F(" and highest row index 0.."));
     Serial.print(gridCountMaxOf(AXIS_Y));
-    Serial.println(F(" rows."));
+    Serial.println(F("."));
     return;
   }
 
@@ -2707,10 +3013,9 @@ bool setGridMode(uint8_t mode)
 // `rotation` is the orientation that will exist when the block is placed.
 // Returns true only if every axis that was asked to move actually arrived.
 //
-// 0 on an axis means "leave it at the origin" rather than a real cell -
-// same convention as gotoBuildTarget(). [0,0] is therefore just "go home":
-// a no-op if the machine is already homed and sitting there, otherwise
-// exactly a home command.
+// Every cell is a real position now, 0 included: both axes always move. G 0 0
+// drives to the FEEDER centre rather than to raw home, because that is where
+// cell [0,0] actually is.
 bool gotoCellForRotation(long col, long row, int8_t rotation)
 {
   Serial.println();
@@ -2730,20 +3035,16 @@ bool gotoCellForRotation(long col, long row, int8_t rotation)
     return false;
   }
 
-  if (col == 0 && row == 0)
+  if (cellIsFeeder(col, row))
   {
-    if (axisHomed[AXIS_X] && axisHomed[AXIS_Y] && curCol == 0 && curRow == 0)
-    {
-      Serial.println(F("  ALREADY AT ORIGIN - no move needed."));
-      return true;
-    }
-    return goToOrigin();
+    Serial.println(F("  [0,0] is the FEEDER - going to its centre."));
+    return goToFeeder();
   }
 
   long targetX = 0;
   long targetY = 0;
-  if ((col > 0 && !cellTargetPosition(AXIS_X, col, rotation, &targetX)) ||
-      (row > 0 && !cellTargetPosition(AXIS_Y, row, rotation, &targetY)))
+  if (!cellTargetPosition(AXIS_X, col, rotation, &targetX) ||
+      !cellTargetPosition(AXIS_Y, row, rotation, &targetY))
   {
     Serial.println(F("  ERROR - tool offset puts the holder outside the X/Y travel."));
     Serial.println(F("  Refusing to clip the target; check tool offset calibration."));
@@ -2757,36 +3058,22 @@ bool gotoCellForRotation(long col, long row, int8_t rotation)
     return false;
   }
 
-  // STEP 2 - Y axis (skipped when row is 0: stay at the origin).
-  bool okY = true;
-  if (row > 0)
-  {
-    Serial.print(F("  Moving Y to "));
-    Serial.print(targetY);
-    Serial.println(F(" ..."));
-    okY = moveAxisTo(AXIS_Y, targetY);
-  }
+  // STEP 2 - Y axis.
+  Serial.print(F("  Moving Y to "));
+  Serial.print(targetY);
+  Serial.println(F(" ..."));
+  bool okY = moveAxisTo(AXIS_Y, targetY);
 
-  // STEP 3 - X axis (skipped when col is 0: stay at the origin).
-  bool okX = true;
-  if (col > 0)
-  {
-    Serial.print(F("  Moving X to "));
-    Serial.print(targetX);
-    Serial.println(F(" ..."));
-    okX = moveAxisTo(AXIS_X, targetX);
-  }
+  // STEP 3 - X axis.
+  Serial.print(F("  Moving X to "));
+  Serial.print(targetX);
+  Serial.println(F(" ..."));
+  bool okX = moveAxisTo(AXIS_X, targetX);
 
   if (okX && okY)
   {
-    // Only a real two-axis arrival counts as a tracked "current cell" - an
-    // axis-only move (one side left at the origin) is not one, same as
-    // gotoBuildTarget() never touching curCol/curRow either.
-    if (col > 0 && row > 0)
-    {
-      curCol = col;
-      curRow = row;
-    }
+    curCol = col;
+    curRow = row;
     Serial.print(F("  ARRIVED at cell ["));
     Serial.print(col);
     Serial.print(F(","));
@@ -2818,8 +3105,9 @@ bool gotoCell(long col, long row)
   return gotoCellForRotation(col, row, clawRotation);
 }
 
-// Same zero-means-stay-at-origin convention as gotoCellForRotation(), kept
-// separate because BUILD has its own range/lock checks around this call.
+// Kept separate from gotoCellForRotation() because BUILD has its own range and
+// lock checks around this call. Both axes always move; [0,0] never reaches
+// here, because buildBlock() refuses the feeder before anything picks up.
 bool gotoBuildTarget(long col, long row, int8_t rotation)
 {
   if (!gridReady() || col < 0 || col > gridColsNow() || row < 0 || row > gridRowsNow())
@@ -2827,14 +3115,14 @@ bool gotoBuildTarget(long col, long row, int8_t rotation)
 
   long targetX = 0;
   long targetY = 0;
-  if ((col > 0 && !cellTargetPosition(AXIS_X, col, rotation, &targetX)) ||
-      (row > 0 && !cellTargetPosition(AXIS_Y, row, rotation, &targetY)))
+  if (!cellTargetPosition(AXIS_X, col, rotation, &targetX) ||
+      !cellTargetPosition(AXIS_Y, row, rotation, &targetY))
     return false;
 
   if (!goToOrigin())
     return false;
-  bool okY = row == 0 || moveAxisTo(AXIS_Y, targetY);
-  bool okX = col == 0 || moveAxisTo(AXIS_X, targetX);
+  bool okY = moveAxisTo(AXIS_Y, targetY);
+  bool okX = moveAxisTo(AXIS_X, targetX);
   return okX && okY;
 }
 
@@ -3022,10 +3310,11 @@ void printBuildUsage()
   Serial.println(F("  ERROR - use:  B <col> <row> <level>"));
   Serial.print(F("    col   0.."));
   Serial.print(gridColsNow());
-  Serial.println(F("      (0 = do not move X)"));
+  Serial.println(F("      (0 is a real cell)"));
   Serial.print(F("    row   0.."));
   Serial.print(gridRowsNow());
-  Serial.println(F("      (0 = do not move Y)"));
+  Serial.println(F("      (0 is a real cell)"));
+  Serial.println(F("    [0,0] is the FEEDER and is never built on."));
   Serial.print(F("    level 0.."));
   Serial.print(maxBuildLevel());
   Serial.print(F("   (0 = ground, 1 = "));
@@ -3224,9 +3513,13 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
   statLastOk = false;
   statLastFailure = NULL;
 
-  // Calibration/no-op sentinel. B 0 0 <level> must not move anything.
-  if (col == 0 && row == 0)
+  // [0,0] is the FEEDER, in both modes: it is where blocks come FROM, so
+  // placing one there would drop it on the stack we are picking off. It stays
+  // the inert no-op it has always been. Every OTHER row-0 / column-0 cell is a
+  // real placement now - they all clear the feeder footprint.
+  if (cellIsFeeder(col, row))
   {
+    Serial.println(F("  [0,0] is the feeder - nothing to do."));
     statLastOk = true;
     ackStart(F("OK"));
     ackField(F("col"), col);
@@ -3251,8 +3544,8 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
   // block.  The same check is repeated in gotoCellForRotation() for direct G.
   long holderTargetX;
   long holderTargetY;
-  if ((col > 0 && !cellTargetPosition(AXIS_X, col, wantRot, &holderTargetX)) ||
-      (row > 0 && !cellTargetPosition(AXIS_Y, row, wantRot, &holderTargetY)))
+  if (!cellTargetPosition(AXIS_X, col, wantRot, &holderTargetX) ||
+      !cellTargetPosition(AXIS_Y, row, wantRot, &holderTargetY))
   {
     Serial.println(F("  ERROR - tool offset puts the holder outside the X/Y travel."));
     return buildReject("tool offset target outside X/Y travel");
@@ -3324,10 +3617,12 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
 
   // ---- 2. back to the feeder at the origin ----
 
-  buildStep(2, "Home X/Y to the origin 0,0 (the feeder)");
-  if (!goToOrigin())
+  // The feeder is the VERTICAL [0,0] cell CENTRE, not raw home - home is that
+  // cell's outer corner. Same point in both modes: the feeder never rotates.
+  buildStep(2, "Home X/Y, then out to the feeder cell [0,0] centre");
+  if (!goToFeeder())
   {
-    buildAbort("homing X/Y failed");
+    buildAbort("could not reach the feeder cell");
     return false;
   }
   buildPause();
@@ -4069,27 +4364,47 @@ void printGridConfig()
   Serial.print(gridGapCmOf(AXIS_X), 2);
   Serial.print(F(" x "));
   Serial.print(gridGapCmOf(AXIS_Y), 2);
-  Serial.println(F(" cm  (before every positive cell)"));
+  Serial.println(F(" cm  (between neighbouring cells)"));
 
   Serial.print(F("Pitch     : "));
   Serial.print(gridPitchCmOf(AXIS_X), 2);
   Serial.print(F(" x "));
-  Serial.print(gridPitchCmOf(AXIS_Y), 2);
-  Serial.println(F(" cm  (block + gap)"));
+  if (gridAxisAlternates(AXIS_Y))
+  {
+    // No single Y pitch here - say so rather than print a number that would
+    // be wrong for every other row.
+    Serial.print(gridMeanPitchCmOf(AXIS_Y), 2);
+    Serial.print(F(" cm  (X block+gap; Y ALTERNATES "));
+    Serial.print(gridBlockCmOf(AXIS_Y) + GRID_GAP_Y_CM[GRID_MODE_VERTICAL], 2);
+    Serial.print(F(" / "));
+    Serial.print(gridBlockCmOf(AXIS_Y) + horizontalYInnerGapCm(), 2);
+    Serial.println(F(" - mean shown)"));
+  }
+  else
+  {
+    Serial.print(gridPitchCmOf(AXIS_Y), 2);
+    Serial.println(F(" cm  (block + gap)"));
+  }
 
   Serial.print(F("Division : "));
-  Serial.print(gridColsNow());
+  Serial.print(gridSlotsOf(AXIS_X));
   Serial.print(F(" cols x "));
-  Serial.print(gridRowsNow());
+  Serial.print(gridSlotsOf(AXIS_Y));
   Serial.print(F(" rows  = "));
-  Serial.print(gridColsNow() * gridRowsNow());
-  Serial.println(F(" positive cells"));
+  Serial.print(gridSlotsOf(AXIS_X) * gridSlotsOf(AXIS_Y) - 1);
+  Serial.println(F(" buildable cells (+1 feeder)"));
 
   Serial.print(F("Coordinates: col 0.."));
   Serial.print(gridColsNow());
   Serial.print(F(" / row 0.."));
   Serial.print(gridRowsNow());
-  Serial.println(F("  (0 = home/axis-only)"));
+  Serial.println(F("  (0 is a real cell; [0,0] is the feeder)"));
+
+  Serial.print(F("Feeder cell: X "));
+  Serial.print(feederCentreCmOf(AXIS_X), 3);
+  Serial.print(F(" cm / Y "));
+  Serial.print(feederCentreCmOf(AXIS_Y), 3);
+  Serial.println(F(" cm  (vertical [0,0] centre, both modes)"));
 
   Serial.print(F("Block footprint: "));
   Serial.print(gridBlockFootprintCmOf(AXIS_X, gridColsNow()), 2);
@@ -4116,10 +4431,10 @@ void printGridConfig()
   Serial.println(F(" cm from home switches"));
 
   Serial.print(F("First centre: X "));
-  Serial.print(cellCentreCmOf(AXIS_X, 1), 3);
+  Serial.print(cellCentreCmOf(AXIS_X, 0), 3);
   Serial.print(F(" cm / Y "));
-  Serial.print(cellCentreCmOf(AXIS_Y, 1), 3);
-  Serial.println(F(" cm"));
+  Serial.print(cellCentreCmOf(AXIS_Y, 0), 3);
+  Serial.println(F(" cm  (cell 0, a real block)"));
 
   Serial.print(F("Last centre : X "));
   Serial.print(cellCentreCmOf(AXIS_X, gridColsNow()), 3);
@@ -4139,11 +4454,11 @@ void printGridConfig()
   Serial.print(gridMaxEdgeOverhangCmOf(AXIS_Y), 3);
   Serial.println(F(" cm  (how far a block edge may pass the travel cap)"));
 
-  Serial.print(F("Max counts : "));
+  Serial.print(F("Max indices: col 0.."));
   Serial.print(gridCountMaxOf(AXIS_X));
-  Serial.print(F(" cols x "));
+  Serial.print(F(" / row 0.."));
   Serial.print(gridCountMaxOf(AXIS_Y));
-  Serial.println(F(" rows in this mode"));
+  Serial.println(F(" in this mode"));
 
   Serial.print(F("Pitch steps: ~"));
   Serial.print(gridPitchStepsOf(AXIS_X), 2);
@@ -4151,7 +4466,7 @@ void printGridConfig()
   Serial.print(gridPitchStepsOf(AXIS_Y), 2);
   Serial.println(F(" steps (X x Y)"));
 
-  Serial.println(F("col 1 = X switch side, row 1 = Y switch side"));
+  Serial.println(F("col 0 = X switch side, row 0 = Y switch side"));
 
   Serial.println(F("Tool offsets (holder -> block centre, + away from home):"));
   Serial.print(F("  neutral: X "));
@@ -4185,12 +4500,10 @@ void printGridPosition()
     Serial.println(F("Last commanded cell: unchanged; run B to return the claw to neutral."));
     return;
   }
+  // positionToIndex() now says GRID_INDEX_NONE for itself when the holder is
+  // in a gap, so the old "0 really meant nowhere" correction is gone.
   long liveCol = positionToIndex(AXIS_X, axisPos[AXIS_X], clawRotation);
   long liveRow = positionToIndex(AXIS_Y, axisPos[AXIS_Y], clawRotation);
-  if (axisPos[AXIS_X] != 0 && liveCol == 0)
-    liveCol = -1; // physically in a gap/outside, not on the col-0 axis
-  if (axisPos[AXIS_Y] != 0 && liveRow == 0)
-    liveRow = -1; // physically in a gap/outside, not on the row-0 axis
 
   Serial.print(F("Machine pos : X "));
   Serial.print(axisPos[AXIS_X]);
@@ -4202,13 +4515,9 @@ void printGridPosition()
   {
     Serial.println(F("UNKNOWN - not homed yet (send 0)"));
   }
-  else if (liveCol < 0 || liveRow < 0)
+  else if (liveCol == GRID_INDEX_NONE || liveRow == GRID_INDEX_NONE)
   {
-    Serial.println(F("between block footprints / outside positive grid"));
-  }
-  else if (liveCol == 0 && liveRow == 0)
-  {
-    Serial.println(F("[0,0] HOME"));
+    Serial.println(F("between block footprints / outside the grid"));
   }
   else
   {
@@ -4217,15 +4526,15 @@ void printGridPosition()
     Serial.print(F(","));
     Serial.print(liveRow);
     Serial.print(F("]"));
-    if (liveCol == 0 || liveRow == 0)
+    if (cellIsFeeder(liveCol, liveRow))
     {
-      Serial.print(F(" axis-only"));
+      Serial.print(F(" FEEDER"));
     }
     Serial.println();
   }
 
   Serial.print(F("Last commanded cell: "));
-  if (curCol > 0 && curRow > 0)
+  if (curCol != GRID_INDEX_NONE && curRow != GRID_INDEX_NONE)
   {
     Serial.print(F("["));
     Serial.print(curCol);
@@ -4365,10 +4674,8 @@ void printGrid()
 
   long liveCol = positionToIndex(AXIS_X, axisPos[AXIS_X], clawRotation);
   long liveRow = positionToIndex(AXIS_Y, axisPos[AXIS_Y], clawRotation);
-  if (axisPos[AXIS_X] != 0 && liveCol == 0)
-    liveCol = -1;
-  if (axisPos[AXIS_Y] != 0 && liveRow == 0)
-    liveRow = -1;
+  // No 0-means-nowhere correction needed: positionToIndex() returns
+  // GRID_INDEX_NONE itself when the holder is not on a footprint.
 
   if (gridColsNow() > GRID_MAP_MAX_COLS || gridRowsNow() > GRID_MAP_MAX_ROWS)
   {
@@ -4383,8 +4690,8 @@ void printGrid()
   }
 
   Serial.println();
-  Serial.println(F("  # = machine   . = positive cell   + = axis-only   H = home"));
-  Serial.println(F("  (row/col 0 are real coordinates; positive cells are 1-based)"));
+  Serial.println(F("  # = machine   . = buildable cell   F = feeder"));
+  Serial.println(F("  (every cell is a real block; [0,0] is the feeder)"));
   Serial.println();
 
   for (long r = gridRowsNow(); r >= 0; r--)
@@ -4403,13 +4710,9 @@ void printGrid()
       {
         Serial.print(F(" #"));
       }
-      else if (c == 0 && r == 0)
+      else if (cellIsFeeder(c, r))
       {
-        Serial.print(F(" H"));
-      }
-      else if (c == 0 || r == 0)
-      {
-        Serial.print(F(" +"));
+        Serial.print(F(" F"));
       }
       else
       {
@@ -4436,7 +4739,7 @@ void printGrid()
       Serial.print(F(" "));
   }
   Serial.println();
-  Serial.println(F("     ^ [0,0] home; [col,0]/[0,row] are axis-only"));
+  Serial.println(F("     ^ [0,0] feeder; every other cell is buildable"));
   Serial.println(F("======================================"));
 }
 
@@ -4452,8 +4755,8 @@ void zeroPosition()
     axisHomed[a] = false;     // a manual zero is NOT a homed origin
     axisRefAtHome[a] = false; // ...and definitely not a switch one
   }
-  curCol = 0;
-  curRow = 0;
+  curCol = GRID_INDEX_NONE;
+  curRow = GRID_INDEX_NONE;
 
   Serial.println();
   Serial.println(F("POSITION ZEROED - this point is now the origin"));

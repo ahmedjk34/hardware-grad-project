@@ -294,8 +294,10 @@ class ColorGridSpec:
         name = active_grid_mode(cfg) if mode is None else str(mode)
         grid = grid_geometry(cfg, name)
         return cls(
-            cols=int(grid["cols"]) + 1,
-            rows=int(grid["rows"]) + 1,
+            # No +1: the machine grid counts a real block at coordinate zero,
+            # exactly as the sheet prints one, so the two counts agree outright.
+            cols=int(grid["cols"]),
+            rows=int(grid["rows"]),
             block_x_cm=float(grid["block_x_cm"]),
             block_y_cm=float(grid["block_y_cm"]),
             gap_x_cm=float(grid["gap_x_cm"]),
@@ -356,7 +358,7 @@ class ColorGridSpec:
         """Whether this sheet was made for exactly this machine layout."""
         return (
             self.mode == grid.mode
-            and (self.cols, self.rows) == (grid.cols + 1, grid.rows + 1)
+            and (self.cols, self.rows) == (grid.cols, grid.rows)
             and self.block_x_cm == grid.block_x_cm
             and self.block_y_cm == grid.block_y_cm
             and self.gap_x_cm == grid.gap_x_cm
@@ -538,9 +540,14 @@ class ColorGridCalibration:
         # Printed-sheet centimetres, measured from the outer corner of printed
         # cell [0,0]: block `c` spans [c*pitch, c*pitch + block].
         if convention == "firmware":
-            # Printed cell c (c >= 1) is made to coincide with firmware cell c.
-            x0 = self.spec.pitch_x_cm - grid.x_start_cm
-            y0 = self.spec.pitch_y_cm - grid.y_start_cm
+            # Printed cell c coincides with firmware cell c, for every c
+            # INCLUDING zero: the machine's coordinate 0 is a real block whose
+            # outer edge sits on the home corner, exactly as the sheet prints
+            # it. With the shipped zero trims this puts home on the outer
+            # corner of printed [0,0] and the two conventions collapse to one
+            # block-half apart, rather than the block-plus-gap they used to be.
+            x0 = -grid.x_start_cm
+            y0 = -grid.y_start_cm
         else:
             x0 = self.spec.block_x_cm / 2
             y0 = self.spec.block_y_cm / 2
@@ -555,17 +562,37 @@ class ColorGridCalibration:
         return [self.point_at(*to_grid(x, y)) for x, y in corners_cm]
 
     def _check_geometry_matches(self, grid):
+        # The horizontal machine grid is DERIVED from the vertical one: its Y
+        # rows are the lower and upper 2.2 cm halves of each vertical row, so
+        # its gaps alternate 0.8 / 1.6 cm. ColorGridSpec still models the sheet
+        # as a single uniform pitch, which is right for vertical and wrong for
+        # horizontal - by row 10 the two disagree by 7.8 cm.
+        #
+        # Refusing is the only safe answer: a wrong workspace map written to
+        # disk is worse than no map (printed-grid-spec.md, "explicitly out of
+        # scope"). Teaching the detector the alternating lattice is the
+        # remaining work; until then, calibrate in vertical.
+        if getattr(grid, "alternates_y", False) and not getattr(
+                self.spec, "alternates_y", False):
+            raise ColorGridError(
+                "the horizontal machine grid now uses an ALTERNATING Y lattice "
+                "(0.8 / 1.6 cm gaps, derived from the vertical grid), but the "
+                "printed-sheet model is still a single uniform 3.0 cm pitch - "
+                "they diverge by 7.8 cm across 11 rows. Calibrate the camera in "
+                "vertical mode; the saved map is shared geometry either way.")
         if self.spec.mode != grid.mode:
             raise ColorGridError(
                 f"the {self.spec.mode} printed sheet cannot calibrate the "
                 f"{grid.mode} machine grid; select the {grid.mode} sheet")
-        expected_counts = (grid.cols + 1, grid.rows + 1)
+        # No +1 any more: the machine grid counts a real block at coordinate
+        # zero, exactly as the sheet prints it, so the two agree outright.
+        expected_counts = (grid.cols, grid.rows)
         if (self.spec.cols, self.spec.rows) != expected_counts:
             raise ColorGridError(
                 f"the {self.spec.mode} printed sheet maps "
                 f"{self.spec.cols}x{self.spec.rows} coordinates, but the "
                 f"{grid.mode} machine grid requires {expected_counts[0]}x"
-                f"{expected_counts[1]} including the zero lanes")
+                f"{expected_counts[1]}")
         pairs = ((self.spec.block_x_cm, grid.block_x_cm, "block X"),
                  (self.spec.block_y_cm, grid.block_y_cm, "block Y"),
                  (self.spec.gap_x_cm, grid.gap_x_cm, "gap X"),
@@ -575,10 +602,10 @@ class ColorGridCalibration:
                 raise ColorGridError(
                     f"the sheet was detected as {name} {printed:g} cm but the rig "
                     f"config says {machine:g} cm; reprint the sheet or fix rig.json")
-        if (self.spec.cols, self.spec.rows) != (grid.cols + 1, grid.rows + 1):
+        if (self.spec.cols, self.spec.rows) != (grid.cols, grid.rows):
             raise ColorGridError(
                 f"the sheet grid is {self.spec.cols}x{self.spec.rows} coordinates "
-                f"but the rig config asks for {grid.cols + 1}x{grid.rows + 1}")
+                f"but the rig config asks for {grid.cols}x{grid.rows}")
 
     # --- reporting --------------------------------------------------------
 

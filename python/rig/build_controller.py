@@ -60,10 +60,15 @@ class BuildController:
         if self.locked:
             raise BuildStateError(self.locked_reason)
         col, row = (int(value) for value in cell)
+        if self.rig.grid.is_feeder(col, row):
+            raise BuildStateError(
+                "[0,0] is the feeder - it is where blocks are picked up from, "
+                "in both modes, and is never built on"
+            )
         if not self.rig.grid.contains_build_target(col, row):
             raise BuildStateError(
-                f"build target [{col},{row}] is outside 0..{self.rig.grid.cols} x "
-                f"0..{self.rig.grid.rows}"
+                f"build target [{col},{row}] is outside "
+                f"0..{self.rig.grid.max_col} x 0..{self.rig.grid.max_row}"
             )
         self.selected = col, row
 

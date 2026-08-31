@@ -240,7 +240,7 @@ CFG = {
                 "trim_x_cm": 0.0, "trim_y_cm": 0.0,
             },
             "horizontal": {
-                "cols": 3, "rows": 15,
+                "cols": 3, "rows": 9,
                 "block_x_cm": 7.5, "block_y_cm": 2.2,
                 "gap_x_cm": 0.5, "gap_y_cm": 0.5,
                 "trim_x_cm": 0.0, "trim_y_cm": -0.25,
@@ -306,7 +306,7 @@ check("'@' alone is not an ack", link.parse_ack("@nope thing") is None)
 
 def build_outcome(name, transcript, expected, acks=True):
     rig, fake = fake_rig(replies={"S": GRID_RESIZED, "B": transcript}, acks=acks)
-    result = rig.build(3, 5, 0, timeout=20)
+    result = rig.build(3, 4, 0, timeout=20)
     rig.close()
     check(
         name,
@@ -330,7 +330,7 @@ for acks in (True, False):
 # ------------------------------------------------------------------
 
 rig, fake = fake_rig()
-check("connect pushes the grid", "S 9 5" in fake.written, str(fake.written))
+check("connect pushes the grid", "S 8 4" in fake.written, str(fake.written))
 check("connect reads the board's mode", rig.ready_mode == "vertical", str(rig.ready_mode))
 check("a vertical session sends no latch",
       "R" not in fake.written and "RR" not in fake.written, str(fake.written))
@@ -351,9 +351,9 @@ rig, fake = fake_rig(
     home_before_configure=True,
 )
 check("horizontal connect homes X/Y before RR and S",
-      fake.written == ["0", "RR", "S 3 15"], str(fake.written))
+      fake.written == ["0", "RR", "S 2 8"], str(fake.written))
 check("horizontal connect selects its requested grid",
-      rig.grid.mode == "horizontal" and (rig.cols, rig.rows) == (3, 15))
+      rig.grid.mode == "horizontal" and (rig.cols, rig.rows) == (3, 9))
 rig.close()
 
 # The manual auxiliary-stepper helper is deliberately relative and bounded.
@@ -406,7 +406,7 @@ rig.close()
 rig, fake = fake_rig(replies={"S": GRID_RESIZED,
                               "B": ["[BUILD 5/14] descend", "@0 BOOT fw=build_test_v1"]})
 try:
-    rig.build(3, 5, 0, timeout=20)
+    rig.build(3, 4, 0, timeout=20)
     check("mid-build reset raises", False)
 except link.RigReset:
     check("mid-build reset raises", True, "RigReset")
@@ -431,7 +431,7 @@ def second_command():
 
 thread = threading.Thread(target=second_command)
 thread.start()
-rig.build(3, 5, 0, timeout=20)
+rig.build(3, 4, 0, timeout=20)
 thread.join()
 check("second command refused", refused == ["RigBusy"], str(refused))
 rig.close()
@@ -439,7 +439,7 @@ rig.close()
 # Nothing conclusive, ever. The rig's state is unknown and that has to be loud.
 rig, fake = fake_rig(replies={"S": GRID_RESIZED, "B": ["[BUILD 5/14] descend"]})
 try:
-    rig.build(3, 5, 0, timeout=2)
+    rig.build(3, 4, 0, timeout=2)
     check("silent firmware times out", False)
 except link.RigTimeout:
     check("silent firmware times out", True, "RigTimeout")
@@ -466,11 +466,11 @@ rig, fake = fake_rig(cfg=HORIZONTAL_CFG)
 check("a horizontal session latches on connect", "RR" in fake.written,
       str(fake.written))
 check("the latch is pushed BEFORE S (R4)",
-      fake.written.index("RR") < fake.written.index("S 3 15"), str(fake.written))
-check("connect pushes the horizontal counts", "S 3 15" in fake.written,
+      fake.written.index("RR") < fake.written.index("S 2 8"), str(fake.written))
+check("connect pushes the horizontal counts", "S 2 8" in fake.written,
       str(fake.written))
 check("the rig's grid followed the latch",
-      rig.grid.mode == "horizontal" and (rig.cols, rig.rows) == (3, 15))
+      rig.grid.mode == "horizontal" and (rig.cols, rig.rows) == (3, 9))
 
 # An idle reset must not disappear when the next command drains old events.
 # Recovery is deliberately explicit because a reset loses X/Y homing: only the
@@ -490,7 +490,7 @@ except link.RigReset:
     check("reset recovery requires explicit homing authority", True)
 rig.recover_after_reset(home=True)
 check("reset recovery homes then re-pushes horizontal mode before S",
-      fake.written == ["0+", "RR", "S 3 15"], str(fake.written))
+      fake.written == ["0+", "RR", "S 2 8"], str(fake.written))
 rig.close()
 
 # set_mode outside connect re-sends S, because the board's count for the mode
@@ -499,9 +499,9 @@ rig, fake = fake_rig()
 fake.written.clear()
 rig.set_mode("horizontal")
 check("set_mode latches and then re-pushes S",
-      fake.written == ["RR", "S 3 15"], str(fake.written))
+      fake.written == ["RR", "S 2 8"], str(fake.written))
 check("set_mode re-read the grid",
-      rig.grid.mode == "horizontal" and (rig.cols, rig.rows) == (3, 15))
+      rig.grid.mode == "horizontal" and (rig.cols, rig.rows) == (3, 9))
 
 # Wanting the mode the board is already in is not an error on this side.
 fake.written.clear()
@@ -543,11 +543,11 @@ rig.close()
 # ------------------------------------------------------------------
 
 rig, fake = fake_rig()
-rig.build(3, 5, 0, timeout=20)
+rig.build(3, 4, 0, timeout=20)
 check("B carries three numbers and nothing else",
-      fake.written[-1] == "B 3 5 0", str(fake.written[-1]))
+      fake.written[-1] == "B 3 4 0", str(fake.written[-1]))
 try:
-    rig.build(3, 5, 0, rotation="RR", timeout=20)
+    rig.build(3, 4, 0, rotation="RR", timeout=20)
     check("build() no longer accepts a rotation", False)
 except TypeError:
     check("build() no longer accepts a rotation", True)

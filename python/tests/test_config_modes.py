@@ -59,10 +59,13 @@ check("the build starts vertical (D2)", active_grid_mode(config) == "vertical",
 vertical = grid_geometry(config, "vertical")
 horizontal = grid_geometry(config, "horizontal")
 
-check("vertical is 6 x 5 (D1)",
-      (vertical["cols"], vertical["rows"]) == (6, 5))
-check("horizontal is 2 x 10 (D1)",
-      (horizontal["cols"], horizontal["rows"]) == (2, 10))
+# Counts, not highest indices: coordinate 0 is a real block, so vertical
+# addresses 0..6 x 0..5 and horizontal 0..2 x 0..10. The firmware's S command
+# speaks in highest indices; rig/link.py is the one place that converts.
+check("vertical is 7 x 6 (D1)",
+      (vertical["cols"], vertical["rows"]) == (7, 6))
+check("horizontal is 3 x 11 (D1)",
+      (horizontal["cols"], horizontal["rows"]) == (3, 11))
 
 # D12: each mode states both block extents outright, and they are the swap of
 # each other only as a matter of physical fact - no code performs that swap.

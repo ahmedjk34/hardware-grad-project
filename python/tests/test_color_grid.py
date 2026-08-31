@@ -144,12 +144,10 @@ print(f"sheet: {spec.describe()}")
 
 rig_config = load_rig_config()
 horizontal_spec = ColorGridSpec.from_config(rig_config, mode="horizontal")
-# rig.json ships trims at 0.0 (allocation centred in travel) pending a rig
-# re-measurement. The firmware home convention needs a feeder-adjacent grid, so
-# use the trims a measured horizontal calibration is expected to land near.
-horizontal_grid = replace(
-    MachineGrid.from_config(rig_config, mode="horizontal"),
-    trim_x_cm=-4.55, trim_y_cm=-5.0)
+# The lattice is ANCHORED on the home corner now, so the shipped 0.0 trims are
+# already feeder-adjacent. The old -4.55/-5.0 override existed only to undo the
+# centring the geometry used to apply, and would now push the grid off the rig.
+horizontal_grid = MachineGrid.from_config(rig_config, mode="horizontal")
 H_COLS, H_ROWS = horizontal_spec.cols, horizontal_spec.rows       # 3 x 11
 H_CELLS = H_COLS * H_ROWS                                         # 33
 check("horizontal sheet maps the complete 3x11 coordinate grid",
@@ -199,14 +197,17 @@ check("horizontal mode recovers weak ink without bending the fit",
               for choice in horizontal_dim_choices),
       f"{len(horizontal_dim_choices)} choices with "
       f"{[choice.metrics.window_observed for choice in horizontal_dim_choices]}")
-horizontal_workspace = WorkspaceMap.from_grid(
-    horizontal_grid, horizontal.workspace_corners(horizontal_grid, "firmware"),
-    horizontal_image.shape[1::-1], {"test": "horizontal"})
-check("horizontal printed cells map to horizontal machine cells",
-      horizontal_workspace.cell_at(
-          horizontal.cell_center(horizontal_grid.cols, horizontal_grid.rows),
-          horizontal_image.shape[1::-1])
-      == (horizontal_grid.cols, horizontal_grid.rows))
+# The horizontal sheet model has not caught up with the machine's alternating
+# Y lattice yet, so calibrating a horizontal map must REFUSE rather than write
+# a map that is 7.8 cm out by row 10.
+try:
+    horizontal.workspace_corners(horizontal_grid, "firmware")
+    check("horizontal sheet calibration is refused until the sheet model "
+          "learns the alternating Y lattice", False)
+except ColorGridError as exc:
+    check("horizontal sheet calibration is refused until the sheet model "
+          "learns the alternating Y lattice", "ALTERNATING" in str(exc), str(exc))
+
 try:
     # The explicit count/layout cross-check protects a caller that accidentally
     # feeds a vertical calibration into a horizontal machine map.
@@ -382,8 +383,8 @@ workspace = WorkspaceMap.from_grid(
     grid, calibration.workspace_corners(grid, "firmware"), size, {"test": 1})
 worst = 0.0
 mismatched = []
-for col in range(1, grid.cols + 1):
-    for row in range(1, grid.rows + 1):
+for col in range(grid.cols):
+    for row in range(grid.rows):
         printed = np.array(calibration.cell_center(col, row))
         if workspace.cell_at(printed, size) != (col, row):
             mismatched.append((col, row))
@@ -409,12 +410,17 @@ px_per_cm = np.linalg.norm(
 ) / spec.pitch_x_cm
 offset_cm = np.linalg.norm(shifted - printed) / px_per_cm
 # Derived, not hard-coded: the two conventions place the machine origin at
-# `pitch - start` and at `block / 2` in printed centimetres, so the gap between
-# them moves with grid.trim_*. Pinning a number here would just re-fail every
-# time a trim is measured on the rig.
+# `-start` (the outer corner of printed [0,0]) and at `block / 2` (its centre)
+# in printed centimetres, so the gap between them moves with grid.trim_*.
+# Pinning a number here would just re-fail every time a trim is measured.
+#
+# Coordinate zero being a real block collapsed this from a block-plus-gap to
+# exactly half a block on each axis: the firmware and the sheet now disagree
+# only about which part of cell [0,0] home sits on, not about whether it
+# exists at all.
 expected_cm = float(np.hypot(
-    spec.pitch_x_cm - grid.x_start_cm - spec.block_x_cm / 2,
-    spec.pitch_y_cm - grid.y_start_cm - spec.block_y_cm / 2))
+    -grid.x_start_cm - spec.block_x_cm / 2,
+    -grid.y_start_cm - spec.block_y_cm / 2))
 check("the two home conventions differ by exactly what the geometry says",
       abs(offset_cm - expected_cm) < 0.15,
       f"{offset_cm:.2f} cm, expected {expected_cm:.2f} cm "

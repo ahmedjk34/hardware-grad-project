@@ -33,11 +33,13 @@ Keys
   c       calibrate/recalibrate: click the four prompted corners
   Enter   save the reviewed four-corner calibration
   u       undo the most recent calibration corner
-  x       cancel calibration (while calibrating); otherwise pick an X-only
-          build target: type a column, Enter confirms B <col> 0, any other
-          key cancels the entry
-  y       pick a Y-only build target: type a row, Enter confirms B 0 <row>,
-          any other key cancels the entry
+  x       cancel calibration (while calibrating); otherwise pick a build
+          target in ROW 0: type a column, Enter confirms B <col> 0, any
+          other key cancels the entry
+  y       pick a build target in COLUMN 0: type a row, Enter confirms
+          B 0 <row>, any other key cancels the entry
+          (these are ordinary cells now, not the old axis-only sentinels;
+          [0,0] is the feeder and is refused)
   p       toggle the printed colour-grid overlay
   , / .   select the previous / next detected printed-grid window
   k       calibrate from the printed colour grid and save
@@ -384,8 +386,8 @@ def main():
                      ("Grid (g)", "g"), ("Detect (v)", "v"),
                      ("Level - ([)", "["),
                      ("Other grid (o)", "o"),
-                     ("Deselect (d)", "d"), ("X-only (x)", "x"),
-                     ("Y-only (y)", "y"),
+                     ("Deselect (d)", "d"), ("Col,0 (x)", "x"),
+                     ("0,Row (y)", "y"),
                      ("Paper grid (p)", "p"), ("Paper calib (k)", "k"),
                      ("Grid choice < (,)", ","), ("Grid choice > (.)", "."),
                      ("BUILD (b)", "b"),
@@ -536,7 +538,7 @@ def main():
                 reject_mutation_if_unsafe()
                 ui["axis_pick"] = "col"
                 ui["axis_buffer"] = ""
-                ui["message"] = (f"type X-only column (0..{grid.cols}), Enter "
+                ui["message"] = (f"type column (0..{grid.max_col}), Enter "
                                  "confirms, any other key cancels")
             except BuildStateError as exc:
                 ui["message"] = str(exc)
@@ -545,7 +547,7 @@ def main():
                 reject_mutation_if_unsafe()
                 ui["axis_pick"] = "row"
                 ui["axis_buffer"] = ""
-                ui["message"] = (f"type Y-only row (0..{grid.rows}), Enter "
+                ui["message"] = (f"type row (0..{grid.max_row}), Enter "
                                  "confirms, any other key cancels")
             except BuildStateError as exc:
                 ui["message"] = str(exc)
@@ -626,7 +628,7 @@ def main():
         build_state = ("RUNNING" if job.running else
                        ("LOCKED" if controller.locked else "READY"))
         axis_text = ("inactive" if ui["axis_pick"] is None else
-                     f"{'X-only col' if ui['axis_pick'] == 'col' else 'Y-only row'} "
+                     f"{'column (row 0)' if ui['axis_pick'] == 'col' else 'row (column 0)'} "
                      f"= {ui['axis_buffer'] or '_'}")
         return [
             f"Camera: {camera.name} | {camera_state(snapshot, now)} | capture {capture_rate.rate:5.1f} fps",
@@ -648,7 +650,7 @@ def main():
             f"grid {timings.ms.get('grid', 0):.1f} ms | "
             f"display {timings.ms.get('display', 0):.1f} ms",
             "i overlay | c calibrate | g grid | v detect | [/] level | o other grid | d deselect",
-            "p paper | ,/. choose grid | k paper calibrate | x X-only | y Y-only",
+            "p paper | ,/. choose grid | k paper calibrate | x col,0 | y 0,row",
             "b/Enter BUILD | s snapshot | q/Esc quit when safe",
         ]
 
@@ -761,13 +763,12 @@ def main():
                             "camera feed is stale; wait for live frames before selecting")
                     if not ui["show_grid"]:
                         raise BuildStateError("grid is hidden; press g before selecting")
+                    # Every coordinate is a real block footprint now, zero
+                    # included, so cell_at() covers every selectable target.
                     cell = workspace.cell_at(point, image_size)
-                    if cell is None and workspace.has_physical_grid:
-                        # The origin margin: [col,0], [0,row] or [0,0] - not a
-                        # block cell, but a real B/G axis-only target.
-                        cell = workspace.axis_lane_at(point, image_size)
                     if cell is None:
-                        raise BuildStateError("click is outside the grid or its origin margin")
+                        raise BuildStateError(
+                            "click is outside the grid, or in a gap between blocks")
                     controller.select(cell)
                     ui["message"] = f"selected [{cell[0]},{cell[1]}]; confirm shown command"
                 except BuildStateError as exc:

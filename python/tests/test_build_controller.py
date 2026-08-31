@@ -73,16 +73,20 @@ try:
 except BuildStateError:
     check("locked controller refuses retry", True)
 
+# Row 0 and column 0 are ordinary cells now, not the old axis-only sentinels.
 calibration_controller = BuildController(FakeRig([]), level=2)
 calibration_controller.select((0, 5))
-check("zero X calibration target is valid",
+check("column 0 is an ordinary build target",
       calibration_controller.command == "B 0 5 2")
 calibration_controller.select((6, 0))
-check("zero Y calibration target is valid",
+check("row 0 is an ordinary build target",
       calibration_controller.command == "B 6 0 2")
-calibration_controller.select((0, 0))
-check("zero-zero no-op target is valid",
-      calibration_controller.command == "B 0 0 2")
+try:
+    calibration_controller.select((0, 0))
+    check("[0,0] is the feeder and cannot be selected", False)
+except BuildStateError as exc:
+    check("[0,0] is the feeder and cannot be selected", "feeder" in str(exc),
+          str(exc))
 
 # ------------------------------------------------------------------
 # Grid mode is selected here, and it is not a per-block rotation
@@ -98,7 +102,7 @@ controller.select((6, 5))
 controller.set_mode("horizontal")
 check("set_mode latched the rig", rig.mode_calls == ["horizontal"])
 check("set_mode re-read the grid", controller.mode == "horizontal"
-      and (rig.grid.cols, rig.grid.rows) == (2, 10))
+      and (rig.grid.cols, rig.grid.rows) == (3, 11))
 check("a mode switch drops the pending selection", controller.selected is None)
 check("cells the new grid lacks are now refused",
       not rig.grid.contains_build_target(6, 5))

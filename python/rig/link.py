@@ -647,15 +647,17 @@ class Rig:
         self._require_not_reset()
         cols = self.cols if cols is None else cols
         rows = self.rows if rows is None else rows
-        # quiet= is safe here and only here: S moves nothing and answers
-        # immediately, so silence after its output really is the end of it.
+        # THE ONE PLACE COUNTS BECOME THE WIRE FORMAT. config/rig.json and
+        # MachineGrid speak COUNTS (7 columns); the firmware's S speaks the
+        # HIGHEST INDEX (0..6). Converting anywhere else would put the two
+        # conventions in the same expression, which is how this drifts.
         out = self._send_and_settle(
-            f"S {cols} {rows}",
+            f"S {cols - 1} {rows - 1}",
             timeout=10.0,
-            done=("GRID RESIZED", "ERROR - grid must be", "ERROR - claw"),
+            done=("GRID RESIZED", "ERROR - highest col index", "ERROR - claw"),
             quiet=3.0,
         )
-        if any("ERROR - grid must be" in line or "ERROR - claw" in line
+        if any("ERROR - highest col index" in line or "ERROR - claw" in line
                for line in out):
             raise RigError(
                 f"the rig refused the grid {cols}x{rows} from config/rig.json:\n  "
@@ -824,10 +826,15 @@ class Rig:
             col, row, level = int(col), int(row), int(level)
         except (TypeError, ValueError) as exc:
             raise ValueError("build coordinates and level must be integers") from exc
+        if self.grid.is_feeder(col, row):
+            raise ValueError(
+                "[0,0] is the feeder - it is where blocks are picked up from, "
+                "in both modes, and is never built on"
+            )
         if not self.grid.contains_build_target(col, row):
             raise ValueError(
-                f"build target [{col},{row}] is outside 0..{self.cols} x "
-                f"0..{self.rows}"
+                f"build target [{col},{row}] is outside "
+                f"0..{self.grid.max_col} x 0..{self.grid.max_row}"
             )
         if level < 0:
             raise ValueError("build level cannot be negative")

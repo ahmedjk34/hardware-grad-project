@@ -469,8 +469,8 @@ def _grid_geometry(workspace, image_size):
     # Draw the actual block rectangles. The space between them is the physical
     # 0.5 cm gap; it is intentionally not swallowed into a pitch-sized cell.
     lines = []
-    for row in range(1, g.rows + 1):
-        for col in range(1, g.cols + 1):
+    for row in range(g.rows):
+        for col in range(g.cols):
             polygon = [_pixel(point) for point in
                        workspace.cell_polygon(col, row, image_size)]
             lines.extend(zip(polygon, polygon[1:] + polygon[:1]))
@@ -480,37 +480,20 @@ def _grid_geometry(workspace, image_size):
         labels.append((text, (x - tw // 2, y + th // 2)))
 
     labels = []
-    first = workspace.cell_polygon(1, 1, image_size)
+    first = workspace.cell_polygon(0, 0, image_size)
     approx_w = np.linalg.norm(np.asarray(first[1]) - np.asarray(first[0]))
     approx_h = np.linalg.norm(np.asarray(first[3]) - np.asarray(first[0]))
     show_labels = approx_w >= 38 and approx_h >= 24
     if show_labels:
-        for row in range(1, g.rows + 1):
-            for col in range(1, g.cols + 1):
+        for row in range(g.rows):
+            for col in range(g.cols):
                 x_cm, y_cm = g.cell_center_cm(col, row)
                 x, y = _pixel(_point(workspace, g, x_cm, y_cm, image_size))
                 _add_label(labels, f"{col},{row}", x, y)
 
-    # Axis-only targets live on real zero axes. They are gap-wide strips outside
-    # the holder envelope, not fake full blocks that overlap horizontal [1,*].
+    # No axis-only strips any more. Row 0 and column 0 are ordinary cells with
+    # real footprints and are drawn by the loop above; [0,0] is the feeder.
     extra_polygons = []
-    for axis, count, label_fmt in (("col", g.cols, "{},0"),
-                                   ("row", g.rows, "0,{}")):
-        for index in range(1, count + 1):
-            polygon = np.asarray(
-                workspace.axis_lane_polygon(axis, index, image_size),
-                dtype=np.float32).round().astype(np.int32)
-            extra_polygons.append(polygon)
-            if show_labels:
-                x, y = polygon.mean(axis=0).astype(int)
-                _add_label(labels, label_fmt.format(index), x, y)
-    origin_polygon = np.asarray(
-        workspace.origin_polygon(image_size),
-        dtype=np.float32).round().astype(np.int32)
-    extra_polygons.append(origin_polygon)
-    if show_labels:
-        x, y = origin_polygon.mean(axis=0).astype(int)
-        _add_label(labels, "0,0", x, y)
 
     cached = (envelope, tuple(lines), tuple(labels), tuple(extra_polygons))
     if len(_GRID_GEOMETRY_CACHE) >= 16:
@@ -522,9 +505,9 @@ def _grid_geometry(workspace, image_size):
 def draw_machine_grid(frame, workspace, hover_point, calibrated, *, detail=False):
     """Draw cached static grid geometry and the dynamic hovered cell.
 
-    Positive cells are their actual separated block rectangles. Axis-only
-    target footprints are centred on row/col 0, and [0,0] marks holder home.
-    All geometry comes from ``workspace.mapped_grid``.
+    Every cell is its actual separated block rectangle, coordinate zero
+    included - [0,0] is the feeder. All geometry comes from
+    ``workspace.mapped_grid``.
     """
     image_size = frame.shape[1::-1]
     envelope, lines, labels, extra_polygons = _grid_geometry(workspace, image_size)
@@ -542,8 +525,6 @@ def draw_machine_grid(frame, workspace, hover_point, calibrated, *, detail=False
                         LABEL_COLOR, 1, cv2.LINE_AA)
 
     cell = workspace.cell_at(hover_point, image_size) if hover_point else None
-    if cell is None and hover_point and workspace.has_physical_grid:
-        cell = workspace.axis_lane_at(hover_point, image_size)
     if cell is not None:
         polygon = np.asarray(workspace.target_polygon(*cell, image_size),
                              dtype=np.float32).round().astype(np.int32)

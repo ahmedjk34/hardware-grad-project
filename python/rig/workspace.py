@@ -63,6 +63,21 @@ def _homography(src, dst):
     return np.append(h, 1.0).reshape(3, 3)
 
 
+def _slot_containing(bottom_of, block_cm, count, value_cm, epsilon=1e-9):
+    """Which 0-based slot `value_cm` lands in, or None if it is in a gap.
+
+    Works for a uniform lattice and for the horizontal Y one, whose gaps
+    alternate 0.8 / 1.6 cm - which is why this scans instead of dividing.
+    """
+    for index in range(count):
+        bottom = bottom_of(index)
+        if value_cm < bottom - epsilon:
+            return None                      # already past it: we are in a gap
+        if value_cm <= bottom + block_cm + epsilon:
+            return index
+    return None
+
+
 def _project(matrix, point):
     out = matrix @ np.asarray((point[0], point[1], 1.0), dtype=float)
     if abs(out[2]) < 1e-12:
@@ -133,6 +148,13 @@ class WorkspaceMap:
                     if "max_edge_overhang_y_cm" in geometry else None),
                 error_offset_x_cm=float(geometry.get("error_offset_x_cm", 0.0)),
                 error_offset_y_cm=float(geometry.get("error_offset_y_cm", 0.0)),
+                # The derived horizontal Y lattice. Absent in maps saved before
+                # coordinate zero became a real block; those reconstruct as a
+                # uniform lattice, which is what they were calibrated against.
+                gap_y_alt_cm=(float(geometry["gap_y_alt_cm"])
+                              if geometry.get("gap_y_alt_cm") is not None
+                              else None),
+                y_lattice_start_cm=float(geometry.get("y_lattice_start_cm", 0.0)),
                 mode=self.mode,
             )
 
@@ -167,6 +189,13 @@ class WorkspaceMap:
             "error_offset_x_cm": grid.error_offset_x_cm,
             "error_offset_y_cm": grid.error_offset_y_cm,
         }
+        # Without these two the map reconstructs horizontal Y as a uniform
+        # pitch, and every row past the first lands in the wrong place. Only
+        # written when the grid actually has a derived lattice, so a vertical
+        # map keeps the exact key set older readers expect.
+        if grid.gap_y_alt_cm is not None:
+            geometry["gap_y_alt_cm"] = grid.gap_y_alt_cm
+            geometry["y_lattice_start_cm"] = grid.y_lattice_start_cm
         return cls(grid.cols, grid.rows, [(x / w, y / h) for x, y in corners],
                    projection, geometry, grid.mode or DEFAULT_GRID_MODE)
 
@@ -295,6 +324,9 @@ class WorkspaceMap:
             and float(_block_cm(geometry, "y")) == grid.block_y_cm
             and float(geometry["gap_x_cm"]) == grid.gap_x_cm
             and float(geometry["gap_y_cm"]) == grid.gap_y_cm
+            and (geometry.get("gap_y_alt_cm") == grid.gap_y_alt_cm)
+            and (float(geometry.get("y_lattice_start_cm", 0.0))
+                 == grid.y_lattice_start_cm)
             and float(geometry.get("trim_x_cm", 0.0)) == grid.trim_x_cm
             and float(geometry.get("trim_y_cm", 0.0)) == grid.trim_y_cm
             # v2 maps did not record D20's safety budget. Its absence means
@@ -322,8 +354,8 @@ class WorkspaceMap:
             return None
         u, v = min(max(u, 0.0), 1.0), min(max(v, 0.0), 1.0)
         if self._grid is None:
-            return min(int(u * self.cols), self.cols - 1) + 1, \
-                   min(int(v * self.rows), self.rows - 1) + 1
+            return min(int(u * self.cols), self.cols - 1), \
+                   min(int(v * self.rows), self.rows - 1)
 
         g = self._grid
         x_cm = u * g.workspace_width_cm
@@ -332,12 +364,13 @@ class WorkspaceMap:
         if x_cm < g.x_start_cm - epsilon or x_cm > g.x_end_cm + epsilon \
                 or y_cm < g.y_start_cm - epsilon or y_cm > g.y_end_cm + epsilon:
             return None
-        col = min(int((x_cm - g.x_start_cm) / g.pitch_x_cm), self.cols - 1) + 1
-        row = min(int((y_cm - g.y_start_cm) / g.pitch_y_cm), self.rows - 1) + 1
-        x0, y0, x1, y1 = g.cell_bounds_cm(col, row)
-        if not (x0 - epsilon <= x_cm <= x1 + epsilon
-                and y0 - epsilon <= y_cm <= y1 + epsilon):
-            # The click is in one of the deliberate 0.5 cm gaps.
+        # A scan, not a division by pitch: the horizontal Y lattice alternates
+        # 0.8/1.6 cm and has no single pitch to divide by. Mirrors
+        # positionToIndex() in the sketch, including returning None in a gap.
+        col = _slot_containing(g.slot_bottom_x_cm, g.block_x_cm, g.cols, x_cm)
+        row = _slot_containing(g.slot_bottom_y_cm, g.block_y_cm, g.rows, y_cm)
+        if col is None or row is None:
+            # The click is in one of the deliberate gaps between blocks.
             return None
         return col, row
 
@@ -354,86 +387,17 @@ class WorkspaceMap:
         """
         return self._grid
 
-    def axis_lane_polygon(self, axis, index, image_size):
-        """Image polygon for the axis-only lane cell ``[index,0]`` or ``[0,index]``.
-
-        Coordinate zero is a holder-home *axis*, not a second physical block.
-        It is drawn as a gap-wide strip immediately outside the holder envelope.
-        A full block centred on home overlaps horizontal cell [1,*], whose near
-        edge is only 0.65 cm from home.
-        """
-        if self._grid is None:
-            raise ValueError("axis lanes need a physically scaled grid")
-        g = self._grid
-        if axis == "col":
-            x0_cm, _y0, x1_cm, _y1 = g.cell_bounds_cm(index, 1)
-            y0_cm, y1_cm = -g.gap_y_cm, 0.0
-        elif axis == "row":
-            _x0, y0_cm, _x1, y1_cm = g.cell_bounds_cm(1, index)
-            x0_cm, x1_cm = -g.gap_x_cm, 0.0
-        else:
-            raise ValueError("axis must be 'col' or 'row'")
-        corners_cm = ((x0_cm, y0_cm), (x1_cm, y0_cm), (x1_cm, y1_cm), (x0_cm, y1_cm))
-        return [self.pixel_at(x / g.workspace_width_cm, y / g.workspace_height_cm,
-                              image_size) for x, y in corners_cm]
-
-    def origin_polygon(self, image_size):
-        """Gap-sized home marker immediately outside real ``[0,0]``."""
-        if self._grid is None:
-            raise ValueError("the origin cell needs a physically scaled grid")
-        g = self._grid
-        x0_cm, x1_cm = -g.gap_x_cm, 0.0
-        y0_cm, y1_cm = -g.gap_y_cm, 0.0
-        corners_cm = ((x0_cm, y0_cm), (x1_cm, y0_cm), (x1_cm, y1_cm), (x0_cm, y1_cm))
-        return [self.pixel_at(x / g.workspace_width_cm, y / g.workspace_height_cm,
-                              image_size) for x, y in corners_cm]
-
     def target_polygon(self, col, row, image_size):
-        """Image polygon for any valid B/G target - 0 on either axis included.
+        """Image polygon for any valid B/G target.
 
-        Positive cells draw their real block footprint. Zero-axis targets draw
-        non-overlapping home-axis strips.
+        Every coordinate is a real block footprint now, zero included, so this
+        is just :meth:`cell_polygon`. It used to branch: coordinate zero was a
+        holder-home *axis* rather than a block, and [c,0] / [0,r] were drawn as
+        gap-wide strips in NEGATIVE cm, immediately outside the envelope. Those
+        lanes are gone - row 0 and column 0 are ordinary cells now, and [0,0]
+        is the feeder. Callers that used axis_lane_at() want cell_at().
         """
-        if col > 0 and row > 0:
-            return self.cell_polygon(col, row, image_size)
-        if col == 0 and row == 0:
-            return self.origin_polygon(image_size)
-        if row == 0:
-            return self.axis_lane_polygon("col", col, image_size)
-        return self.axis_lane_polygon("row", row, image_size)
-
-    def axis_lane_at(self, point, image_size):
-        """Return the axis-only target a pixel falls on, or None.
-
-        ``(col, 0)`` in the row-0 lane (Y held at the origin), ``(0, row)``
-        in the column-0 lane (X held at the origin), or ``(0, 0)`` where both
-        lanes overlap - the machine origin itself.
-        Distinct from :meth:`cell_at`, which only returns positive cells.
-        """
-        if self._grid is None:
-            return None
-        g = self._grid
-        u, v = self.normalized_at(point, image_size)
-        x_cm = u * g.workspace_width_cm
-        y_cm = v * g.workspace_height_cm
-        epsilon = 1e-9
-        row0_lane_y0, row0_lane_y1 = -g.gap_y_cm, 0.0
-        col0_lane_x0, col0_lane_x1 = -g.gap_x_cm, 0.0
-        in_row0_lane_y = row0_lane_y0 - epsilon <= y_cm <= row0_lane_y1 + epsilon
-        in_col0_lane_x = col0_lane_x0 - epsilon <= x_cm <= col0_lane_x1 + epsilon
-        if in_col0_lane_x and in_row0_lane_y:
-            return (0, 0)
-        if in_row0_lane_y:
-            for col in range(1, g.cols + 1):
-                x0, _y0, x1, _y1 = g.cell_bounds_cm(col, 1)
-                if x0 - epsilon <= x_cm <= x1 + epsilon:
-                    return (col, 0)
-        if in_col0_lane_x:
-            for row in range(1, g.rows + 1):
-                _x0, y0, _x1, y1 = g.cell_bounds_cm(1, row)
-                if y0 - epsilon <= y_cm <= y1 + epsilon:
-                    return (0, row)
-        return None
+        return self.cell_polygon(col, row, image_size)
 
     def pixel_at(self, u, v, image_size):
         """Project normalized machine-envelope coordinates into image pixels."""
@@ -442,8 +406,8 @@ class WorkspaceMap:
 
     def cell_polygon(self, col, row, image_size):
         if self._grid is None:
-            u0, u1 = (col - 1) / self.cols, col / self.cols
-            v0, v1 = (row - 1) / self.rows, row / self.rows
+            u0, u1 = col / self.cols, (col + 1) / self.cols
+            v0, v1 = row / self.rows, (row + 1) / self.rows
         else:
             x0, y0, x1, y1 = self._grid.cell_bounds_cm(col, row)
             u0, u1 = x0 / self._grid.workspace_width_cm, x1 / self._grid.workspace_width_cm
