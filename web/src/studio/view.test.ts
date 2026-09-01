@@ -1,8 +1,9 @@
 import { describe, expect, it, afterEach } from "vitest";
 import { machineToScene, rigConfig, setRigConfig, type Vec3 } from "./coords";
 import {
-  MAX_POLAR_ANGLE, MIN_CAMERA_Y, VIEWS, clampAboveGround, envelopeBoxScene,
-  frameDistance, screenAxes, tweenMs, viewPose, type CameraPose,
+  MAX_POLAR_ANGLE, MIN_CAMERA_Y, TWEEN_MS, VIEWS, cameraTransitionMs,
+  clampAboveGround, envelopeBoxScene, frameDistance, screenAxes, tweenMs,
+  viewPose, type CameraPose,
 } from "./view";
 
 const shipped = rigConfig();
@@ -154,5 +155,21 @@ describe("motion", () => {
   it("tweens by default and cuts instantly under prefers-reduced-motion", () => {
     expect(tweenMs(false)).toBeGreaterThan(0);
     expect(tweenMs(true)).toBe(0);
+  });
+
+  it("shows the first camera pose immediately instead of zooming in from the Three.js default", () => {
+    expect(cameraTransitionMs(false, false, false)).toBe(0);
+  });
+
+  it("reframes immediately when only the viewport size settles", () => {
+    expect(cameraTransitionMs(true, false, false)).toBe(0);
+  });
+
+  it("animates only an explicit view command after initialization", () => {
+    expect(cameraTransitionMs(true, true, false)).toBe(TWEEN_MS);
+  });
+
+  it("keeps explicit view commands instant under reduced motion", () => {
+    expect(cameraTransitionMs(true, true, true)).toBe(0);
   });
 });

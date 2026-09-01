@@ -9,6 +9,7 @@
 import { CanvasTexture, Color, RepeatWrapping, type Texture } from "three";
 
 const cache = new Map<string, string>();
+const colourCache = new Map<string, Color>();
 
 /** The computed value of a custom property, or "" when there is no stylesheet. */
 export function cssToken(name: string): string {
@@ -23,9 +24,12 @@ export function cssToken(name: string): string {
 /** A token as a three.js colour. An unreadable token stays three's own default
  *  rather than being replaced by a literal nobody designed. */
 export function tokenColor(name: string): Color {
+  const hit = colourCache.get(name);
+  if (hit) return hit;
   const colour = new Color();
   const value = cssToken(name);
   if (value) colour.setStyle(value);
+  colourCache.set(name, colour);
   return colour;
 }
 

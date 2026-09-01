@@ -173,6 +173,21 @@ export function machineToScene(point: Vec3): Vec3 {
   return { x: point.x * SCENE_UNITS_PER_MM, y: point.z * SCENE_UNITS_PER_MM, z: -point.y * SCENE_UNITS_PER_MM };
 }
 
+/** A cell centre already expressed on the three scene axes. */
+export function cellToScene(mode: ModeName, col: number, row: number, level: number, shift?: Shift): Vec3 {
+  return machineToScene(cellToMachine(mode, col, row, level, shift));
+}
+
+/** Physical block extents already expressed on the three scene axes. */
+export function blockSceneSize(mode: ModeName): Vec3 {
+  const size = blockExtents(mode);
+  return {
+    x: size.x * SCENE_UNITS_PER_MM,
+    y: size.z * SCENE_UNITS_PER_MM,
+    z: size.y * SCENE_UNITS_PER_MM,
+  };
+}
+
 export function sceneToMachine(point: Vec3): Vec3 {
   return { x: point.x / SCENE_UNITS_PER_MM, y: -point.z / SCENE_UNITS_PER_MM, z: point.y / SCENE_UNITS_PER_MM };
 }

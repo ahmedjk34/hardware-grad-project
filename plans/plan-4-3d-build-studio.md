@@ -14,6 +14,10 @@ tractable* and *§3 The seven facts* first; everything after them assumes those.
 
 Milestone-by-milestone prompts for handing this to an agent:
 [plan-4-milestone-prompts.md](plan-4-milestone-prompts.md).
+**What the Studio actually is today, kept current:
+[docs/STUDIO.md](../docs/STUDIO.md).** This plan states the intent and is not
+rewritten as the work lands; that document is the living record, and where the
+two disagree it is the one describing the code.
 Visual language: [docs/DESIGN.md](../docs/DESIGN.md).
 The console this attaches to: [plan-3-web-operator-console.md](plan-3-web-operator-console.md).
 The wider feature catalogue: [docs/feature-ideas.md](../docs/feature-ideas.md).

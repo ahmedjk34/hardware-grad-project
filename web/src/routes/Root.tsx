@@ -9,8 +9,9 @@
 import { Suspense, lazy, useEffect, useState } from "react";
 import { App } from "../App";
 import { Icon } from "../components/Icon";
+import { preloadStudio } from "./studio-loader";
 
-const Studio = lazy(() => import("./Studio"));
+const Studio = lazy(preloadStudio);
 
 function useHashRoute(): string {
   const [route, setRoute] = useState(() => window.location.hash.replace(/^#/, "") || "/");

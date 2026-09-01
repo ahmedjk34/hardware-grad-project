@@ -23,7 +23,8 @@ export const FRAME_MARGIN = 1.12;
 /** The orbit's floor: the camera may sit level with the ground, never under it. */
 export const MIN_CAMERA_Y = 0.2;
 export const MAX_POLAR_ANGLE = Math.PI / 2;
-export const TWEEN_MS = 420;
+/** Explicit view changes stay legible without making the camera feel heavy. */
+export const TWEEN_MS = 260;
 
 export interface Box { min: Vec3; max: Vec3 }
 export interface CameraPose { position: Vec3; target: Vec3; up: Vec3 }
@@ -132,4 +133,15 @@ export function clampAboveGround(position: Vec3, minY = MIN_CAMERA_Y): Vec3 {
 /** DESIGN.md section 3.4: a reduced-motion viewer gets the destination, not the trip. */
 export function tweenMs(reducedMotion: boolean): number {
   return reducedMotion ? 0 : TWEEN_MS;
+}
+
+/**
+ * A camera transition is animation only when the operator explicitly asks for
+ * one after initialization. The first pose and a size-only reframe must snap:
+ * tweening either makes the canvas visibly zoom from Three.js's default pose,
+ * and a settling ResizeObserver can otherwise restart that zoom several times.
+ */
+export function cameraTransitionMs(initialized: boolean, explicitCommand: boolean,
+                                   reducedMotion: boolean): number {
+  return initialized && explicitCommand ? tweenMs(reducedMotion) : 0;
 }

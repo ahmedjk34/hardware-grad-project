@@ -1,7 +1,7 @@
 import { describe, expect, it, afterEach } from "vitest";
 import fixtures from "./coords.fixtures.json";
 import {
-  blockExtents, cellCount, cellToMachine, isFeeder, latticeBounds, machineToScene,
+  blockExtents, blockSceneSize, cellCount, cellToMachine, cellToScene, isFeeder, latticeBounds, machineToScene,
   reachableCells, rigConfig, setRigConfig, type RigConfig, type ModeName,
 } from "./coords";
 import { aabbOf } from "./geometry";
@@ -97,5 +97,11 @@ describe("the facts the fixtures cannot state on their own", () => {
     // to 1 unit = 10 mm, so (x, y, z) -> (x, z, -y) / 10.
     expect(machineToScene({ x: 100, y: 200, z: 15 })).toEqual({ x: 10, y: 1.5, z: -20 });
     expect(machineToScene({ x: 0, y: 0, z: 0 })).toEqual({ x: 0, y: 0, z: -0 });
+  });
+
+  it("hands components complete scene positions and sizes without axis juggling", () => {
+    expect(cellToScene("vertical", 1, 2, 3)).toEqual(machineToScene(cellToMachine("vertical", 1, 2, 3)));
+    expect(blockSceneSize("vertical")).toEqual({ x: 2.2, y: 1.5, z: 6 });
+    expect(blockSceneSize("horizontal")).toEqual({ x: 6, y: 1.5, z: 2.2 });
   });
 });

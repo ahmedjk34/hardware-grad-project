@@ -1,0 +1,594 @@
+# The 3D Build Studio — living record
+
+**What this document is.** The single, current, complete description of the
+Studio as it actually exists in the repository. Plan 4
+([plans/plan-4-3d-build-studio.md](../plans/plan-4-3d-build-studio.md)) says what
+the Studio is *for* and is deliberately not rewritten as the work lands; the
+milestone prompts file records what each milestone was *asked* for. **This file
+records what is true right now** — every module, every exported function, every
+decision that a future reader would otherwise have to reverse-engineer from the
+code.
+
+**How to keep it.** Update it in the same commit as the change it describes.
+Anything that would surprise someone reading the code cold belongs here: a
+decision that contradicts the plan, a constant with no home in `rig.json`, a
+library that had to be used a particular way. §11 is the changelog; add to it
+every time. If this file and the code disagree, the code is right and this file
+is a bug.
+
+Related: [DESIGN.md](DESIGN.md) (the visual language, shared with the console),
+[AGENTS.md](../AGENTS.md) §3a/§3b (the machine's grid geometry, authoritative),
+[plan-3-web-operator-console.md](../plans/plan-3-web-operator-console.md) (the
+console this attaches to).
+
+---
+
+## 1. Status at a glance
+
+| Milestone | State | What it delivered |
+| --- | --- | --- |
+| M0 — Coordinates and fixtures | ✅ delivered | `coords.ts`, `geometry.ts`, fixtures dumped from Python |
+| M1 — Static viewport | ✅ delivered | `view.ts`, `lattice.ts`, `scene/`, the `#/studio` route |
+| M2 — Placement | ✅ delivered | ghost, top picking, click/alt/shift-drag, undo/redo, level x-ray |
+| M3 — Validation | not started | `validate.ts`, the diagnostics panel |
+| M4 — The compiler | not started | `compile.ts`, model → command program |
+| M5 — Library | not started | model document metadata, `library.ts`, thumbnails |
+| M6 — The twin | not started | read-only scene beside the camera |
+| M7 — The runner | not started | executing a compiled program through `/api/build` |
+| M8 — Wow pass | not started | shift gizmo, x-ray by level, cross-mode bridging |
+
+**Test suite.** `cd web && npm test` — **136 tests across 17 files**, all green.
+
+| file | tests | what it holds |
+| --- | --- | --- |
+| `studio/coords.test.ts` | 41 | the port of `python/rig/grid.py`, against dumped fixtures at 1e-6 |
+| `studio/geometry.test.ts` | 12 | AABBs, overlap, the firmware's clipping |
+| `studio/lattice.test.ts` | 14 | which cells are drawn, and in what state |
+| `studio/view.test.ts` | 13 | envelope framing, the four snaps, the orbit floor |
+| `studio/model.test.ts` | 7 | immutable mutations; geometry/order separation |
+| `studio/history.test.ts` | 4 | generic undo/redo, branching and the 100-entry cap |
+| `studio/pick.test.ts` | 6 | cell/level resolution, gaps, hit priority and straight runs |
+| `studio/placement.test.ts` | 4 | M2's feeder, grid and occupied-slot gate |
+| `studio/interaction.test.ts` | 5 | click slop, hover deduplication and keyboard interpretation |
+| `studio/motion.test.ts` | 4 | fade/drop curves, reduced motion and row sequencing |
+| `studio/panels/LevelScrubber.test.tsx` | 2 | accessible level hold/release controls |
+| `routes/preload.test.ts` | 1 | one cached route import shared by every preload trigger |
+| `redesign.test.tsx` | 10 | Plan 3 console |
+| `step7` / `step9` / `step10` | 5 / 4 / 1 | Plan 3 console guards — must never regress |
+| `lib/workspace.test.tsx` | 3 | the homography port |
+
+**Bundle**, from `npm run build` at the end of M2:
+
+| chunk | size | notes |
+| --- | --- | --- |
+| console entry `index-*.js` | 218.73 kB (68.89 kB gzip) | contains **no** three.js; includes the tiny preload trigger |
+| `Studio-*.js` | 957.40 kB (257.30 kB gzip) | lazy; preloaded on idle or navigation intent |
+| `index-*.css` | 24.51 kB (5.76 kB gzip) | console and Studio share one stylesheet |
+
+Before the Studio existed the console entry was 216.92 kB (68.24 kB gzip), so
+the console's first paint pays **1.81 kB** for the lazy route, hash router and
+preload trigger. Three.js remains absent from first paint. Check the split with:
+
+```sh
+cd web && npm run build
+grep -c WebGLRenderer dist/assets/index-*.js    # must be 0
+```
+
+**Dependencies**, pinned exact, installed locally, never a CDN (DESIGN.md §3.2 —
+the Pi serves this over LAN with no guaranteed internet):
+
+```
+three@0.185.1  @react-three/fiber@9.7.0  @react-three/drei@10.7.8
+@types/three@0.185.0 (dev)
+```
+
+---
+
+## 2. Running it
+
+```sh
+cd web && npm run dev      # then open http://localhost:5173/#/studio
+cd web && npm test         # the gate; must be green at every milestone
+cd web && npm run build    # tsc -b, then vite build
+```
+
+The console is at `/`; its right-hand rail carries a link to the Studio. The dev
+server proxies `/api` to `127.0.0.1:8000` and `server.fs.allow: [".."]` lets the
+browser import `config/rig.json` directly, so there is no second copy of the
+machine's geometry anywhere.
+
+---
+
+## 3. The layering rule
+
+This is the whole architecture in one sentence: **the parts that must be correct
+are the parts that need no browser and no GPU.**
+
+```
+studio/coords.ts geometry.ts lattice.ts view.ts model.ts history.ts pick.ts placement.ts interaction.ts motion.ts
+                                                        ← pure. Every rule. Tested.
+studio/scene/*.tsx panels/*.tsx routes/*.tsx             ← draws. No rules.
+```
+
+A component that decides something about the machine — which cells exist, where
+a block sits, whether a placement is legal, how far back the camera must stand —
+has taken a rule out of the test suite. Move it down and test it there. Plan 4
+§0.1 states this; M1 followed it by inventing `lattice.ts` and `view.ts` rather
+than putting either decision inside `Lattice.tsx` or `Viewport.tsx`.
+
+```
+web/src/
+  studio/
+    coords.ts            cell ⇄ machine ⇄ scene — the only place axes are handled
+    geometry.ts          AABBs, overlap, the firmware's grid clipping
+    lattice.ts           WHICH cells are drawn and what each one is
+    view.ts              the envelope box, the snap poses, the orbit floor
+    model.ts             immutable cell-space blocks + separate author order
+    history.ts           generic bounded undo/redo
+    pick.ts              raycast point → active-mode cell and stack level
+    placement.ts         M2's deliberately cheap local placement gate
+    interaction.ts       click slop and keyboard gesture interpretation
+    motion.ts            row sequencing + fade/downward arrival curves
+    coords.fixtures.json 17 cases / 980 cells dumped from Python
+    scene/
+      theme.ts           DESIGN.md tokens read off the document, as three colours
+      Viewport.tsx       <Canvas>, camera rig, lights, contact shadows
+      Envelope.tsx       the travel cap + its centimetre rulers
+      Lattice.tsx        the active grid, the gaps, the hatched feeder
+      Blocks.tsx         rounded instanced blocks, split by mode and x-ray state
+      Ghost.tsx          exact legal/illegal hover preview
+      surface.ts         cell-space payload shared by raycast surfaces
+    panels/
+      LevelScrubber.tsx  explicit click/drag level hold
+  routes/
+    Root.tsx             hash routing + the lazy Studio import
+    preload.ts           generic one-promise import cache
+    studio-loader.ts     shared idle/intent/navigation Studio import
+    Studio.tsx           the Studio route (chrome + viewport)
+  App.tsx                the operator console (Plan 3), still the console route
+```
+
+---
+
+## 4. The three coordinate spaces
+
+| Space | Units | Origin | Used by |
+| --- | --- | --- | --- |
+| **Cell** | integers `(mode, col, row, level)` | feeder at `[0,0]` | the model file, the compiler, the `B` command |
+| **Machine** | **millimetres**, X right, Y away from Y-home, Z up | home corner, ground | collision, support, envelope checks, readouts |
+| **Scene** | three.js units, 1 unit = 10 mm, Y up | machine home corner | rendering only |
+
+The config and the lattice formula speak **centimetres**, because that is what
+the machine's own numbers are. `coords.ts` is the only module that converts, and
+everything it hands out is millimetres or scene units.
+
+```
+pitch     = block + gap
+centre(i) = trim + error_offset + shift + i * pitch
+```
+
+Centre-anchored, 0-based, no leading gap, no trailing gap, no centring. Cell 0's
+centre sits exactly on the home corner and its block hangs half a block back past
+the switches. `[0,0]` is the feeder in **both** modes and is never built on.
+
+### 4.1 The one correction to Plan 4 §4
+
+§4 sketches the machine→scene conversion as a `<group>` transform
+(`rotation.x = -π/2`, `scale 0.1`). **It is not built that way.**
+`coords.machineToScene()` performs the conversion in the pure layer, where it is
+fixture-tested, and hands `scene/` coordinates that are already in scene space —
+`(x, y, z)ₘ → (x, z, −y) / 10`. A group transform on top of that would apply the
+rotation twice. The rule §4 actually cares about is unchanged and absolute:
+**the axes are handled in exactly one place.** That place is `coords.ts`, not a
+group. `SCENE_ROTATION_X` is still exported for anyone who needs the number.
+
+---
+
+## 5. The pure layer, module by module
+
+### 5.1 `studio/coords.ts` — the port of `python/rig/grid.py`
+
+Held to Python at 1e-6 by `coords.test.ts` against `coords.fixtures.json`, dumped
+by `python/tools/dump_grid_fixtures.py` (17 cases, 980 cells: both modes, shipped
+and clipped and refused shifts, plus trims and error offsets on a synthetic
+envelope). **When the two disagree, Python is right.**
+
+| export | does |
+| --- | --- |
+| `setRigConfig` / `rigConfig` / `activeMode` / `modeGeometry` | swap in and read the live config; a test, a preview, or a model's own snapshot |
+| `latticeOf(mode, shift?)` | one mode's resolved lattice in cm: counts, block extents, pitches, `origin = trim + error_offset + shift` |
+| `cellToMachine(...)` / `cellToScene(...)` | cell → machine mm / complete scene position. Z is the block **centre** |
+| `levelBaseZ` / `levelCentreZ` | ground → base / centre of a level |
+| `blockExtents(mode)` / `blockSceneSize(mode)` | machine / scene-axis extents. **Never a component swap** |
+| `cellCount(mode)` | the requested grid |
+| `reachableCells(mode, shift?)` | what the live shift actually leaves reachable — the firmware's `gridColsNow()`/`gridRowsNow()` as counts |
+| `axisFits(mode, axis, index, shift?)` | the firmware's `gridGeometryFits()`, kept identical on purpose |
+| `latticeBounds(mode, shift?, counts?)` | block edges and first/last centres in mm; **reachable by default**, `"requested"` for the grid the operator asked for |
+| `isFeeder` / `feederCentre` | `[0,0]`; the pick-up is a plain home to raw `[0,0]` — no shift, no tool offset |
+| `machineToScene` / `sceneToMachine` | the whole of the axis juggling |
+
+Constants: `MM_PER_CM`, `BLOCK_HEIGHT_CM = 1.5`, `BLOCK_HEIGHT_MM`,
+`SCENE_UNITS_PER_MM = 0.1`, `SCENE_ROTATION_X`.
+
+**`BLOCK_HEIGHT_CM` has no `rig.json` partner.** It is the firmware's
+`BLOCK_HEIGHT_CM` from `arduino/build_test_v1`, stated once here and once in
+`python/tools/dump_grid_fixtures.py`. See also `ENVELOPE_Z_CM` in §5.4.
+
+### 5.2 `studio/geometry.ts` — machine-space predicates
+
+`aabbOf(block)`, `topFaceZ`, `intersects` (touching faces are **not** a
+collision — a stack is legal), `footprintOverlapArea`, `footprintArea`,
+`latticeFootprint`, and:
+
+`clippedCells(mode, shift?)` → `{ requested, reachable, cells, refused }` —
+which cells a shift pushes past the travel cap, exactly as the firmware reports
+it: the **requested** grid is kept, the **reachable** grid is clipped, clearing
+the shift restores the request with no re-`S`, and `refused: true` is the shift
+`applyGridShift()` would reject outright. Judged against each mode's own
+`max_edge_overhang_*_cm`, because a centre-only check happily accepts a grid
+whose far block hangs off the machine.
+
+### 5.3 `studio/lattice.ts` — which cells get drawn
+
+```ts
+latticeCells(mode, shift?) → LatticeCell[]
+  { col, row, kind: "feeder" | "cell" | "clipped", centre: Vec3, sizeX, sizeZ }
+rulerTicks(lengthCm, stepCm = 1, majorEvery = 5) → { cm, major, at }[]
+```
+
+Everything is in **scene units**, converted only by `machineToScene`, so
+`Lattice.tsx` draws the list and computes nothing. The **requested** grid always
+comes back whole: a shift clips what the machine can reach without changing what
+was asked for, and the Studio draws clipped cells struck through rather than
+deleting them. **The feeder outranks clipping** — `[0,0]` reads as the feeder in
+every state, including one a shift has put out of reach, because it is never
+built on either way.
+
+### 5.4 `studio/view.ts` — where the camera stands
+
+Plan 4 §0.4 rules out testing camera angles by rendering them. The arithmetic
+that *produces* a snap is not a rendering question, so it lives here and is
+tested headlessly.
+
+| export | does |
+| --- | --- |
+| `envelopeBoxScene()` | the travel cap as a scene-space box: X and Y from `workspace` in `rig.json`, Z from `ENVELOPE_Z_CM` |
+| `boxCentre(box)` | what every snap aims at |
+| `frameDistance(halfW, halfH, fov, aspect, margin)` | how far back a perspective camera must stand for a rectangle to fit. On a portrait phone the *horizontal* half-extent is usually what binds |
+| `viewPose(view, aspect, box?)` | `{ position, target, up }` for `top` / `front` / `side` / `iso` |
+| `screenAxes(pose)` | the pose's screen basis, built exactly as three.js builds a camera's |
+| `clampAboveGround(position, minY?)` | the orbit constraint as arithmetic |
+| `tweenMs(reducedMotion)` | `0` under `prefers-reduced-motion`, else `TWEEN_MS` |
+
+Constants: `ENVELOPE_Z_CM = 26.5`, `FOV_DEG = 35`, `FRAME_MARGIN = 1.12`,
+`MIN_CAMERA_Y = 0.2`, `MAX_POLAR_ANGLE = π/2`, `TWEEN_MS = 420`, `VIEWS`.
+
+**`ENVELOPE_Z_CM` is the firmware's `Z_TRAVEL_CM` (26.5 cm)** and has no
+`rig.json` partner, exactly as with `BLOCK_HEIGHT_CM`. It is the cage's height —
+the machine's travel — *not* a build ceiling; the practical level ceiling is an
+operator setting.
+
+**Framing.** `top`, `front` and `side` are framed to the box face they look at,
+plus that view's own depth half-extent so the near corners cannot fall outside
+the frustum. `iso` is off-axis, so it frames the bounding **sphere** instead:
+that holds at every orbit angle and cannot clip a corner.
+
+**Top view carries a requirement beyond taste.** Its up vector is `(0, 0, −1)`,
+which puts machine **+X to the right and +Y up the screen**. M6 lays the twin
+against the overhead camera's own image, so this is asserted in `view.test.ts`
+rather than left to whoever next edits the file.
+
+**The orbit floor is enforced twice**: `maxPolarAngle` on the drei controls stops
+an orbit going under the horizon, and `clampAboveGround` runs per frame in
+`Viewport.tsx` because a *pan* can still drag the camera below the floor.
+
+### 5.5 `studio/model.ts` and `studio/history.ts` — editing without coupling
+
+`Model` is `{ blocks, order }`. A block is `{ id, mode, col, row, level,
+colour }`; its own mode is permanent geometry, so changing the active lattice
+cannot move it. `applyEdit()` is the only mutation boundary: `place`,
+`placeRun`, `remove`, `move`, `recolour`, `reorder`. Moving preserves both list
+and author order; reordering preserves the geometry list byte-for-byte.
+
+`history.ts` is generic and knows nothing about blocks. It stores complete
+immutable values, clears redo on a new branch and retains 100 undo entries by
+default. A shift-drag calls `applyEdit(placeRun)` once and therefore occupies
+one history entry, regardless of its length.
+
+### 5.6 `studio/pick.ts`, `placement.ts` and `interaction.ts`
+
+`pick.ts` inverts the centre-anchored lattice through `coords.ts`. A ray point
+must fall inside the actual block footprint; the 1.6 cm gap returns `null`, not
+the nearest cell. Ground hits resolve to level 0. Block tops take their level
+from `geometry.topFaceZ()` matched against `coords.levelBaseZ()`, but resolve X/Y
+in the **currently active mode**. Nearest hit wins and a top wins an exact tie.
+Shift-drag runs are constrained to the dominant axis.
+
+`placement.ts` is intentionally separate from `model.ts`: the model mutates;
+the placement gate answers whether a proposed edit is locally legal. M2 checks
+only `[0,0]`, the active mode's requested bounds and an occupied same-mode slot.
+Support, collision, edge and shift validation remain M3.
+
+`interaction.ts` owns the 4 px click slop and keyboard mapping. Undo is
+Ctrl/Cmd-Z; redo is Ctrl/Cmd-Shift-Z or Ctrl/Cmd-Y. Inputs and editable elements
+are ignored. Escape releases a held level, digits 0–9 hold one, and `M` toggles
+the authoring lattice.
+
+### 5.7 `studio/motion.ts` — one arrival, two explanations
+
+`arrivalFrame()` combines two independent cues: opacity explains the block
+spawning into the model, while a downward offset explains the machine placing
+it. The fade is a 130 ms smoothstep. The 8 mm drop is a 220 ms quintic ease-out,
+long enough to read cleanly without making the editor wait. Reduced motion
+returns the final frame immediately.
+
+`rowArrivalDelays()` handles multi-cell gestures. Blocks on the same row start
+together; each distinct row in gesture order starts 34 ms after the previous
+one. A single placement always has delay zero, regardless of its machine row.
+The maths is pure and tested; `Blocks.tsx` only applies its result.
+
+---
+
+## 6. The scene layer
+
+Nothing in `scene/` decides anything. If you are about to write arithmetic here,
+it belongs in §5.
+
+### 6.1 `scene/Viewport.tsx`
+
+The `<Canvas>`, the camera rig, the lights, the contact shadows and the orbit
+controls. It receives the immutable model, hover target/status, held level and
+cell-space surface callbacks in addition to `{ mode, shift?, view, nonce? }`.
+`nonce` is bumped by the caller to re-snap to the view already selected.
+
+- **Lighting**: one key directional, one dim fill and a faint hemisphere. The
+  continuously-updated 1024² directional shadow map was removed in the
+  performance pass; the grounding cue is a 512² `<ContactShadows frames={1}>`
+  keyed by block geometry. A placement/removal regenerates it once while an
+  idle stage still draws nothing.
+- **No ground plane.** Plan 4 §8.2 rules out an infinite checkerboard as visual
+  noise. The lit-from-above read comes from a CSS radial vignette behind the
+  canvas (`--vignette`), which costs nothing to render.
+- **`frameloop="demand"`.** DESIGN.md §3.4 forbids motion on an idle screen, and
+  an idle Studio issues no draw calls at all. The view tween calls `invalidate()`
+  once per frame while it runs and stops; `prefers-reduced-motion` makes
+  `tweenMs()` zero, which snaps to the destination instead of animating to it.
+- **Pixel cost is capped** at DPR 1.5 and the WebGL context requests the
+  high-performance adapter. This keeps fill rate bounded on the Pi display and
+  high-DPI phones without making ordinary desktop output soft.
+- **The tween** interpolates position, orbit target and the camera's up vector
+  with a cubic ease-out. Up is interpolated because `top` uses a different one;
+  the path between `(0,1,0)` and `(0,0,−1)` never passes through zero length.
+
+### 6.2 `scene/Envelope.tsx`
+
+The travel cap as a thin `--line-strong` wireframe box, with centimetre rulers
+along two edges — the X edge at machine Y = 0 and the Y edge at machine X = 0,
+each tick major every 5 cm, majors labelled. This is the machine's real limit and
+it is always visible. It is never inferred from the lattice: it comes from
+`workspace` in `rig.json` by way of `envelopeBoxScene()`.
+
+### 6.3 `scene/Lattice.tsx`
+
+Every addressable cell at its true footprint with the true gaps: `--signal` fills
+at 30 % with outlines, the feeder hatched and labelled `FEED`, and cells the live
+shift has clipped in `--motion`, crossed through. Plain fills and clipped fills
+are one instanced draw each instead of one mesh/draw per cell. Cell outlines and
+crosses remain one merged line geometry each.
+
+Which cells those are, and which is which, is `latticeCells()` — see §5.3.
+
+### 6.4 `scene/theme.ts`
+
+DESIGN.md §3.1 says nothing in a component carries a raw colour value, and that
+rule does not stop at the edge of a WebGL canvas. `cssToken(name)` reads a custom
+property off the document (memoised), `tokenColor(name)` returns a cached
+`THREE.Color`, and `hatchTexture(token)` draws the feeder's stripes into a
+canvas at runtime rather than shipping an asset. **An unreadable token stays
+three.js's own default** rather than falling back to a literal nobody designed.
+
+### 6.5 Text in the scene
+
+**drei's `<Text>` is not used and must not be.** It is troika, which fetches a
+default font from a CDN — forbidden by DESIGN.md §3.2, and it would fail silently
+on a Pi with no internet. Scene labels (ruler numbers, `FEED`) are drei `<Html>`,
+so they are real DOM and use the real type tokens (`.studio-tick`, `.studio-tag`
+in `style.css`).
+
+### 6.6 `scene/Blocks.tsx`, `Ghost.tsx` and placement surfaces
+
+Placed geometry is rounded by 0.6 mm and instanced with 512 slots of headroom.
+There is a separate physical geometry for each mode; the held-level x-ray splits
+each into solid and 15%-opacity batches. Instance colour comes from the five
+original `--block-*` tokens plus `--block-white`; new blocks default to white.
+A new block fades over 130 ms while settling from +8 mm over 220 ms. Distinct
+rows in one run start 34 ms apart. Per-instance opacity keeps the whole gesture
+in one arriving draw, while the solid/x-ray split remains ordinary materials.
+Arrival state, matrices and opacity live in refs; `useFrame` exits before doing
+any matrix work when no arrival exists, and `invalidate()` runs only while one
+is active. Reduced motion places immediately.
+
+Instanced batches mount empty, so the first colour attribute appears only when a
+block is placed. `Blocks.tsx` explicitly recompiles that material once when the
+attribute is created; without it, Three.js retains its empty-batch program and
+renders the missing vertex colour black. White receives a small token-derived
+emissive lift so it remains visibly white against the dark stage.
+
+`Ghost.tsx` uses the active mode's same rounded dimensions at 35% `--signal`, or
+30% `--danger` with a solid edge and one reason label. It has no raycast of its
+own and disappears when the surface target is null.
+
+After a commit, the old hover target is cleared. This prevents an occupied-cell
+danger ghost from masking the newly placed white block while the pointer is
+stationary; the next pointer movement resolves the real top face normally.
+
+The lattice planes and block instances translate R3F hits through `pick.ts` and
+emit `SurfacePointer`; they never edit the model. Block tops stop propagation,
+so the nearest top wins over the lattice beneath it. X/Y resolves in the active
+mode even when the hit block belongs to the other mode. Alt-pointer events may
+remove from any visible block face; ordinary placement accepts only top faces.
+
+### 6.7 The level scrubber
+
+The left rail exposes levels 0–17 as real DOM buttons and supports pointer drag.
+A held level overrides ground/top-derived height, is repeated in the header, and
+fades every block above it to 15%. Escape or the rail's explicit `ESC` control
+releases it. The current 17-level ceiling is the theoretical travel ceiling;
+M3 promotes the practical operator limit to a visible setting.
+
+---
+
+## 7. Routing and code-splitting
+
+`routes/Root.tsx` is the whole of the routing: the console at `#/`, the Studio at
+`#/studio`, with `React.lazy` around the Studio import so three.js lands in its
+own chunk. **Hash routing, deliberately** — it needs no server rewrite, which
+matters because the Pi serves this as static files and the PWA offline shell has
+to keep working.
+
+The import is cached by `createPreloader()`. `App.tsx` starts it when the browser
+is idle and immediately on pointer-enter, focus or pointer-down over the Studio
+link; `React.lazy` consumes the same promise on navigation. This moves download,
+parse and module initialization away from the click without pulling Three.js
+back into the console's initial bundle. Touch, keyboard and mouse intent all
+take the same path.
+
+`App.tsx` is still the console; Plan 4 §7's `routes/Console.tsx` has not been
+split out, because moving it would churn the Plan 3 tests for no benefit until
+the twin (M6) needs it.
+
+The console's rail links to the Studio. `main.tsx` renders `<Root/>`; the Plan 3
+tests import `<App/>` directly and are untouched by the routing.
+
+---
+
+## 8. The visual language inside a canvas
+
+The Studio must feel like the same instrument as the console, not a second
+application, so it takes the console's tokens unchanged (DESIGN.md §3). In
+practice:
+
+- Colours come from `theme.ts` (in the scene) or CSS custom properties (in the
+  chrome). No hex anywhere in `studio/` or `routes/`.
+- `--signal` is interaction, never a machine state. `--motion` amber means
+  *degraded but recoverable* — which is exactly what a clipped cell is. `--danger`
+  red is reserved for *stop, a human is required*; M2 uses it only for the
+  invalid ghost and its reason label.
+- Type is the console's five sizes; every numeric readout is `tabular-nums`.
+- Motion: `--fast` / `--base` for chrome, `TWEEN_MS` for the camera, nothing on
+  an idle screen, and `prefers-reduced-motion` honoured.
+- One token was added for the Studio: `--vignette`, the wash behind the 3D stage.
+- The performance/UI pass added `--block-white`, the default placed-block colour.
+
+---
+
+## 9. What is tested, and what is deliberately not
+
+**Tested, headlessly, in milliseconds:** every coordinate and geometry
+predicate; lattice state; camera arithmetic; every model mutation; bounded
+undo/redo; ray point → cell/level resolution including real gaps and hit ties;
+local legality; click/keyboard interpretation; and the scrubber's accessible
+control contract. `view.test.ts` re-derives the perspective projection itself
+and checks every envelope corner rather than trusting the implementation.
+
+**Not tested, on purpose** (Plan 4 §0.4): pixels, materials, light positions,
+tween timings, anything that would be testing three.js rather than this project.
+Judge the look by eye; judge the rules by test.
+
+**The working rule.** Write the test, run it, watch it fail *for the right
+reason* — a missing module is the right reason, a typo in the test is not — then
+implement until it passes. Test and implementation land in the same commit, test
+first in the diff.
+
+---
+
+## 10. Known gaps and things to watch
+
+- **The optimized M2 scene and a real placement have been smoke-rendered** at
+  1440 × 900 in headless Chrome with software WebGL. The test clicked a known
+  top-view cell, observed `1 BLOCKS`, exercised the per-instance fade shader and
+  confirmed the final block is visibly white. A human browser pass should still
+  judge pointer feel on the target Pi/display; pixels remain outside Vitest.
+- **`ContactShadows frames={1}` plus `frameloop="demand"`** remains intentional.
+  The contact component is keyed by geometry, so block changes remount its one
+  frame without turning the idle stage into a loop.
+- **Shift is a prop that nothing sets yet.** `Viewport`, `Lattice` and
+  `latticeCells` all take one and honour it; the gizmo and the readout that drive
+  it are M8. The header currently reads the shipped `shift_*_cm` out of the
+  config.
+- **The authoring mode is local route state; every block stores its own mode.**
+  The M6 twin's mode will instead be a read-only mirror of `state.mode`. Never
+  confuse them: a real latch homes X and Y, a Studio mode switch moves nothing.
+- **`@react-three/drei` is a large dependency.** It remains confined to the lazy
+  Studio chunk; the production console chunk still contains no `WebGLRenderer`.
+
+---
+
+## 11. Changelog
+
+Newest first. One entry per landed change; note anything that contradicts the
+plan or that a future reader could not infer.
+
+### M2 — Performance and placement-motion pass
+
+- Added one-promise Studio preloading on browser idle and mouse, keyboard or
+  touch intent. The console bundle remains free of `WebGLRenderer`.
+- Deduplicated same-cell hover state and memoised the heavy lattice/block trees,
+  so pointer samples within one target do not rerender the scene.
+- Replaced per-cell fill meshes with two instanced fills, cached token colours,
+  capped DPR at 1.5 and requested the high-performance WebGL adapter.
+- Removed the continuously-updated directional shadow map and reduced the
+  one-shot contact texture from 1024² to 512².
+- Stopped block `useFrame` work completely when no arrival is active and marked
+  the changing arrival buffers for dynamic GPU upload.
+- Replaced the 140/90 ms arrival with a smoother 220 ms quintic 8 mm settle plus
+  130 ms smoothstep fade. Multi-row runs stagger distinct rows by 34 ms.
+- Added an efficient per-instance arrival-opacity shader while retaining the
+  requested ordinary solid/x-ray material split.
+- Added `--block-white`; new blocks are white with a small emissive lift. Fixed
+  the empty-instance shader recompile that previously rendered their colour
+  black, and clear stale hover previews after a commit.
+- Added six pure tests for motion, row sequencing, hover deduplication and the
+  cached preload path; the suite is now 136 tests across 17 files.
+
+### M2 — Placement
+
+- Added immutable `model.ts` and generic `history.ts`; geometry and order cannot
+  mutate each other, history retains 100 entries, and a run is one entry.
+- Added `pick.ts`: footprint-aware inverse lattice, active-mode top resolution,
+  nearest-hit/top-tie priority and dominant-axis run cells, all GPU-free tests.
+- Kept M2 legality in a separate `placement.ts`; support/collision remain M3.
+- Added rounded, colour-instanced blocks per mode, keyed contact-shadow refresh
+  and reduced-motion snapping; current arrival timing is documented above.
+- Added the legal/illegal ghost, any-face alt removal, 4 px click guard and
+  click-on-pointerup semantics.
+- Added the level 0–17 rail, held-level header state, keyboard jumps and 15%
+  above-level x-ray batches.
+- Smoke-rendered the whole stage under software WebGL at 1440 × 900.
+
+### M1 — Static viewport
+
+- Added the pure `view.ts` and `lattice.ts` rather than putting the framing
+  arithmetic or the cell-state decision inside a component.
+- **Corrected Plan 4 §4**: no scene-group transform; `coords.machineToScene()`
+  already returns scene space (§4.1 above).
+- Chose hash routing and a lazy Studio import; console entry grew 1.44 kB.
+- Pinned `three@0.185.1`, `@react-three/fiber@9.7.0`, `@react-three/drei@10.7.8`.
+- Ruled out drei `<Text>` (troika fetches a font from a CDN); scene labels are
+  `<Html>`.
+- Added `scene/theme.ts` so the "no raw hex" rule reaches inside the canvas, and
+  the `--vignette` token for the stage background.
+- `ENVELOPE_Z_CM = 26.5` named once in `view.ts`, the firmware's `Z_TRAVEL_CM`.
+
+### M0 — Coordinates and fixtures
+
+- `coords.ts` + `geometry.ts`, held to `python/rig/grid.py` at 1e-6 by fixtures
+  dumped by `python/tools/dump_grid_fixtures.py`.
+- The browser imports `config/rig.json` directly; `vite.config.ts` gained
+  `server.fs.allow: [".."]`. No second copy of the geometry.
+- Machine space is millimetres; `coords.ts` is the only converter.
+- `BLOCK_HEIGHT_CM` (1.5) has no `rig.json` partner — it is the firmware's.
+- `latticeBounds()` reports the **reachable** grid by default, matching
+  `MachineGrid`; pass `"requested"` for the operator's grid.
+- `AGENTS.md` §3a and §3b were stale against `grid.py` and the firmware and were
+  corrected in the same pass.

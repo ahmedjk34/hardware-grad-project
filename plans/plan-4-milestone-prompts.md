@@ -18,6 +18,18 @@ that has not read the repository will otherwise get wrong:
 4. No CDN assets — everything bundles and works offline over LAN.
 5. Geometry comes from `config/rig.json` at runtime, never hard-coded.
 
+**Every unfinished milestone also carries a `HOW I WOULD BUILD THIS — DESIGN
+DIRECTION` section inside its prompt.** It is the opinionated part: the module
+shapes, the visual specifications in tokens, the exact copy for the dangerous
+dialogs, the traps that cost an afternoon, and the decisions I would make rather
+than leave to taste. It is guidance, not gospel — but an agent that deviates
+should say so in `docs/STUDIO.md` rather than silently.
+
+**Read [docs/STUDIO.md](../docs/STUDIO.md) before starting any milestone.** It is
+the living record of what the Studio actually is right now — every module, every
+exported function, every decision that contradicts this plan. Update it, and its
+changelog, in the same commit as the work.
+
 ### The rule that applies to all nine
 
 Write the test file, run it, watch it fail *for the right reason*, then write the
@@ -388,6 +400,139 @@ CONSTRAINTS
   same machine-space position regardless of what is latched later (Plan 4 §8.4
   point 3). Getting this wrong now breaks M4 badly.
 
+HOW I WOULD BUILD THIS — DESIGN DIRECTION
+Everything below is guidance, not gospel; if you find a better way, take it and
+say why in `docs/STUDIO.md`. But do not deviate silently, and do not deviate on
+the house style.
+
+HOUSE STYLE (applies to every milestone)
+- Read `docs/STUDIO.md` first — it is the living record of what already exists,
+  and you update it in the same commit as your change, including its changelog.
+- Rules live in pure modules; `scene/`, `panels/` and `routes/` only draw. If you
+  are writing arithmetic inside a component, you are writing it in the wrong
+  file.
+- Module docstrings explain WHY and name the machine fact they encode; comments
+  name the rule, not the mechanism. Match the voice already in `coords.ts` and
+  `view.ts` — plain, direct, no hedging, no "we do X here".
+- Colours come from tokens: `theme.tokenColor()` inside the canvas, CSS custom
+  properties outside it. No hex, ever. `--signal` is interaction, `--motion` is
+  "degraded but recoverable, or moving", `--danger` is "stop, a human is
+  needed". Never use a state colour decoratively.
+- Nothing loops on an idle screen. `frameloop="demand"` stays; call
+  `invalidate()` when something actually changed. Honour `prefers-reduced-motion`
+  by shortening to zero, not by animating differently.
+- Five type sizes, 4px spacing scale, `tabular-nums` on every number, borders and
+  background steps for elevation rather than shadows.
+
+THE SHAPE I WOULD GIVE THE CODE
+Three pure modules, then components that are almost embarrassingly thin:
+
+- `studio/model.ts` — an immutable `Model` value plus a reducer:
+  `applyEdit(model, edit) → Model`, with `Edit` a discriminated union
+  (`place`, `remove`, `recolour`, `reorder`, `placeRun`). Every mutation goes
+  through the reducer, so there is exactly one place that can corrupt a model and
+  exactly one place to test. Never mutate; structural sharing is free at this
+  size.
+- `studio/history.ts` — a generic `History<T>` with `push`, `undo`, `redo`,
+  `canUndo`, `canRedo` and a cap of 100. Keep it generic and test it against
+  numbers, not models: an undo stack that is coupled to the model is an undo
+  stack you cannot reason about. A shift-drag run is ONE history entry — this is
+  a design decision, not an accident, and it deserves its own test.
+- `studio/pick.ts` — the cell-resolution maths, the part of raycasting that has
+  no GPU in it:
+    resolveGroundTarget(pointScene, mode, shift?) → {col, row} | null
+    resolveTopTarget(block, pointScene, mode, shift?) → {col, row, level} | null
+  Invert the lattice formula through `coords.ts` (`col = round((x_mm/10 −
+  originX) / pitchX)`), then CHECK the hit actually lies inside that cell's
+  footprint. A point in the 1.6 cm gap must return `null`, not the nearest cell.
+  That single rule is what stops the ghost flickering between neighbours and it
+  is trivially testable: hand-compute three points — dead centre, just inside the
+  edge, in the gap — and assert centre, centre, null.
+
+THE AMBIGUITY THE PROMPT ASKS ABOUT, DECIDED
+Take the nearest hit, with block tops winning ties, and resolve the CELL in the
+CURRENTLY LATCHED MODE rather than in the hit block's own mode. Hovering the top
+of a vertical block while horizontal is active must offer a horizontal cell —
+that is how cross-mode bridging becomes discoverable, and §3 fact 6 says it is
+the most interesting thing the machine can do. Level comes from the hit block's
+top face via `geometry.topFaceZ`, converted to a level index through
+`coords.levelBaseZ` — do not divide by 1.5 yourself.
+
+THE GHOST
+- Geometry: the same rounded box as a real block (see below) at 0.35 opacity,
+  `--signal`, `depthWrite={false}` so it never punches a hole in what is behind
+  it, plus a thin edge line at full opacity so its footprint is legible against a
+  lit block.
+- Illegal: `--danger` at 0.30 with a solid `--danger` edge. Do not also shake,
+  flash or pulse it — the colour and the label are the message, and a pulse on a
+  static screen breaks §3.4.
+- The reason label rides beside the cursor in a drei `<Html>` using the existing
+  `.studio-tag` class, offset ~14px down-right so it never sits under the
+  pointer. Wording is plain and specific: `[0,0] is the feeder`,
+  `outside the grid`, `already a block here`. M3 replaces the text with the
+  validator's own message — so route it through one `reason` string now and do
+  not scatter copy through the component.
+- Hide the ghost entirely when the target is null. A ghost parked on the last
+  known cell while the cursor is over empty space is a lie about where a click
+  would land.
+
+THE BLOCKS
+- One `<instancedMesh>` PER MODE, because the two modes are different geometry,
+  not one geometry rotated (§3 fact 3). Allocate with headroom (say 512) and keep
+  a count; set `instanceMatrix.needsUpdate` and call `invalidate()` after any
+  edit.
+- Geometry: a rounded box with about a 0.6 mm radius. It costs nothing, it
+  catches the key light along every edge, and it is the difference between "a
+  cube" and "an object". Use `meshStandardMaterial` at roughness ~0.55,
+  metalness 0 — these are matte plastic blocks, not chrome.
+- Colour per instance from `instanceColor`, fed from the five `--block-*` tokens
+  through `theme.tokenColor()`. Those are the same names `web/geometry.py`
+  `_colour_name()` uses; keeping them aligned is what lets M7 print
+  `FEED: RED` and mean it.
+- Contact shadows already exist in `Viewport.tsx` at `frames={1}`, which renders
+  once. The moment a block can appear you must re-render them — bump a key or
+  raise `frames` while the model is changing. Left alone, blocks will float over
+  a shadow of an empty stage and the whole scene will look wrong for a reason
+  that is hard to find.
+
+PLACEMENT FEEL — THE 140 MS
+Drop from +6 mm above the resting position with a cubic ease-out over 140 ms and
+no bounce; overshoot reads as bouncy plastic and this machine is not bouncy. Ramp
+opacity 0 → 1 over the first 90 ms so the block arrives rather than appears. One
+`invalidate()` per frame while any block is settling, and settle state lives in a
+ref, not React state — do not re-render the tree 8 times to move one matrix.
+`prefers-reduced-motion` skips straight to the resting position.
+
+THE LEVEL SCRUBBER
+A vertical rail down the LEFT inside edge of the viewport, since the view snap
+buttons already own the bottom-left and the mode switch the bottom-right. One
+tick per level up to the ceiling, current level a filled `--signal` square, the
+rest hairlines in `--line-strong`, the number in `--t-xs` mono beside it. Click
+or drag to hold a level; `Escape` releases; digits `0`–`9` jump. When held, show
+the level in the header readout too, because a held level silently changing where
+clicks land is exactly the kind of hidden mode that makes a tool feel hostile.
+Implement x-ray by SPLITTING the instanced meshes into "at or below the held
+level" and "above it" and giving the second material `opacity 0.15`. That is two
+draw calls and no shader patching; `onBeforeCompile` is the clever answer and the
+wrong one.
+
+INTERACTION DETAIL WORTH GETTING RIGHT
+- Click commits on pointerUP, and only if the pointer moved less than ~4 px since
+  pointerdown. Otherwise every orbit that ends over the lattice places a block,
+  and the tool will feel cursed in a way testers cannot articulate.
+- Alt-click removes. Shift-drag fills the run of cells between anchor and current
+  along whichever axis dominates — constrain to one axis, free-form 2D fills are
+  harder to control than they look.
+- `Ctrl-Z` / `Ctrl-Shift-Z`, and also `Ctrl-Y`, because half your users expect it.
+  Ignore all of them when the event target is an input.
+- Keep the pointer handlers on the lattice/block meshes rather than a full-screen
+  plane, so the orbit control still gets events over empty space.
+
+WHAT TO PUT IN THE HEADER
+The header from M1 gains: block count, and the held level when one is held. Do
+not add a save control yet — persistence is M5 and a disabled button that does
+nothing is worse than no button.
+
 DONE WHEN
 You can build a tower and a two-column bridge by hand, undo the whole thing, and
 redo it. It feels good — the ghost never lags, never flickers between cells, and
@@ -475,6 +620,130 @@ CONSTRAINTS
   claims about the validator defensible in a write-up.
 - `CLIPPED_BY_SHIFT` must reproduce the firmware's clipping, not approximate it.
   M0's `clippedCells()` already does the work; use it.
+
+HOW I WOULD BUILD THIS — DESIGN DIRECTION
+Guidance, not gospel — but if you deviate, say so in `docs/STUDIO.md`.
+
+HOUSE STYLE (applies to every milestone)
+- Read `docs/STUDIO.md` first; update it, changelog included, in the same commit.
+- Rules live in pure modules; components only draw. Arithmetic in a component is
+  arithmetic outside the test suite.
+- Module docstrings say WHY and name the machine fact they encode. Match the
+  voice in `coords.ts` and `view.ts`: plain, direct, no hedging.
+- Tokens only — `theme.tokenColor()` inside the canvas, custom properties
+  outside. `--signal` is interaction, `--motion` is degraded-but-recoverable,
+  `--danger` is stop-a-human-is-needed. Never decorative.
+- Nothing loops on an idle screen; honour `prefers-reduced-motion`.
+- Five type sizes, 4px spacing, `tabular-nums`, elevation by border and
+  background step.
+
+THE ONE ARCHITECTURAL DECISION THAT MATTERS HERE
+There must be exactly ONE validator, with two entry points into the same rules:
+
+    validateModel(model, ctx)                → Diagnostic[]
+    validatePlacement(model, candidate, ctx) → Diagnostic[]
+
+`validatePlacement` is what the ghost asks on every pointer move; `validateModel`
+is what the diagnostics panel and the compiler ask. If you write a separate
+"cheap check for the ghost", it will drift from the real rules and the tool will
+refuse placements the panel says are fine, or worse, allow ones it does not. Make
+the placement path fast by scoping the candidate's neighbourhood, never by
+duplicating a rule.
+
+Shape each rule as its own exported pure function with the code as its name, and
+collect them in one `RULES` array:
+
+    const RULES = [feederCell, outOfGrid, clippedByShift, edgeOverhang,
+                   levelCeiling, duplicateCell, collision, unsupported,
+                   clawClearance, geometryDrift, island];
+
+The array IS the §6.4 table, in one place, greppable, and each entry is testable
+alone. `ctx` carries the mode, the shift, the settings and the rig snapshot — one
+object, not eight arguments, because M5's drift check needs the snapshot too.
+
+DIAGNOSTIC SHAPE AND COPY
+`{severity: "error" | "warning", code, blockId?, message, fix?}`. Two severities
+only; a third tier will not survive contact with the panel design.
+
+Write `message` for someone standing at a machine, not for a compiler log. It
+names the block, states the fact, and gives the number that decided it:
+  - `b7 rests on 30% of its footprint — it needs 55%`
+  - `b4 would collide with b2`
+  - `[0,0] is the feeder — blocks are picked up there, never built there`
+  - `column 6 is past the travel cap at the current shift`
+`fix` is an action the UI can offer, not prose: `{label: "Drop to level 1",
+edit: {...}}`. If a rule cannot offer a real fix, omit it — a greyed-out "Fix"
+button is a promise the tool cannot keep.
+
+Fix the PRIORITY ORDER of the codes once, in the module, and use it everywhere
+the UI must pick a single reason to show (the ghost label): feeder, out-of-grid,
+clipped, ceiling, duplicate, collision, unsupported, clearance. Without a fixed
+order the ghost's message flickers between two equally-true reasons and reads as
+a bug.
+
+THE SUPPORT RULE — WRITE THE TEST SO IT CANNOT BE FUDGED
+Do not hard-code centres in the bridging test. Ask `coords.ts` and
+`geometry.ts` for them: scan every (vertical block a, vertical block b,
+horizontal candidate) triple in a small region, and assert that AT LEAST ONE
+legal cross-mode bridge exists — supported ratio ≥ `SUPPORT_RATIO`, centroid over
+supported area, no collision. Then pin the specific triple the scan found as a
+named fixture with a comment saying where the numbers came from. That way the
+test proves the capability rather than restating a constant, and it will survive
+a geometry change in `rig.json` instead of silently going green on nonsense.
+The naive rule — "there must be a block in the same cell one level down" —
+passes every other test in this milestone and forbids the machine's most
+interesting structural move. Write the bridging test FIRST and watch it fail
+against the naive rule before you write the real one.
+
+The centroid condition is not decoration: 55% of a footprint concentrated at one
+end is a lever, not a support. Test it with an asymmetric case.
+
+THE THREE CONSTANTS, AND HOW TO SHOW THEM
+`SUPPORT_RATIO 0.55`, `CLAW_MARGIN_MM 8`, `LEVEL_CEILING 6`. Ship them
+conservative and visible in a `panels/Settings.tsx` section headed
+`ESTIMATES — NOT MEASUREMENTS`, framed with a `--motion` hairline, with copy that
+says exactly what each one is guessing about:
+
+    SUPPORT RATIO 0.55
+    How much of a block's underside must rest on something. A guess about
+    friction and the claw's release. Nobody has measured this rig.
+
+    CLAW CLEARANCE 8 mm
+    How much room the claw needs beside a block on the way down. A guess about
+    the claw's width. Measure the claw and change this.
+
+    LEVEL CEILING 6
+    How high you are allowed to build. An operator limit, not a physical one —
+    the Z travel would allow about 17.
+
+Persist under `rig.studio.settings.v1`, same try/catch discipline M5 will use.
+Changing one re-validates the model live; that immediacy is what makes the
+numbers feel real rather than like config.
+
+THE DIAGNOSTICS PANEL
+Rows grouped by severity, errors first, each row: a 6px severity dot
+(`--danger` / `--motion`), the block id in mono, the message in `--t-sm`, the
+fix as a right-aligned text button. The whole row is a button — hovering
+highlights that block in the viewport, clicking selects it and frames the camera
+on it. Add `frameBox(box, aspect)` to `view.ts` for that framing (it is the same
+arithmetic `viewPose` already does — reuse `frameDistance`, do not write a second
+one) and test it there.
+
+Header of the panel: `3 ERRORS · 2 WARNINGS` in `--t-xs` mono, the counts in
+their severity colours, the words in `--text-dim`. When clean, say
+`NO PROBLEMS` in `--ready` — the operator should be able to read the state from
+across a bench.
+
+In the viewport, mark an offending block with a thin ring on its top face in the
+severity colour. No pulsing, no bobbing, no outline animation.
+
+TEST DISCIPLINE
+Table-driven: a `cases` array of `{name, model, expect: [codes]}`, one passing and
+one failing case per rule, each `it()` named after the code. Write a tiny
+`modelOf(...blocks)` helper in the test file — the readability of these tests is
+what makes the validator defensible in a write-up, and a wall of object literals
+is not readable. Every rule that reads `rig.json` gets a case under a modified
+config via `setRigConfig`, so a geometry change cannot quietly disable a rule.
 
 DONE WHEN
 Every rule has a unit test and a way to make it fire in the UI by hand.
@@ -571,6 +840,117 @@ CONSTRAINTS
   model is invalid, `valid` is false and `program` is empty.
 - No React, no DOM, no three.js in this module.
 
+HOW I WOULD BUILD THIS — DESIGN DIRECTION
+Guidance, not gospel — but if you deviate, say so in `docs/STUDIO.md`.
+
+HOUSE STYLE (applies to every milestone)
+- Read `docs/STUDIO.md` first; update it, changelog included, in the same commit.
+- Rules live in pure modules; components only draw.
+- Module docstrings say WHY and name the machine fact they encode; match the
+  voice in `coords.ts` and `view.ts`.
+- Tokens only, no hex. `--signal` interaction, `--motion` degraded-or-moving,
+  `--danger` stop. Nothing loops on an idle screen. `prefers-reduced-motion`
+  shortens to zero.
+- Five type sizes, 4px spacing, `tabular-nums`.
+
+THE SHAPE
+`compile.ts` exports one function and some types:
+
+    compile(model, {mode: startingMode, settings}) → Program
+
+and nothing else public. Internally, four named steps in this order, each its own
+function so a test can point at it:
+
+    supportGraph(model)      → Map<id, Set<id>>   who must precede whom
+    orderBlocks(model, graph, startingMode) → Block[]
+    emitOps(ordered, startingMode)          → Op[]
+    summarise(ops, settings)                → Stats
+
+Keep `emitOps` separate from `orderBlocks`. The latch state machine is a
+different kind of correctness from the ordering and mixing them produces a
+function nobody can test a single claim about.
+
+THE ORDERING, CONCRETELY
+Kahn's algorithm with a ready-set. At each step, pick the ready block that sorts
+first under a comparator built from named terms, IN THIS ORDER:
+
+    byLevel(a, b)          — bottom-up; a block can never precede its support
+    byCurrentMode(a, b)    — prefer the mode already latched (DYNAMIC: depends on
+                             the emitter's state at this point in the walk)
+    byAuthorIndex(a, b)    — the author's order, wherever it is still legal
+    byCell(a, b)           — col, then row
+    byId(a, b)             — total order, so ties cannot exist
+
+Write each term as its own exported function and compose them with a `chain()`
+helper. This is not decoration: the milestone requires a test that goes red when
+a constraint is removed, and "remove a constraint" then means "delete one term
+from the chain", which is a clean, reviewable experiment. Do it — literally
+delete each term in turn, confirm exactly the expected test fails, restore it,
+and report which test guards which term.
+
+`byCurrentMode` makes the comparator STATEFUL. Say so in a comment, recompute it
+at every pop, and give it a test where the greedy same-mode choice is available
+but illegal because of support order — the interesting bug in this whole
+milestone lives there.
+
+With n in the hundreds, do not build a heap. Sort the ready array on every pop.
+It is O(n² log n) on a list that will never exceed a few hundred, it is obviously
+deterministic, and obviously-correct beats fast here.
+
+DETERMINISM — HOW IT ACTUALLY BREAKS
+It will not break in the comparator. It breaks because someone iterated a `Set`
+or a `Map` built from object identity, or used `Object.keys` on something built
+in hover order, or sorted with a comparator that returns 0 for distinct items.
+So: build every collection from an explicitly sorted array of ids, never iterate
+a set to produce output, and end every comparator chain with `byId`. The
+twenty-compile test is the alarm, not the defence.
+
+THE LATCH STATE MACHINE
+State is one variable: the mode the board is in. Initial value is the live
+`state.mode` when there is one, `vertical` otherwise (a board reset returns to
+vertical, which is why `@0 READY` reports `mode=` at all). Emit a `mode` op ONLY
+on an actual change — the firmware refuses a latch that confirms a state nobody
+asked for, and emitting a redundant one turns a working program into a failed
+one. Annotate every latch `{cost: "homes X and Y"}`.
+
+Build the literal serial text in ONE place:
+
+    commandText(op)   // "B 3 2 1" | "R" | "RR"
+
+The runner (M7) and `ProgramView` both consume `op.text`. Two formatters is how a
+project ends up sending `B 3 2 1 ccw` to a firmware that treats a fourth word as
+a parse error naming the latch.
+
+PROGRAM VIEW — MAKE IT LOOK LIKE A SERIAL LOG
+That is the register this whole console speaks in, and it costs nothing to hit.
+
+    01   B 1 1 0        b1
+    02   B 3 1 0        b3
+    ──── RR ─────────────────────── homes X and Y
+    03   B 0 2 2        b4
+
+Mono throughout. Line numbers `--text-faint`, command text `--text`, the block id
+`--text-dim` right-aligned. A latch is a full-width 1px `--motion` rule with the
+latch word in a small amber chip on the left and `homes X and Y` in `--text-dim`
+on the right — full-width, because the cost is a whole-machine event and a chip
+on its own understates it. Selecting a line highlights that block in the
+viewport. Add a copy-to-clipboard control; someone will want to paste this into a
+serial monitor and that is a legitimate thing to want.
+
+ESTIMATES
+`{blocks, latches, levels, estimateSeconds}` with per-block cycle and per-latch
+homing cost as named constants, exposed in the same `ESTIMATES — NOT
+MEASUREMENTS` settings block M3 introduces. Render as `4 blocks · 1 latch ·
+~2:56`, and say `~` every time you show it. M7 measures the real mean cycle time
+against the mock; when it does, the constant moves and the doc changelog records
+that it came from a measurement.
+
+INVALID MODELS
+`{valid: false, program: [], diagnostics}` — the diagnostics come from M3's
+validator, run by the compiler itself. The compiler never re-implements a rule
+and never emits a partial program. A half-program is the single most dangerous
+artefact this codebase could produce.
+
 DONE WHEN
 A mixed-mode model compiles to a correct, minimal-latch, repeatable program, and
 every ordering constraint has a test that fails when the constraint is removed.
@@ -656,6 +1036,112 @@ CONSTRAINTS
   option; leave a clean seam for it and nothing more.
 - Everything works offline. No network call in this milestone.
 
+HOW I WOULD BUILD THIS — DESIGN DIRECTION
+Guidance, not gospel — but if you deviate, say so in `docs/STUDIO.md`.
+
+HOUSE STYLE (applies to every milestone)
+- Read `docs/STUDIO.md` first; update it, changelog included, in the same commit.
+- Rules live in pure modules; components only draw.
+- Module docstrings say WHY; match the voice in `coords.ts` and `view.ts`.
+- Tokens only, no hex. `--signal` interaction, `--motion` degraded-or-moving,
+  `--danger` stop. Nothing loops on an idle screen. Honour reduced motion.
+- Five type sizes, 4px spacing, `tabular-nums`, elevation by border and
+  background step, radius `--r-md` on cards.
+
+THE API I WOULD WRITE
+`library.ts` never throws and never returns a bare value:
+
+    listModels()            → Result<ModelCard[]>
+    readModel(id)           → Result<Model>
+    writeModel(model)       → Result<{bytes, remaining}>
+    removeModel(id)         → Result<void>
+    duplicateModel(id)      → Result<Model>
+    exportModel(model)      → string
+    importModel(text)       → Result<Model>
+
+`Result<T> = {ok: true, value: T} | {ok: false, reason: string}` — because
+`localStorage` is genuinely unavailable in private windows, genuinely full at
+5 MB, and genuinely throws on ACCESS in some browsers, not just on write. A
+Studio that dies because storage is disabled is a worse tool than one that says
+`storage unavailable — your work will not be kept` in an amber strip and carries
+on. Write that test.
+
+Keep the card list separate from the model bodies: `rig.studio.models.v1.index`
+holds the cards (id, name, counts, dates, thumbnail) and
+`rig.studio.models.v1.<id>` holds each body. The drawer then renders without
+parsing every model, and a single corrupt body costs one card, not the library.
+
+STORAGE BUDGET — AND WHAT HAPPENS AT THE EDGE
+Budget 4 MB of an assumed 5. Thumbnails are the whole problem: 320 × 200 WebP at
+quality 0.7 is ~10–20 kB, so ~200 models. When a write would exceed the budget,
+REFUSE IT and say which models are largest, with a delete control right there.
+Do not evict anything automatically. Silently deleting an operator's saved work
+to make room for a save is the kind of behaviour that ends trust in a tool
+permanently, and this is a tool people will use the night before a demo.
+
+THUMBNAILS — THE TRAP
+With `frameloop="demand"` and no `preserveDrawingBuffer`, the canvas backbuffer
+is empty by the time you call `toDataURL`, and you will get a transparent
+rectangle and lose an hour. Do NOT turn on `preserveDrawingBuffer` globally to
+fix it — it costs every frame of the whole app for a feature used on save.
+Render to a `WebGLRenderTarget` at 640 × 400, read the pixels, draw them into an
+`OffscreenCanvas`, encode WebP at 0.7, downscale to 320 × 200. It is about thirty
+lines and it is correct.
+
+Frame the thumbnail on the MODEL's own bounding box, not the envelope — use
+`viewPose("iso", aspect, modelBox)`, which M1 already supports by taking a box.
+Cards that all show the same empty cage are worse than no thumbnails. Draw the
+envelope faintly behind it for scale.
+
+THE FILE FORMAT, AND ONE DEVIATION I WOULD MAKE
+`rigmodel/1` exactly as Plan 4 §5 specifies, including the `rig` snapshot, wired
+to M3's `GEOMETRY_DRIFT` warning. On import: validate the schema, run the
+migration hook (identity for v1), then validate the model, then warn on drift —
+in that order, and never rewrite the file on open.
+
+For "the whole library", I would ship a single `.rigmodels.json` array file
+instead of a zip. A zip means either a new dependency in a bundle served off a Pi
+or eighty lines of stored-entry zip writer, to produce a file that is harder to
+inspect, harder to diff and harder to email than the JSON it contains. Take the
+array. If you disagree, write the stored-entry writer by hand rather than adding
+a dependency, and record the decision in `docs/STUDIO.md`.
+
+Drag-and-drop import on the window: accept `.json`, reject anything else with a
+named reason, and NEVER import silently — show what is about to be added, with
+its block count and any drift warning, and let the operator confirm.
+
+THE DRAWER AND THE CARDS
+The drawer slides from the left at `--z-drawer` over the viewport, not beside it;
+the viewport is the point of this application and it should not be squeezed to
+288px to list files. Card: 16:10 thumbnail on `--sunken`, name in `--t-md`, then
+one mono `--t-xs` meta line in `--text-dim`:
+
+    12 blocks · 1 latch · ~4:10 · 2d ago
+
+Selected card gets a `--signal` 1px border, never a fill. Rename is inline edit
+on double-click, not a modal. Delete is immediate with a 6-second undo toast —
+a confirm dialog for a local file is friction; an undo is a safety net. That undo
+is a real requirement, not a nicety.
+
+THE THREE EXAMPLES — THESE ARE YOUR DEMO
+They are fixtures as well as content: assert that each loads, validates clean and
+compiles, so a geometry change in `rig.json` breaks a test rather than the
+presentation.
+
+- TOWER — one cell, four or five levels. Proves stacking and gives the runner a
+  short program to rehearse with.
+- BRIDGE — two vertical stacks with a horizontal block spanning them. This is the
+  one that matters: it demonstrates §3 fact 6 and forces the compiler to emit a
+  latch. Do not guess the cells. Write a small script or test that searches for a
+  legal bridging triple using M3's validator, then hard-code what it found with a
+  comment recording the search. Name it something a person would say out loud —
+  "Two towers, one span".
+- PYRAMID — a stepped pyramid, three levels, wide base. Shows the support rule
+  doing real work and looks good in a thumbnail.
+
+Author each one so the timeline reads sensibly top-to-bottom; these are the
+programs that will be on screen while somebody explains the project.
+
 DONE WHEN
 You can close the tab, reopen it, and your models are there. Import and export
 round-trip cleanly. The three examples load and compile.
@@ -737,6 +1223,105 @@ CONSTRAINTS
   twin does not show it placed.
 - Do not regress anything in the console. `npm test` must stay green, including
   `step7`, `step9`, `step10` and `lib/workspace.test.tsx`.
+
+HOW I WOULD BUILD THIS — DESIGN DIRECTION
+Guidance, not gospel — but if you deviate, say so in `docs/STUDIO.md`.
+
+HOUSE STYLE (applies to every milestone)
+- Read `docs/STUDIO.md` first; update it, changelog included, in the same commit.
+- Rules live in pure modules; components only draw.
+- Module docstrings say WHY; match the voice in `coords.ts` and `view.ts`.
+- Tokens only, no hex. `--signal` interaction, `--motion` degraded-or-moving,
+  `--danger` stop. Nothing loops on an idle screen except the one RUNNING
+  indicator the console already owns. Honour reduced motion.
+- Five type sizes, 4px spacing, `tabular-nums`.
+
+THE DECISION THAT MAKES THIS MILESTONE TESTABLE
+Put the whole thing in a pure module first:
+
+    twinScene(state, model, confirmed) → {
+      blocks: {id, cell, mode, appearance}[],   // ghost | target | building
+                                                // | placed | rejected
+      banner: "none" | "running" | "rejected" | "locked" | "stale",
+      animating: boolean,
+      desaturate: boolean,
+    }
+
+`Twin.tsx` then renders that object and holds no logic whatsoever. Every row of
+§9.2's table becomes a test over a fixture `/api/events` payload, and the LOCKED
+row gets its own explicit assertion that `animating` is false. Do not express
+"stops animating" as "we don't call useFrame" — express it as a field, assert the
+field, and let the component obey it.
+
+`confirmed` is a set of block ids the SERVER has said were placed. The twin
+renders `placed` from that set and from nothing else. No optimistic placement, no
+"we sent the command so it probably worked". §9's whole claim is that the twin
+mirrors the machine; the moment it predicts, it is decoration.
+
+THE FIVE APPEARANCES, IN TOKENS
+- ghost — remaining work. `--text-faint`, 12% opacity, no shadow. Present but
+  clearly not real.
+- target — the next block. `--signal` at 45% with a full-opacity edge, and the
+  cell label beside it (`B 3 2 1` in mono). The plan asks for a pulse here; a
+  pulse is permitted ONLY while `build_state` is RUNNING, because that is the
+  console's one licensed ambient motion. Idle, it is static.
+- building — during RUNNING, a slow descent from travel height to the cell, timed
+  against nothing in particular. Say so in a comment: it is an illustration of a
+  descent, not a telemetry read-out. If reduced motion is set, no descent — show
+  it at the cell in `--motion`.
+- placed — solid, the model's colour, full material.
+- rejected — back to a ghost, outlined `--motion`, with the reason under it.
+  Amber, not red: nothing moved, the selection is still the operator's.
+
+LOCKED is the one that must be exactly right. Desaturate every block — lerp its
+colour toward `--text-faint` in the MAPPING so it is tested — stop all motion,
+and lay a `--danger` plate over the panel with the console's existing locked copy.
+After an abort nobody knows where the arm is or what fell over; a twin that keeps
+cheerfully rendering the model as if the plan still holds is actively misleading
+at the exact moment misleading is most expensive.
+
+MAKING IT CHEAP — IT SHARES A PHONE WITH AN MJPEG STREAM
+- No shadow maps, no `ContactShadows`. Give each block a small dark radial sprite
+  on the ground instead; at twin scale nobody can tell and it costs one textured
+  quad.
+- `dpr={[1, 1.5]}`, `frameloop="demand"`, and invalidate ONLY on a state change
+  or while an animation is genuinely in flight.
+- One `<instancedMesh>` per mode, as in M2. Reuse `Blocks.tsx` with a `quality`
+  prop rather than forking it — two block renderers will drift.
+- Pause rendering entirely when the twin is not visible (phone tab switched away,
+  or `document.hidden`). The camera is what matters on a phone; the twin must
+  never be the reason a frame is dropped.
+
+LAYOUT
+Desktop ≥ 900px: camera and twin as equal columns, top-aligned, sharing one
+`--r-lg` stage border so they read as one instrument rather than two widgets.
+Phone: a two-tab switcher above the action sheet, DEFAULTING TO CAMERA, styled
+like the existing status chips — `CAMERA` / `TWIN`, the inactive one in
+`--text-dim`. BUILD must not move down the page by a single pixel; check at
+390px, 768px and 1440px, and check with the locked banner showing, which is the
+tallest state.
+
+SYNC VIEW
+It is `viewPose("top", aspect, workspaceBox)` plus a framing match. M1 chose the
+top view's up vector `(0,0,−1)` — machine +X right, +Y up the screen —
+specifically so this would line up; the test for it is already in `view.test.ts`.
+Make the toggle a chip in the twin's corner labelled `SYNC VIEW`, pressed state
+in `--signal`. When it is on, disable orbit and say so (`synced to camera`) —
+an orbit that silently breaks the sync is a control that lies.
+
+MODE — THE TRAP IN THIS MILESTONE
+The Studio's mode switch is free and instant because it is a view change. The
+index page's is a physical latch that HOMES X AND Y. They must not look alike.
+The twin's indicator is a read-only mirror of `state.mode`, rendered as a plain
+label, NOT as the Studio's `[V|H]` segmented control, and switching goes through
+the console's existing confirmed `POST /api/mode`. If an operator can develop a
+habit in the Studio that moves the machine on the index page, the design has
+failed regardless of what the code does.
+
+WHEN THE SOCKET DROPS
+Freeze exactly as it is, dim to ~60%, and show `STALE` in `--motion` with the
+seconds since the last update. Do not clear the twin and do not keep animating —
+a moving twin over a dead socket is the worst of both.
 
 VERIFICATION
 Run `cd python && ../.venv/bin/python -m web --mock` and `cd web && npm run dev`.
@@ -828,6 +1413,107 @@ CONSTRAINTS — READ THESE TWICE
   restarts the service. Any button implying otherwise is a lie about the machine.
 - Every guard stays server-side. The runner is a client of the existing routes
   and adds no new authority. Do not add a batch endpoint.
+
+HOW I WOULD BUILD THIS — DESIGN DIRECTION
+Guidance, not gospel — but if you deviate, say so in `docs/STUDIO.md`. On the
+safety constraints above, there is no deviation available.
+
+HOUSE STYLE (applies to every milestone)
+- Read `docs/STUDIO.md` first; update it, changelog included, in the same commit.
+- Rules live in pure modules; components only draw.
+- Module docstrings say WHY; match the voice in `coords.ts` and `view.ts`.
+- Tokens only, no hex. `--signal` interaction, `--motion` degraded-or-moving,
+  `--danger` stop. The RUNNING banner is the app's only ambient motion. Honour
+  reduced motion.
+- Five type sizes, 4px spacing, `tabular-nums`.
+
+THE ARCHITECTURE THAT MAKES THE SAFETY PROPERTY TESTABLE
+Write the runner as a pure reducer, not as a React component with async
+functions in it:
+
+    step(runState, event) → {state: RunState, effects: Effect[]}
+
+`Effect` is a DESCRIPTION — `{kind: "select", col, row, level}`,
+`{kind: "verify", expect: "B 3 2 1"}`, `{kind: "build"}`, `{kind: "mode", mode}`,
+`{kind: "warn", text}` — and a thin driver component executes them and feeds the
+results back in as events. Everything the milestone is actually about then
+becomes a property of a pure function:
+
+  - "never two builds in flight": no reachable state emits `build` while
+    `inFlight` is true. Assert it by exhaustively walking the state machine over
+    every event, not by inspecting one happy path.
+  - "never issues a command while `build_state` is RUNNING": same walk.
+
+A reducer you can exhaust is the difference between a safety claim and a hopeful
+comment. This is the single most important structural decision in the milestone.
+
+THE STATES, NAMED
+`idle → arming → verifying → awaiting-confirm → building → (settled | rejected |
+aborted)` plus `paused`, `stopped-mismatch`, `locked`, `done`. Name them in a
+union type; do not encode state in three booleans, which is how a runner ends up
+with two builds in flight in the first place.
+
+THE PER-BLOCK SEQUENCE, AND WHY VERIFY IS IN THE MIDDLE
+    1. POST /api/select (or /api/select/axis) for the op's cell
+    2. read state.command and COMPARE it to op.text
+    3. if they differ → STOP the run, state `stopped-mismatch`, show both strings
+    4. POST /api/build, then wait for the server's outcome
+Step 2 is the whole point. A mismatch means the model and the rig disagree about
+the world — a stale shift, a mode that is not what the program assumed, a cell
+the server clamped. Continuing would place a block somewhere nobody asked for.
+Show both strings verbatim: `program: B 3 2 1` / `rig: B 3 2 0`. Do not
+paraphrase them, and do not offer to continue anyway.
+
+THE THREE RUN STYLES
+- STEP — the console's existing two-tap BUILD per block. Reuse `BuildButton`;
+  do not build a second confirm affordance with different semantics.
+- RUN — continuous, with `STOP AFTER THIS BLOCK`. The copy under it is
+  `the block in flight will finish — the rig cannot be interrupted`, in
+  `--text-dim`, always visible, not a tooltip. Once pressed the control becomes
+  `STOPPING AFTER THIS BLOCK` and is disabled. No cancel. No retry. Anywhere.
+- DRY RUN — runs the SAME reducer against a fake transport that returns success
+  after ~600 ms. That is the design point: the demo mode exercises the real state
+  machine, so rehearsing the demo is rehearsing the code. Label it `DRY RUN — no
+  serial traffic` in `--motion` across the runner strip for its entire duration,
+  because a dry run that looks like a real run is a genuinely dangerous UI.
+
+THE FEEDER PROMPT — THIS IS THE HUMAN INTERFACE
+The feeder is manual, so this prompt is the operator's actual instruction, and it
+should be the largest thing on screen when it is showing:
+
+    ┌──────────────────────────────────┐
+    │  ● FEED: RED                     │   --t-hero mono, swatch in --block-red
+    │  block 7 of 24 · B 3 2 1         │   --t-xs mono, --text-dim
+    └──────────────────────────────────┘
+
+Only change it when the colour changes — a prompt that re-renders identically
+between every block trains people to stop reading it. When the next block is the
+same colour, show `SAME COLOUR` quietly instead of shouting the colour again.
+
+FAILURE HANDLING, EXACTLY
+- REJECTED → pause, keep position, show the reason in `--motion`, offer
+  `CONTINUE` (resume from the same op) and `END RUN`. Nothing moved; the
+  selection is still the operator's.
+- ABORTED → the existing lock rules take over. The program view goes read-only
+  with the reached step marked, everything below it dimmed, and a line saying how
+  far it got: `stopped at step 9 of 24`. No control that implies recovery — a
+  human inspects the rig and restarts the service.
+- Socket drop mid-run → pause immediately, `STALE` in `--motion`. Do not send the
+  next command on a socket you cannot hear the answer on.
+
+THE RUN REPORT
+Build it from the event log, not from what the runner intended to do. Markdown
+export, deterministic ordering, a table of step / command / result / duration,
+then totals, then the camera thumbnails if any were captured. Include the
+mismatch or abort verbatim if there was one — a report that omits the failure is
+worthless to the person debugging it, and this report is a dissertation artefact.
+
+WHAT NOT TO BUILD
+No batch endpoint. No queue. No "resume from where it broke" that re-derives
+machine state the server does not vouch for. No progress bar that predicts a
+per-block time you have not measured — show elapsed and the count, and add the
+ETA only once M7's own measurement replaces the M4 estimate constant, at which
+point say so in `docs/STUDIO.md`.
 
 VERIFICATION
 Against `python -m web --mock`: a full model builds end to end; every failure
@@ -925,6 +1611,117 @@ CONSTRAINTS
   remembered.
 - No new backend authority. Everything here is client-side or reads existing
   state.
+
+HOW I WOULD BUILD THIS — DESIGN DIRECTION
+Guidance, not gospel — but if you deviate, say so in `docs/STUDIO.md`.
+
+HOUSE STYLE (applies to every milestone)
+- Read `docs/STUDIO.md` first; update it, changelog included, in the same commit.
+- Rules live in pure modules; components only draw.
+- Module docstrings say WHY; match the voice in `coords.ts` and `view.ts`.
+- Tokens only, no hex. `--signal` interaction, `--motion` degraded-or-moving,
+  `--danger` stop. Nothing loops on an idle screen. Honour reduced motion
+  everywhere — this milestone is the one most likely to break that rule.
+- Five type sizes, 4px spacing, `tabular-nums`.
+
+THE OVERALL POSTURE FOR A "WOW PASS"
+The temptation is to add effects. Resist it: DESIGN.md §8 rules out decorative
+gradients, glassmorphism, animated backgrounds and decorative use of the state
+palette, and a machine console that looks like a crypto dashboard reads as
+untrustworthy no matter how good the engineering under it is. Everything below
+earns its place by making a REAL machine behaviour visible. That is what people
+remember — not the polish, the fact that the far column drops out exactly when
+the firmware says it would.
+
+1 — LIVE GRID SHIFT (the best thirty minutes in the plan)
+M1 built `latticeCells(mode, shift)` and `Lattice.tsx` to take a shift and render
+`kind: "clipped"` in amber, struck through, already. This item is therefore
+mostly WIRING, and you should verify that before writing anything: set a shift by
+hand in a test, confirm the amber cells appear, and only then build the gizmo.
+
+- The gizmo is a flat handle at the lattice's home corner, dragged in the ground
+  plane. Two thin `--signal` arrows along machine +X and +Y, a small square where
+  they meet. Drag the square for both axes, an arrow for one. Cursor `grabbing`
+  while held.
+- Snap 0.1 cm, 0.5 cm with Shift, free with Alt. Show the modifier hint in
+  `--t-xs` beside the readout while dragging, then hide it.
+- Readout in mono, signed, two decimals, U+2212 for the minus so the columns line
+  up: `shiftX +1.20 cm   shiftY −0.40 cm`. `tabular-nums` or the numbers will
+  jitter as you drag and the whole effect is lost.
+- Shift is PER MODE. Switching mode swaps the value; it does not carry over.
+- Reset to zero is one click and restores the full requested grid with no re-`S`,
+  because the request was never modified — say that in the tooltip, it is the
+  interesting part.
+
+The apply-to-rig action is separate, explicit and confirmed, and the copy is the
+deliverable:
+
+    APPLY SHIFT TO THE RIG
+    This moves every placement in vertical mode by +1.20, −0.40 cm, including
+    the [0,0] reference. It does NOT move the pick-up: the feeder is a plain
+    home to raw [0,0].
+    This is a registration shift, not calibration. If the machine is placing
+    blocks consistently off-target, error_offset_* is the knob you want.
+                                        [ CANCEL ]  [ APPLY SHIFT ]
+
+2 — TIMELINE
+Chips 28px tall in compiled order, id in mono `--t-xs`, colour dot at the left,
+`--raised` background, `--signal` border when selected. Mode latches are
+FULL-HEIGHT 2px `--motion` bars labelled `R` / `RR` — full height because the
+cost is a whole-machine event, and the timeline should visibly break in two at
+the latch.
+
+Drag to reorder against a pure, tested predicate:
+
+    canReorder(program, fromIndex, toIndex) → true | {reason: string}
+
+Illegal drop: the chip springs back with a 120 ms shake (skip the shake under
+reduced motion) and a toast naming the actual constraint — `b7 supports b9`, not
+`invalid move`. Every refusal in this application teaches the operator something
+about the machine; a generic refusal teaches them the tool is arbitrary.
+
+Playhead: past solid, current outlined `--signal`, future at 12% ghost. Scrub with
+drag or arrow keys. Because past/present/future is one uniform per block, this is
+the same mechanism as M2's x-ray by level — reuse it rather than inventing a
+second dimming path.
+
+3 — PLAN PROJECTION ON THE VIDEO
+`web/src/lib/workspace.ts` already ports `target_polygon()` and is fixture-tested,
+which is the only reason this is affordable. Draw it as an SVG overlay on top of
+the MJPEG, not a canvas: it scales with CSS, costs nothing per frame, and does
+not fight the stream for the compositor.
+
+- Next block's footprint filled `--signal` at 25% with a full-opacity edge; every
+  other planned cell a 1px `--signal` outline at 35%. No animation over a live
+  video feed, ever — it competes with the thing the operator is supposed to be
+  watching.
+- Level parallax: offset toward the image centre proportional to height. Document
+  the approximation honestly, in the code, with the assumption stated —
+  "a pinhole camera about 50 cm above the surface; this is an approximation and
+  it drifts at the frame edges". Label the overlay `APPROXIMATION` in `--motion`
+  the way the console already labels its own approximate readouts.
+- Build the whole thing against `python -m web --mock`, which serves a real MJPEG
+  stream of a synthetic workspace. You do not need a camera.
+
+4 — AUDIO, AND WHY IT IS LAST
+Synthesise it — a WebAudio oscillator, a short 880 Hz tick with a 40 ms decay per
+placed block, a soft major third on completion. No audio files: they are bytes
+the Pi has to serve for something that must be off by default anyway. Off until
+the operator enables it, remembered in `rig.studio.settings.v1`, and never a
+sound on an error — a machine that beeps when something goes wrong trains people
+to dread it. Silence plus a red plate is stronger.
+
+5 — INSTRUCTION SHEET
+Print stylesheet, not a PDF library. One step per row: step number, the command,
+a thumbnail of the model as of that step, and the feed colour. Black on white
+with the state colours kept as the only colour on the page. `@media print` in
+`style.css` and a browser print dialog is the whole feature.
+
+6 — THE REHEARSAL IS A DELIVERABLE
+Run §13's demo script start to finish against the mock, out loud, twice. Fix what
+stumbles, and write down in `docs/STUDIO.md` what you did not get to and what
+turned out to matter less than it looked on paper. An honest account of which
+items landed is worth more to the write-up than one more feature.
 
 DONE WHEN
 The §13 demo script runs start to finish, on mock hardware, without a stumble.

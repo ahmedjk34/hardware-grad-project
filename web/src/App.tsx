@@ -17,6 +17,7 @@ import { connectEvents } from "./ws";
 import { Icon } from "./components/Icon";
 import * as api from "./api";
 import type { StateModel } from "./types";
+import { preloadStudio } from "./routes/studio-loader";
 
 const store = createConsoleStore();
 const PHONE = "(max-width: 899px)";
@@ -56,6 +57,21 @@ export function App() {
   const changeHandler = useCallback((handler: ((point: [number, number], imageSize: [number, number]) => void) | null) => setCornerHandler(() => handler), []);
 
   useEffect(() => connectEvents(store), []);
+
+  // Three.js stays out of first paint, then downloads when the browser is idle.
+  // Pointer/focus intent below starts the same cached import immediately.
+  useEffect(() => {
+    const idleWindow = window as Window & {
+      requestIdleCallback?: Window["requestIdleCallback"];
+      cancelIdleCallback?: Window["cancelIdleCallback"];
+    };
+    if (idleWindow.requestIdleCallback) {
+      const id = idleWindow.requestIdleCallback(() => { void preloadStudio(); }, { timeout: 4000 });
+      return () => idleWindow.cancelIdleCallback?.(id);
+    }
+    const id = globalThis.setTimeout(() => { void preloadStudio(); }, 2200);
+    return () => globalThis.clearTimeout(id);
+  }, []);
 
   const state = snapshot.state;
   const mutable = !!state && snapshot.connected && state.build_state === "READY";
@@ -124,7 +140,12 @@ export function App() {
             <Icon name="waiting" size={14} />Press ? for keyboard shortcuts
           </p>
           <p className="reason">
-            <a className="studio-link" href="#/studio">Open the 3D Build Studio</a>
+            <a className="studio-link" href="#/studio"
+               onPointerEnter={() => { void preloadStudio(); }}
+               onFocus={() => { void preloadStudio(); }}
+               onPointerDown={() => { void preloadStudio(); }}>
+              Open the 3D Build Studio
+            </a>
           </p>
         </div>
       </div>

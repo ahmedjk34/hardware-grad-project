@@ -1,26 +1,33 @@
 /**
  * The 3D viewport: a dark space holding an accurate, to-scale render of the
- * machine. Nothing in here is interactive yet beyond the camera — placement
- * arrives in M2.
+ * machine. Surface meshes report raycast hits in cell space while the route
+ * owns model edits, history and keyboard state.
  *
  * The camera maths lives in `studio/view.ts` and is tested there; this file
  * moves a three.js camera to the poses that module hands it. Per DESIGN.md
  * section 3.4 the frameloop is on demand, so an idle Studio renders nothing at
  * all rather than burning a phone's battery animating a still picture.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { ContactShadows, OrbitControls } from "@react-three/drei";
+import { OrbitControls } from "@react-three/drei";
 import { Vector3 } from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import type { ModeName, Shift } from "../coords";
+import type { Model } from "../model";
+import type { CellTarget } from "../pick";
+import type { PlacementStatus } from "../placement";
 import {
   FOV_DEG, MAX_POLAR_ANGLE, boxCentre, clampAboveGround, envelopeBoxScene,
-  tweenMs, viewPose, type ViewName,
+  cameraTransitionMs, viewPose, type ViewName,
 } from "../view";
 import { Envelope } from "./Envelope";
 import { Lattice } from "./Lattice";
+import { Blocks } from "./Blocks";
+import { BlockShadows } from "./BlockShadows";
+import { Ghost } from "./Ghost";
 import { tokenColor } from "./theme";
+import type { SurfaceHandlers } from "./surface";
 
 const REDUCED_MOTION = "(prefers-reduced-motion: reduce)";
 
@@ -47,8 +54,9 @@ function CameraRig({ view, nonce, reduced }: { view: ViewName; nonce: number; re
   const tween = useRef<{ from: { position: Vector3; target: Vector3; up: Vector3 };
                          to: { position: Vector3; target: Vector3; up: Vector3 };
                          start: number; duration: number } | null>(null);
+  const previousCommand = useRef<string | null>(null);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const orbit = controls as OrbitControlsImpl | null;
     const pose = viewPose(view, size.width / Math.max(size.height, 1));
     const to = {
@@ -56,7 +64,11 @@ function CameraRig({ view, nonce, reduced }: { view: ViewName; nonce: number; re
       target: new Vector3(pose.target.x, pose.target.y, pose.target.z),
       up: new Vector3(pose.up.x, pose.up.y, pose.up.z),
     };
-    const duration = tweenMs(reduced);
+    const command = `${view}:${nonce}`;
+    const initialized = previousCommand.current !== null;
+    const explicitCommand = initialized && previousCommand.current !== command;
+    const duration = cameraTransitionMs(initialized, explicitCommand, reduced);
+    previousCommand.current = command;
     if (duration === 0) {
       camera.up.copy(to.up);
       camera.position.copy(to.position);
@@ -99,41 +111,35 @@ function CameraRig({ view, nonce, reduced }: { view: ViewName; nonce: number; re
   return null;
 }
 
-function Scene({ mode, shift, view, nonce, reduced }: {
+function Scene({ mode, shift, view, nonce, reduced, model, target, status, heldLevel, ...handlers }: {
   mode: ModeName; shift?: Shift; view: ViewName; nonce: number; reduced: boolean;
-}) {
+  model: Model; target: CellTarget | null; status: PlacementStatus | null; heldLevel: number | null;
+} & SurfaceHandlers) {
   const box = useMemo(() => envelopeBoxScene(), []);
   const centre = boxCentre(box);
-
   return (
     <>
       {/* Section 8.2: one key with soft shadows, one dim fill, a faint hemisphere. */}
       <hemisphereLight intensity={0.35} groundColor={tokenColor("--void")} color={tokenColor("--line-strong")} />
       <directionalLight
-        castShadow intensity={1.5}
+        intensity={1.5}
         position={[centre.x + 18, centre.y + 34, centre.z + 22]}
-        shadow-mapSize={[1024, 1024]}
-        shadow-bias={-0.0005}
-        shadow-camera-left={-40} shadow-camera-right={40}
-        shadow-camera-top={40} shadow-camera-bottom={-40}
       />
       <directionalLight intensity={0.35} position={[centre.x - 26, centre.y + 12, centre.z - 20]} />
 
-      {/* What later makes a block look placed rather than floating. */}
-      <ContactShadows
-        position={[centre.x, 0, centre.z]}
-        scale={Math.max(box.max.x - box.min.x, box.max.z - box.min.z) * 1.6}
-        resolution={1024} blur={2.4} opacity={0.55} far={12} frames={1}
-      />
-
       <Envelope box={box} />
-      <Lattice mode={mode} shift={shift} />
+      <Lattice mode={mode} shift={shift} {...handlers} />
+      <BlockShadows blocks={model.blocks} />
+      <Blocks blocks={model.blocks} activeMode={mode} shift={shift} heldLevel={heldLevel}
+              reduced={reduced} {...handlers} />
+      <Ghost mode={mode} shift={shift} target={target} status={status} />
 
       <OrbitControls
         makeDefault enableDamping={false}
         maxPolarAngle={MAX_POLAR_ANGLE}
         target={[centre.x, centre.y, centre.z]}
         minDistance={4} maxDistance={260}
+        zoomSpeed={1.25} rotateSpeed={0.9} panSpeed={0.9}
       />
       <CameraRig view={view} nonce={nonce} reduced={reduced} />
     </>
@@ -146,20 +152,27 @@ export interface ViewportProps {
   view: ViewName;
   /** Bumped by the caller to re-snap to the view that is already selected. */
   nonce?: number;
+  model: Model;
+  target: CellTarget | null;
+  status: PlacementStatus | null;
+  heldLevel: number | null;
 }
 
-export function Viewport({ mode, shift, view, nonce = 0 }: ViewportProps) {
+export function Viewport({ mode, shift, view, nonce = 0, model, target, status, heldLevel,
+                           onSurfaceMove, onSurfaceDown, onSurfaceUp, onSurfaceLeave }: ViewportProps & SurfaceHandlers) {
   const reduced = useReducedMotion();
   return (
-    <div className="studio-viewport">
+    <div className="studio-viewport" onPointerLeave={onSurfaceLeave}>
       <Canvas
         frameloop="demand"
-        shadows
-        dpr={[1, 2]}
-        gl={{ antialias: true, alpha: true }}
+        dpr={[1, 1.5]}
+        gl={{ antialias: true, alpha: true, stencil: false, powerPreference: "high-performance" }}
         camera={{ fov: FOV_DEG, near: 0.5, far: 800 }}
       >
-        <Scene mode={mode} shift={shift} view={view} nonce={nonce} reduced={reduced} />
+        <Scene mode={mode} shift={shift} view={view} nonce={nonce} reduced={reduced}
+               model={model} target={target} status={status} heldLevel={heldLevel}
+               onSurfaceMove={onSurfaceMove} onSurfaceDown={onSurfaceDown}
+               onSurfaceUp={onSurfaceUp} onSurfaceLeave={onSurfaceLeave} />
       </Canvas>
     </div>
   );
