@@ -4,6 +4,7 @@ One plan at a time. A plan is written, reviewed, worked through, then archived.
 
 | Plan | State | What it covers |
 | --- | --- | --- |
+| [plan-4-3d-build-studio.md](plan-4-3d-build-studio.md) | **drafted** | a browser 3D modelling studio for block structures plus a live digital twin beside the camera: design in 3D, compile to ordered `B`/`R`/`RR` commands, validate support and collisions, run it |
 | [plan-3-web-operator-console.md](plan-3-web-operator-console.md) | **active — Steps 1–3 built** | `rig_build_v1` as a React PWA + FastAPI service: browser click-to-build, server-side safety state, `--mock` mode for off-Pi work, tests-first |
 | [plan-2-click-to-build.md](plan-2-click-to-build.md) | **built** | click a spot on the camera image, the rig places a block there — every step implemented (`gridded_camera_feed.py`, `rig_build_v1.py`); Pi/rig acceptance and the ack flash remain |
 | [dual-orientation-grid.md](dual-orientation-grid.md) | **built** | a second, equally valid grid: blocks laid horizontally 3 x 15 alongside the vertical 9 x 5, with per-mode geometry, trims and calibration, latched by `RR` / `R`; Pi/camera and hardware verification remain |

@@ -1,2 +1,13 @@
 import type { StateModel } from "../types";
-export function LockedBanner({ state }: { state: StateModel }) { return state.build_state === "LOCKED" ? <section className="locked" role="alert"><strong>SESSION LOCKED</strong>: <span>{state.locked_reason}</span>. A human must inspect the rig and restart the service.</section> : null; }
+
+export function LockedBanner({ state }: { state: StateModel }) {
+  if (state.build_state !== "LOCKED") return null;
+  return (
+    <section className="banner locked" role="alert">
+      <strong>SESSION LOCKED</strong>
+      <span className="detail">
+        <span>{state.locked_reason}</span>. A human must inspect the rig and restart the service.
+      </span>
+    </section>
+  );
+}
