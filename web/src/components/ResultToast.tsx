@@ -1,0 +1,2 @@
+import type { StateModel } from "../types";
+export function ResultToast({ state }: { state: StateModel }) { if (state.build_state === "LOCKED" || !state.last_result) return null; if (state.last_result === "placed") return <output className="placed">PLACED — select the next cell</output>; if (state.last_result === "rejected") return <output className="rejected">REJECTED — {state.last_result_reason}</output>; return null; }

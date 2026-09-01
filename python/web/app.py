@@ -19,7 +19,9 @@ from rig.build_job import BuildJob
 from rig.console_pipeline import ConsolePipeline
 from rig.mock_board import MockBoard
 from rig.workspace import WORKSPACE_MAP_PATH
+from web.mjpeg import publish_jpeg, router as mjpeg_router
 from web.routes_command import router as command_router
+from web.routes_calibration import router as calibration_router
 from web.state import StateModel, build_state
 
 
@@ -70,6 +72,7 @@ async def _drive_pipeline(app: FastAPI, pipeline: ConsolePipeline,
             outcome = job.poll()
             if frame is not None:
                 app.state.latest_frame = frame
+                await publish_jpeg(app, frame)
             if frame is not None or outcome is not None:
                 await _notify_state(app)
             await asyncio.sleep(interval_s)
@@ -89,10 +92,16 @@ def create_app(options: ConsoleAppOptions | None = None) -> FastAPI:
         app.state.latest_frame = None
         app.state.log = deque(maxlen=200)
         app.state.log_revision = 0
+        app.state.stream_subscribers = 0
+        app.state.latest_jpeg = None
+        app.state.jpeg_revision = 0
+        app.state.jpeg_encode_count = 0
+        app.state.jpeg_condition = asyncio.Condition()
         app.state.views = {"grid": True, "detect": True, "paper": False,
                            "overlay": True}
         app.state.driver = None
         app.state.mock_board = None
+        app.state.calibration_points = []
 
         def signal_change() -> None:
             """Thread-safe signal used by serial callbacks and test hooks."""
@@ -171,6 +180,8 @@ def create_app(options: ConsoleAppOptions | None = None) -> FastAPI:
         return build_state(app)
 
     app.include_router(command_router)
+    app.include_router(calibration_router)
+    app.include_router(mjpeg_router)
 
     @app.websocket("/api/events")
     async def events(socket: WebSocket) -> None:

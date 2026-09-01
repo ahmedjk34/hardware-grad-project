@@ -1,0 +1,4 @@
+import type { StateModel } from "../types";
+import * as api from "../api";
+import { GridOverlay } from "./GridOverlay";
+export function CameraView({ state, connected, onCalibrationPoint }: { state: StateModel; connected: boolean; onCalibrationPoint?: (point: [number, number], imageSize: [number, number]) => void }) { const size = state.geometry?.image_size ?? [1, 1] as [number, number]; const select = ([x, y]: [number, number]) => { if (onCalibrationPoint) onCalibrationPoint([x, y], size); else if (connected && state.build_state === "READY") void api.select(x, y, size[0], size[1]); }; return <main className={`camera ${connected ? "" : "disconnected"}`}><img src="/api/stream.mjpg" alt="Live rig camera" /><GridOverlay state={state} onSelect={select} />{!connected && <div className="disconnect-label">DISCONNECTED</div>}</main>; }

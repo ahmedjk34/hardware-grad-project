@@ -1,0 +1,5 @@
+import { useEffect, useState } from "react";
+import * as api from "../api";
+import type { StateModel } from "../types";
+const CONFIRM_MS = 3000;
+export function BuildButton({ state, connected }: { state: StateModel; connected: boolean }) { const [confirming, setConfirming] = useState(false); const allowed = connected && state.selected !== null && state.camera === "LIVE" && state.build_state === "READY" && !!state.command; useEffect(() => { if (!confirming) return; const timer = window.setTimeout(() => setConfirming(false), CONFIRM_MS); return () => clearTimeout(timer); }, [confirming]); useEffect(() => { if (!allowed) setConfirming(false); }, [allowed]); if (confirming) return <button onClick={() => { if (state.command) void api.build(state.command); setConfirming(false); }}>CONFIRM {state.command}</button>; const reason = !connected ? "Disconnected" : state.build_state !== "READY" ? "Rig is unavailable" : !state.selected ? "Select a cell first" : state.camera !== "LIVE" ? "Camera is not live" : ""; return <button title={reason} disabled={!allowed} onClick={() => setConfirming(true)}>BUILD</button>; }

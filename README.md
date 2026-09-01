@@ -28,6 +28,7 @@ The repository is split by platform:
 - Python tools, setup and usage → **[python/README.md](python/README.md)**
 - Per-tool walkthrough → **[python/GUIDE.md](python/GUIDE.md)**
 - Firmware → open the relevant sketch in `arduino/` with the Arduino IDE
+- Web operator console → **[docs/server-guide.md](docs/server-guide.md)**
 
 ## Main camera feed
 

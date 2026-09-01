@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import time
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
+from web.geometry import build_geometry
+
 
 class StateModel(BaseModel):
-    """The complete client state for Step 4.
+    """The complete client state for the operator console.
 
-    Video and drawing geometry deliberately do not belong here.  Raw video is
-    a Step 6 MJPEG concern, while geometry is added in that same step.
+    Raw video never belongs here; Step 6 adds only lightweight drawing geometry
+    for the browser-owned SVG overlay.
     """
 
     mode: str
@@ -29,6 +31,7 @@ class StateModel(BaseModel):
     last_result: Literal["placed", "rejected", "aborted"] | None
     last_result_reason: str | None
     views: dict[str, bool]
+    geometry: dict[str, Any] | None
 
 
 def build_state(app) -> StateModel:
@@ -37,6 +40,11 @@ def build_state(app) -> StateModel:
     job = app.state.job
     rig = app.state.rig
     frame = app.state.latest_frame
+    # A mode latch invalidates the old frame's workspace immediately.  Wait for
+    # the pipeline's next per-mode frame rather than pairing old geometry with
+    # new coordinates for even one state message.
+    if frame is not None and frame.grid_mode != rig.grid.mode:
+        frame = None
 
     if job.running:
         build_state = "RUNNING"
@@ -70,4 +78,5 @@ def build_state(app) -> StateModel:
         last_result=str(result) if result is not None else None,
         last_result_reason=result.reason if result is not None else None,
         views=dict(app.state.views),
+        geometry=build_geometry(frame, controller.selected) if frame is not None else None,
     )

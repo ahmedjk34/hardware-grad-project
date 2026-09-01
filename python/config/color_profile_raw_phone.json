@@ -1,0 +1,51 @@
+{
+  "_about": "Written by vision/tune_color_to_raw_phone.py. The 'colour' block is the same one config/camera_settings.json carries; Camera Studio's TUNE TO RAW PHONE IMAGE button loads this file and applies it without re-tuning.",
+  "generated_at": "2026-09-01T12:06:27",
+  "reference_image": "raw_with_phone.jpeg",
+  "camera_image": "current_live_view.png",
+  "similarity": 0.79842,
+  "baseline_similarity": 0.40389,
+  "target": 0.95,
+  "target_met": false,
+  "iterations": 6,
+  "new_clipping_fraction": 0.0,
+  "notes": [
+    "an offset reaches 217 levels, far outside the brightness range the sheet could measure"
+  ],
+  "colour": {
+    "enabled": true,
+    "matrix": [
+      [
+        1.911465,
+        0.20402,
+        -0.068505,
+        -216.688328
+      ],
+      [
+        0.20402,
+        1.272178,
+        0.2156,
+        -139.740333
+      ],
+      [
+        -0.068505,
+        0.2156,
+        1.806391,
+        -195.605905
+      ]
+    ],
+    "gain": [
+      1.91146,
+      1.27218,
+      1.80639
+    ],
+    "offset": [
+      -216.6883,
+      -139.7403,
+      -195.6059
+    ],
+    "gamma": 1.0,
+    "saturation": 0.9,
+    "source": "tuned to raw_with_phone.jpeg"
+  }
+}

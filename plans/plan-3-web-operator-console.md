@@ -15,7 +15,7 @@ read the rest of the repo. It over-explains on purpose. Read *The final goal* an
 
 ## Current implementation status — 2026-09-01
 
-**Steps 1–5 are implemented. Step 6 is next.** Their code is intentionally
+**Steps 1–10 are implemented.** Their code is intentionally
 headless and usable without a Pi, Arduino, or physical camera:
 
 - **Step 1:** `rig/mock_board.py` now provides `MockBoard`, a protocol-level,
@@ -47,11 +47,31 @@ headless and usable without a Pi, Arduino, or physical camera:
   axis selection, deselection, level, mode, view, and confirmed-build routes.
   It validates camera freshness, build/lock state, and the exact displayed
   command before delegating only to `BuildController` and `BuildJob`.
+- **Step 6:** `web/mjpeg.py` provides a raw MJPEG stream with one latest JPEG
+  slot shared across clients and no encoding while it has no subscribers.
+  `web/geometry.py` supplies cached grid polygons plus current selection and
+  detection geometry in `StateModel`; frames never enter REST or WebSocket
+  state messages.
+- **Step 7:** `web/` now contains the Vite/React/TypeScript PWA shell with a
+  reconnecting WebSocket state store, one shared MJPEG image layer, responsive
+  control rail, disconnected/locked states, and server-backed level controls.
+- **Step 8:** the browser SVG overlay draws server geometry, detections and
+  selection, turns pointer taps into guarded `/api/select` requests, and has a
+  fixture-tested TypeScript homography port. Its local hover uses the documented
+  uniform approximate-cell path; physical gap rejection remains server-side.
+- **Step 9:** `BuildButton`, `BuildBanner`, and `ResultToast` implement the
+  two-tap build confirmation, visibly immutable RUNNING state, terminal result
+  feedback, disconnect warning, and permanent locked-session presentation.
+- **Step 10:** guarded four-corner and printed-sheet calibration endpoints
+  save per-mode `WorkspaceMap` entries and immediately refresh state geometry;
+  the browser provides the corner workflow and a sheet-calibration action.
 
 New pytest-style tests are in `python/tests/mock_board_test.py`,
 `mock_camera_test.py`, `console_pipeline_test.py`, and `web_state_test.py`.
 `web_command_test.py` covers Step 5's placed/rejected/aborted and mutation
-guards. Steps 4–5's state, WebSocket, and command tests pass; the direct
+guards, while `web_stream_test.py` covers Step 6 MJPEG framing, shared encode
+behaviour, and geometry. Steps 4–6's state, WebSocket, command, and stream
+tests pass; the direct
 behavioral checks `test_link.py`, `test_camera_frame_pump.py`, and
 `test_latest_workers.py` pass. The aggregate pytest suite still has a known
 Step 2 race in `mock_camera_test.py`: one source frame can arrive after

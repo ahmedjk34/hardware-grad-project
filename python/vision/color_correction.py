@@ -504,3 +504,290 @@ def pair_samples(camera: ColorSamples, reference: ColorSamples):
     return (np.array([camera.colors[name] for name in shared]),
             np.array([reference.colors[name] for name in shared]),
             shared)
+
+
+# ---------------------------------------------------------------------------
+# tuning a whole correction against a trusted photograph
+# ---------------------------------------------------------------------------
+#
+# solve_matrix above pairs a handful of measured ink colours. The functions
+# here pair the colour DISTRIBUTIONS of two whole frames instead, so they work
+# when the live view and the reference photo do not frame the same thing — a
+# blurred crop of the rig against a sharp phone shot of the same sheet, which is
+# exactly the pair captures/color_correction/ holds. Same model, same
+# ColorCorrection object, same settings block: this is another way to solve one,
+# not a second pipeline.
+
+
+# Newly crushed-or-blown pixels past this fraction of the frame mean the
+# transform is destroying detail rather than correcting colour.
+MAX_NEW_CLIPPING = 0.02
+
+
+def color_similarity(image_a, image_b) -> float:
+    """A 0..1 score for how alike two frames are in COLOUR, framing aside.
+
+    Built from three views that a colour cast moves and that a crop or a soft
+    focus mostly leave alone:
+
+      * the spread of hues, a 2-D histogram of the CIELAB a*/b* plane;
+      * the spread of brightness, a 1-D grey histogram;
+      * the first two moments (mean and standard deviation) of each BGR channel.
+
+    1.0 is identical colour. Because the metric ignores where things are, two
+    photographs of the same sheet from different distances still score high once
+    the cast between them is gone — which is what makes it usable as the thing
+    :func:`tune_to_reference` maximises. Reported in Camera Studio as the
+    "match to raw phone" percentage.
+    """
+    a = np.asarray(image_a)
+    b = np.asarray(image_b)
+    if a.ndim != 3 or b.ndim != 3 or a.shape[2] != 3 or b.shape[2] != 3:
+        raise ColorCorrectionError("colour similarity needs two BGR images")
+
+    def chroma_hist(img):
+        lab = cv2.cvtColor(np.ascontiguousarray(img), cv2.COLOR_BGR2LAB)
+        hist = cv2.calcHist([lab], [1, 2], None, [24, 24], [0, 256, 0, 256])
+        total = float(hist.sum())
+        return hist / total if total else hist
+
+    def grey_hist(img):
+        grey = cv2.cvtColor(np.ascontiguousarray(img), cv2.COLOR_BGR2GRAY)
+        hist = cv2.calcHist([grey], [0], None, [32], [0, 256])
+        total = float(hist.sum())
+        return hist / total if total else hist
+
+    chroma_score = float(np.minimum(chroma_hist(a), chroma_hist(b)).sum())
+    grey_score = float(np.minimum(grey_hist(a), grey_hist(b)).sum())
+
+    flat_a = a.reshape(-1, 3).astype(np.float64)
+    flat_b = b.reshape(-1, 3).astype(np.float64)
+    mean_err = float(np.abs(flat_a.mean(0) - flat_b.mean(0)).mean())
+    std_err = float(np.abs(flat_a.std(0) - flat_b.std(0)).mean())
+    moment_score = math.exp(-(mean_err + std_err) / 25.0)
+
+    score = 0.5 * chroma_score + 0.2 * grey_score + 0.3 * moment_score
+    return float(min(1.0, max(0.0, score)))
+
+
+def _distribution_moments(pixels):
+    flat = np.asarray(pixels, dtype=np.float64).reshape(-1, 3)
+    if len(flat) < 2:
+        raise ColorCorrectionError(
+            "a colour distribution needs at least two pixels to measure")
+    return flat.mean(0), np.cov(flat, rowvar=False)
+
+
+def _psd_power(matrix, power):
+    """``matrix ** power`` for a symmetric positive-semidefinite matrix.
+
+    Via the eigendecomposition, with the eigenvalues floored so a flat channel
+    cannot send an inverse power to infinity.
+    """
+    symmetric = (np.asarray(matrix, dtype=np.float64) + np.asarray(matrix).T) / 2.0
+    values, vectors = np.linalg.eigh(symmetric)
+    values = np.clip(values, 1e-10, None)
+    return (vectors * (values ** power)) @ vectors.T
+
+
+def solve_distribution_transfer(camera_image, reference_image,
+                                *, mode=DEFAULT_FIT_MODE):
+    """A BGR transform matching one frame's colour distribution to another's.
+
+    Where :func:`solve_matrix` pairs measured ink colours, this pairs the
+    distributions: it lines up the mean and covariance of the camera colour
+    cloud with the reference's. No correspondence between the frames is needed,
+    so they may be different crops of the sheet, or one may be soft.
+
+    ``mode`` mirrors :data:`FIT_MODES`:
+
+      gain    per-channel scale through each channel's mean — a white balance.
+      affine  per-channel scale (matched on spread) plus offset.
+      matrix  the full linear map carrying the camera cloud onto the reference
+              one: the closed-form linear Monge-Kantorovich solution, i.e.
+              gains, offsets and cross-channel mixing solved together.
+
+    Returns ``(matrix, notes)`` like :func:`solve_matrix`. There is no residual:
+    the fit is exact on the moments by construction, so the honest check is
+    :func:`color_similarity` on the corrected frame, not a number here. ``notes``
+    still carries :meth:`ColorCorrection.implausibilities` — for the full matrix
+    the mean-recentring offset is large by design and shows up there.
+    """
+    if mode not in FIT_MODES:
+        raise ColorCorrectionError(
+            f"fit mode must be one of {', '.join(FIT_MODES)}, not {mode!r}")
+
+    cam_mean, cam_cov = _distribution_moments(camera_image)
+    ref_mean, ref_cov = _distribution_moments(reference_image)
+    cam_var = np.clip(np.diag(cam_cov), 1e-8, None)
+    ref_var = np.clip(np.diag(ref_cov), 1e-8, None)
+
+    if mode == "gain":
+        gains = np.clip(ref_mean / np.clip(cam_mean, 1e-6, None), *GAIN_RANGE)
+        linear = np.diag(gains)
+        offset = np.zeros(3)
+    elif mode == "affine":
+        gains = np.clip(np.sqrt(ref_var / cam_var), *GAIN_RANGE)
+        linear = np.diag(gains)
+        offset = ref_mean - linear @ cam_mean
+    else:
+        cam_sqrt = _psd_power(cam_cov, 0.5)
+        cam_isqrt = _psd_power(cam_cov, -0.5)
+        middle = _psd_power(cam_sqrt @ ref_cov @ cam_sqrt, 0.5)
+        linear = cam_isqrt @ middle @ cam_isqrt
+        offset = ref_mean - linear @ cam_mean
+
+    matrix = np.hstack([np.asarray(linear, dtype=np.float64), offset.reshape(3, 1)])
+    notes = ColorCorrection(matrix=matrix).implausibilities()
+    return matrix, notes
+
+
+@dataclass
+class TuningResult:
+    """What :func:`tune_to_reference` found, and how far it got.
+
+    ``correction`` is always usable; ``passed`` says whether ``target`` was
+    actually reached, and ``notes`` records every compromise made on the way —
+    a fit rejected as unsafe, a score that did not beat the untouched frame,
+    the large offset the full matrix carries.
+    """
+
+    correction: "ColorCorrection"
+    similarity: float
+    baseline: float
+    iterations: int
+    clipping: float
+    notes: list
+    passed: bool
+
+    def summary(self) -> str:
+        state = "target reached" if self.passed else "best safe result"
+        return (f"{self.similarity * 100:.1f}% colour similarity ({state}), "
+                f"up from {self.baseline * 100:.1f}%, after {self.iterations} "
+                f"tone iteration(s); {self.clipping * 100:.2f}% newly clipped")
+
+
+def _new_clipping(before, after):
+    was = (before == 0).any(2) | (before == 255).any(2)
+    now = (after == 0).any(2) | (after == 255).any(2)
+    return float((now & ~was).mean())
+
+
+def _neutral_ramp():
+    ramp = np.repeat(np.arange(256, dtype=np.uint8)[None, :, None], 3, axis=2)
+    return np.ascontiguousarray(np.repeat(ramp, 2, axis=0))
+
+
+def _hard_faults(correction, corrected, clipping):
+    """The ways a tuned correction is not safe to apply, as opposed to merely
+    imperfect. Kept separate from :meth:`ColorCorrection.implausibilities`,
+    which flags fits that *measure* well and look wrong; these are operational —
+    an inverted channel, a blown frame, a non-monotone response.
+    """
+    faults = []
+    if not np.all(np.isfinite(correction.matrix)):
+        faults.append("the matrix has non-finite entries")
+    diagonal = np.diag(correction.matrix[:, :3])
+    if diagonal.min() <= 0:
+        faults.append(f"the {CHANNELS[int(np.argmin(diagonal))]} gain is not positive")
+    if clipping > MAX_NEW_CLIPPING:
+        faults.append(f"{clipping * 100:.1f}% of the frame is newly clipped")
+    mapped = correction.apply(_neutral_ramp())[0].astype(int)
+    for index in range(3):
+        if np.mean(np.diff(mapped[:, index]) >= 0) < 0.95:
+            faults.append(
+                f"the {CHANNELS[index]} channel is not monotone on a neutral ramp")
+    return faults
+
+
+def _refine_tone(correction, camera, reference, target, max_iterations):
+    """Pattern search on gamma then saturation, shrinking the step when stuck.
+
+    Gains, offsets and mixing are already fixed by the distribution transfer;
+    these are the two non-linear knobs a person reaches for afterwards, and
+    hill-climbing them on :func:`color_similarity` is deterministic and cheap.
+    """
+    score = color_similarity(correction.apply(camera), reference)
+    gamma_step = saturation_step = 0.4
+    iterations = 0
+    while (iterations < max_iterations and score < target
+           and (gamma_step > 0.02 or saturation_step > 0.02)):
+        iterations += 1
+        improved = False
+        for setter, current, step in (
+                (correction.set_gamma, correction.gamma, gamma_step),
+                (correction.set_saturation, correction.saturation, saturation_step)):
+            for candidate in (current + step, current - step):
+                setter(candidate)
+                trial = color_similarity(correction.apply(camera), reference)
+                if trial > score + 1e-5:
+                    score = trial
+                    improved = True
+                    break
+                setter(current)
+        if not improved:
+            gamma_step *= 0.5
+            saturation_step *= 0.5
+    return iterations
+
+
+def tune_to_reference(camera_image, reference_image, *, mode="matrix",
+                      target=0.95, max_iterations=12):
+    """Fit, then refine, a full :class:`ColorCorrection` taking a live view to a
+    trusted photograph of the same scene.
+
+    The whole process, run to completion:
+
+      1. solve the distribution transfer (:func:`solve_distribution_transfer`) —
+         gains, offsets and cross-channel mixing in one closed-form step;
+      2. walk gamma, then saturation, by pattern search, each step scored by
+         :func:`color_similarity` against the reference;
+      3. stop when the score clears ``target``, stalls, or ``max_iterations``
+         is spent, keeping the best correction seen;
+      4. validate with :func:`_hard_faults`: nothing non-finite, no channel
+         inverted, the neutral ramp still monotone, and no more than
+         :data:`MAX_NEW_CLIPPING` of the frame newly crushed or blown. If the
+         requested fit fails a hard check, fall back to ``affine`` then ``gain``
+         and take the first that is safe.
+
+    Returns a :class:`TuningResult`.
+    """
+    camera = np.ascontiguousarray(np.asarray(camera_image))
+    reference = np.ascontiguousarray(np.asarray(reference_image))
+    if camera.ndim != 3 or reference.ndim != 3:
+        raise ColorCorrectionError("tuning needs two BGR images")
+
+    baseline = color_similarity(camera, reference)
+    notes = []
+    attempts = [mode] + [m for m in ("affine", "gain") if m != mode]
+    chosen = None
+    for attempt in attempts:
+        matrix, solve_notes = solve_distribution_transfer(camera, reference, mode=attempt)
+        correction = ColorCorrection(enabled=True, matrix=matrix,
+                                     source=f"tuned to reference, {attempt} fit")
+        iterations = _refine_tone(correction, camera, reference, target, max_iterations)
+        corrected = correction.apply(camera)
+        clipping = _new_clipping(camera, corrected)
+        faults = _hard_faults(correction, corrected, clipping)
+        similarity = color_similarity(corrected, reference)
+        record = (correction, similarity, iterations, clipping, faults, solve_notes)
+        if not faults:
+            chosen = record
+            if attempt != mode:
+                notes.append(
+                    f"the {mode} fit was unsafe and was dropped; used the "
+                    f"{attempt} fit")
+            break
+        notes.append(f"the {attempt} fit is unsafe: {'; '.join(faults)}")
+        if chosen is None or similarity > chosen[1]:
+            chosen = record
+
+    correction, similarity, iterations, clipping, faults, solve_notes = chosen
+    notes.extend(solve_notes)
+    if similarity + 1e-6 < baseline:
+        notes.append(
+            f"tuning did not beat the untouched frame "
+            f"({similarity * 100:.1f}% vs {baseline * 100:.1f}%)")
+    passed = bool(similarity >= target and not faults)
+    return TuningResult(correction, similarity, baseline, iterations, clipping,
+                        notes, passed)

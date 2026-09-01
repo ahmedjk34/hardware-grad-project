@@ -85,8 +85,8 @@ Keys
   v  fit / native sizing                    r  reset everything
   s  save the JSON                          p  snapshot PNGs
 
-Colour commands: `colour` on/off, `wb`, `colourcal`, `colourmode`, `rgain`,
-`ggain`, `bgain`, `roff`, `goff`, `boff`, `gamma`, `csat`, `nomix`,
+Colour commands: `colour` on/off, `wb`, `colourcal`, `tunetoraw`, `colourmode`,
+`rgain`, `ggain`, `bgain`, `roff`, `goff`, `boff`, `gamma`, `csat`, `nomix`,
 `colourinfo`, `colourreset`. See "Fixing the colour" below.
 
 While an entry or dropdown has focus it takes the keyboard instead. That focus
@@ -117,6 +117,12 @@ Two ways, both needing the printed calibration sheet in shot:
      taken with something you trust, typically a phone. Both images are reduced
      to three measured colours (green ink, magenta ink, white paper) and the
      transform between them is solved. The two shots need not be framed alike.
+  3. `tunetoraw` — apply the profile that `vision/tune_color_to_raw_phone.py`
+     already solved offline from the pair in `captures/color_correction/`. That
+     script matches the whole colour DISTRIBUTION of a live view to a phone
+     photo (gains, offsets, mixing, then gamma and saturation) and validates the
+     result; this button only loads and applies its `.json`, showing the
+     similarity score it reached. It does NOT re-tune.
 
 `colourmode` picks what the fit solves. `gain` is the default and is almost
 always the answer:
@@ -253,6 +259,12 @@ MANUAL_TUNING_DEFAULTS = {
 CAPTURE_DIR = Path(__file__).resolve().parents[1] / "captures"
 SETTINGS_PATH = Path(__file__).resolve().parents[1] / "config" / "camera_settings.json"
 
+# The tuned colour profile that `vision/tune_color_to_raw_phone.py` writes and
+# the TUNE TO RAW PHONE IMAGE button applies. Same `colour` block as the
+# settings file; carries a similarity score alongside it. The button loads this
+# and applies it — it never runs the tuning.
+RAW_PHONE_PROFILE_PATH = SETTINGS_PATH.parent / "color_profile_raw_phone.json"
+
 INTERP_NAMES = list(INTERPOLATIONS)
 VIEWS = ("corrected", "raw", "both")
 FIT_MODES = ("fit", "native")     # crop sizing; the COLOUR section's fit modes
@@ -331,6 +343,9 @@ class Studio:
         self.colour = ColorCorrection()
         self.colour_mode = DEFAULT_COLOUR_FIT
         self.colour_status = "not calibrated"
+        # Set only by the TUNE TO RAW PHONE IMAGE profile, which carries the
+        # score its offline tuning reached. None for every other colour source.
+        self.colour_similarity = None
         self.last_capture = None       # newest frame BEFORE colour correction
 
         self.view = "corrected"
@@ -689,6 +704,7 @@ class Studio:
         except ColorCorrectionError as exc:
             raise CommandError(str(exc))
         self.colour.enabled = True
+        self.colour_similarity = None
         red, blue = equivalent_sensor_gains(self.colour.matrix,
                                             samples.colors["paper"])
         self.colour_status = (f"paper white balance | equivalent sensor "
@@ -758,6 +774,7 @@ class Studio:
         mode, matrix, residual, implausible, notes = chosen
         self.colour.set_matrix(matrix, f"{mode} fit against {path.name}")
         self.colour.enabled = True
+        self.colour_similarity = None
         self.colour_mode = mode
         red, blue = equivalent_sensor_gains(matrix, camera_samples.colors["paper"]) \
             if "paper" in camera_samples.colors else (float("nan"), float("nan"))
@@ -779,8 +796,55 @@ class Studio:
             self.colour_status += f" | {len(notes)} warning(s), see the log"
         return f"{self.colour.describe()} — {self.colour_status}"
 
+    def apply_raw_phone_profile(self, path=None):
+        """Apply the pre-tuned TUNE-TO-RAW-PHONE colour profile to the live view.
+
+        Loads the profile ``vision/tune_color_to_raw_phone.py`` wrote and applies
+        it, nothing more: it does not run the tuning, ask for images, or optimise
+        anything. The profile is the same ``colour`` block the settings file
+        carries, so once applied it saves, edits and toggles through the ordinary
+        COLOUR workflow. The similarity score the offline tuning reached is kept
+        for the panel.
+        """
+        path = Path(path) if path is not None else RAW_PHONE_PROFILE_PATH
+        if not path.exists():
+            raise CommandError(
+                f"no tuned profile at {path.name} — run "
+                f"vision/tune_color_to_raw_phone.py to create it first")
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            raise CommandError(f"cannot read {path.name}: {exc}")
+        try:
+            self.colour = ColorCorrection.from_settings(data)
+        except RuntimeError as exc:
+            raise CommandError(str(exc))
+
+        self.colour.enabled = True
+        self.colour_similarity = data.get("similarity")
+        # The offline tuner solves the full distribution transfer, so the panel's
+        # fit selector should say so when the loaded matrix actually carries mix.
+        self.colour_mode = ("matrix" if not self.colour.is_diagonal
+                            else DEFAULT_COLOUR_FIT)
+        source = self.colour.source or "tuned to the raw phone image"
+        self.colour.source = source
+        if self.colour_similarity is not None:
+            match = f"{self.colour_similarity * 100:.1f}% colour similarity"
+            if data.get("target_met") is False:
+                match += " (best safe result)"
+        else:
+            match = "similarity not recorded"
+        self.colour_status = (f"{source}, {match} — loaded from {path.name}, "
+                              f"not re-tuned")
+        for note in data.get("notes", []):
+            self.log.add(False, f"colour: {note}")
+        return f"{self.colour.describe()} — {self.colour_status}"
+
     def colour_report(self):
         lines = [self.colour.describe(), f"  {self.colour_status}"]
+        if self.colour_similarity is not None:
+            lines.append(f"  colour similarity to the raw phone image: "
+                         f"{self.colour_similarity * 100:.1f}%")
         if self.colour.source:
             lines.append(f"  from: {self.colour.source}")
         lines.append("  matrix (BGR affine, row = output channel):")
@@ -796,6 +860,7 @@ class Studio:
         self.colour.enabled = False
         self.colour_mode = DEFAULT_COLOUR_FIT
         self.colour_status = "not calibrated"
+        self.colour_similarity = None
         return "colour correction reset to identity and switched off"
 
     # --- frame orientation -------------------------------------------------
@@ -996,6 +1061,9 @@ class Studio:
         cmds.add("colourreset", lambda a: self.reset_colour(), "",
                  "colour correction back to identity, and off",
                  aliases=("colorreset",))
+        cmds.add("tunetoraw", lambda a: self.apply_raw_phone_profile(), "",
+                 "apply the saved TUNE-TO-RAW-PHONE profile (loads it, does not "
+                 "re-tune)", aliases=("rawphone",))
 
         # --- sensor: one command per control, generated from the table ---
         for name, spec in SENSOR_CONTROLS.items():
@@ -1330,6 +1398,11 @@ class Studio:
             },
             "sensor": dict(self.sensor),
             "colour": self.colour.to_settings(),
+            # Only present when the colour came from TUNE TO RAW PHONE IMAGE, so
+            # a save-then-load keeps the score the panel shows. `camera_feed.py`
+            # ignores it; only the colour block drives the runtime feed.
+            **({"similarity": round(self.colour_similarity, 5)}
+               if self.colour_similarity is not None else {}),
             "derived": {
                 "roi": [round(v, 6) for v in self.roi()],
                 "output_size": list(self.maps.out_size) if self.maps else None,
@@ -1403,6 +1476,10 @@ class Studio:
             self.colour = ColorCorrection.from_settings(data)
         except RuntimeError as exc:
             raise CommandError(str(exc))
+        # A settings file may carry the tuned score next to its colour block
+        # (e.g. one saved straight after the button), but a plain calibration
+        # will not — so this is None unless the file actually recorded it.
+        self.colour_similarity = data.get("similarity")
         self.colour_status = self.colour.source or (
             "loaded" if not self.colour.is_identity else "not calibrated")
 
@@ -1463,7 +1540,10 @@ class Studio:
 
     def colour_line(self):
         state = "ON " if self.colour.enabled else "off"
-        return f"COLOUR {state} {self.colour.describe()[7:]} | {self.colour_status}"
+        line = f"COLOUR {state} {self.colour.describe()[7:]} | {self.colour_status}"
+        if self.colour_similarity is not None:
+            line += f" | {self.colour_similarity * 100:.1f}% match to raw phone"
+        return line
 
     def sensor_lines(self):
         """One line per sensor control, three to a row to fit the panel."""
@@ -1487,6 +1567,7 @@ BUTTONS = [
     ("SNAP PNG", "snap"),
     ("WHITE BAL", "wb"),
     ("COLOUR CAL", "colourcal"),
+    ("TUNE TO RAW PHONE IMAGE", "tunetoraw"),
     ("COLOUR ON/OFF", "colour"),
     ("COLOUR INFO", "colourinfo"),
     ("COLOUR RESET", "colourreset"),

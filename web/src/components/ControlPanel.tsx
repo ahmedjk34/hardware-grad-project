@@ -1,0 +1,4 @@
+import * as api from "../api";
+import type { StateModel } from "../types";
+import { BuildButton } from "./BuildButton";
+export function ControlPanel({ state, connected, onBuild: _onBuild }: { state: StateModel; connected: boolean; onBuild: () => void }) { const mutable = connected && state.build_state === "READY"; return <aside className="controls" aria-label="Rig controls"><div><b>{state.mode.toUpperCase()}</b> <span>{state.calibrated ? "CALIBRATED" : "APPROXIMATION ONLY"}</span></div><p>{state.command ?? "No cell selected"}</p><div><button aria-label="Level -" disabled={!mutable} onClick={() => void api.level(-1)}>−</button><span>Level {state.level}</span><button aria-label="Level +" disabled={!mutable} onClick={() => void api.level(1)}>+</button></div><button disabled={!mutable} onClick={() => void api.deselect()}>Deselect</button><BuildButton state={state} connected={connected} /></aside>; }
