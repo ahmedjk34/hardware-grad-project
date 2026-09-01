@@ -388,6 +388,7 @@ with age in ms, socket chip, session uptime. Every item is a chip: `--r-sm`,
   multi-line components — but **do not change any behaviour**: the guarded call
   sequence, the two-tap confirm, the reconnecting socket and the geometry maths
   in `GridOverlay` are all tested (`web/src/step7.test.tsx`, `step9`, `step10`,
-  `lib/workspace.test.tsx`). Those tests must still pass.
+  `lib/workspace.test.tsx`, and the Studio's `studio/coords.test.ts` /
+  `studio/geometry.test.ts`). Those tests must still pass.
 - Keep the PWA offline shell working; assets must be local for the same reason
   fonts are.

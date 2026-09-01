@@ -9,17 +9,56 @@ tests pass. Do not start M<sub>n+1</sub> before M<sub>n</sub> is green — the
 whole plan is built so that every milestone is independently demonstrable, and
 skipping ahead loses that.
 
-**Every prompt repeats four constraints on purpose.** They are the ones an agent
+**Every prompt repeats five constraints on purpose.** They are the ones an agent
 that has not read the repository will otherwise get wrong:
 
 1. Read `plans/plan-4-3d-build-studio.md` fully before writing code.
-2. Nothing bypasses the server's safety model.
-3. No CDN assets — everything bundles and works offline over LAN.
-4. Geometry comes from `config/rig.json` at runtime, never hard-coded.
+2. **Test-driven development. Tests first, always** — Plan 4 §0.
+3. Nothing bypasses the server's safety model.
+4. No CDN assets — everything bundles and works offline over LAN.
+5. Geometry comes from `config/rig.json` at runtime, never hard-coded.
+
+### The rule that applies to all nine
+
+Write the test file, run it, watch it fail *for the right reason*, then write the
+implementation until it passes, then clean up. Test and implementation are
+committed together, **test first in the diff**. "Tests first" is not "tests
+eventually" — if you are writing implementation with no failing test pointing at
+it, stop and write the test.
+
+Plan 4 is layered so this is practical: `coords.ts`, `geometry.ts`, `model.ts`,
+`validate.ts`, `compile.ts` and `library.ts` contain every rule and contain no
+React and no three.js, so they test headless in milliseconds. `scene/` and
+`panels/` only draw. **If a rule about the machine ends up in a component, it
+has escaped the test suite** — move it down and test it there. Do not write
+tests that assert on pixels, camera angles or animation timings; judge the look
+by eye and the rules by test.
 
 ---
 
-## M0 — Coordinates and fixtures
+## M0 — Coordinates and fixtures ✅ DELIVERED
+
+**Shipped.** `web/src/studio/coords.ts` + `geometry.ts`, fixtures dumped by
+`python/tools/dump_grid_fixtures.py` into `web/src/studio/coords.fixtures.json`
+(17 cases, 980 cells: both modes, shipped and clipped and refused shifts, plus
+trims and error offsets on a synthetic envelope), checked at 1e-6 by
+`coords.test.ts` and `geometry.test.ts`. `cd web && npm test` is green at 75
+tests across 7 files. Notes worth carrying into later milestones:
+
+- The browser imports `config/rig.json` directly; `vite.config.ts` gained
+  `server.fs.allow: [".."]` so the dev server can reach it. No second copy of
+  the geometry anywhere.
+- Machine space is **millimetres**. The config and the internal lattice are in
+  centimetres, and `coords.ts` is the only place that converts.
+- Block height (1.5 cm) has no `rig.json` partner — it is the firmware's
+  `BLOCK_HEIGHT_CM`, named once in `coords.ts`.
+- `latticeBounds()` reports the REACHABLE grid by default (what a shift has
+  clipped), matching `MachineGrid`; pass `"requested"` for the grid the operator
+  asked for, which is what M8's amber clipped-cell shading wants.
+- `AGENTS.md` §3a and §3b were stale against `grid.py` and the firmware and have
+  since been corrected in the same pass.
+
+The prompt as issued:
 
 ```text
 Read `plans/plan-4-3d-build-studio.md` in full before writing any code, and read
@@ -28,6 +67,23 @@ milestone depends on facts stated there that you cannot infer from the code in
 an afternoon. Then read `python/rig/grid.py` (all of it, including the module
 docstring, which is the specification), `python/rig/workspace.py`,
 `config/rig.json`, and `AGENTS.md` §3a and §3b.
+
+HOW TO WORK — TEST FIRST, NOT TESTS EVENTUALLY
+This plan is test-driven; read Plan 4 §0 before anything else and follow it.
+For every deliverable below: write the test, run it, watch it fail for the right
+reason, then implement until it passes, then clean up. Test and implementation
+are committed together, test first in the diff. If you are writing
+implementation with no failing test pointing at it, stop and write the test.
+A test that fails because the module does not exist yet has failed for the right
+reason; one that fails on a typo in the test has not — read the failure before
+writing the fix.
+`cd web && npm test` must be green when you finish, INCLUDING the console's
+existing `step7`, `step9`, `step10` and `lib/workspace.test.tsx`. Nothing in
+Plan 4 may regress Plan 3.
+Write the fixture dumper and `coords.test.ts` BEFORE `coords.ts`. The fixtures
+are the specification for this milestone — generate them from Python first, look
+at the numbers, and only then write TypeScript to match. When the two disagree,
+Python is right.
 
 TASK
 Build the coordinate and geometry foundation for the 3D Build Studio:
@@ -97,7 +153,90 @@ knowing about regardless of this milestone.
 
 ---
 
-## M1 — Static viewport
+## M1 — Static viewport ✅ DELIVERED
+
+**Shipped.** The Studio route renders the machine to scale in a dark space:
+travel-cap cage with centimetre rulers, the active mode's lattice at its true
+footprints and gaps, the hatched `FEED` cell, four snap views and an orbit that
+cannot go under the floor. `cd web && npm test` is green at **102 tests across
+9 files** (75 before, 27 new).
+
+New pure modules, both written test-first and both holding rules that would
+otherwise have hidden in a component:
+
+- `web/src/studio/view.ts` — the travel envelope in scene units, `frameDistance`
+  (how far back a camera must stand for the envelope to fit a given aspect),
+  `viewPose` for top / front / side / iso, `screenAxes`, `clampAboveGround` and
+  `tweenMs`. `view.test.ts` re-derives the perspective projection itself and
+  asserts every corner of the envelope lands inside every snap's frustum at
+  16:9, 4:3 and a 0.5 portrait phone.
+- `web/src/studio/lattice.ts` — `latticeCells(mode, shift)` decides WHICH cells
+  are drawn and what each one is (`feeder` / `cell` / `clipped`), and
+  `rulerTicks` places the envelope's centimetre marks. `lattice.test.ts` holds
+  both to `coords.ts` and `geometry.clippedCells()`.
+
+Renderer files, which hold no rules: `studio/scene/Viewport.tsx` (canvas, camera
+rig, lights, contact shadows), `Envelope.tsx`, `Lattice.tsx` and `theme.ts`.
+Route chrome: `routes/Studio.tsx` and `routes/Root.tsx`.
+
+Notes worth carrying into later milestones:
+
+- **There is no scene-group transform.** Plan §4 sketches one
+  (`rotation.x = -π/2`, `scale 0.1`), but `coords.machineToScene()` already
+  returns scene space and is fixture-tested, so applying a group transform on
+  top of it would convert twice. `scene/` draws the numbers the pure layer hands
+  it. Keep it that way — a component that starts rotating things is the bug.
+- **Routing is hash-based.** `routes/Root.tsx` renders the console at `#/` and
+  lazily imports the Studio at `#/studio`. A hash route needs no server rewrite,
+  which keeps the static-file serve and the PWA offline shell working. The
+  console's rail carries the link.
+- **No text in the WebGL context.** drei's `<Text>` is troika, which fetches a
+  default font from a CDN — forbidden by DESIGN.md §3.2. Labels are drei
+  `<Html>`, so the ruler numbers and `FEED` use the real type tokens.
+- **`scene/theme.ts` reads the CSS custom properties off the document** and
+  turns them into three.js colours, so DESIGN.md §3.1's "no raw hex in a
+  component" holds inside the canvas too. An unreadable token stays three's own
+  default rather than becoming a literal nobody designed.
+- **`frameloop="demand"`.** DESIGN.md §3.4 forbids motion on an idle screen; an
+  idle Studio issues no draw calls at all. The view tween calls `invalidate()`
+  per frame while it runs, and `prefers-reduced-motion` makes `tweenMs()` zero,
+  which snaps instead.
+- **The cage's height is the firmware's `Z_TRAVEL_CM` (26.5 cm)**, named once in
+  `view.ts` — `rig.json` has no Z partner, exactly as with `BLOCK_HEIGHT_CM`.
+- **Top view's up vector is `(0, 0, −1)`**, which puts machine +X to the right
+  and machine +Y up the screen. That is the framing M6 lays the twin against, so
+  it is asserted in `view.test.ts` rather than left to taste.
+- **Not verified by eye.** The suite and `npm run build` are green and the
+  chunking was checked in the built output, but no browser render of this
+  milestone has been seen — headless Chrome could not reach the preview server
+  from this environment. Look at `#/studio` before building M2 on top of it.
+
+Dependencies, pinned exact, installed locally, no CDN:
+`three@0.185.1`, `@react-three/fiber@9.7.0`, `@react-three/drei@10.7.8`, and
+`@types/three@0.185.0` as a dev dependency.
+
+Bundle sizes from `npm run build`, before and after the split:
+
+| chunk | before | after |
+| --- | --- | --- |
+| console entry | 216.92 kB (68.24 kB gzip) | 218.36 kB (68.77 kB gzip) |
+| `Studio-*.js` (lazy, `#/studio` only) | — | 919.98 kB (246.12 kB gzip) |
+| CSS | 20.46 kB (5.10 kB gzip) | 22.62 kB (5.47 kB gzip) |
+
+The console's first paint pays **1.44 kB** for the Studio existing — the lazy
+import and the hash router. `grep -c WebGLRenderer` on the console chunk is 0
+and on the Studio chunk is 6.
+
+**Frame rate on a mid-range phone: an estimate, not a measurement.** The scene
+is one line geometry for the cage, one for the rulers, two for the lattice
+outlines, and one flat mesh per cell (42 vertical / 30 horizontal) — well under
+a hundred draw calls with no per-frame work, and with `frameloop="demand"` a
+still viewport costs nothing at all. The cost is concentrated in the one-off
+1024² shadow map and `ContactShadows` at `frames={1}`. Orbiting should hold 60
+fps; if a phone struggles, drop `dpr` to `[1, 1.5]` and the contact-shadow
+resolution to 512 before touching anything else.
+
+The prompt as issued:
 
 ```text
 Read `plans/plan-4-3d-build-studio.md` in full and carefully — §4, §7, §8.1 and
@@ -106,6 +245,26 @@ done); the Studio has to feel like the same instrument as the operator console,
 not a second application. M0 is complete: `web/src/studio/coords.ts` and
 `geometry.ts` exist and are fixture-tested against Python. Use them. Do not
 recompute a single coordinate yourself.
+
+HOW TO WORK — TEST FIRST, NOT TESTS EVENTUALLY
+This plan is test-driven; read Plan 4 §0 before anything else and follow it.
+For every deliverable below: write the test, run it, watch it fail for the right
+reason, then implement until it passes, then clean up. Test and implementation
+are committed together, test first in the diff. If you are writing
+implementation with no failing test pointing at it, stop and write the test.
+A test that fails because the module does not exist yet has failed for the right
+reason; one that fails on a typo in the test has not — read the failure before
+writing the fix.
+`cd web && npm test` must be green when you finish, INCLUDING the console's
+existing `step7`, `step9`, `step10` and `lib/workspace.test.tsx`. Nothing in
+Plan 4 may regress Plan 3.
+This milestone is mostly rendering, which Plan 4 §0.4 explicitly says not to
+unit-test: no assertions on pixels, camera angles, materials or tween timings.
+What IS testable and must be written test-first: the view-snap camera target
+maths, the orbit constraint (never below the ground plane), and any lattice
+data-preparation function that decides WHICH cells to draw. If you find yourself
+about to put a geometry decision in a component, move it into the pure layer and
+test it there.
 
 TASK
 Stand up the 3D viewport: a dark space containing an accurate, to-scale,
@@ -165,6 +324,24 @@ of this milestone, plus §3 facts 1, 4 and 6, and §4. M0 and M1 are complete: t
 coordinate module is fixture-tested and the viewport renders the envelope,
 lattice and feeder. Use `coords.ts` for every position; never juggle axes in a
 component.
+
+HOW TO WORK — TEST FIRST, NOT TESTS EVENTUALLY
+This plan is test-driven; read Plan 4 §0 before anything else and follow it.
+For every deliverable below: write the test, run it, watch it fail for the right
+reason, then implement until it passes, then clean up. Test and implementation
+are committed together, test first in the diff. If you are writing
+implementation with no failing test pointing at it, stop and write the test.
+A test that fails because the module does not exist yet has failed for the right
+reason; one that fails on a typo in the test has not — read the failure before
+writing the fix.
+`cd web && npm test` must be green when you finish, INCLUDING the console's
+existing `step7`, `step9`, `step10` and `lib/workspace.test.tsx`. Nothing in
+Plan 4 may regress Plan 3.
+Write `model.test.ts` before `model.ts`: every mutation, the undo/redo stack to
+depth 100, and the guarantee that moving a block does not reorder it and
+reordering does not move it. Write tests for the cell-resolution maths — given a
+raycast hit point, which cell and level — before wiring the raycaster. The
+raycasting itself needs no GPU test; the maths behind it does.
 
 TASK
 Make the Studio a modelling tool. Hover a cell and a ghost block snaps into it;
@@ -232,6 +409,25 @@ Read `plans/plan-4-3d-build-studio.md` in full and carefully — §6.4, §6.5 an
 M0–M2 are complete: coordinates are fixture-tested, the viewport renders, and
 placement works. Use `geometry.ts` for every predicate.
 
+HOW TO WORK — TEST FIRST, NOT TESTS EVENTUALLY
+This plan is test-driven; read Plan 4 §0 before anything else and follow it.
+For every deliverable below: write the test, run it, watch it fail for the right
+reason, then implement until it passes, then clean up. Test and implementation
+are committed together, test first in the diff. If you are writing
+implementation with no failing test pointing at it, stop and write the test.
+A test that fails because the module does not exist yet has failed for the right
+reason; one that fails on a typo in the test has not — read the failure before
+writing the fix.
+`cd web && npm test` must be green when you finish, INCLUDING the console's
+existing `step7`, `step9`, `step10` and `lib/workspace.test.tsx`. Nothing in
+Plan 4 may regress Plan 3.
+This is the milestone where test-first matters most, and it is also the easiest
+place to apply it: every rule in Plan 4 §6.4 is a pure function. Write the whole
+table as failing tests FIRST — one passing case and one failing case per rule —
+then implement until they go green. The cross-mode bridging case for the support
+rule (§6.5) gets its own explicit test, because the naive implementation would
+forbid it and you want that failure to be loud.
+
 TASK
 Implement every validation rule as a pure function, then surface it in the UI so
 an operator sees why a placement is illegal before committing it.
@@ -298,6 +494,27 @@ Read `plans/plan-4-3d-build-studio.md` in full and carefully. §6 is this
 milestone in its entirety, and §2.1 explains the constraint that makes it
 non-trivial — read that one twice. Also read `AGENTS.md` §6 (firmware command
 vocabulary) and `python/rig/link.py`'s `set_mode()`.
+
+HOW TO WORK — TEST FIRST, NOT TESTS EVENTUALLY
+This plan is test-driven; read Plan 4 §0 before anything else and follow it.
+For every deliverable below: write the test, run it, watch it fail for the right
+reason, then implement until it passes, then clean up. Test and implementation
+are committed together, test first in the diff. If you are writing
+implementation with no failing test pointing at it, stop and write the test.
+A test that fails because the module does not exist yet has failed for the right
+reason; one that fails on a typo in the test has not — read the failure before
+writing the fix.
+`cd web && npm test` must be green when you finish, INCLUDING the console's
+existing `step7`, `step9`, `step10` and `lib/workspace.test.tsx`. Nothing in
+Plan 4 may regress Plan 3.
+Write the compiler's tests before a line of `compile.ts`. Each ordering
+constraint in §6.2 needs a test THAT FAILS WHEN THAT CONSTRAINT IS REMOVED — a
+constraint with no such test is not enforced, it is only hoped for. Prove that
+by deleting each constraint in turn and confirming exactly the expected test
+goes red.
+The determinism test is not optional: compile the same model twenty times and
+assert byte-identical output. Non-deterministic ordering would make every other
+test here worthless and the demo unrepeatable.
 
 TASK
 Turn a model into an ordered command program. This is the intellectual core of
@@ -373,6 +590,24 @@ Read `plans/plan-4-3d-build-studio.md` in full and carefully — §5 (the model
 file format) and §8.7 (the library) are this milestone. M0–M4 are complete:
 coordinates, viewport, placement, validation and the compiler all work.
 
+HOW TO WORK — TEST FIRST, NOT TESTS EVENTUALLY
+This plan is test-driven; read Plan 4 §0 before anything else and follow it.
+For every deliverable below: write the test, run it, watch it fail for the right
+reason, then implement until it passes, then clean up. Test and implementation
+are committed together, test first in the diff. If you are writing
+implementation with no failing test pointing at it, stop and write the test.
+A test that fails because the module does not exist yet has failed for the right
+reason; one that fails on a typo in the test has not — read the failure before
+writing the fix.
+`cd web && npm test` must be green when you finish, INCLUDING the console's
+existing `step7`, `step9`, `step10` and `lib/workspace.test.tsx`. Nothing in
+Plan 4 may regress Plan 3.
+Write the round-trip tests first: model → JSON → model is lossless; a corrupt
+file is rejected with a useful message rather than a crash; a full or
+unavailable `localStorage` degrades gracefully instead of breaking the Studio.
+Then write `library.ts`. The three built-in example models are fixtures as well
+as demos — assert that each one loads, validates clean, and compiles.
+
 TASK
 Persistence. Save models, load them, name them, export them, import them, and
 ship three built-in examples so an empty library never looks broken.
@@ -439,6 +674,26 @@ Read `plans/plan-4-3d-build-studio.md` in full and carefully — §9 is this
 milestone. Also read `plans/plan-3-web-operator-console.md` §2's eight facts,
 `docs/DESIGN.md` §4 (the state model IS the design), `python/web/state.py` and
 `python/web/app.py`. M0–M5 are complete.
+
+HOW TO WORK — TEST FIRST, NOT TESTS EVENTUALLY
+This plan is test-driven; read Plan 4 §0 before anything else and follow it.
+For every deliverable below: write the test, run it, watch it fail for the right
+reason, then implement until it passes, then clean up. Test and implementation
+are committed together, test first in the diff. If you are writing
+implementation with no failing test pointing at it, stop and write the test.
+A test that fails because the module does not exist yet has failed for the right
+reason; one that fails on a typo in the test has not — read the failure before
+writing the fix.
+`cd web && npm test` must be green when you finish, INCLUDING the console's
+existing `step7`, `step9`, `step10` and `lib/workspace.test.tsx`. Nothing in
+Plan 4 may regress Plan 3.
+Write the state → twin mapping tests first, driven by fixture `/api/events`
+payloads covering every row of Plan 4 §9.2's table: ghosts, next-target,
+RUNNING, placed, rejected, and LOCKED. The LOCKED case deserves its own explicit
+assertion that the twin STOPS animating — after an abort the machine's real
+state is unknown and the twin must not pretend to know it.
+Rendering needs no GPU test. The mapping does, and that is where the bugs that
+matter will be.
 
 TASK
 Put the same 3D engine, read-only, on the index page beside the live camera, and
@@ -508,6 +763,26 @@ facts are the safety reasoning you must not violate. Also read
 `python/web/routes_command.py`, `python/rig/build_controller.py` and
 `python/rig/build_job.py`. M0–M6 are complete.
 
+HOW TO WORK — TEST FIRST, NOT TESTS EVENTUALLY
+This plan is test-driven; read Plan 4 §0 before anything else and follow it.
+For every deliverable below: write the test, run it, watch it fail for the right
+reason, then implement until it passes, then clean up. Test and implementation
+are committed together, test first in the diff. If you are writing
+implementation with no failing test pointing at it, stop and write the test.
+A test that fails because the module does not exist yet has failed for the right
+reason; one that fails on a typo in the test has not — read the failure before
+writing the fix.
+`cd web && npm test` must be green when you finish, INCLUDING the console's
+existing `step7`, `step9`, `step10` and `lib/workspace.test.tsx`. Nothing in
+Plan 4 may regress Plan 3.
+Write the runner state machine's tests first, against a mocked API, covering
+every path before you write the runner: the happy path, command-mismatch stop,
+rejection-pause, abort-lock, and a mode op. Include a test asserting that the
+runner NEVER has two builds in flight and never issues a command while
+`build_state` is RUNNING — that is the safety property this milestone exists to
+preserve, so it gets an explicit test rather than a careful implementation and
+a hopeful comment.
+
 TASK
 Execute a compiled program against the rig, one block at a time, without
 weakening a single existing guard.
@@ -576,6 +851,26 @@ Read `plans/plan-4-3d-build-studio.md` in full and carefully — §8.5, §8.6, �
 §11 and §13 are this milestone. Also read `docs/DESIGN.md` throughout. M0–M7 are
 complete: the Studio designs, validates, compiles, saves and runs models, and
 the twin mirrors real builds.
+
+HOW TO WORK — TEST FIRST, NOT TESTS EVENTUALLY
+This plan is test-driven; read Plan 4 §0 before anything else and follow it.
+For every deliverable below: write the test, run it, watch it fail for the right
+reason, then implement until it passes, then clean up. Test and implementation
+are committed together, test first in the diff. If you are writing
+implementation with no failing test pointing at it, stop and write the test.
+A test that fails because the module does not exist yet has failed for the right
+reason; one that fails on a typo in the test has not — read the failure before
+writing the fix.
+`cd web && npm test` must be green when you finish, INCLUDING the console's
+existing `step7`, `step9`, `step10` and `lib/workspace.test.tsx`. Nothing in
+Plan 4 may regress Plan 3.
+Most of this milestone is look and feel, which §0.4 says not to unit-test. The
+exceptions are real and must still be written test-first: the shift-clipping
+predicate (which cells drop out at a given shift — extend M0's `clippedCells()`
+tests rather than writing new maths), the timeline's legal-reorder predicate,
+and the cell → pixel projection for the video overlay, which is fixture-tested
+against `web/src/lib/workspace.ts` exactly as M0 was tested against Python.
+Everything else here you judge by eye.
 
 TASK
 The features that turn a working tool into a demo people remember. Plan 4 §11

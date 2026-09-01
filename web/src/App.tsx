@@ -123,6 +123,9 @@ export function App() {
           <p className="reason">
             <Icon name="waiting" size={14} />Press ? for keyboard shortcuts
           </p>
+          <p className="reason">
+            <a className="studio-link" href="#/studio">Open the 3D Build Studio</a>
+          </p>
         </div>
       </div>
 

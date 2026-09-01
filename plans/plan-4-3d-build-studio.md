@@ -7,14 +7,83 @@ page, shows the structure filling in block by block as the rig actually builds
 it.
 
 This plan is written for someone who has not read the rest of the repository.
-Read *§1 The idea*, *§2 The one thing that makes this tractable* and *§3 The
-seven facts* first; everything after them assumes those.
+Read *§0 The development rule*, *§1 The idea*, *§2 The one thing that makes this
+tractable* and *§3 The seven facts* first; everything after them assumes those.
+
+**This plan is test-driven. §0 is not advisory.**
 
 Milestone-by-milestone prompts for handing this to an agent:
 [plan-4-milestone-prompts.md](plan-4-milestone-prompts.md).
 Visual language: [docs/DESIGN.md](../docs/DESIGN.md).
 The console this attaches to: [plan-3-web-operator-console.md](plan-3-web-operator-console.md).
 The wider feature catalogue: [docs/feature-ideas.md](../docs/feature-ideas.md).
+
+---
+
+## 0. The development rule: tests first
+
+**Every milestone in this plan is developed test-first.** This is the same rule
+Plan 3 was built under ([plan-3-web-operator-console.md](plan-3-web-operator-console.md)
+§6) and it carries over unchanged.
+
+For **every** deliverable: write the test file, run it, watch it fail *for the
+right reason*, then write the implementation until it passes, then clean up. The
+test and its implementation are committed together, **test first in the diff**.
+
+"Tests first" is not "tests eventually". If you find yourself writing
+implementation with no failing test pointing at it, stop and write the test.
+
+### 0.1 Why this plan in particular
+
+The Studio is a 3D application, and 3D applications tempt people into judging
+correctness by eye. That temptation is exactly what this plan is arranged to
+resist. Plan 4 is deliberately layered so that **the parts that must be correct
+are the parts that need no browser and no GPU**:
+
+- `coords.ts`, `geometry.ts`, `validate.ts`, `model.ts`, `compile.ts` and
+  `library.ts` are pure TypeScript with no React and no three.js in them. All of
+  them are fully testable in Vitest, headless, in milliseconds.
+- Only `scene/` and `panels/` touch the renderer, and they hold no rules — they
+  read from the pure layer and draw.
+
+If a rule about the machine ends up inside a component, it has escaped the test
+suite. Move it down into the pure layer and test it there.
+
+### 0.2 What "the right reason" means here
+
+A test that fails because a module does not exist yet has failed for the right
+reason. A test that fails because of a typo in the test has not. Read the
+failure before writing the fix — on a coordinate-heavy project, a test that
+passes for the wrong reason is worse than no test, because it will be believed.
+
+### 0.3 The three kinds of test in this plan
+
+1. **Fixture tests against Python.** The coordinate maths must agree with
+   `python/rig/grid.py` to 1e-6. Fixtures are dumped from Python and committed;
+   the TypeScript is written to match them. `web/src/lib/workspace.test.tsx`
+   already establishes this pattern for the homography port — follow it.
+   **When the two disagree, Python is right.**
+2. **Pure unit tests.** Every validation rule (§6.4) gets at least one passing
+   and one failing case. Every compiler ordering constraint (§6.2) gets a test
+   that fails when that constraint is removed — a constraint with no such test
+   is not actually being enforced, it is just being hoped for.
+3. **State-mapping tests.** The twin (§9) and the runner (§10) are driven by
+   fixture server-state payloads, not by a live rig. Rendering needs no GPU
+   test; the mapping from state to behaviour does, and that is where the bugs
+   that matter will be.
+
+### 0.4 What is not worth testing
+
+Do not write tests that assert on pixel output, camera angles, material colours
+or animation timings. They are slow, brittle, and they test three.js rather than
+this project. Judge the look by eye; judge the *rules* by test.
+
+### 0.5 The existing suite is a gate, not a suggestion
+
+`cd web && npm test` must be green at the end of every milestone, including the
+console's own `step7`, `step9`, `step10` and `lib/workspace.test.tsx`. Nothing
+in Plan 4 is permitted to regress Plan 3. If a legitimate markup change breaks a
+test's DOM query, update the query — **never the guard it is checking**.
 
 ---
 
@@ -182,10 +251,28 @@ sceneGroup.scale.setScalar(0.1)          // mm → scene units
 
 **Rule:** no component may do its own axis juggling. A single `coords.ts`
 module exports `cellToMachine`, `machineToScene`, `blockExtents(mode)` and
-`aabbOf(block)`, and everything else calls it. This module is the direct
-counterpart of `python/rig/grid.py` and is tested against fixtures dumped from
-it (`python/tools/dump_workspace_fixtures.py` already establishes that pattern
-for the homography port in `web/src/lib/workspace.ts`).
+`latticeBounds(mode)`, `geometry.ts` exports `aabbOf(block)`, and everything
+else calls them. This module is the direct counterpart of `python/rig/grid.py`
+and is tested against fixtures dumped from it by
+`python/tools/dump_grid_fixtures.py` — the pattern
+`python/tools/dump_workspace_fixtures.py` set for the homography port in
+`web/src/lib/workspace.ts`.
+
+**Shipped in M0** (`web/src/studio/`):
+
+| module | exports |
+| --- | --- |
+| `coords.ts` | `setRigConfig` / `rigConfig` / `activeMode`, `latticeOf`, `cellToMachine`, `blockExtents`, `levelBaseZ` / `levelCentreZ`, `latticeBounds`, `cellCount`, `isFeeder`, `feederCentre`, `machineToScene` / `sceneToMachine`, `axisFits`, `reachableCells` |
+| `geometry.ts` | `aabbOf`, `intersects`, `footprintOverlapArea`, `footprintArea`, `topFaceZ`, `clippedCells`, `latticeFootprint` |
+
+Geometry is read from `config/rig.json` itself at runtime — the browser imports
+the same file the Pi does (`vite.config.ts` → `server.fs.allow`), so there is no
+second copy of the table in §3 anywhere. Machine space is **millimetres**; the
+config and the internal lattice are in centimetres and convert only in
+`coords.ts`. Block height (1.5 cm) is the one number with no `rig.json` partner:
+it lives in the firmware's `BLOCK_HEIGHT_CM` and is named once in `coords.ts`
+as `BLOCK_HEIGHT_CM`, with an optional `block_z_cm` config override honoured if
+one is ever added.
 
 ---
 
@@ -354,7 +441,10 @@ web/src/
     compile.ts         # §6 — pure, no React, no three.js
     library.ts         # localStorage CRUD, import/export, thumbnails
     geometry.ts        # AABBs, support/clearance/collision predicates
+    lattice.ts         # WHICH cells are drawn and what each one is
+    view.ts            # envelope box, snap poses, framing, orbit constraint
     scene/
+      theme.ts         # DESIGN.md tokens read off the document, as three colours
       Viewport.tsx     # <Canvas>, camera rig, lights, environment
       Lattice.tsx      # the active grid, its gaps, the feeder marker
       Envelope.tsx     # travel-cap cage + clipped-cell shading
@@ -366,9 +456,19 @@ web/src/
       Palette.tsx      Timeline.tsx   Diagnostics.tsx
       LibraryDrawer.tsx  Inspector.tsx  ProgramView.tsx
   routes/
-    Console.tsx        # the existing index page + the twin
+    Root.tsx           # hash routing: the console at #/, the Studio at #/studio
+    Console.tsx        # the existing index page + the twin (still App.tsx today)
     Studio.tsx         # the full editor
 ```
+
+**One correction to the sketch in §4.** That section shows the machine-to-scene
+transform as a group on the scene (`rotation.x = -π/2`, `scale 0.1`). It is not
+built that way: `coords.machineToScene()` performs that conversion in the pure
+layer, where it is fixture-tested, and hands `scene/` coordinates that are
+already in scene space. A group transform on top of it would apply the rotation
+twice. The rule §4 states is the one that matters and it still holds —
+**the axes are handled in exactly one place** — that place is just `coords.ts`
+rather than a `<group>`.
 
 **Library choice: `three` + `@react-three/fiber` + `@react-three/drei`.**
 R3F is the mature React binding for three.js; `drei` supplies the orbit
@@ -626,11 +726,13 @@ existing guard.
 ## 12. Milestones
 
 Each milestone is independently demonstrable. Do not start the next until the
-current one is committed and tested.
+current one is committed and its tests pass. **Every one of them is written
+test-first, per §0** — the "done when" column below describes a state the test
+suite proves, not one you confirm by looking at the screen.
 
 | # | Milestone | Done when |
 | --- | --- | --- |
-| **M0** | **Coordinates and fixtures.** `coords.ts` + `geometry.ts`, ported from `rig/grid.py`, with fixtures dumped from Python via `python/tools/dump_workspace_fixtures.py` | every cell centre, footprint and AABB matches Python for both modes, all shifts and trims, to 1e-6 |
+| **M0** ✅ | **Coordinates and fixtures.** `coords.ts` + `geometry.ts`, ported from `rig/grid.py`, with fixtures dumped from Python via `python/tools/dump_grid_fixtures.py` | **done** — 17 fixture cases / 980 cells, both modes, across trims, error offsets and shifts, matching to 1e-6 |
 | **M1** | **Static viewport.** R3F canvas, envelope cage, lattice for both modes, feeder marker, orbit + view snaps | it looks like the machine, from any angle, with correct proportions |
 | **M2** | **Placement.** Ghost, raycast to lattice and to block tops, click/alt-click, undo stack, level scrubber | you can build a tower and a bridge by hand and it feels good |
 | **M3** | **Validation.** All of §6.4 as pure functions + the diagnostics panel with per-block markers | every rule has a unit test and a way to see it fire in the UI |

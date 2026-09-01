@@ -109,6 +109,15 @@ two-element table indexed by `gridMode`, ordered `{vertical, horizontal}`.
 | signed complete-grid shift | yes | `grid.modes.*.trim_x_cm` / `trim_y_cm` | `GRID_TRIM_X_CM[]` / `GRID_TRIM_Y_CM[]` |
 | signed error correction shift | yes | `grid.modes.*.error_offset_x_cm` / `error_offset_y_cm` | `GRID_ERROR_OFFSET_X_CM[]` / `GRID_ERROR_OFFSET_Y_CM[]` |
 | permitted block-edge overhang | yes | `grid.modes.*.max_edge_overhang_x_cm` / `_y_cm` | `GRID_MAX_EDGE_OVERHANG_X_CM[]` / `_Y_CM[]` |
+| live operator grid shift | yes | `grid.modes.*.shift_x_cm` / `shift_y_cm` | `GRID_SHIFT_X_CM[]` / `GRID_SHIFT_Y_CM[]` |
+
+The shift is pushed by `rig/link.py` as `shiftX` / `shiftY` after the mode latch
+and before `S` on every connection, because a port-open reset clears it. It
+enters the lattice exactly like a trim but is **not** calibration: a shift that
+pushes the far block past the travel cap CLIPS the reachable grid
+(`gridColsNow()` / `gridRowsNow()`, `MachineGrid.requested_cols` / `_rows`)
+while keeping the request, so clearing it restores the full grid with no re-`S`.
+The pick-up never rides it — that is a plain home to raw `[0,0]`.
 
 **Each mode declares both block extents outright.** Nothing in this project
 swaps a width for a length. A swap would have to be performed identically in
@@ -135,31 +144,40 @@ CW remain zero.
 
 A block is **2.2 × 6.0 × 1.5 cm**. Which of its two plan dimensions lies along
 X is what the mode decides. `[0,0]` is the feeder-block centre where the claw
-picks up, and every positive cell has a gap before it — **1.6 cm along X,
-0.8 cm along Y**, in both modes. The whole derivation is the same six lines in
-both modes:
+picks up. **The gaps are a uniform 1.6 cm on every axis of both modes** —
+measuring the printed sheet (6.00 cm tiles, 1.56 cm gaps, identical on both
+axes) settled that; an earlier revision claimed 0.8 cm along Y and it was
+wrong. The whole lattice is one line, and it is CENTRE-ANCHORED:
 
 ```text
-pitch       = block + gap
-allocation  = count × pitch
-start       = (travel − allocation) / 2 + trim
-first centre= start + gap + block/2
-last centre = first centre + (count − 1) × pitch
-footprint   = count × block + (count − 1) × gap
+pitch     = block + gap
+centre(i) = trim + error_offset + shift + i * pitch
 ```
 
-Worked out for both at the shipped calibration (including trims and error offsets):
+Cell indices are **0-based** and cell 0's CENTRE sits on the home corner, so
+cell 0's block hangs half a block back past the switches and a full-travel grid
+lands its last centre exactly on the software cap. There is no leading gap, no
+trailing gap and no centring: the trim is the only thing that moves a grid.
+That half-block overhang is what `GRID_MAX_EDGE_OVERHANG_*` budgets for.
+
+Worked out for both at the shipped calibration:
 
 | mode | axis | block | gap | pitch | count | footprint | centres | block edges |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| vertical | X | 2.2 | 1.6 | 3.8 | **6** | 21.20 | 3.60 → 22.60 | 2.50 → 23.70 |
-| vertical | Y | 6.0 | 0.8 | 6.8 | **5** | 33.20 | 6.35 → 33.55 | 3.35 → 36.55 |
-| horizontal | X | 6.0 | 1.6 | 7.6 | **2** | 13.60 | 9.15 → 16.75 | 6.15 → 19.75 |
-| horizontal | Y | 2.2 | 0.8 | 3.0 | **10** | 29.20 | 8.50 → 35.50 | 7.40 → 36.60 |
+| vertical | X | 2.2 | 1.6 | 3.8 | **7** | 25.00 | 0.00 → 22.80 | −1.10 → 23.90 |
+| vertical | Y | 6.0 | 1.6 | 7.6 | **6** | 44.00 | 0.00 → 38.00 | −3.00 → 41.00 |
+| horizontal | X | 6.0 | 1.6 | 7.6 | **3** | 21.20 | 0.00 → 15.20 | −3.00 → 18.20 |
+| horizontal | Y | 2.2 | 1.6 | 3.8 | **10** | 36.40 | 1.60 → 35.80 | 0.50 → 36.90 |
 
-The vertical allocation is centred in travel (`trim_x = trim_y = 0`). The
-horizontal allocation ships with `trim_y = +1.6 cm`: after pickup, the top
-2.2 cm of the vertical feeder `[0,0]` cell is the horizontal `[0,0]`
+`count` is a COUNT; the firmware's `S` and `GRID_COLS` / `GRID_ROWS` speak in
+highest indices, one less. `python/rig/grid.py` is the authoritative statement
+of all of this and `web/src/studio/coords.ts` is its browser port, held to it
+by fixtures (`python/tools/dump_grid_fixtures.py`).
+
+The vertical grid ships at `trim_x = trim_y = 0` and sits EXACTLY on its travel
+cap and edge budget on both axes, so any trim at all is a geometry error there
+rather than a moved grid. The horizontal grid ships with
+`trim_y = +1.6 cm`: after pickup, the top 2.2 cm of the vertical feeder `[0,0]` cell is the horizontal `[0,0]`
 reference, with a 1.6 cm separation between the two 2.2 cm reference regions.
 This is a mode-specific grid registration shift, positive away from Y home;
 it is not a tool offset and must not be added to `tool_offsets.ccw`.
@@ -246,11 +264,12 @@ centimetre values genuinely have partners on both machines. Change both
 partners in the same commit. Positive trim moves the entire grid away from its
 home/feeder reference; negative trim moves it toward that reference. The
 shipped vertical trims are `0.0` on both axes; horizontal `trim_y` is `+1.6 cm`
-for the pickup-cell-to-horizontal-grid registration described above. The
-observed vertical placement corrections are `error_offset_x = +0.15 cm` and
-`error_offset_y = +0.05 cm`. These are cumulative corrections: the prior
-`+0.15/-0.45 cm` correction was increased by the newly measured `0.5 cm`
-toward-home Y error, leaving X at `+0.15 cm` and Y at `+0.05 cm`.
+for the pickup-cell-to-horizontal-grid registration described above.
+The shipped error offsets are `0.0` on both axes of both modes: the earlier
+`+0.15 / +0.05` corrections were measured against the previous CENTRED
+allocation and mean nothing against the centre-anchored one, so they were reset
+when the grid was re-anchored on the printed sheet. Start any new error
+calibration from zero.
 For any user-marked **error offsetting**, use `error_offset_x_cm` and
 `error_offset_y_cm` (and the paired firmware variables) as an additional
 signed shift exactly like the grid trim.
@@ -263,14 +282,16 @@ signed shift exactly like the grid trim.
 | `python/rig/grid.py` | `cell_at()` / `image_cell()` / `ascii_map()` |
 | `python/tests/test_grid.py` | holds the two to the same map |
 
-Positive block cells are **1-based**. Col 1 is the X switch side, row 1 is the
-Y switch side, and `[1,1]` is drawn above/right of home. The complete map also
-draws col 0 and row 0: `[0,0]` is home, `[col,0]` is X-only, and `[0,row]` is
-Y-only. Rows increase upward and columns rightward. Cells are written
-`[col,row]`, the same order as the arguments to `G` and `B`.
+Block cells are **0-based and every one of them is a real block**, coordinate
+zero included. Col 0 is the X switch side, row 0 is the Y switch side, rows
+increase upward and columns rightward. `[0,0]` is the **feeder** in both modes —
+where blocks are picked up from, never built on — so `B 0 0 <level>` stays an
+inert no-op, while `B 0 3` and `B 4 0` are ordinary placements (they used to be
+the "move one axis only" sentinel). Cells are written `[col,row]`, the same
+order as the arguments to `G` and `B`.
 
 **The convention holds in both modes; only the map's dimensions change.**
-Vertical draws 10 wide × 6 tall, horizontal draws 4 wide × 16 tall. `9` prints
+Vertical draws 7 wide × 6 tall, horizontal draws 3 wide × 10 tall. `9` prints
 the active mode's name above the map, so a map with the wrong shape for what
 you expected is a mode you did not expect, not a numbering change.
 

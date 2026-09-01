@@ -24,3 +24,4 @@ pnpm-debug.log*
 config/workspace_map.json
 
 .claude
+.codex

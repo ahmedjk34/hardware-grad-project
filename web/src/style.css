@@ -40,6 +40,7 @@
   --wash-signal: rgba(111, 198, 255, .10);
   --wash-ready:  rgba(61, 214, 140, .18);
   --sheet-shadow: 0 -8px 24px rgba(0, 0, 0, .5);
+  --vignette:    #0F151B;  /* the lit-from-above wash behind the 3D stage */
 
   /* type — self-hosted Fira (see main.tsx); no CDN, works offline on the Pi */
   --font-ui:   "Fira Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -795,3 +796,121 @@ svg.grid-overlay.selectable { cursor: crosshair; }
   .scanline { animation: none; }
   .arm-drain { transition: none; }
 }
+
+/* ── The 3D Build Studio ─────────────────────────────────────────────────────
+   Same tokens, same type scale, same reserved state colours as the console:
+   the Studio is the same instrument, not a second application. */
+
+.studio {
+  display: grid;
+  grid-template-rows: var(--bar-h) 1fr;
+  height: 100%;
+  background: var(--void);
+}
+
+.studio-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--s4);
+  padding: 0 var(--s4);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.studio-back {
+  font: var(--t-xs);
+  letter-spacing: .08em;
+  color: var(--text-dim);
+  text-decoration: none;
+  padding: var(--s1) var(--s2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+}
+
+.studio-back:hover { color: var(--text); border-color: var(--line-strong); }
+
+.studio-title {
+  font: var(--t-xs);
+  letter-spacing: .08em;
+  color: var(--text);
+}
+
+.studio-readout {
+  font: var(--t-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+}
+
+.studio-readout b { color: var(--text); }
+.studio-readout:last-of-type { margin-left: auto; }
+.studio-clipped { color: var(--motion); font-style: normal; }
+
+.studio-stage { position: relative; min-height: 0; }
+
+/* No infinite checkerboard — a vignette instead, so the model reads as lit
+   from above (DESIGN.md §8.2) and nothing on the floor competes with it. */
+.studio-viewport {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(70% 60% at 50% 34%, var(--vignette) 0%, transparent 70%),
+    var(--void);
+}
+
+.studio-views, .studio-modes {
+  position: absolute;
+  bottom: var(--s4);
+  display: flex;
+  gap: 1px;
+  padding: 1px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--line);
+  z-index: var(--z-chrome);
+}
+
+.studio-views { left: var(--s4); }
+.studio-modes { right: var(--s4); }
+
+.studio-view, .studio-mode {
+  font: var(--t-xs);
+  letter-spacing: .08em;
+  color: var(--text-dim);
+  background: var(--surface);
+  border: 0;
+  padding: var(--s2) var(--s3);
+  cursor: pointer;
+}
+
+.studio-view:hover, .studio-mode:hover { color: var(--text); background: var(--raised); }
+
+.studio-view[aria-pressed="true"], .studio-mode[aria-pressed="true"] {
+  color: var(--void);
+  background: var(--signal);
+}
+
+.studio-view:focus-visible, .studio-mode:focus-visible,
+.studio-back:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+
+/* Labels drawn into the scene by drei's <Html>: DOM, so they use the type
+   tokens and need no font file inside the WebGL context. */
+.studio-tick, .studio-tag {
+  font: var(--t-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-faint);
+  user-select: none;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.studio-tag {
+  color: var(--text-dim);
+  letter-spacing: .12em;
+  padding: 1px var(--s1);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  background: var(--plate);
+}
+
+.studio-link { color: var(--signal); text-decoration: none; }
+.studio-link:hover { text-decoration: underline; }
