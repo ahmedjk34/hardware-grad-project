@@ -1,6 +1,6 @@
 {
   "_about": "Written by camera/camera_studio.py. 'derived' is output, not input \u2014 editing it does nothing.",
-  "saved_at": "2026-09-01T12:51:37",
+  "saved_at": "2026-09-01T13:28:54",
   "camera": "picamera2 @ 1296x972, sensor mode 1296x972",
   "capture": {
     "backend": "auto",
@@ -12,21 +12,21 @@
     "rotate": 0
   },
   "lens": {
-    "lens_fov_deg": 189.0,
+    "lens_fov_deg": 160.0,
     "fov_reference": "diagonal",
     "model": "equidistant",
-    "k1": 0.11999999999999995,
-    "k2": -0.19999999999999973,
-    "k3": 0.5,
-    "k4": 0.17,
-    "centre_dx": -15.0,
-    "centre_dy": 24.0,
+    "k1": 0.03999999999999997,
+    "k2": 0.0,
+    "k3": 0.024999999999999738,
+    "k4": 0.0,
+    "centre_dx": 0.0,
+    "centre_dy": 0.0,
     "focal_x_scale": 1.2,
-    "focal_y_scale": 1.2,
-    "skew": 0.027999999999999914,
-    "p1": -0.022000000000000006,
+    "focal_y_scale": 1.0,
+    "skew": 0.0,
+    "p1": -0.02800000000000001,
     "p2": 0.0,
-    "output_fov_deg": 100.0,
+    "output_fov_deg": 120.0,
     "output_scale": 1.0,
     "source": "estimated",
     "camera_matrix": null,
@@ -41,102 +41,103 @@
   "framing": {
     "crops": [
       [
-        0.278549383,
-        0.163580247,
-        0.656635802,
-        0.976337449
+        0.213734568,
+        0.149176955,
+        0.728395062,
+        0.966049383
       ],
       [
-        0.051020407056726336,
-        0.07088607625774074,
-        0.9102040822048146,
-        0.977215189290934
+        0.2068965526621516,
+        0.1020151129400098,
+        0.8215892047855532,
+        0.865239294133698
       ]
     ],
     "zoom": 1.0,
     "pan": [
-      0.46026,
-      0.58951
+      0.4784,
+      0.54424
     ],
     "fit_mode": "fit",
     "view_size": null
   },
   "sensor": {
-    "brightness": -0.12,
-    "contrast": 1.5,
+    "brightness": "auto",
+    "contrast": "auto",
     "saturation": "auto",
-    "sharpness": 11.5,
-    "ev": -0.26,
+    "sharpness": "auto",
+    "ev": "auto",
     "exposure": "auto",
-    "gain": 1.0,
-    "awb": "daylight",
+    "gain": "auto",
+    "awb": "auto",
     "redgain": "auto",
     "bluegain": "auto",
-    "denoise": "hq",
+    "denoise": "auto",
     "fps": "auto"
   },
   "colour": {
-    "enabled": true,
+    "enabled": false,
     "matrix": [
       [
-        1.134127,
-        0.0,
-        0.0,
-        0.0
+        1.694366,
+        0.155425,
+        -0.052188,
+        -165.075982
       ],
       [
-        0.0,
-        1.165869,
-        0.0,
-        0.0
+        0.155425,
+        1.207349,
+        0.164247,
+        -106.456
       ],
       [
-        0.0,
-        0.0,
-        0.793314,
-        0.0
+        -0.052188,
+        0.164247,
+        1.614319,
+        -149.015118
       ]
     ],
     "gain": [
-      1.13413,
-      1.16587,
-      0.79331
+      1.69437,
+      1.20735,
+      1.61432
     ],
     "offset": [
-      0.0,
-      0.0,
-      0.0
+      -165.076,
+      -106.456,
+      -149.0151
     ],
-    "gamma": 1.6,
-    "saturation": 1.0,
-    "source": "white balance from the sheet's paper"
+    "gamma": 1.0,
+    "saturation": 0.9238,
+    "source": "tuned to raw_with_phone.jpeg"
   },
+  "similarity": 0.66879,
   "derived": {
     "roi": [
-      0.29784,
-      0.221193,
-      0.622685,
-      0.957819
+      0.320216,
+      0.23251,
+      0.636574,
+      0.855967
     ],
     "output_size": [
-      421,
-      716
+      410,
+      606
     ],
     "full_output_size": [
       1296,
       972
     ],
-    "source_focal_px": 491.11,
+    "source_focal_px": 580.12,
     "output_camera_matrix": [
       [
-        679.6707012794275,
+        467.65371906559136,
         0.0,
-        261.5000002339573
+        232.49999970919023
       ],
       [
         0.0,
-        679.670701625707,
-        270.49999979636874
+        467.6537181362018,
+        259.50000011548514
       ],
       [
         0.0,
@@ -145,12 +146,12 @@
       ]
     ],
     "sampling": {
-      "centre": 0.8276,
-      "edge": 0.5622,
-      "worst_upscale": 0.5271,
-      "worst_downscale": 0.8803,
-      "upscaled_fraction": 1.0,
-      "mip_levels": 1
+      "centre": 1.2097,
+      "edge": 0.7164,
+      "worst_upscale": 0.6654,
+      "worst_downscale": 1.4923,
+      "upscaled_fraction": 0.2361,
+      "mip_levels": 2
     }
   }
 }
