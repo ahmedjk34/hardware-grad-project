@@ -366,6 +366,13 @@ the placement gate answers whether a proposed edit is locally legal. M2 checks
 only `[0,0]`, the active mode's requested bounds and an occupied same-mode slot.
 Support, collision, edge and shift validation remain M3.
 
+`validate.ts` measures support as the union of all beneath footprints clipped
+to the candidate. The configured `supportRatio` remains the minimum. Below 70%
+contact, the candidate's exact footprint centre must also sit on support; at
+**70% contact or more**, `CENTROID_BYPASS_RATIO` makes the union-area majority
+authoritative and a narrow gap through the centre no longer rejects the block.
+This deliberately supersedes Plan 4 §6.5's unconditional centroid clause.
+
 `interaction.ts` owns the 4 px click slop and keyboard mapping. Undo is
 Ctrl/Cmd-Z; redo is Ctrl/Cmd-Shift-Z or Ctrl/Cmd-Y. Inputs and editable elements
 are ignored. Escape releases a held level, digits 0–9 hold one, and `M` toggles
@@ -587,22 +594,11 @@ and compiles — so a geometry change in `rig.json` breaks a test rather than th
 presentation. They are listed in the drawer above the saved models and are
 **never written to storage**: they cost no budget and cannot be deleted.
 
-**The bridge carries `shiftX +1.00 cm` on the horizontal grid, and that is the
-finding of this milestone.** With the shipped `rig.json` (horizontal registered
-+1.9 cm on both axes) and the default 0.55 support ratio, *no* cross-mode bridge
-is legal on the registration alone: the +1.9 cm trim lands the span dead over
-the 1.6 cm gap between two vertical stacks — 73.3% contact but centroid over
-air, which §6.5's centroid rule refuses. A ±1.0 cm operator shift slides the
-span so its centroid rides one tower. A search over `shiftX` in 1 mm steps
-through `validateModel` for `v[2,2] v[3,2]` / `h[1,4]` found the legal shifts to
-be **−1.0…−0.8 cm and +0.8…+1.1 cm**; +1.0 is the round one (56.7% contact,
-centroid over the far tower). All of that is recorded in `examples.ts`'s
-docstring and pinned by a test.
-
-Because the rig is not applying that shift, the bridge opens with a
-`GEOMETRY_DRIFT` warning naming it. **That warning is the feature**: it is the
-difference between an operator pushing `shiftX 1.0` before the build and
-watching a block fall between two towers.
+**The bridge needs no operator shift.** With the shipped `rig.json`
+(horizontal registered +1.9 cm on both axes), the span sits over the 1.6 cm gap
+between two vertical stacks with **73.3% union contact**. That clears the 70%
+centroid bypass, so the built-in bridge opens with no `UNSUPPORTED` or
+`GEOMETRY_DRIFT` diagnostic and `BRIDGE_SHIFT_CM` is pinned to zero.
 
 The pyramid opens with `ISLAND` warnings, and they are also correct: inside one
 grid the 1.6 cm gaps mean no two cells ever touch, so five stacks side by side
@@ -1141,6 +1137,23 @@ first in the diff.
 
 Newest first. One entry per landed change; note anything that contradicts the
 plan or that a future reader could not infer.
+
+### Support centroid bypass at 70% contact
+
+- `validate.ts` now accepts a placement when it meets the operator's configured
+  `supportRatio` and either its centre is supported **or union contact is at
+  least 70%** (`CENTROID_BYPASS_RATIO`). The configured minimum still wins if
+  somebody raises it above 70%; the bypass removes only the extra centroid veto.
+- Added the exact regression fixture reported by the Studio: a horizontal span
+  centred over the 1.6 cm gap has 73.33% contact and an unsupported centroid.
+  It is now legal. Lower-contact bridges still need their centre supported.
+- The built-in two-tower bridge no longer carries a synthetic `shiftX +1.00`
+  workaround. `BRIDGE_SHIFT_CM = 0`; it opens at the shipped +1.9 cm
+  registration with no support or geometry-drift diagnostic. This supersedes
+  the bridge-retuning note immediately below and Plan 4 §6.5's unconditional
+  centroid clause.
+- The Studio settings copy names the 70% behaviour so the visible control and
+  validator no longer tell different stories.
 
 ### Horizontal grid registration → +1.9 cm on both axes
 

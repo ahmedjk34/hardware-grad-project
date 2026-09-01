@@ -196,6 +196,14 @@ export interface SupportMetrics {
   supportIds: string[];
 }
 
+/**
+ * Above this much union contact, a narrow unsupported line through the exact
+ * footprint centre is not enough to reject the placement. The centroid check
+ * remains useful for marginal bridges, but at 70% the majority support is the
+ * stronger signal. The operator's configured supportRatio still applies.
+ */
+export const CENTROID_BYPASS_RATIO = 0.7;
+
 export function supportMetrics(model: Model, block: ModelBlock, ctx: ValidationContext): SupportMetrics {
   if (block.level <= 0) return { ratio: 1, centroidSupported: true, supportIds: [] };
   const target = boxOf(block, ctx);
@@ -215,7 +223,9 @@ export function supportMetrics(model: Model, block: ModelBlock, ctx: ValidationC
 export const unsupported = defineRule("UNSUPPORTED", (model, block, ctx) => {
   if (!block || block.level <= 0) return [];
   const support = supportMetrics(model, block, ctx);
-  if (support.ratio >= ctx.settings.supportRatio && support.centroidSupported) return [];
+  const enoughContact = support.ratio >= ctx.settings.supportRatio;
+  const stableCentre = support.centroidSupported || support.ratio >= CENTROID_BYPASS_RATIO;
+  if (enoughContact && stableCentre) return [];
   const percent = Math.round(support.ratio * 100);
   const needed = Math.round(ctx.settings.supportRatio * 100);
   const message = support.ratio >= ctx.settings.supportRatio

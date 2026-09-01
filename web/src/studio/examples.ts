@@ -8,27 +8,20 @@
  * sensibly top to bottom, because these are the programs that will be on screen
  * while somebody explains the project.
  *
- * THE BRIDGE CARRIES A GRID SHIFT, AND THAT IS THE POINT. Horizontal's +1.9 cm
- * registration lands a span block dead over the 1.6 cm gap between two vertical
- * stacks: it touches 73.3% of its footprint but its centroid sits over the gap
- * — over air — so M3 rejects it. A ±1.0 cm operator shift slides the span so
- * its centroid rides one tower (56.7% contact at +1.0 cm). Because the rig is
- * not applying that shift today, the bridge opens with a `GEOMETRY_DRIFT`
- * warning naming it. That warning is the feature: it is the difference between
- * an operator pushing `shiftX 1.0` before the build and watching a block fall
- * between two towers.
+ * THE BRIDGE NEEDS NO OPERATOR SHIFT. Horizontal's +1.9 cm registration lands
+ * the span over the 1.6 cm gap between two vertical stacks with 73.3% union
+ * contact. M3 accepts contact at or above 70% without requiring the exact
+ * footprint centroid to touch, so this is intentionally a legal bridge at the
+ * rig's shipped registration.
  */
 import type { ModelBlock } from "./model";
 import { documentOf, snapshotFileRig, type StudioModel } from "./rigmodel";
 
 /**
- * Found, not guessed. The search sweeps `shiftX` in 1 mm steps through M3's
- * `validateModel` for the `v[2,2] v[3,2]` / `h[1,4]` fixture on the shipped
- * rig.json (horizontal registered +1.9 cm on both axes); the shifts with no
- * error are -1.0…-0.8 cm and +0.8…+1.1 cm. +1.0 is the round one, and puts the
- * span's centroid over the far tower v[3,2].
+ * Kept as a named fixture value because the example tests pin that no hidden
+ * registration adjustment is needed.
  */
-export const BRIDGE_SHIFT_CM = 1;
+export const BRIDGE_SHIFT_CM = 0;
 
 const AUTHORED = "2026-09-01T12:00:00.000Z";
 
@@ -60,7 +53,7 @@ const TOWER = example(
 const BRIDGE = example(
   "example-bridge",
   "Two towers, one span",
-  "Two vertical stacks two blocks high, with a horizontal block laid across both of them. The two grids are different lattices in the same physical space, so a 6.0 cm horizontal block can bridge a gap no vertical block can. Needs shiftX +1.00 cm on the horizontal grid — the model says so on open.",
+  "Two vertical stacks two blocks high, with a horizontal block laid across both of them. The two grids are different lattices in the same physical space, so a 6.0 cm horizontal block can bridge a gap no vertical block can. Its 73% contact is legal at the shipped registration with no operator shift.",
   [
     block("l1", "vertical", 2, 2, 0, "blue"),
     block("r1", "vertical", 3, 2, 0, "blue"),

@@ -91,25 +91,14 @@ describe("Two towers, one span — the cross-mode bridge", () => {
     ]);
   });
 
-  it("carries the grid shift the span needs, which the rig is not applying", () => {
-    // Horizontal's +1.9 cm registration lands the span dead over the 1.6 cm gap
-    // between two vertical stacks: 73.3% contact, but centroid over air, so M3
-    // rejects it. Sweeping shiftX in 1 mm steps through M3's validator for the
-    // v[2,2] v[3,2] / h[1,4] fixture, the shifts that produce a legal bridge are
-    // -1.0 to -0.8 and +0.8 to +1.1 cm. +1.0 is the round one and rides the
-    // far tower (56.7% contact).
+  it("needs no operator shift because its 73% contact clears the centroid bypass", () => {
     expect(bridge().rig.shift_cm.horizontal).toEqual([BRIDGE_SHIFT_CM, 0]);
-    expect(BRIDGE_SHIFT_CM).toBe(1);
+    expect(BRIDGE_SHIFT_CM).toBe(0);
   });
 
-  it("says so in a GEOMETRY_DRIFT warning rather than building the wrong thing", () => {
+  it("opens without support or geometry-drift diagnostics", () => {
     const diagnostics = validateModel(structureOf(bridge()), contextFor("example-bridge"));
-    const drift = diagnostics.filter(diagnostic => diagnostic.code === "GEOMETRY_DRIFT");
-    expect(drift).toHaveLength(1);
-    expect(drift[0].severity).toBe("warning");
-    expect(drift[0].message).toMatch(/horizontal/);
-    expect(drift[0].message).toMatch(/shift/i);
-    expect(diagnostics.filter(diagnostic => diagnostic.code !== "GEOMETRY_DRIFT")).toEqual([]);
+    expect(diagnostics).toEqual([]);
   });
 });
 

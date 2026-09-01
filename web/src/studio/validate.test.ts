@@ -179,7 +179,7 @@ describe("footprint-area support", () => {
     expect(unsupported(model, found!.candidate, ctx)).toEqual([]);
   });
 
-  it("rejects ample contact when the footprint centroid sits in the unsupported gap", () => {
+  it("accepts contact over 70% even when the footprint centroid sits in a narrow gap", () => {
     const supports = [
       block("v1", "vertical", 1, 1, 0),
       block("v2", "vertical", 2, 1, 0),
@@ -193,9 +193,9 @@ describe("footprint-area support", () => {
     const ctx = context({ mode: "horizontal", shifts: { horizontal: shift } });
     const metrics = supportMetrics(modelOf(...supports, candidate), candidate, ctx);
 
-    expect(metrics.ratio).toBeGreaterThan(DEFAULT_STUDIO_SETTINGS.supportRatio);
+    expect(metrics.ratio).toBeGreaterThan(0.7);
     expect(metrics.centroidSupported).toBe(false);
-    expect(unsupported(modelOf(...supports, candidate), candidate, ctx)[0]?.code).toBe("UNSUPPORTED");
+    expect(unsupported(modelOf(...supports, candidate), candidate, ctx)).toEqual([]);
   });
 });
 

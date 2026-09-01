@@ -22,7 +22,7 @@ export function Settings({ value, onChange }: {
         <input id="studio-support-ratio" aria-label="Support ratio" type="number"
                min="0" max="1" step="0.01" value={value.supportRatio}
                onChange={event => number("supportRatio", event.target.value)} />
-        <span className="studio-setting-copy">How much of a block's underside must rest on something. A guess about friction and the claw's release. Nobody has measured this rig.</span>
+        <span className="studio-setting-copy">How much of a block's underside must rest on something. A guess about friction and the claw's release. Nobody has measured this rig. At least 70% contact bypasses the centre check.</span>
       </label>
 
       <label className="studio-setting" htmlFor="studio-claw-margin">
