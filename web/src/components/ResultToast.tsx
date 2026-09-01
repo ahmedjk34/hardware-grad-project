@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Icon } from "./Icon";
 import type { StateModel } from "../types";
 
 /** PLACED clears itself after four seconds; REJECTED persists so the operator
@@ -15,7 +16,11 @@ export function ResultToast({ state }: { state: StateModel }) {
   }, [result, state.last_result_reason]);
 
   if (state.build_state === "LOCKED" || !result || dismissed) return null;
-  if (result === "placed") return <output className="result placed">PLACED — select the next cell</output>;
-  if (result === "rejected") return <output className="result rejected">REJECTED — {state.last_result_reason}</output>;
+  if (result === "placed") return (
+    <output className="result placed"><Icon name="check" size={15} />PLACED — select the next cell</output>
+  );
+  if (result === "rejected") return (
+    <output className="result rejected"><Icon name="stale" size={15} />REJECTED — {state.last_result_reason}</output>
+  );
   return null;
 }

@@ -22,3 +22,5 @@ pnpm-debug.log*
 
 # Generated calibration artefacts
 config/workspace_map.json
+
+.claude

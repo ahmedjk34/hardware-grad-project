@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Icon } from "./Icon";
 import type { LogLine } from "../types";
 
 function tone(text: string) {
@@ -8,9 +9,7 @@ function tone(text: string) {
   return "";
 }
 
-function stamp(at: number) {
-  return new Date(at).toLocaleTimeString([], { hour12: false });
-}
+const stamp = (at: number) => new Date(at).toLocaleTimeString([], { hour12: false });
 
 export function RigLog({ log, defaultOpen }: { log: LogLine[]; defaultOpen: boolean }) {
   const [open, setOpen] = useState(defaultOpen);
@@ -29,19 +28,31 @@ export function RigLog({ log, defaultOpen }: { log: LogLine[]; defaultOpen: bool
     setFollowing(element.scrollHeight - element.scrollTop - element.clientHeight < 24);
   };
 
+  const toLatest = () => {
+    const element = body.current;
+    if (element) element.scrollTop = element.scrollHeight;
+    setFollowing(true);
+  };
+
   return (
     <section className="panel log">
       <header>
-        <h2>Rig log</h2>
+        <h2><Icon name="power" size={13} />Rig log</h2>
+        <span className="log-count">{log.length} lines</span>
+        <span className="spacer" />
         <button
           type="button"
-          className="btn"
+          className="btn btn-ghost btn-icon"
           aria-expanded={open}
+          aria-label={open ? "Collapse" : `Expand (${log.length})`}
           onClick={() => setOpen(value => !value)}
-        >{open ? "Collapse" : `Expand (${log.length})`}</button>
+        >
+          <Icon name="chevron" size={16} className={open ? "chevron up" : "chevron"} />
+        </button>
       </header>
+
       {open && (
-        <div className="log-wrap">
+        <>
           <div className="log-body" ref={body} onScroll={onScroll} role="log" aria-label="Rig serial log">
             {log.length === 0 && <div className="log-empty">No serial lines yet.</div>}
             {log.map(line => (
@@ -52,11 +63,11 @@ export function RigLog({ log, defaultOpen }: { log: LogLine[]; defaultOpen: bool
             ))}
           </div>
           {!following && (
-            <button type="button" className="btn jump-latest" onClick={() => { setFollowing(true); }}>
-              Jump to latest
+            <button type="button" className="btn btn-ghost jump-latest" onClick={toLatest}>
+              <Icon name="down" size={13} />Jump to latest
             </button>
           )}
-        </div>
+        </>
       )}
     </section>
   );

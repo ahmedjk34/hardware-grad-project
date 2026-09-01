@@ -232,8 +232,12 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     import uvicorn
 
+    # Browsers accumulate cookies across every dev server on localhost, and a
+    # fat Cookie header makes h11's 16 KiB default answer 431 before the app
+    # ever sees the request.  The console is LAN-local; give it room.
     uvicorn.run(create_app(ConsoleAppOptions(mock=args.mock, mode=args.mode)),
-                host=args.host, port=args.port)
+                host=args.host, port=args.port,
+                h11_max_incomplete_event_size=256 * 1024)
 
 
 if __name__ == "__main__":

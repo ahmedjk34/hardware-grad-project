@@ -14,6 +14,7 @@ import { ResultToast } from "./components/ResultToast";
 import { Calibrate } from "./components/Calibrate";
 import { createConsoleStore } from "./store";
 import { connectEvents } from "./ws";
+import { Icon } from "./components/Icon";
 import * as api from "./api";
 import type { StateModel } from "./types";
 
@@ -82,7 +83,12 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [state, mutable]);
 
-  if (!state) return <main className="boot">Connecting to rig…</main>;
+  if (!state) return (
+    <main className="boot">
+      <Icon name="waiting" size={28} />
+      Connecting to rig…
+    </main>
+  );
 
   return (
     <div className="app">
@@ -90,18 +96,18 @@ export function App() {
       <LockedBanner state={state} />
       {state.build_state !== "LOCKED" && <BuildBanner state={state} connected={snapshot.connected} />}
 
-      <div className="console">
-        <div className="column-camera">
+      <div className="workspace">
+        <div className="pane-camera">
           <CameraView
             state={state}
             connected={snapshot.connected}
             onCalibrationPoint={cornerHandler ?? undefined}
           />
-          <ResultToast state={state} />
           <RigLog log={snapshot.log} defaultOpen={!phone} />
         </div>
 
-        <div className="column-rail">
+        <div className="pane-rail">
+          <ResultToast state={state} />
           <ControlPanel
             state={state}
             connected={snapshot.connected}
@@ -114,6 +120,9 @@ export function App() {
             onCollecting={setCollecting}
             onPointChange={changeHandler}
           />
+          <p className="reason">
+            <Icon name="waiting" size={14} />Press ? for keyboard shortcuts
+          </p>
         </div>
       </div>
 

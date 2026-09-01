@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import * as api from "../api";
+import { Icon } from "./Icon";
 
 const NAMES = [
   "holder home [0,0]",
@@ -49,25 +50,25 @@ export function Calibrate({ ready, onCollecting, onPointChange }: {
 
   if (!active) return (
     <section className="panel" aria-label="Calibration">
-      <header><h2>Calibration</h2></header>
+      <header><h2><Icon name="ruler" size={13} />Calibration</h2></header>
       <button
         type="button"
-        className="btn choice"
+        className="btn btn-ghost choice"
         aria-label="Calibrate"
         disabled={!ready}
         onClick={() => void enter()}
       >
-        <span className="btn-title">Calibrate by corners</span>
+        <span className="btn-title"><Icon name="target" size={15} />Calibrate by corners</span>
         <span className="btn-sub">Click the four holder limits on the video, in order.</span>
       </button>
       <button
         type="button"
-        className="btn choice"
+        className="btn btn-ghost choice"
         aria-label="Calibrate from sheet"
         disabled={!ready}
         onClick={() => void api.calibration.paper()}
       >
-        <span className="btn-title">Calibrate from sheet</span>
+        <span className="btn-title"><Icon name="sheet" size={15} />Calibrate from sheet</span>
         <span className="btn-sub">Detect the printed calibration sheet in the current frame.</span>
       </button>
     </section>
@@ -76,7 +77,8 @@ export function Calibrate({ ready, onCollecting, onPointChange }: {
   return (
     <section className="panel calibration" aria-label="Calibration">
       <header>
-        <h2>Calibration</h2>
+        <h2><Icon name="ruler" size={13} />Calibration</h2>
+        <span className="spacer" />
         <span className="wizard-progress">{Math.min(points, 4)} of 4 corners</span>
       </header>
       <ol className="wizard-steps">
@@ -93,10 +95,10 @@ export function Calibrate({ ready, onCollecting, onPointChange }: {
       </p>
       <div className="row">
         <button type="button" className="btn" onClick={place} aria-label="Place corner">Place corner</button>
-        <button type="button" className="btn" onClick={() => void undo()} disabled={!points}>Undo</button>
+        <button type="button" className="btn btn-ghost" onClick={() => void undo()} disabled={!points}>Undo</button>
       </div>
       <div className="row">
-        <button type="button" className="btn" onClick={() => void cancel()}>Cancel</button>
+        <button type="button" className="btn btn-ghost" onClick={() => void cancel()}>Cancel</button>
         <button
           type="button"
           className="btn"

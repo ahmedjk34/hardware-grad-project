@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Icon } from "./Icon";
 import type { StateModel } from "../types";
 
 export function BuildBanner({ state, connected }: { state: StateModel; connected: boolean }) {
@@ -20,6 +21,7 @@ export function BuildBanner({ state, connected }: { state: StateModel; connected
 
   if (state.build_state === "LOCKED") return (
     <section className="banner locked" role="alert">
+      <Icon name="lock" size={20} />
       <strong>SESSION LOCKED</strong>
       <span className="detail">
         {state.locked_reason}. A human must inspect the rig and restart the service.
@@ -29,6 +31,7 @@ export function BuildBanner({ state, connected }: { state: StateModel; connected
 
   if (running) return (
     <section className="banner running" role="status">
+      <Icon name={connected ? "power" : "unlink"} size={20} />
       {!connected ? (
         <>
           <strong>DISCONNECTED</strong>

@@ -2,6 +2,7 @@ import * as api from "../api";
 import type { StateModel } from "../types";
 import { BuildButton } from "./BuildButton";
 import { CommandReadout } from "./CommandReadout";
+import { Icon } from "./Icon";
 import { LevelStepper } from "./LevelStepper";
 
 export function ControlPanel({ state, connected, onBuild: _onBuild, primaryElsewhere = false }: {
@@ -15,18 +16,24 @@ export function ControlPanel({ state, connected, onBuild: _onBuild, primaryElsew
   return (
     <aside className="panel controls" aria-label="Rig controls">
       <header>
-        <h2>Target</h2>
+        <h2><Icon name="target" size={13} />Target</h2>
+        <span className="spacer" />
         <span className={`chip ${state.calibrated ? "is-ready" : "is-motion"}`}>
           {state.calibrated ? "Calibrated" : "Approximate"}
         </span>
       </header>
+
       {!primaryElsewhere && (
         <>
           <CommandReadout state={state} />
           <LevelStepper level={state.level} disabled={!mutable} />
         </>
       )}
-      <button type="button" className="btn" disabled={!mutable} onClick={() => void api.deselect()}>Deselect</button>
+
+      <button type="button" className="btn btn-ghost" disabled={!mutable} onClick={() => void api.deselect()}>
+        <Icon name="unlink" size={15} />Deselect
+      </button>
+
       {!primaryElsewhere && <BuildButton state={state} connected={connected} />}
     </aside>
   );

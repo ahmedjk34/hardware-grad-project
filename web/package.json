@@ -9,11 +9,13 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@fontsource-variable/fira-code": "^5.3.0",
+    "@fontsource/fira-sans": "^5.3.0",
     "@vitejs/plugin-react": "latest",
-    "vite": "latest",
-    "vite-plugin-pwa": "latest",
     "react": "latest",
-    "react-dom": "latest"
+    "react-dom": "latest",
+    "vite": "latest",
+    "vite-plugin-pwa": "latest"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "latest",

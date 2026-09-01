@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import * as api from "../api";
+import { Icon } from "./Icon";
 import type { StateModel } from "../types";
 
 const CONFIRM_MS = 3000;
@@ -40,7 +41,8 @@ export function BuildButton({ state, connected }: { state: StateModel; connected
         />
       </button>
       <p className="reason" aria-hidden="true">
-        Arms for {Math.ceil(remaining / 1000)}s — tap again to move the rig
+        <Icon name="clock" size={14} />
+        Arm expires in {Math.ceil(remaining / 1000)}s — tap again to move the rig
       </p>
     </div>
   );
@@ -56,7 +58,9 @@ export function BuildButton({ state, connected }: { state: StateModel; connected
       <button type="button" className="btn btn-build" title={reason} disabled={!allowed} onClick={() => setConfirming(true)}>
         BUILD
       </button>
-      {reason && <p className="reason">{reason}</p>}
+      {reason
+        ? <p className="reason"><Icon name="lock" size={14} />{reason}</p>
+        : <p className="reason"><Icon name="power" size={14} />Two taps to run · ~40s uninterruptible</p>}
     </div>
   );
 }

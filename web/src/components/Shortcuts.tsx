@@ -1,3 +1,5 @@
+import { Icon } from "./Icon";
+
 const KEYS: [string, string][] = [
   ["← ↑ → ↓", "Nudge the selected cell"],
   ["+ / −", "Change level"],
@@ -20,7 +22,9 @@ export function Shortcuts({ onClose }: { onClose: () => void }) {
             </div>
           ))}
         </dl>
-        <button type="button" className="btn" onClick={onClose}>Close</button>
+        <button type="button" className="btn btn-ghost" onClick={onClose}>
+          <Icon name="check" size={15} />Close
+        </button>
       </div>
     </div>
   );

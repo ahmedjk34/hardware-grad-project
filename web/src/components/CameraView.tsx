@@ -1,13 +1,14 @@
 import { useState } from "react";
 import * as api from "../api";
 import { GridOverlay } from "./GridOverlay";
+import { Icon } from "./Icon";
 import type { CellGeometry, StateModel } from "../types";
 
-const VIEWS: { key: string; glyph: string; label: string }[] = [
-  { key: "grid", glyph: "⌗", label: "grid" },
-  { key: "detect", glyph: "◎", label: "detect" },
-  { key: "paper", glyph: "▦", label: "sheet" },
-  { key: "overlay", glyph: "◐", label: "overlay" },
+const VIEWS: { key: string; icon: string; label: string }[] = [
+  { key: "grid", icon: "grid", label: "grid" },
+  { key: "detect", icon: "detect", label: "detect" },
+  { key: "paper", icon: "sheet", label: "sheet" },
+  { key: "overlay", icon: "overlay", label: "overlay" },
 ];
 
 export function CameraView({ state, connected, onCalibrationPoint }: {
@@ -17,7 +18,9 @@ export function CameraView({ state, connected, onCalibrationPoint }: {
 }) {
   const [hover, setHover] = useState<CellGeometry | null>(null);
   const size = state.geometry?.image_size ?? ([1, 1] as [number, number]);
-  const selectable = !onCalibrationPoint && connected && state.build_state === "READY" && state.camera === "LIVE";
+  const collecting = !!onCalibrationPoint;
+  const selectable = collecting
+    || (connected && state.build_state === "READY" && state.camera === "LIVE");
 
   const select = ([x, y]: [number, number]) => {
     if (onCalibrationPoint) onCalibrationPoint([x, y], size);
@@ -28,68 +31,74 @@ export function CameraView({ state, connected, onCalibrationPoint }: {
   const stageState = !connected ? "offline" : state.camera === "STALE" ? "stale" : "";
 
   return (
-    <main className={`stage ${stageState}`} aria-label="Camera stage">
-      {/* The frame keeps the camera's aspect ratio so the SVG can never drift
-          from the video, and is capped by viewport height so a portrait frame
-          cannot push the log and rail off the bottom of a desktop screen. */}
-      <div
-        className="stage-frame"
-        style={{
-          aspectRatio: `${size[0]} / ${size[1]}`,
-          maxWidth: `calc((100dvh - 14rem) * ${size[0] / size[1]})`,
-        }}
-      >
-        <img src="/api/stream.mjpg" alt="Live rig camera" />
-        <GridOverlay
-          state={state}
-          onSelect={select}
-          onHover={setHover}
-          selectable={selectable || !!onCalibrationPoint}
-        />
-        {state.camera === "WAITING" && (
-          <div className="stage-plate waiting">
-            <span className="scanline" aria-hidden="true" />
-            WAITING FOR FIRST FRAME
-            <span className="sub">The pipeline has not delivered a frame yet.</span>
-          </div>
-        )}
-        {!connected && (
-          <div className="stage-plate offline">
-            DISCONNECTED
-            <span className="sub">
-              {state.build_state === "RUNNING"
-                ? "A build may still be in progress; do not touch the rig."
-                : "Reconnecting to the rig service…"}
-            </span>
-          </div>
-        )}
-      </div>
-
-      <div className="hud">
-        <span className="label">Cell</span>
-        <span className="cell">
-          {shown ? `[${shown.col},${shown.row}] · L${state.level}` : `— · L${state.level}`}
-        </span>
-      </div>
-
-      <div className="view-chips" role="group" aria-label="Overlay views">
+    <>
+      {/* Display-only toggles: the server allows these while the rig is moving,
+          so they are deliberately never disabled. */}
+      <div className="stage-toolbar" role="group" aria-label="Overlay views">
         {VIEWS.map(item => {
           const active = state.views[item.key] !== false;
           return (
             <button
               key={item.key}
               type="button"
-              className="chip"
+              className="toggle"
               aria-pressed={active}
               aria-label={`Toggle ${item.label} overlay`}
               onClick={() => void api.view({ [item.key]: !active })}
             >
-              <span className="glyph" aria-hidden="true">{item.glyph}</span>
+              <Icon name={item.icon} size={15} />
               {item.label}
             </button>
           );
         })}
+        <span className="spacer" />
+        {collecting && (
+          <span className="chip is-motion"><Icon name="ruler" size={13} />Collecting corners</span>
+        )}
+        <span className="chip is-idle">
+          <Icon name="grid" size={13} />
+          <span className="value">{state.cols}×{state.rows}</span>
+        </span>
       </div>
-    </main>
+
+      <div className="stage-area">
+        <main
+          className={`stage ${stageState}`}
+          aria-label="Camera stage"
+          style={{ ["--ar" as string]: `${size[0]} / ${size[1]}` }}
+        >
+          <div className="stage-frame">
+            <img src="/api/stream.mjpg" alt="Live rig camera" />
+            <GridOverlay state={state} onSelect={select} onHover={setHover} selectable={selectable} />
+          </div>
+
+          {state.camera === "WAITING" && (
+            <div className="stage-plate waiting">
+              <span className="scanline" aria-hidden="true" />
+              WAITING FOR FIRST FRAME
+              <span className="sub">The pipeline has not delivered a frame yet.</span>
+            </div>
+          )}
+
+          {!connected && (
+            <div className="stage-plate offline">
+              DISCONNECTED
+              <span className="sub">
+                {state.build_state === "RUNNING"
+                  ? "A build may still be in progress; do not touch the rig."
+                  : "Reconnecting to the rig service…"}
+              </span>
+            </div>
+          )}
+
+          <div className="hud">
+            <span className="label">Cell</span>
+            <span className="cell">{shown ? `${shown.col},${shown.row}` : "—,—"}</span>
+            <span className="label">Level</span>
+            <span className="cell">{state.level}</span>
+          </div>
+        </main>
+      </div>
+    </>
   );
 }

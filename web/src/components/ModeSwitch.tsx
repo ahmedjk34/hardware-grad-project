@@ -1,5 +1,6 @@
 import { useState } from "react";
 import * as api from "../api";
+import { Icon } from "./Icon";
 import type { StateModel } from "../types";
 
 const MODES: ("vertical" | "horizontal")[] = ["vertical", "horizontal"];
@@ -10,7 +11,8 @@ export function ModeSwitch({ state, disabled }: { state: StateModel; disabled: b
 
   return (
     <section className="panel">
-      <header><h2>Grid mode</h2></header>
+      <header><h2><Icon name="axes" size={13} />Grid mode</h2></header>
+
       <div className="segmented" role="group" aria-label="Grid mode">
         {MODES.map(mode => (
           <button
@@ -25,11 +27,15 @@ export function ModeSwitch({ state, disabled }: { state: StateModel; disabled: b
           </button>
         ))}
       </div>
+
       {pending && (
         <>
           <p className="confirm-note" role="status">
-            Switching to {pending.toUpperCase()} homes the X and Y axes and clears your
-            selection. The rig will move.
+            <Icon name="stale" size={15} />
+            <span>
+              Switching to {pending.toUpperCase()} homes the X and Y axes and clears your
+              selection. The rig will move.
+            </span>
           </p>
           <div className="row">
             <button
@@ -38,7 +44,9 @@ export function ModeSwitch({ state, disabled }: { state: StateModel; disabled: b
               disabled={disabled}
               onClick={() => { void api.mode(pending); setPending(null); }}
             >Home and switch</button>
-            <button type="button" className="btn" disabled={disabled} onClick={() => setPending(null)}>Keep {state.mode}</button>
+            <button type="button" className="btn btn-ghost" disabled={disabled} onClick={() => setPending(null)}>
+              Keep {state.mode}
+            </button>
           </div>
         </>
       )}

@@ -10,6 +10,8 @@ This plan is written for someone who has not read the rest of the repository.
 Read *§1 The idea*, *§2 The one thing that makes this tractable* and *§3 The
 seven facts* first; everything after them assumes those.
 
+Milestone-by-milestone prompts for handing this to an agent:
+[plan-4-milestone-prompts.md](plan-4-milestone-prompts.md).
 Visual language: [docs/DESIGN.md](../docs/DESIGN.md).
 The console this attaches to: [plan-3-web-operator-console.md](plan-3-web-operator-console.md).
 The wider feature catalogue: [docs/feature-ideas.md](../docs/feature-ideas.md).
@@ -639,7 +641,12 @@ current one is committed and tested.
 | **M8** | **Wow pass.** Live shift clipping, timeline scrub, sync view, audio, instruction sheet, video projection | the demo script in §13 runs start to finish without a stumble |
 
 M0–M5 need **no hardware and no Pi**. M6–M7 run entirely against
-`python -m web --mock`. Only M8's video projection wants a real camera.
+`python -m web --mock`. **No milestone requires a real camera.** `MockCamera`
+serves a genuine MJPEG stream of a synthetic workspace through the same
+`/api/stream.mjpg` endpoint, so even M8's plan-projection overlay is developed
+and tested entirely against the mock. A real camera is wanted once, at the very
+end, only to confirm the projection lands on the physical bench where the maths
+says it should.
 
 ---
 
