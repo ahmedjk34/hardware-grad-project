@@ -1,0 +1,156 @@
+{
+  "_about": "Written by camera/camera_studio.py. 'derived' is output, not input \u2014 editing it does nothing.",
+  "saved_at": "2026-09-01T13:11:49",
+  "camera": "picamera2 @ 1296x972, sensor mode 1296x972",
+  "capture": {
+    "backend": "auto",
+    "device": null,
+    "width": 1296,
+    "height": 972,
+    "swap_rb": false,
+    "flip": "none",
+    "rotate": 0
+  },
+  "lens": {
+    "lens_fov_deg": 189.0,
+    "fov_reference": "diagonal",
+    "model": "equidistant",
+    "k1": 0.11999999999999995,
+    "k2": -0.19999999999999973,
+    "k3": 0.5,
+    "k4": 0.17,
+    "centre_dx": -15.0,
+    "centre_dy": 24.0,
+    "focal_x_scale": 1.2,
+    "focal_y_scale": 1.2,
+    "skew": 0.027999999999999914,
+    "p1": -0.022000000000000006,
+    "p2": 0.0,
+    "output_fov_deg": 100.0,
+    "output_scale": 1.0,
+    "source": "estimated",
+    "camera_matrix": null,
+    "dist_coeffs": null,
+    "calibration_size": null
+  },
+  "correction": {
+    "enabled": true,
+    "interp": "cubic",
+    "mip": true
+  },
+  "framing": {
+    "crops": [
+      [
+        0.278549383,
+        0.163580247,
+        0.656635802,
+        0.976337449
+      ],
+      [
+        0.051020407056726336,
+        0.07088607625774074,
+        0.9102040822048146,
+        0.977215189290934
+      ]
+    ],
+    "zoom": 1.0,
+    "pan": [
+      0.46026,
+      0.58951
+    ],
+    "fit_mode": "fit",
+    "view_size": null
+  },
+  "sensor": {
+    "brightness": -0.12,
+    "contrast": 1.5,
+    "saturation": "auto",
+    "sharpness": 11.5,
+    "ev": -0.26,
+    "exposure": "auto",
+    "gain": 1.0,
+    "awb": "off",
+    "redgain": 0.69,
+    "bluegain": 0.94,
+    "denoise": "hq",
+    "fps": "auto"
+  },
+  "colour": {
+    "enabled": true,
+    "matrix": [
+      [
+        1.095656,
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.171396,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        0.810621,
+        0.0
+      ]
+    ],
+    "gain": [
+      1.09566,
+      1.1714,
+      0.81062
+    ],
+    "offset": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "gamma": 1.6,
+    "saturation": 1.0,
+    "source": "white balance from the sheet's paper"
+  },
+  "derived": {
+    "roi": [
+      0.29784,
+      0.221193,
+      0.622685,
+      0.957819
+    ],
+    "output_size": [
+      421,
+      716
+    ],
+    "full_output_size": [
+      1296,
+      972
+    ],
+    "source_focal_px": 491.11,
+    "output_camera_matrix": [
+      [
+        679.6707012794275,
+        0.0,
+        261.5000002339573
+      ],
+      [
+        0.0,
+        679.670701625707,
+        270.49999979636874
+      ],
+      [
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "sampling": {
+      "centre": 0.8276,
+      "edge": 0.5622,
+      "worst_upscale": 0.5271,
+      "worst_downscale": 0.8803,
+      "upscaled_fraction": 1.0,
+      "mip_levels": 1
+    }
+  }
+}

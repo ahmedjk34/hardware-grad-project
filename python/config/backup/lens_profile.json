@@ -1,0 +1,11 @@
+{
+  "lens_fov_deg": 160.0,
+  "fov_reference": "diagonal",
+  "model": "equidistant",
+  "output_fov_deg": 120.0,
+  "output_scale": 1.0,
+  "source": "estimated",
+  "camera_matrix": null,
+  "dist_coeffs": null,
+  "calibration_size": null
+}
