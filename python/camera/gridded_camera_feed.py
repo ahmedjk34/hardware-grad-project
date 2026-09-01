@@ -92,6 +92,10 @@ from vision.combined_grid import (  # noqa: E402
     detect_printed_grid,
     detect_printed_grids,
 )
+from vision.cluster_grid import (  # noqa: E402
+    detect_cluster_grid,
+    detect_cluster_grids,
+)
 from vision.color_grid_overlay import (  # noqa: E402
     draw_candidates,
     draw_color_grid,
@@ -125,6 +129,35 @@ _GRID_GEOMETRY_CACHE = {}
 PAPER_GRID_HZ = 3.0
 PAPER_OVERLAY_WIDTH = 1024
 
+# Which printed-sheet detector `p` (overlay) and `k` (calibrate) use.
+#   "color"   - the shipped green/magenta sheet + A2 combined target
+#               (vision/combined_grid.py)
+#   "cluster" - the black-bordered 3x3 cluster sheet
+#               (vision/cluster_grid.py, plans/cluster-calibration-grid.md);
+#               geometry from the printed border by edge detection.
+# Each entry is (multi-window fn, single-window fn); both share the
+# ColorGridCalibration output contract so the overlay and the map writer do not
+# care which one produced a result.
+_PAPER_DETECTORS = {
+    "color": (detect_printed_grids, detect_printed_grid),
+    "cluster": (detect_cluster_grids, detect_cluster_grid),
+}
+_paper_detector_name = "color"
+
+
+def set_paper_detector(name):
+    """Select the printed-sheet detector by name (see ``_PAPER_DETECTORS``)."""
+    if name not in _PAPER_DETECTORS:
+        raise ValueError(f"unknown paper detector {name!r}; choose from "
+                         f"{', '.join(sorted(_PAPER_DETECTORS))}")
+    global _paper_detector_name
+    _paper_detector_name = name
+
+
+def paper_detector_name():
+    """The currently selected printed-sheet detector name."""
+    return _paper_detector_name
+
 
 def analyze_paper_grid(frame, spec, process_width=PAPER_OVERLAY_WIDTH,
                        edge_margin=DEFAULT_EDGE_MARGIN,
@@ -136,14 +169,16 @@ def analyze_paper_grid(frame, spec, process_width=PAPER_OVERLAY_WIDTH,
     a generic message — so the specific "move the sheet" sentence is returned as
     a value instead of raised, and survives the trip back to the UI intact.
     """
+    multi, _single = _PAPER_DETECTORS[_paper_detector_name]
     kwargs = {}
-    if page_plane_min is not None:
-        kwargs["page_plane_min"] = page_plane_min
-    if min_saturation is not None:
-        kwargs["min_saturation"] = min_saturation
+    if _paper_detector_name == "color":
+        if page_plane_min is not None:
+            kwargs["page_plane_min"] = page_plane_min
+        if min_saturation is not None:
+            kwargs["min_saturation"] = min_saturation
     try:
-        return ((detect_printed_grids(frame, spec, process_width=process_width,
-                                      edge_margin=edge_margin, **kwargs), None),)
+        return ((multi(frame, spec, process_width=process_width,
+                       edge_margin=edge_margin, **kwargs), None),)
     except ColorGridError as exc:
         return ((None, exc),)
 
@@ -273,8 +308,8 @@ def paper_workspace_map(view, spec, grid, projection, convention, window_index=0
     is not usable and ``ValueError`` when the corners it implies fall outside
     the frame — both are sentences worth showing an operator verbatim.
     """
-    calibration = detect_printed_grid(
-        view, spec, process_width=0, window_index=window_index)
+    _multi, single = _PAPER_DETECTORS[_paper_detector_name]
+    calibration = single(view, spec, process_width=0, window_index=window_index)
     corners = calibration.workspace_corners(grid, convention)
     workspace = WorkspaceMap.from_grid(grid, corners, view.shape[1::-1], projection)
     return workspace, calibration

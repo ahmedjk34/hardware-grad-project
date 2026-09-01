@@ -13,6 +13,55 @@ read the rest of the repo. It over-explains on purpose. Read *The final goal* an
 
 ---
 
+## Current implementation status — 2026-09-01
+
+**Steps 1–5 are implemented. Step 6 is next.** Their code is intentionally
+headless and usable without a Pi, Arduino, or physical camera:
+
+- **Step 1:** `rig/mock_board.py` now provides `MockBoard`, a protocol-level,
+  pyserial-shaped Mega stand-in. It emits boot/READY banners, handles the
+  connect mode/grid handshake, returns placed/rejected/aborted build outcomes,
+  can omit one terminal acknowledgement for the prose fallback, and can emit
+  an unexpected BOOT. `Rig` accepts an optional `serial_factory` while keeping
+  its real-pyserial default. The pre-existing scripted `FakeSerial` transcript
+  helper also lives in that module now.
+- **Step 2:** `vision/mock_camera.py` provides `MockCamera`, selected with
+  `open_camera("mock")`. It draws a physically proportioned workspace and
+  grid-aligned BGR blocks using the real `MachineGrid` and `WorkspaceMap`, so
+  `detect_blocks` sees the planted warm blocks at the same locations an overlay
+  will draw. It supports `set_blocks`, `freeze`, and `resume`. Its visible
+  printed lattice is only a visual stand-in; it must not be presented as a
+  detector-calibratable combined sheet. Full-fidelity sheet simulation remains
+  Step 10 work.
+- **Step 3:** `rig/console_pipeline.py` provides `ConsolePipeline` and
+  `ProcessedFrame`. It owns exactly one camera, frame pump, block worker, and
+  paper tracker; applies orientation then colour correction exactly once;
+  builds/remembers fisheye maps and their generation; supplies approximate or
+  saved per-mode workspaces; and stops in the safe worker → pump → camera
+  order. It does **not** own a serial `Rig`.
+- **Step 4:** `web/app.py` now provides the FastAPI app factory, one-owner
+  lifespan, state driver, `GET /api/state`, and frame-free `WS /api/events`;
+  `web/state.py` holds the Pydantic snapshot model. Mock mode injects one
+  `MockBoard` through `Rig(serial_factory=...)`, never patches real serial.
+- **Step 5:** `web/routes_command.py` now supplies server-guarded selection,
+  axis selection, deselection, level, mode, view, and confirmed-build routes.
+  It validates camera freshness, build/lock state, and the exact displayed
+  command before delegating only to `BuildController` and `BuildJob`.
+
+New pytest-style tests are in `python/tests/mock_board_test.py`,
+`mock_camera_test.py`, `console_pipeline_test.py`, and `web_state_test.py`.
+`web_command_test.py` covers Step 5's placed/rejected/aborted and mutation
+guards. Steps 4–5's state, WebSocket, and command tests pass; the direct
+behavioral checks `test_link.py`, `test_camera_frame_pump.py`, and
+`test_latest_workers.py` pass. The aggregate pytest suite still has a known
+Step 2 race in `mock_camera_test.py`: one source frame can arrive after
+`MockCamera.freeze()` before the pump observes the freeze.
+The FastAPI stack is listed in `requirements-dev.txt`: this environment's
+Pydantic/uvicorn WebSocket install contains native extensions, so the Pi must
+use its distro packages in accordance with `AGENTS.md`'s dependency rule.
+
+---
+
 ## Contents
 
 1. The final goal

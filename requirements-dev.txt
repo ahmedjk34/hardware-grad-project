@@ -12,3 +12,11 @@
 
 opencv-python>=4.8
 numpy>=1.24
+# FastAPI's Pydantic dependency and uvicorn's WebSocket extras include native
+# wheels. Keep them out of the Pi runtime venv; install distro packages there.
+fastapi>=0.115,<0.116
+uvicorn[standard]>=0.30
+pytest>=8.0
+pytest-asyncio>=0.24
+httpx>=0.27
+asgi-lifespan>=2.1

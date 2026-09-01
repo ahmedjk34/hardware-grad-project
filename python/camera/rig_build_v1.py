@@ -95,6 +95,7 @@ from camera.gridded_camera_feed import (  # noqa: E402
     load_workspace,
     paper_workspace_map,
     projection_metadata,
+    set_paper_detector,
 )
 from camera.tk_camera_window import TkCameraWindow  # noqa: E402
 from rig.build_controller import BuildController, BuildStateError  # noqa: E402
@@ -163,6 +164,11 @@ def parse_args():
                              f"(default: {DEFAULT_HOME_CONVENTION})")
     parser.add_argument("--paper-hz", type=float, default=PAPER_GRID_HZ,
                         help=f"printed-sheet detection rate (default: {PAPER_GRID_HZ})")
+    parser.add_argument("--paper-detector", choices=("color", "cluster"),
+                        default="color",
+                        help="which printed sheet 'p'/'k' expect: 'color' is the "
+                             "green/magenta + A2 target; 'cluster' is the "
+                             "black-bordered 3x3 sheet (default: color)")
     parser.add_argument("--analysis-hz", type=float, default=10.0)
     parser.add_argument("--opencv-threads", type=int, default=2)
     return parser.parse_args()
@@ -220,6 +226,7 @@ def outcome_message(outcome, controller):
 
 def main():
     args = parse_args()
+    set_paper_detector(args.paper_detector)
     if (args.level < 0 or args.display_scale <= 0 or args.min_area <= 0
             or args.connect_timeout <= 0 or args.build_timeout <= 0
             or args.analysis_hz <= 0 or args.opencv_threads <= 0
