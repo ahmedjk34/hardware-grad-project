@@ -3,7 +3,9 @@ import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
 
 export default defineConfig({
-  server: { proxy: { "/api": { target: "http://127.0.0.1:8000", ws: true } } },
+  // fs.allow reaches config/rig.json, which web/src/studio/coords.ts imports so
+  // the browser reads the machine's geometry from the same file the Pi does.
+  server: { proxy: { "/api": { target: "http://127.0.0.1:8000", ws: true } }, fs: { allow: [".."] } },
   plugins: [react(), VitePWA({ registerType: "prompt", includeAssets: ["favicon.svg", "apple-touch-icon.png"],
     manifest: {
       name: "Rig operator console",
