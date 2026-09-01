@@ -6,7 +6,12 @@ import type { StateModel } from "../types";
 const CONFIRM_MS = 3000;
 const TICK_MS = 100;
 
-export function BuildButton({ state, connected }: { state: StateModel; connected: boolean }) {
+export function BuildButton({ state, connected, onBuild }: {
+  state: StateModel;
+  connected: boolean;
+  /** Runner STEP mode reuses this exact two-tap affordance, but owns the effect. */
+  onBuild?: (command: string) => void;
+}) {
   const [confirming, setConfirming] = useState(false);
   const [remaining, setRemaining] = useState(CONFIRM_MS);
   const allowed = connected && state.selected !== null && state.camera === "LIVE"
@@ -29,7 +34,10 @@ export function BuildButton({ state, connected }: { state: StateModel; connected
         type="button"
         className="btn btn-build armed"
         onClick={() => {
-          if (state.command) void api.build(state.command);
+          if (state.command) {
+            if (onBuild) onBuild(state.command);
+            else void api.build(state.command);
+          }
           setConfirming(false);
         }}
       >

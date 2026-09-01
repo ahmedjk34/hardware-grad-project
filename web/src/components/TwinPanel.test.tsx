@@ -103,6 +103,15 @@ describe("choosing the model the twin shows", () => {
     fireEvent.change(picker, { target: { value: EXAMPLES[0].id } });
     expect(screen.getByText(/5 blocks/)).toBeInTheDocument();
   });
+
+  it("can be controlled by the runner so the twin and program cannot diverge", () => {
+    const changed = vi.fn();
+    panel({ modelId: EXAMPLES[1].id, onModelIdChange: changed, modelSelectionDisabled: true });
+    const picker = screen.getByLabelText("Model shown in the twin");
+    expect(picker).toHaveValue(EXAMPLES[1].id);
+    expect(picker).toBeDisabled();
+    expect(screen.getByText(/5 blocks/)).toBeInTheDocument();
+  });
 });
 
 describe("the index layout — camera and twin, in step", () => {

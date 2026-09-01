@@ -1531,3 +1531,94 @@ svg.grid-overlay.selectable { cursor: crosshair; }
 
 .studio-model-name { color: var(--text); }
 .studio-library-toggle { cursor: pointer; background: none; }
+
+/* ── Program runner (Plan 4 M7) ───────────────────────────────────────────
+   The strip is evidence-first: exact commands and measured elapsed time. The
+   only ambient motion remains the console's RUNNING banner. */
+
+.runner {
+  display: grid;
+  gap: var(--s3);
+  min-width: 0;
+  max-height: min(42vh, 30rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.runner.is-dry { border-color: var(--motion); }
+.runner-head { display: flex; align-items: center; gap: var(--s2); }
+.runner-count {
+  color: var(--text-dim);
+  font: var(--t-xs);
+  font-variant-numeric: tabular-nums;
+}
+.runner-style { width: min(100%, 28rem); }
+.runner-idle { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--s2); align-items: center; }
+.runner-idle .runner-model { margin: 0; color: var(--text); font: var(--t-lg); }
+.runner-idle .reason { grid-column: 1; }
+.runner-idle .btn-build { grid-column: 2; grid-row: 1 / span 2; min-width: 11rem; }
+
+.feeder {
+  display: grid;
+  gap: var(--s1);
+  padding: var(--s4);
+  background: var(--sunken);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+}
+.feeder strong {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  color: var(--text);
+  font: var(--t-hero);
+}
+.feeder strong.is-same { color: var(--text-dim); font: var(--t-xs); letter-spacing: .1em; }
+.feeder > span { color: var(--text-dim); font: var(--t-xs); font-variant-numeric: tabular-nums; }
+.feeder-swatch { width: .62em; height: .62em; border-radius: 50%; background: var(--block-white); }
+.feeder-swatch[data-colour="red"] { background: var(--block-red); }
+.feeder-swatch[data-colour="orange"] { background: var(--block-orange); }
+.feeder-swatch[data-colour="yellow"] { background: var(--block-yellow); }
+.feeder-swatch[data-colour="green"] { background: var(--block-green); }
+.feeder-swatch[data-colour="blue"] { background: var(--block-blue); }
+
+.runner-warning, .runner-result {
+  display: grid;
+  gap: var(--s2);
+  padding: var(--s3);
+  color: var(--motion);
+  background: var(--motion-deep);
+  border: 1px solid var(--motion);
+  border-radius: var(--r-md);
+  font: var(--t-sm);
+}
+.runner-warning strong, .runner-result strong { font: var(--t-xs); letter-spacing: .08em; }
+.runner-warning .btn { justify-self: start; }
+.runner-result.is-locked { color: var(--danger); background: var(--danger-deep); border-color: var(--danger); }
+.runner-result.is-done { color: var(--ready); background: var(--ready-deep); border-color: var(--ready); }
+.runner-program { display: grid; gap: var(--s1); margin: var(--s1) 0 0; padding: 0; list-style: none; }
+.runner-program li { display: grid; grid-template-columns: 2rem 1fr; gap: var(--s2); color: var(--text-dim); }
+.runner-program li > span, .runner-program code { font: var(--t-xs); font-variant-numeric: tabular-nums; }
+.runner-program .is-stopped { color: var(--danger); }
+.runner-program .is-future { opacity: .32; }
+.runner-stop { display: flex; }
+.runner-honest { color: var(--text-dim); }
+
+.runner-report { display: grid; gap: var(--s2); min-width: 0; }
+.runner-report-head { display: flex; align-items: center; gap: var(--s2); font: var(--t-xs); color: var(--text-dim); }
+.runner-report-head .spacer { flex: 1; }
+.runner-report-scroll { overflow-x: auto; }
+.runner-report table { width: 100%; border-collapse: collapse; font: var(--t-xs); font-variant-numeric: tabular-nums; }
+.runner-report th, .runner-report td { padding: var(--s2); text-align: left; border-bottom: 1px solid var(--line); }
+.runner-report th { color: var(--text-faint); letter-spacing: .08em; }
+.runner-report td { color: var(--text-dim); }
+.runner-report td:nth-child(2) { color: var(--text); }
+
+@media (max-width: 899px) {
+  .runner-idle { grid-template-columns: 1fr; }
+  .runner-idle .btn-build { grid-column: 1; grid-row: auto; width: 100%; }
+  .feeder strong { font-size: clamp(24px, 8vw, 34px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .runner *, .runner *::before, .runner *::after { animation: none !important; transition: none !important; }
+}

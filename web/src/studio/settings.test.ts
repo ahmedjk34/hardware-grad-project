@@ -13,7 +13,7 @@ describe("versioned Studio validation settings", () => {
       blockCycleSeconds: BLOCK_CYCLE_SECONDS,
       latchHomingSeconds: LATCH_HOMING_SECONDS,
     });
-    expect([BLOCK_CYCLE_SECONDS, LATCH_HOMING_SECONDS]).toEqual([40, 16]);
+    expect([BLOCK_CYCLE_SECONDS, LATCH_HOMING_SECONDS]).toEqual([2.115, 16]);
   });
 
   it("persists under rig.studio.settings.v1", () => {

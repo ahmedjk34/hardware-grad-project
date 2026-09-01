@@ -190,11 +190,11 @@ describe("summarise + estimates", () => {
     const { stats } = compile(flatFourWithOneLatch(), options());
     expect(stats).toEqual({
       blocks: 4, latches: 1, modeSwitches: 1, levels: 1,
-      estimateSeconds: 4 * DEFAULT_STUDIO_SETTINGS.blockCycleSeconds
-        + 1 * DEFAULT_STUDIO_SETTINGS.latchHomingSeconds,
+      estimateSeconds: Math.round(4 * DEFAULT_STUDIO_SETTINGS.blockCycleSeconds
+        + 1 * DEFAULT_STUDIO_SETTINGS.latchHomingSeconds),
     });
-    expect(stats.estimateSeconds).toBe(176);
-    expect(estimateLabel(stats)).toBe("4 blocks · 1 latch · ~2:56");
+    expect(stats.estimateSeconds).toBe(24);
+    expect(estimateLabel(stats)).toBe("4 blocks · 1 latch · ~0:24");
     expect(formatDuration(176)).toBe("2:56");
   });
 

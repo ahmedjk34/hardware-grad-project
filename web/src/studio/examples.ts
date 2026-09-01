@@ -8,25 +8,25 @@
  * sensibly top to bottom, because these are the programs that will be on screen
  * while somebody explains the project.
  *
- * THE BRIDGE CARRIES A GRID SHIFT, AND THAT IS THE POINT. The two lattices do
- * not line up: the vertical pitch is 3.8 cm and the horizontal 7.6 cm, so an
- * unshifted horizontal block lands over the 1.6 cm gap between two vertical
- * stacks and rests on 46.7% of its footprint — under the 55% support ratio, and
- * with its centroid over air. A +1.0 cm shift of the horizontal grid moves the
- * span onto both stacks. Because the rig is not applying that shift today, the
- * bridge opens with a `GEOMETRY_DRIFT` warning naming it. That warning is the
- * feature: it is the difference between an operator pushing `shiftX 1.0` before
- * the build and watching a block fall between two towers.
+ * THE BRIDGE CARRIES A GRID SHIFT, AND THAT IS THE POINT. Horizontal's +1.9 cm
+ * registration lands a span block dead over the 1.6 cm gap between two vertical
+ * stacks: it touches 73.3% of its footprint but its centroid sits over the gap
+ * — over air — so M3 rejects it. A ±1.0 cm operator shift slides the span so
+ * its centroid rides one tower (56.7% contact at +1.0 cm). Because the rig is
+ * not applying that shift today, the bridge opens with a `GEOMETRY_DRIFT`
+ * warning naming it. That warning is the feature: it is the difference between
+ * an operator pushing `shiftX 1.0` before the build and watching a block fall
+ * between two towers.
  */
 import type { ModelBlock } from "./model";
 import { documentOf, snapshotFileRig, type StudioModel } from "./rigmodel";
 
 /**
- * Found, not guessed. The search swept every (tower pair, span cell, shift in
- * 1 mm steps) triple through M3's `validateModel` and kept the ones with no
- * errors; the legal shifts are +0.8…+1.1 cm and +2.7…+3.0 cm. +1.0 is the round
- * one. The winning cells at that shift are v[c,r] v[c+1,r] with h[c/2, 2r] for
- * c in {0,2,4}; v[2,2] v[3,2] with h[1,4] is the central case.
+ * Found, not guessed. The search sweeps `shiftX` in 1 mm steps through M3's
+ * `validateModel` for the `v[2,2] v[3,2]` / `h[1,4]` fixture on the shipped
+ * rig.json (horizontal registered +1.9 cm on both axes); the shifts with no
+ * error are -1.0…-0.8 cm and +0.8…+1.1 cm. +1.0 is the round one, and puts the
+ * span's centroid over the far tower v[3,2].
  */
 export const BRIDGE_SHIFT_CM = 1;
 

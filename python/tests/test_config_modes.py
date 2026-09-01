@@ -80,14 +80,13 @@ check("every axis of both modes uses the same 1.6 cm gap",
       (vertical["gap_x_cm"], vertical["gap_y_cm"]) == (1.6, 1.6)
       and (horizontal["gap_x_cm"], horizontal["gap_y_cm"]) == (1.6, 1.6))
 
-# D14: the trims ship at 0.0 pending a rig re-measurement per mode; horizontal
-# must never simply inherit vertical's once they are measured.
-# Vertical is anchored dead on the home corner. Horizontal carries the +1.6 cm
-# Y registration - the move the arm makes after picking up, before rotating -
-# and is NOT shifted on X at all.
-check("vertical seeds at trim 0.0 / 0.0, horizontal at 0.0 / +1.6 (D14)",
+# D14: vertical is anchored dead on the home corner. Horizontal carries the
+# +1.9 cm pickup-cell registration on BOTH axes - the rotated 6.0 cm face
+# overhangs the 2.2 cm vertical footprint by 6.0/2 - 2.2/2 = 1.9 cm per side.
+# Horizontal must never simply inherit vertical's trims.
+check("vertical seeds at trim 0.0 / 0.0, horizontal at +1.9 / +1.9 (D14)",
       (vertical["trim_x_cm"], vertical["trim_y_cm"]) == (0.0, 0.0)
-      and (horizontal["trim_x_cm"], horizontal["trim_y_cm"]) == (0.0, 1.6))
+      and (horizontal["trim_x_cm"], horizontal["trim_y_cm"]) == (1.9, 1.9))
 
 check("no mode is asked to share the other's numbers",
       all(set(("cols", "rows", "block_x_cm", "block_y_cm", "gap_x_cm", "gap_y_cm",

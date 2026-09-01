@@ -193,11 +193,13 @@ cannot build.
    | mode | block X | block Y | gap X | gap Y | pitch X | pitch Y | cols | rows | X centres | Y centres |
    | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
    | vertical | 2.2 | 6.0 | 1.6 | 1.6 | 3.8 | 7.6 | 7 | 6 | 0 → 22.8 | 0 → 38.0 |
-   | horizontal | 6.0 | 2.2 | 1.6 | 1.6 | 7.6 | 3.8 | 3 | 10 | 0 → 15.2 | 1.6 → 35.8 |
+   | horizontal | 6.0 | 2.2 | 1.6 | 1.6 | 7.6 | 3.8 | 3 | 10 | 1.9 → 17.1 | 1.9 → 36.1 |
 
-   Horizontal ships with `trim_y = +1.6 cm`; that is a mode-specific
-   registration shift, not a tool offset. **Read all of these from
-   `config/rig.json` at runtime — never hard-code the table above.**
+   Horizontal ships with `trim_x = trim_y = +1.9 cm` — the pickup-cell
+   registration (the rotated 6.0 cm face overhangs the 2.2 cm vertical
+   footprint by 1.9 cm per side), a mode-specific registration shift, not a
+   tool offset. **Read all of these from `config/rig.json` at runtime — never
+   hard-code the table above.**
 
 4. **A level is 1.5 cm, measured from ground.** `level 0` = the block sits on
    the surface, `level 1` = 1.5 cm, `level 2` = 3.0 cm. The firmware derives

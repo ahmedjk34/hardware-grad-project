@@ -36,7 +36,7 @@
     R  = select the VERTICAL grid    (cols 0..6, rows 0..5, block 2.2 x 6.0)
     RR = select the HORIZONTAL grid  (cols 0..2, rows 0..9, block 6.0 x 2.2)
       Gaps are a uniform 1.6 cm on every axis of both grids. Horizontal is
-      registered +1.6 cm along Y and not shifted at all on X. See SECTION 6C.
+      registered +1.9 cm on BOTH axes (pickup-cell registration). See SECTION 6C.
       These LATCH a grid layout. NEITHER MOVES ANYTHING. Each is refused
       when it is already true, and both need X/Y homed first. The claw's
       rotation is owned entirely by the build cycle.
@@ -570,8 +570,8 @@ const bool SOFT_LIMIT_VERBOSE = true;
 //
 //   vertical    X: 7 cells (0..6)  centres 0 .. 22.8   pitch 3.8
 //               Y: 6 cells (0..5)  centres 0 .. 38.0   pitch 7.6
-//   horizontal  X: 3 cells (0..2)  centres 0 .. 15.2   pitch 7.6
-//               Y: 10 cells (0..9) centres 1.6 .. 35.8 pitch 3.8
+//   horizontal  X: 3 cells (0..2)  centres 1.9 .. 17.1  pitch 7.6
+//               Y: 10 cells (0..9) centres 1.9 .. 36.1  pitch 3.8
 //
 // GRID_COLS / GRID_ROWS hold the HIGHEST INDEX, not a count, which is why they
 // read 6/5 and 2/9 - there are 7/6 and 3/10 addressable cells.
@@ -612,10 +612,14 @@ const bool SOFT_LIMIT_VERBOSE = true;
 //   HOW THE TWO GRIDS RELATE
 // ------------------------------------------------------------
 //   X  a horizontal column covers two vertical columns plus the gap between
-//      them: block 6.0 = 2.2 + 1.6 + 2.2, pitch 7.6 = 2 * 3.8. NOT shifted.
-//   Y  a vertical row holds two horizontal rows - its lower and upper 2.2 cm.
-//      The horizontal grid is registered +1.6 cm along Y (GRID_TRIM_Y_CM),
-//      which is the move the arm makes after picking up and before rotating.
+//      them: block 6.0 = 2.2 + 1.6 + 2.2, pitch 7.6 = 2 * 3.8.
+//   Y  a vertical row is 6.0 cm; a horizontal block laid on it is 2.2 cm.
+//   Both axes carry the SAME +1.9 cm registration (GRID_TRIM_{X,Y}_CM): the
+//   block is picked up standing at the vertical [0,0] feeder, centred on home,
+//   then rotated 90 degrees about the grip. The rotated 6.0 cm face overhangs
+//   the 2.2 cm vertical footprint by 6.0/2 - 2.2/2 = 1.9 cm per side, so a
+//   +1.9 cm trim on each axis seats horizontal [0,0] flush against the
+//   vertical [0,0] block edge (near edge in X, far edge in Y).
 //
 // Nothing here swaps an X extent for a Y one; see D12 in
 // plans/dual-orientation-grid.md.
@@ -624,20 +628,20 @@ const bool SOFT_LIMIT_VERBOSE = true;
 // [0,0] block sits on the holder home point, and printed [c,r] is firmware
 // [c,r]. Half of that block hangs back past the switches - that is expected.
 //
-// PHYSICAL RR REGISTRATION (Y axis, positive away from Y home):
+// PHYSICAL RR REGISTRATION (both axes, positive away from the home switch):
 //
 //    home
-//      0        1.6        3.8                 7.6        (cm along Y)
+//      0        1.9        3.8                 7.6        (cm, either axis)
 //      |         |          |                   |
-//   [--- vertical row 0, 6.0 cm centred on 0 ---]
-//   |<-2.2->|<-1.6->|<-2.2->|<-1.6 gap->|<-2.2->|  the 2.2 sub-cells, pitch 3.8
+//   [--- vertical [0,0], 6.0 cm centred on 0 ---]        (along its long axis)
+//   |<--2.2-->|<---1.6--->|<---2.2--->| ...
 //      ^         ^
-//      |         h ROW 0 centre = 1.6   (the +1.6 GRID_TRIM_Y_CM)
-//      v [0,0] centre = 0 = the feeder / pick-up point
+//      |         h [0,0] centre = 1.9   (the +1.9 GRID_TRIM_{X,Y}_CM)
+//      v vertical [0,0] centre = 0 = the feeder / pick-up point
 //
 // So RR only latches the mode; the next B picks the block up standing at home,
-// moves +1.6 cm along Y, rotates 90 degrees CCW, then places. X is not shifted
-// at all. B 0 0 remains a no-op in both modes.
+// moves +1.9 cm along BOTH X and Y, rotates 90 degrees CCW, then places.
+// B 0 0 remains a no-op in both modes.
 //
 // Targets are computed as absolute physical cell centres and rounded only
 // once, so sub-step rounding error never accumulates between cells.
@@ -679,15 +683,15 @@ float GRID_GAP_Y_CM[GRID_MODE_COUNT] = {1.6, 1.6};
 // ------------------------------------------------------------
 //   THE FOUR OFFSET FAMILIES, AND WHAT EACH ONE IS FOR
 // ------------------------------------------------------------
-//   These used to overlap - the horizontal Y registration lived in a TRIM while
-//   the same physical effect was also partly in a TOOL OFFSET, so tuning either
-//   one moved the grid twice. Each name now has exactly one job:
+//   These used to overlap - the horizontal registration was split between a
+//   TRIM and a TOOL OFFSET, so tuning either one moved the grid twice. Each
+//   name now has exactly one job:
 //
 //     GRID_BLOCK_* / GRID_GAP_*   the physical lattice. Stated per mode.
 //     GRID_TRIM_*                 moves the WHOLE grid against the home
-//                                 switches. Both modes 0.0. If this is not
-//                                 zero the printed sheet is misregistered -
-//                                 move the paper, do not tune the number.
+//                                 switches. Vertical is 0.0 on both axes;
+//                                 horizontal carries its pickup-cell
+//                                 registration here - see below.
 //     GRID_ERROR_OFFSET_*         the calibration knob. A CONSTANT per-mode
 //                                 nudge; it cannot fix an error that grows
 //                                 with distance (that is a steps/cm or pitch
@@ -696,15 +700,19 @@ float GRID_GAP_Y_CM[GRID_MODE_COUNT] = {1.6, 1.6};
 //                                 centre sits from the holder centre in each
 //                                 rotation. Nothing to do with the grid.
 //
-//   The horizontal Y registration is NOT in any of these any more. It is
-//   structural - row 0 is the upper 2.2 cm sub-slot of vertical row 0 - and it
-//   is derived in gridLatticeStartCmOf(). Putting 1.6 back in the trim would
-//   double-count it.
+//   THE HORIZONTAL REGISTRATION LIVES IN GRID_TRIM_{X,Y}_CM, +1.9 cm on BOTH
+//   axes. The arm picks a block up standing at the vertical [0,0] feeder and
+//   rotates it 90 degrees about the grip; the rotated 6.0 cm face then
+//   overhangs the vertical footprint by half the vertical pitch (3.8 / 2 =
+//   1.9 cm) on each side. Trimming +1.9 on each axis seats horizontal [0,0]
+//   flush against the vertical [0,0] block edge. It is applied exactly once,
+//   through cellCentreCmOf(); nothing adds it structurally.
 
-// Signed whole-allocation shift, per mode. Not copied between modes - see
-// above. Both zero: the lattice is anchored on the home corner, not centred.
-float GRID_TRIM_X_CM[GRID_MODE_COUNT] = {0.0, 0.0};
-float GRID_TRIM_Y_CM[GRID_MODE_COUNT] = {0.0, 1.6};
+// Signed whole-allocation shift, per mode. Not copied between modes. Vertical
+// is anchored on the home corner (0.0 / 0.0); horizontal carries the +1.9 cm
+// pickup-cell registration on both axes (see the block above).
+float GRID_TRIM_X_CM[GRID_MODE_COUNT] = {0.0, 1.9};
+float GRID_TRIM_Y_CM[GRID_MODE_COUNT] = {0.0, 1.9};
 
 // AI AGENT NOTE: For any user-marked "error" offsetting, use these variables.
 // They apply exactly like GRID_TRIM_* and shift every grid centre from home.
@@ -2516,7 +2524,7 @@ float xyStepsPerCmOf(uint8_t axis)
 //
 //   That is the whole model. There is no leading gap, no trailing gap and no
 //   centring: the trim IS the only thing that moves a grid, which is how the
-//   horizontal Y registration (+1.6 cm) is expressed.
+//   horizontal pickup-cell registration (+1.9 cm on both axes) is expressed.
 //
 //   THE GAPS ARE UNIFORM. A vertical block reads 2.2 + 1.6 + 2.2 along its
 //   6.0 cm length, and consecutive blocks are also 1.6 cm apart, so the 2.2 cm
@@ -2682,8 +2690,8 @@ long physicalGridCountMaxOf(uint8_t axis)
 // Cell 0's CENTRE is the home corner itself, so the whole model is one line.
 //   vertical   X: 0, 3.8, 7.6, 11.4, 15.2, 19.0, 22.8   (22.8 = the X cap)
 //   vertical   Y: 0, 7.6, 15.2, 22.8, 30.4, 38.0        (38.0 = the Y cap)
-//   horizontal X: 0, 7.6, 15.2
-//   horizontal Y: 1.6, 5.4, 9.2 ... 35.8                (the +1.6 registration)
+//   horizontal X: 1.9, 9.5, 17.1                        (the +1.9 registration)
+//   horizontal Y: 1.9, 5.7, 9.5 ... 36.1                (the +1.9 registration)
 float cellCentreCmOf(uint8_t axis, long index)
 {
   return gridTrimCmOf(axis) + (float)index * gridPitchCmOf(axis);

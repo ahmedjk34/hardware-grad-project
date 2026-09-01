@@ -85,8 +85,9 @@ centre and matching `G` command.
 There are two grids, and which one is live decides every coordinate. The
 `vertical` grid is `6 × 5` (blocks standing, `6 × (2.2 + 1.6) = 22.8 cm` by
 `5 × (6.0 + 0.8) = 34 cm`); the `horizontal` grid is `2 × 10` (blocks lying,
-`2 × (6.0 + 1.6) = 15.2 cm` by `10 × (2.2 + 0.8) = 30 cm`). Both fit inside the
-`24.3 × 40 cm` travel with room to spare at the shipped `trim 0`. Including
+`2 × (6.0 + 1.6) = 15.2 cm` by `10 × (2.2 + 0.8) = 30 cm`). Vertical ships at
+`trim 0`; horizontal at `trim_x = trim_y = +1.9 cm` (pickup-cell registration).
+Both fit inside the travel with far-end slack. Including
 coordinate zero, commands span col `0..cols` and row `0..rows`: `[0,0]` home,
 `[col,0]` X-only, and `[0,row]` Y-only. `MachineGrid.from_config(mode=...)`
 gives you either; `rig.json`'s `grid.active_mode` picks the default.

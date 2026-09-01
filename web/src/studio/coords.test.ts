@@ -63,10 +63,10 @@ describe("Studio coordinates against python/rig/grid.py", () => {
 });
 
 describe("the facts the fixtures cannot state on their own", () => {
-  it("puts cell 0's centre on the home corner in both modes", () => {
+  it("puts vertical cell 0 on the home corner and horizontal cell 0 on its +1.9 cm registration", () => {
     expect(cellToMachine("vertical", 0, 0, 0)).toEqual({ x: 0, y: 0, z: 7.5 });
-    expect(cellToMachine("horizontal", 0, 0, 0).x).toBeCloseTo(0, 6);
-    expect(cellToMachine("horizontal", 0, 0, 0).y).toBeCloseTo(16, 6); // trim_y +1.6 cm
+    expect(cellToMachine("horizontal", 0, 0, 0).x).toBeCloseTo(19, 6); // trim_x +1.9 cm
+    expect(cellToMachine("horizontal", 0, 0, 0).y).toBeCloseTo(19, 6); // trim_y +1.9 cm
   });
 
   it("never swaps a width for a length", () => {

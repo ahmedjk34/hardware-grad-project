@@ -21,7 +21,7 @@ leading gap, no trailing gap and no centring; the trim is the only thing that
 moves a grid. Gaps are a uniform 1.6 cm on every axis of both modes.
 
     vertical    7 cols x 6 rows   centres X 0..22.8   Y 0..38.0
-    horizontal  3 cols x 10 rows  centres X 0..15.2   Y 1.6..35.8
+    horizontal  3 cols x 10 rows  centres X 1.9..17.1  Y 1.9..36.1
 
 [0,0] is the FEEDER in both modes and is never built on. The feeder does not
 rotate, and because the lattice is centre-anchored its centre is home itself,
@@ -314,8 +314,8 @@ class MachineGrid:
     # full-travel grid puts its last centre exactly on the software cap and
     # cell 0's block hangs half a block back past the switches. There is no
     # leading gap, no trailing gap and no centring - the trim is the only thing
-    # that moves a grid, which is how horizontal's +1.6 cm Y registration is
-    # expressed.
+    # that moves a grid, which is how horizontal's +1.9 cm pickup-cell
+    # registration (both axes) is expressed.
     #
     # Every gap is 1.6 cm, on both axes of both modes. A vertical block reads
     # 2.2 + 1.6 + 2.2 along its 6.0 cm length and consecutive blocks are also

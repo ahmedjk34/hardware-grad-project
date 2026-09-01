@@ -168,23 +168,24 @@ check("that overhang is exactly each axis' budget, both ends",
 # MachineGrid and the camera overlay, so it is transcribed here rather than
 # recomputed: a test that redoes the arithmetic would agree with a bug.
 #
-#  All rows are at the shipped trim of 0.0, i.e. each allocation centred in the
-#  22.8 x 38.0 cm travel (4550 x 7600 steps). The lattice is CENTRE-ANCHORED:
-#  the centre of cell 0 sits on the home corner, so the last vertical centre
-#  lands exactly on the software cap and cell 0's block hangs half a block back
-#  past the switches. Gaps are a uniform 1.6 cm on every axis of both modes.
+#  Vertical is at the shipped trim of 0.0 on both axes; horizontal carries its
+#  +1.9 cm pickup-cell registration on both axes. The lattice is CENTRE-ANCHORED:
+#  the centre of cell 0 sits on the home corner (plus the trim), so the last
+#  vertical centre lands exactly on the software cap and cell 0's block hangs
+#  half a block back past the switches. Gaps are a uniform 1.6 cm on every axis
+#  of both modes.
 #
 #  mode        axis  block  gap  pitch  n   centres          block edges
 #  vertical    X     2.2    1.6  3.8    7   0.0  -> 22.8     -1.1 -> 23.9
 #  vertical    Y     6.0    1.6  7.6    6   0.0  -> 38.0     -3.0 -> 41.0
-#  horizontal  X     6.0    1.6  7.6    3   0.0  -> 15.2     -3.0 -> 18.2
-#  horizontal  Y     2.2    1.6  3.8   10   1.6  -> 35.8      0.5 -> 36.9
+#  horizontal  X     6.0    1.6  7.6    3   1.9  -> 17.1     -1.1 -> 20.1
+#  horizontal  Y     2.2    1.6  3.8   10   1.9  -> 36.1      0.8 -> 37.2
 #
 #  Vertical fills its travel exactly: 6 * 3.8 = 22.8 and 5 * 7.6 = 38.0. That
 #  is what "the build area IS the travel area" means, and it is why vertical X
-#  has seven columns rather than six. Horizontal is registered +1.6 cm on Y
-#  (the move the arm makes after picking up, before rotating) and not shifted
-#  on X at all - a 4th X column would geometrically fit but is not used.
+#  has seven columns rather than six. Horizontal is registered +1.9 cm on BOTH
+#  axes (the rotated 6.0 cm face overhangs the 2.2 cm vertical footprint by
+#  6.0/2 - 2.2/2 = 1.9 cm per side); a 4th X column is still refused.
 
 SECTION_3 = {
     "vertical": {
@@ -205,10 +206,10 @@ SECTION_3 = {
         "gap": (1.6, 1.6),
         "pitch": (7.6, 3.8),
         "footprint": (21.20, 36.40),
-        "first_centre": (0.00, 1.60),
-        "last_centre": (15.20, 35.80),
-        "first_edge": (-3.00, 0.50),
-        "last_edge": (18.20, 36.90),
+        "first_centre": (1.90, 1.90),
+        "last_centre": (17.10, 36.10),
+        "first_edge": (-1.10, 0.80),
+        "last_edge": (20.10, 37.20),
         "cells": 30,
     },
 }
@@ -341,13 +342,13 @@ except ValueError as exc:
           "before home" in str(exc), str(exc))
 
 check("horizontal at the shipped trims is accepted",
-      horizontal_at(0.0, 1.6).mode == "horizontal")
-check("horizontal row 0 sits +1.6 cm out - the registration shift",
-      math.isclose(horizontal_at(0.0, 1.6).cell_center_y_cm(0), 1.6))
-check("horizontal X is NOT shifted: column 0's centre is the home corner",
-      math.isclose(horizontal_at(0.0, 1.6).cell_center_x_cm(0), 0.0))
+      horizontal_at(1.9, 1.9).mode == "horizontal")
+check("horizontal row 0 sits +1.9 cm out on Y - the pickup registration",
+      math.isclose(horizontal_at(1.9, 1.9).cell_center_y_cm(0), 1.9))
+check("horizontal col 0 sits +1.9 cm out on X too - same registration",
+      math.isclose(horizontal_at(1.9, 1.9).cell_center_x_cm(0), 1.9))
 check("every Y gap is a uniform 1.6 - no alternation anywhere",
-      [round(horizontal_at(0.0, 1.6).gap_before_row_cm(r), 3)
+      [round(horizontal_at(1.9, 1.9).gap_before_row_cm(r), 3)
        for r in range(1, 10)] == [1.6] * 9)
 
 # Vertical keeps its half-block budget (block_x/2 = 1.1, block_y/2 = 3.0).
@@ -632,19 +633,19 @@ check("from_config reads grid.modes.<mode>.shift_x_cm",
 check("a shifted grid no longer matches the unshifted config",
       not MachineGrid.from_config(_cfg, mode="vertical").matches())
 
-# Horizontal has a +1.6 cm Y registration trim, so a modest negative shift is
+# Horizontal has a +1.9 cm Y registration trim, so a modest negative shift is
 # still a legal grid; a big one that unseats cell 0 is refused outright.
 check("horizontal tolerates a -1.0 cm Y shift (trim headroom)",
-      math.isclose(horizontal_at(0.0, 1.6).cell_center_y_cm(0), 1.6)
+      math.isclose(horizontal_at(1.9, 1.9).cell_center_y_cm(0), 1.9)
       and math.isclose(
           MachineGrid(
               cols=3, rows=10, mode="horizontal",
               block_x_cm=6.0, block_y_cm=2.2, gap_x_cm=1.6, gap_y_cm=1.6,
               workspace_width_cm=22.8, workspace_height_cm=38.0,
-              trim_x_cm=0.0, trim_y_cm=1.6,
+              trim_x_cm=1.9, trim_y_cm=1.9,
               max_edge_overhang_x_cm=3.0, max_edge_overhang_y_cm=3.0,
               shift_y_cm=-1.0,
-          ).cell_center_y_cm(0), 0.6))
+          ).cell_center_y_cm(0), 0.9))
 try:
     MachineGrid(
         cols=7, rows=6, mode="vertical",

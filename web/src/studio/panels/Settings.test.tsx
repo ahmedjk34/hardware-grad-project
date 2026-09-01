@@ -12,12 +12,12 @@ describe("estimated validation settings", () => {
     expect(screen.getByLabelText("Support ratio")).toHaveValue(0.55);
     expect(screen.getByLabelText("Claw clearance in millimetres")).toHaveValue(8);
     expect(screen.getByLabelText("Level ceiling")).toHaveValue(6);
-    expect(screen.getByLabelText("Block cycle in seconds")).toHaveValue(40);
+    expect(screen.getByLabelText("Block cycle in seconds")).toHaveValue(2.115);
     expect(screen.getByLabelText("Latch homing in seconds")).toHaveValue(16);
     expect(screen.getByText(/Nobody has measured this rig/)).toBeInTheDocument();
     expect(screen.getByText(/Measure the claw and change this/)).toBeInTheDocument();
     expect(screen.getByText(/operator limit, not a physical one/)).toBeInTheDocument();
-    expect(screen.getByText(/not yet timed against the mock/)).toBeInTheDocument();
+    expect(screen.getByText(/measured across five mock builds/)).toBeInTheDocument();
     expect(screen.getByText(/A guess until M7 measures it/)).toBeInTheDocument();
   });
 

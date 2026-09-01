@@ -21,6 +21,7 @@ import * as api from "./api";
 import type { StateModel } from "./types";
 import { preloadStudio } from "./routes/studio-loader";
 import { usePhone } from "./media";
+import { RunnerPanel } from "./components/RunnerPanel";
 
 const store = createConsoleStore();
 
@@ -42,6 +43,8 @@ export function App() {
   const snapshot = useSyncExternalStore(store.subscribe, () => store.snapshot);
   const [collecting, setCollecting] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [runnerModelId, setRunnerModelId] = useState<string | null>(null);
+  const [runnerActive, setRunnerActive] = useState(false);
   const phone = usePhone();
   const [cornerHandler, setCornerHandler] = useState<((point: [number, number], imageSize: [number, number]) => void) | null>(null);
   const changeHandler = useCallback((handler: ((point: [number, number], imageSize: [number, number]) => void) | null) => setCornerHandler(() => handler), []);
@@ -115,9 +118,14 @@ export function App() {
             }
             twin={
               <TwinPanel state={state} connected={snapshot.connected}
-                         lastUpdateAt={snapshot.updatedAt} />
+                         lastUpdateAt={snapshot.updatedAt}
+                         modelId={runnerModelId ?? undefined}
+                         onModelIdChange={setRunnerModelId}
+                         modelSelectionDisabled={runnerActive} />
             }
           />
+          <RunnerPanel state={state} connected={snapshot.connected}
+                       modelId={runnerModelId ?? ""} onActiveChange={setRunnerActive} />
           <RigLog log={snapshot.log} defaultOpen={!phone} />
         </div>
 

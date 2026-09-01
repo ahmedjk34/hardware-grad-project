@@ -148,7 +148,7 @@ def main() -> None:
                    error_offset_x_cm=0.15, error_offset_y_cm=0.05,
                    shift_x_cm=1.1, shift_y_cm=0.45)),
         case("wide horizontal everything", "horizontal",
-             widen(cfg, "horizontal", trim_x_cm=1.6, trim_y_cm=1.6,
+             widen(cfg, "horizontal", trim_x_cm=1.9, trim_y_cm=1.9,
                    error_offset_x_cm=-0.25, error_offset_y_cm=0.3,
                    shift_x_cm=0.9, shift_y_cm=0.75)),
         case("wide horizontal negative error offset", "horizontal",

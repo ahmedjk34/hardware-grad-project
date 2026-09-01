@@ -34,10 +34,10 @@ console this attaches to).
 | M4 — The compiler | ✅ delivered | `compile.ts` (support graph, Kahn order, latch state machine, deterministic), `panels/ProgramView.tsx`, per-block/per-latch estimate settings |
 | M5 — Library | ✅ delivered | `rigmodel.ts` (the `rigmodel/1` file), `library.ts` (Result CRUD, 4 MB budget), `thumbnail.ts` + `scene/Capture.tsx`, `panels/LibraryDrawer.tsx`, three built-in examples |
 | M6 — The twin | ✅ delivered | `twin.ts` (the whole state→picture mapping, fixture-tested against recorded server sessions), `scene/Twin.tsx`, `components/TwinPanel.tsx` + `Instrument.tsx` on the index page, SYNC VIEW, a read-only mode mirror |
-| M7 — The runner | not started | executing a compiled program through `/api/build` |
+| M7 — The runner | ✅ delivered | pure exhaustive runner reducer, guarded effect driver, STEP/RUN/DRY RUN, feeder guidance, failure lock/pause, Markdown evidence report |
 | M8 — Wow pass | not started | shift gizmo, x-ray by level, cross-mode bridging |
 
-**Test suite.** `cd web && npm test` — **347 tests across 30 files**, all green.
+**Test suite.** `cd web && npm test` — **380 tests across 34 files**, all green.
 
 | file | tests | what it holds |
 | --- | --- | --- |
@@ -51,7 +51,11 @@ console this attaches to).
 | `studio/library.test.ts` | 20 | CRUD, index/body split, one corrupt body costing one card, unavailable and full storage, the budget refusal, export/import |
 | `studio/examples.test.ts` | 23 | the three examples as fixtures — round trip, no errors, compiled program, grid bounds, author order |
 | `studio/twin.test.ts` | 39 | every row of Plan 4 §9.2, LOCKED's explicit `animating === false`, the confirmation fold, and three **recorded** `/api/events` sessions (placed, rejected, aborted) |
-| `components/TwinPanel.test.tsx` | 6 | the read-only mode label, SYNC VIEW, the locked/stale/rejected banners, the model picker, and the desktop/phone instrument layout |
+| `studio/runner.test.ts` | 15 | every named transition, feeder sequencing, abort program position, elapsed/ETA arithmetic, plus an exhaustive all-event walk proving no second build and no serial effect while RUNNING |
+| `studio/runner-driver.test.ts` | 7 | the level/select/verify/build/mode request sequence against a mocked API, axis selection, zero-API dry transport and the defensive RUNNING refusal |
+| `studio/run-report.test.ts` | 2 | deterministic event-derived Markdown, verbatim failures, durations, verification and camera evidence |
+| `components/RunnerPanel.test.tsx` | 5 | full dry tower with no API traffic, mismatch stop, honest stop copy, rejected pause and abort lock |
+| `components/TwinPanel.test.tsx` | 7 | the read-only mode label, SYNC VIEW, locked/stale/rejected banners, controlled model picker, and desktop/phone instrument layout |
 | `studio/thumbnail.test.ts` | 5 | the bottom-up row flip, the 16:10 sizes, graceful absence of `OffscreenCanvas` |
 | `studio/panels/LibraryDrawer.test.tsx` | 18 | cards and meta line, inline rename, duplicate, delete with a real undo, the storage strip, the budget refusal, drop-import confirmation |
 | `studio/settings.test.ts` | 4 | conservative defaults, timing-field backfill, guarded versioned persistence |
@@ -70,15 +74,15 @@ console this attaches to).
 | `step7` / `step9` / `step10` | 5 / 4 / 1 | Plan 3 console guards — must never regress |
 | `lib/workspace.test.tsx` | 3 | the homography port |
 
-**Bundle**, from `npm run build` at the end of M6:
+**Bundle**, from `npm run build` at the end of M7:
 
 | chunk | size | notes |
 | --- | --- | --- |
-| console entry `index-*.js` | 254.93 kB (81.61 kB gzip) | still contains **no** three.js. **+36.2 kB over M5**, and all of it is the twin: `twin.ts` pulls in `library.ts` / `examples.ts` / `rigmodel.ts`, and `library.ts` statically imports `compile.ts` and `validate.ts` to build a card. That is the price of the model picker being on the index page; splitting it would put the picker behind a second async import for ~13 kB gzip |
+| console entry `index-*.js` | 273.50 kB (86.75 kB gzip) | still contains **no** three.js. M7 adds the reducer, guarded driver, report exporter and runner chrome to the console entry; the compiler/model code was already reachable through the M6 twin picker |
 | `BlockShadows-*.js` | 917.35 kB (245.23 kB gzip) | the three.js/drei chunk, now **shared** by the Studio and the twin and lazily loaded by whichever arrives first. The name is Rolldown's pick of a shared entry point, not a claim about its contents |
-| `Studio-*.js` | 52.08 kB (16.54 kB gzip) | the Studio route alone, once three.js is shared out |
+| `Studio-*.js` | 52.13 kB (16.56 kB gzip) | the Studio route alone, once three.js is shared out |
 | `Twin-*.js` | 3.40 kB (1.60 kB gzip) | `scene/Twin.tsx`, lazily imported by `TwinPanel` |
-| `index-*.css` | 36.09 kB (7.48 kB gzip) | +1.9 kB for the instrument, the tabs and the twin's plates |
+| `index-*.css` | 39.36 kB (8.06 kB gzip) | M7's feeder plate, failure/report strip and responsive runner layout |
 
 Three.js is still absent from first paint: the twin's canvas is a `React.lazy`
 import behind `routes/twin-loader.ts`, exactly as the Studio route is. Check with:
@@ -145,6 +149,9 @@ web/src/
     motion.ts            row sequencing + fade/downward arrival curves
     validate.ts          the one §6.4 rule table; model and ghost entry points
     twin.ts              §9's whole state → picture mapping; the confirmation fold
+    runner.ts            §10's pure program state machine and exhaustive safety surface
+    runner-driver.ts     one reducer-described effect → existing guarded API route
+    run-report.ts        event-derived Markdown and camera evidence capture
     compile.ts           model → ordered B/R/RR program; support graph, Kahn order, latch state machine
     settings.ts          versioned physical estimates + the two estimate-timing constants, guarded localStorage I/O
     coords.fixtures.json 17 cases / 980 cells dumped from Python
@@ -172,6 +179,7 @@ web/src/
   components/
     Instrument.tsx       camera + twin: two columns, or a phone tab switcher
     TwinPanel.tsx        the twin's chrome: mode mirror, SYNC VIEW, banners, picker
+    RunnerPanel.tsx      STEP/RUN/DRY RUN chrome; executes effects, owns no rules
   media.ts               the phone breakpoint, reduced motion, page visibility
   App.tsx                the operator console (Plan 3), still the console route
 ```
@@ -423,7 +431,7 @@ is removed. Confirmed by deleting each in turn:
 | `byId` | `CONSTRAINT 5` (byId sub-assertion) + `ORDER_TERMS` |
 
 **Serial text is built in one place**, `commandText(op)` → `"B 3 2 1" | "R" |
-"RR"`. `ProgramView` and the future M7 runner both consume `op.text`; a second
+"RR"`. `ProgramView` and the M7 runner both consume `op.text`; a second
 formatter is how `B 3 2 1 ccw` reaches a firmware that reads a fourth word as a
 parse error.
 
@@ -441,12 +449,15 @@ collection is built from model order; every comparator chain ends in `byId`.
 behaviour, so the byte-identical program/stats check excludes it.)
 
 **The estimate** is `blocks × blockCycleSeconds + latches × latchHomingSeconds`,
-both named constants in `settings.ts` (`BLOCK_CYCLE_SECONDS = 40` from
-`rig/link.py`'s "~40 s", `LATCH_HOMING_SECONDS = 16`) and both editable in the
-`ESTIMATES — NOT MEASUREMENTS` settings block. `estimateLabel(stats)` renders
-`4 blocks · 1 latch · ~2:56` — the `~` is always shown. M7 measures the real
-mean against `--mock`; when it does, the constant moves and this changelog
-records that it came from a measurement.
+both named constants in `settings.ts`. M7 replaced the M4 guess with
+`BLOCK_CYCLE_SECONDS = 2.115`, the mean of five complete guarded cycles against
+`python -m web --mock` (2.113 / 2.108 / 2.112 / 2.104 / 2.140 s).
+`LATCH_HOMING_SECONDS = 16` remains a visible guess. The mock mean times the
+demo/rehearsal transport, **not the physical arm**; the setting copy says so and
+the value remains editable for a hardware measurement. With those defaults
+`estimateLabel(stats)` renders `4 blocks · 1 latch · ~0:24` — the `~` is always
+shown. The runner uses the same values for its count / elapsed / ETA readout;
+there is no predictive progress bar.
 
 **Report-back (from the milestone prompt).**
 - *Worst case.* The heuristic re-homes once per mode transition per level band.
@@ -577,17 +588,16 @@ presentation. They are listed in the drawer above the saved models and are
 **never written to storage**: they cost no budget and cannot be deleted.
 
 **The bridge carries `shiftX +1.00 cm` on the horizontal grid, and that is the
-finding of this milestone.** With the shipped `rig.json` and the default 0.55
-support ratio, *no* unshifted cross-mode bridge is legal. The vertical pitch is
-3.8 cm and the horizontal 7.6 cm, so a horizontal block always lands over the
-1.6 cm gap between two vertical stacks: the best available contact is 46.7% of
-its footprint (three vertical piers), under the ratio. The reverse — a vertical
-block on two horizontal piers — reaches 68.3% but puts its centroid in the gap,
-which §6.5's centroid rule refuses. A search over every (tower pair, span cell,
-shift in 1 mm steps) triple through `validateModel` found the legal shifts to be
-**+0.8…+1.1 cm and +2.7…+3.0 cm**; +1.0 is the round one, and `v[2,2] v[3,2]`
-with `h[1,4]` is its central case. All of that is recorded in
-`examples.ts`'s docstring and pinned by a test.
+finding of this milestone.** With the shipped `rig.json` (horizontal registered
++1.9 cm on both axes) and the default 0.55 support ratio, *no* cross-mode bridge
+is legal on the registration alone: the +1.9 cm trim lands the span dead over
+the 1.6 cm gap between two vertical stacks — 73.3% contact but centroid over
+air, which §6.5's centroid rule refuses. A ±1.0 cm operator shift slides the
+span so its centroid rides one tower. A search over `shiftX` in 1 mm steps
+through `validateModel` for `v[2,2] v[3,2]` / `h[1,4]` found the legal shifts to
+be **−1.0…−0.8 cm and +0.8…+1.1 cm**; +1.0 is the round one (56.7% contact,
+centroid over the far tower). All of that is recorded in `examples.ts`'s
+docstring and pinned by a test.
 
 Because the rig is not applying that shift, the bridge opens with a
 `GEOMETRY_DRIFT` warning naming it. **That warning is the feature**: it is the
@@ -678,6 +688,71 @@ aborted — one entry per state the socket would have delivered. The mapping is
 tested against what the server actually sends, not against payloads the test
 invented. Same bridge as the coordinate fixtures: **when the two disagree,
 Python is right.**
+
+---
+
+### 5.14 `studio/runner.ts` — the program is not a queue
+
+`step(runState, event) → { state, effects }` is the whole runner. Its phase is
+the named union from Plan 4 §10: `idle`, `arming`, `verifying`,
+`awaiting-confirm`, `building`, `settled`, `rejected`, `aborted`, `paused`,
+`stopped-mismatch`, `locked`, `done`. `inFlight`, the last observed server
+`buildState`, and connection state are explicit fields; none is inferred from
+three unrelated booleans in a component.
+
+Effects are descriptions only: `select`, `verify`, `build`, `mode`, `warn`.
+The normal build transition is exactly:
+
+```text
+POST /api/level only when the level differs
+POST /api/select for a camera-mapped cell, or /api/select/axis for a zero-axis cell
+verify returned state.command byte-for-byte against op.text
+POST /api/build { confirm: true, command: op.text }
+wait for RUNNING → terminal server state before advancing
+```
+
+There is no effect for a batch, cancellation or retry. A mismatch becomes
+`stopped-mismatch`, preserves `program` and both strings verbatim, sets the run
+read-only and emits nothing. `REJECTED` keeps `cursor` on the same op and offers
+only continue/end. `ABORTED` becomes `locked`, leaves the reached step visible
+and has no outgoing recovery transition. Socket loss becomes `paused` at once;
+reconnection does not resume automatically, but allows a deliberate continue
+only after state messages are audible again.
+
+The safety test walks every candidate event out of every reachable canonical
+state for STEP, RUN and DRY RUN. It fails immediately if a turn emits more than
+one `build`, emits a second one while `inFlight`, or describes a real
+select/build/mode while the resulting state still says `RUNNING`. This is the
+proof M7 exists to supply; `routes_command.require_mutable`, `BuildJob.start`
+and `BuildController` still repeat the guard server-side.
+
+Feeder guidance is pure too. Before START it shows the first block. Once a
+build is in flight that block has already left the feeder, so the prompt uses
+the otherwise-dead motion window to show the next block's colour and command.
+Repeated colour becomes the quiet `SAME COLOUR` line. That is how continuous
+RUN remains compatible with a manual feeder instead of flashing an instruction
+after it is too late to act on it.
+
+### 5.15 `runner-driver.ts` and `run-report.ts`
+
+`executeEffect` is the thin transport. Real effects check the latest observed
+state immediately before calling the existing functions in `api.ts`; the
+backend remains authoritative. An arbitrary cell uses the centre of the
+server-supplied camera polygon. Row-zero/column-zero targets use the existing
+axis route. A build request returns only `build-running`; the WebSocket state,
+not the POST response, supplies the terminal result.
+
+DRY RUN executes the same reducer with fake select/mode/build transport. It
+never calls an API method; a fake build settles after 600 ms. A 24-block build
+therefore rehearses in about 14.4 seconds plus mode effects and UI scheduling,
+inside the plan's approximate twenty-second target.
+
+The report is built only from `RunLogEntry` values produced by terminal events,
+never from intended program lines. Its deterministic Markdown table records
+command/result/duration and optional vision verification; totals and failures
+follow, including verbatim mismatch strings. On each real terminal result the
+driver attempts a 320 px WebP capture of the live MJPEG image. Capture failure
+is non-fatal and simply leaves that evidence row without a thumbnail.
 
 ---
 
@@ -900,6 +975,29 @@ plus whatever is in the library — and remembered in
 that the operator did not choose is the same class of mistake as a block
 appearing that the rig did not place.
 
+### 6.11 `RunnerPanel.tsx`
+
+The runner sits below the camera/twin instrument. It compiles the model already
+chosen in the twin; while any non-terminal-safe run state is preserved, that
+picker is disabled so the picture and program cannot diverge. The component is
+a driver and a drawing surface: it applies reducer turns, executes their effect
+descriptions, and folds WebSocket terminal state back into events. It does not
+decide ordering, commands, feeder sequence, ETA or failure policy.
+
+STEP reuses the console's existing `BuildButton`, including its expiring
+two-tap arm; `BuildButton` gained only an optional callback at the point where
+it would otherwise call `api.build`. RUN exposes `STOP AFTER THIS BLOCK`, and
+the always-visible line underneath says `the block in flight will finish — the
+rig cannot be interrupted`. Pressing it changes the disabled control to
+`STOPPING AFTER THIS BLOCK`; it does not alter the current effect. DRY RUN keeps
+`DRY RUN — no serial traffic` in `--motion` for the full session.
+
+Mode ops always stop at `awaiting-confirm` and render the X/Y homing warning
+before the driver may call `/api/mode`, in all three styles. Amber is used for
+recoverable rejection/staleness and the dry label; red is reserved for command
+mismatch and the locked abort. Reduced motion disables every runner transition
+or animation; the console's RUNNING banner remains the only ambient motion.
+
 ---
 
 ## 7. Routing and code-splitting
@@ -979,6 +1077,18 @@ first in the diff.
 
 ## 10. Known gaps and things to watch
 
+- **The full five-block tower was exercised through a real `python -m web
+  --mock` process and the guarded HTTP routes**, including level, selection,
+  exact command verification, build and terminal polling. The five cycles were
+  2.113 / 2.108 / 2.112 / 2.104 / 2.140 s (mean 2.115 s). This confirms the
+  backend sequence and supplies the estimate constant. It is not a browser E2E
+  test and not a physical-rig measurement; Vitest covers the browser driver
+  against the same API shapes.
+- **Camera thumbnails are best-effort browser evidence.** A same-origin MJPEG
+  frame is copied into a 320 px canvas after each terminal result. jsdom tests
+  the sizing/encoding contract, but a headless browser was not used to inspect
+  the resulting pixels. A tainted or unavailable canvas omits the thumbnail
+  rather than losing the run report.
 - **The optimized M2 scene and a real placement have been smoke-rendered** at
   1440 × 900 in headless Chrome with software WebGL. The test clicked a known
   top-view cell, observed `1 BLOCKS`, exercised the per-instance fade shader and
@@ -1031,6 +1141,75 @@ first in the diff.
 
 Newest first. One entry per landed change; note anything that contradicts the
 plan or that a future reader could not infer.
+
+### Horizontal grid registration → +1.9 cm on both axes
+
+- `config/rig.json` `grid.modes.horizontal`: `trim_x_cm` 0.0 → **1.9**,
+  `trim_y_cm` 1.6 → **1.9**. The registration is now symmetric: the block is
+  picked up standing at the vertical `[0,0]` feeder and rotated about the grip,
+  and the rotated 6.0 cm face overhangs the 2.2 cm vertical footprint by
+  `6.0/2 − 2.2/2 = 1.9 cm` per side, so a +1.9 cm trim on each axis seats
+  horizontal `[0,0]` flush against the vertical `[0,0]` block edge. Supersedes
+  the earlier single-axis `trim_y = +1.6` ("one gap width"), which the docs
+  (AGENTS.md §6C diagram vs prose, `dual-orientation-grid.md` D14) had never
+  agreed on. Firmware `GRID_TRIM_{X,Y}_CM` horizontal slots moved to match;
+  `test_grid.py`'s `.ino`↔config parity check holds.
+- **This value is a geometric derivation, not a rig measurement.** Committed as
+  authoritative per the owner's call; the printed sheet and rig must be
+  physically re-registered to match, and a real pickup-place measurement is
+  still what would confirm it.
+- The 3 × 10 reachable grid is unchanged (X last centre 17.1 ≤ 22.8, Y 36.1 ≤
+  38.0; near-edge −1.1 inside the `max_edge_overhang_x_cm = 3.0` budget). No
+  clip, no count change.
+- **BRIDGE re-tuned, no rule touched.** `+1.9` trim alone centres the span dead
+  over the 1.6 cm gap — 73.3% contact but centroid over air, which §6.5
+  refuses (mirror of the old "reverse reaches 68.3% in the gap" finding). The
+  legal `shiftX` windows for `v[2,2] v[3,2]` / `h[1,4]` are now **−1.0…−0.8 cm
+  and +0.8…+1.1 cm**; `BRIDGE_SHIFT_CM` stays `1` (56.7% contact, centroid over
+  the far tower) and the example still opens with exactly one `GEOMETRY_DRIFT`
+  warning. `coords.fixtures.json` regenerated (17 cases / 980 cells unchanged;
+  horizontal cases moved +19 mm X / +3 mm Y). `validate.test.ts`'s bridge-search
+  pin moved from candidate `[0,2]` to `[0,1]` (descriptive, not a rule).
+
+### M7 — The runner
+
+- Added `studio/runner.ts`, the pure `step(state,event)` reducer with the named
+  §10 phases and effect descriptions only. Its exhaustive reachable-state test
+  covers every candidate event across STEP/RUN/DRY RUN and proves no second
+  build is emitted while one is in flight and no real select/build/mode effect
+  exists while the reducer still observes `build_state === RUNNING`.
+- Added `studio/runner-driver.ts`. Per block it changes level only when needed,
+  posts `/api/select` (or `/api/select/axis` on a genuine zero-axis target),
+  returns the server's `state.command` to the reducer for a byte comparison,
+  and only then posts the existing confirmed `/api/build`. It adds no endpoint,
+  batch or authority. A second defensive RUNNING check precedes every real API
+  effect; server guards remain unchanged.
+- STEP reuses `BuildButton`'s existing expiring two-tap confirmation. RUN is
+  continuous and has only honest stop-after-current-block semantics. DRY RUN
+  sends zero API traffic and uses the same reducer with 600 ms fake builds.
+  Every mode op pauses on the X/Y-homing warning before `/api/mode` is possible.
+- The manual-feeder prompt appears before START, then uses an in-flight block's
+  motion time to name the next required colour. Consecutive identical colours
+  reduce to `SAME COLOUR`; the command and `block n of total` remain visible.
+- REJECTED preserves the cursor and exposes only CONTINUE / END RUN. ABORTED
+  preserves the complete program and log read-only at `stopped at step n of
+  total`; there is no cancel or retry control. Socket loss pauses immediately
+  and never auto-resumes. Mismatch shows program/rig strings verbatim, makes the
+  run read-only and emits nothing further.
+- Added the event-derived Markdown report: exact sent commands, terminal
+  results, measured per-command and total durations, optional vision result,
+  best-effort 320 px camera WebP evidence, and verbatim mismatch/abort detail.
+- Measured a complete five-block tower through a real `python -m web --mock`
+  process and the production HTTP routes: **2.113, 2.108, 2.112, 2.104,
+  2.140 s; mean 2.115 s**. `BLOCK_CYCLE_SECONDS` is now 2.115 and feeds both
+  compiler estimates and the runner's elapsed/count/ETA readout. The UI and
+  docs explicitly say this is mock transport timing, not physical-arm timing;
+  the latch's 16 s remains an editable guess.
+- `TwinPanel` can now be controlled by `App`; its picker is frozen while a run,
+  mismatch or lock is preserved, so the twin cannot silently switch to a model
+  different from the executing program.
+- Production build after M7: console 273.50 kB (86.75 kB gzip), CSS 39.36 kB
+  (8.06 kB gzip); Three.js remains absent from first paint.
 
 ### M6 — The twin
 
@@ -1116,7 +1295,8 @@ plan or that a future reader could not infer.
   with a `GEOMETRY_DRIFT` warning naming it. This is Plan 4 §16 open question 3
   answered from the geometry: bridging works, but only with a registration
   shift, and the Studio has to say so. **No rule and no default was changed to
-  make the example pass.**
+  make the example pass.** (The specific ratios and shift windows here are
+  superseded by the horizontal-registration entry above; the finding stands.)
 - Improved `GEOMETRY_DRIFT` to name what actually differs — the mode, the knob
   and both values (`describeDrift`) — instead of "the geometry changed". A model
   that opens saying only that leaves somebody diffing two JSON files; one that

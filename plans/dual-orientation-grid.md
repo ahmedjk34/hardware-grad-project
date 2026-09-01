@@ -37,7 +37,7 @@ quietly working around it.
 | D11 | `rig.json` gains `grid.modes.{vertical,horizontal}`, each **self-contained**. | See D12. |
 | D12 | Each mode declares `block_x_cm` and `block_y_cm` outright. There is no shared `block_width`/`block_length` that gets swapped. | A swap has to be performed identically in the firmware, in `MachineGrid`, and in the camera overlay. Three chances to get a sign or an axis backwards. Declaring both per mode removes the operation entirely. |
 | D13 | Trims, error offsets and gaps are **per mode per axis**. | X and Y were already separate. Mode is the missing dimension. |
-| D14 | Horizontal ships at `trim_x = 0.0`, `trim_y = +1.6 cm`; vertical trims remain zero. **Do not copy vertical's trims.** | The horizontal origin is registered from the pickup cell: after pickup, the top 2.2 cm of vertical `[0,0]` is horizontal `[0,0]`, separated by 1.6 cm along forward Y. This is a grid-registration trim, not a tool offset. |
+| D14 | Horizontal ships at `trim_x = +1.9 cm`, `trim_y = +1.9 cm`; vertical trims remain zero. **Do not copy vertical's trims.** | The horizontal origin is registered from the pickup cell: the block is picked up standing at vertical `[0,0]` (centred on home) and rotated 90° about the grip. The rotated 6.0 cm face overhangs the 2.2 cm vertical footprint by `6.0/2 − 2.2/2 = 1.9 cm` per side, so a +1.9 cm trim on each axis seats horizontal `[0,0]` flush against the vertical `[0,0]` block edge. This is a grid-registration trim, not a tool offset. |
 | D15 | `tool_offsets` stays **separate** from trims and keeps its `neutral`/`cw`/`ccw` shape. `cw` has no grid/build route but stays in the schema. | Trim moves cell *centres* (grid layout). Tool offset moves the *holder* for a given centre (claw asymmetry). Conflating them makes calibration unfalsifiable — two knobs that both look like "shift everything". |
 | D16 | `S <cols> <rows>` survives, **scoped to the active mode** and revalidated against that mode's geometry. | Keeps the bring-up path and the reconnect handshake. |
 | D17 | One `config/workspace_map.json`, with both calibrations under keyed modes. Old flat files migrate into `modes.vertical` on read. | Keeps the two calibrations visibly in sync in one artifact. |
@@ -131,8 +131,11 @@ else, that is a signal to stop and re-read the plan.
 > **Superseded geometry (block/gap change).** The block plan is now
 > **2.2 × 6.0 cm** with gaps **1.6 cm along X, 0.8 cm along Y** in both modes;
 > `BLOCK_HEIGHT_CM` stays 1.5. Vertical is **6 × 5**, horizontal is **2 × 10**.
-> Vertical trims remain zero; horizontal ships at `trim_y = +1.6 cm` for the
-> pickup-cell registration described in D14. Vertical error offsets ship at
+> Vertical trims remain zero; horizontal ships at `trim_x = trim_y = +1.9 cm`
+> for the pickup-cell registration described in D14 (later revised from the
+> single-axis `trim_y = +1.6` this note originally quoted; `config/rig.json` and
+> `python/tests/test_grid.py` `SECTION_3` are authoritative). Vertical error
+> offsets ship at
 > `(+0.15, +0.05) cm` for X/Y after incremental correction: the prior
 > `(+0.15, -0.45) cm` was increased by the newly measured `0.5 cm`
 > toward-home Y error. The tables below are recomputed
@@ -167,8 +170,10 @@ and the held block overhangs. Vertical keeps a half-block overhang budget
 
 ### Horizontal — 2 × 10, shipped calibration
 
-X and Y swap their block dimensions. Horizontal has `trim_y = +1.6 cm` for
-the pickup-cell registration; overhang budget is zero on both axes.
+X and Y swap their block dimensions. Horizontal has `trim_x = trim_y = +1.9 cm`
+for the pickup-cell registration (this sub-table's numbers below predate that
+and the block-edge budget amendment in D20 — see `config/rig.json` and
+`test_grid.py` `SECTION_3` for the shipped values).
 
 | axis | block | gap | pitch | count | footprint | centres | block edges |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -190,33 +195,35 @@ still pushes the last block *edge* past the X wall, and `gridGeometryFits`
 catches that only through the per-mode zero overhang budget. This is R2.
 
 **Pickup-cell registration (current hardware behavior).** The feeder is a
-vertical pickup cell, not a bare mathematical point. After the block is picked
-up and the claw is rotated for `RR`, the upper 2.2 cm region of the vertical
-`[0,0]` pickup cell is the horizontal `[0,0]` reference, with 1.6 cm between
-the two 2.2 cm reference regions:
+vertical pickup cell, not a bare mathematical point. The block is picked up
+standing at vertical `[0,0]`, centred on home, then rotated 90° about the grip
+for `RR`. The rotated 6.0 cm face overhangs the 2.2 cm vertical footprint by
+`6.0/2 − 2.2/2 = 1.9 cm` per side, so horizontal `[0,0]` is registered +1.9 cm
+from the feeder on BOTH axes:
 
 ```text
-positive X / away from X home →
+positive / away from the home switch →
 
-vertical pickup [0,0]       1.6 cm       horizontal [0,0] reference
+vertical pickup [0,0]       1.9 cm       horizontal [0,0] reference
 ┌──────────────────────┐                 ┌──────────────────────┐
-│       2.2 cm         │<--------------->│       2.2 cm          │
-│   pickup reference   │                 │   RR reference       │
-└──────────────────────┘                 └──────────────────────┘
+│  centre = 0          │<--------------->│  centre = +1.9        │
+│   pickup reference   │   (same on X    │   RR reference        │
+└──────────────────────┘    and on Y)    └──────────────────────┘
 ```
 
 That whole-layout relationship is represented by
-`horizontal.trim_x_cm = +1.6`, not by `gap_x_cm` and not by
-`tool_offsets.ccw`. `RR` only latches the mode. A build homes at the feeder,
+`horizontal.trim_x_cm = horizontal.trim_y_cm = +1.9`, not by `gap_*_cm` and not
+by `tool_offsets.ccw`. `RR` only latches the mode. A build homes at the feeder,
 picks up neutral, travels using the shifted horizontal centres, rotates 90°
 CCW at the target, and releases. `B 0 0 <level>` remains an inert sentinel and
-does not physically test this reference. If later measurement places the
-registration on Y, move the correction to `horizontal.trim_y_cm`; never hide
-it inside the rotation/tool offset.
+does not physically test this reference. A future rig measurement may refine
+the magnitude per axis; keep any such correction in `horizontal.trim_{x,y}_cm`
+and never hide it inside the rotation/tool offset.
 
-**Tolerance note.** The shipped horizontal X registration remains inside its
-zero-overhang budget. Measure a real stack before trusting the last row of
-horizontal's 10.
+**Tolerance note.** The +1.9 cm registration leaves horizontal ~1.9 cm of
+far-end slack on each axis (X last centre 17.1 into 22.8, Y 36.1 into 38.0) and
+a −1.1 cm X near edge, inside its `max_edge_overhang_x_cm = 3.0` budget. Measure
+a real stack before trusting the last row of horizontal's 10.
 
 ---
 

@@ -91,17 +91,19 @@ positive footprint  vertical    X: 6 × 2.2 + 5 × 1.6 = 21.2 cm
                                 Y: 10 × 2.2 + 9 × 0.8 = 29.2 cm
 ```
 
-Both `GRID_TRIM_*` ship at `0.0`, so each allocation is centred in travel
-until the feeder-centre-to-build-grid offset is re-measured on the rig, per
-mode. **Horizontal's trims are still not vertical's and must not be copied** —
-a positive X trim there pushes its last column edge off the end of the
-machine. Each mode also declares `GRID_MAX_EDGE_OVERHANG_*_CM`, the budget its
-block *edges* are checked against; vertical allows half a block (`1.1` / `3.0`),
-horizontal allows zero.
+Vertical's `GRID_TRIM_*` ship at `0.0` on both axes. Horizontal ships at
+`GRID_TRIM_X_CM = GRID_TRIM_Y_CM = +1.9 cm` — the pickup-cell registration: the
+block is picked up standing at the vertical `[0,0]` feeder and rotated about the
+grip, and the rotated 6.0 cm face overhangs the 2.2 cm vertical footprint by
+`6.0/2 − 2.2/2 = 1.9 cm` per side. **Horizontal's trims are still not
+vertical's and must not be copied.** Each mode also declares
+`GRID_MAX_EDGE_OVERHANG_*_CM`, the budget its block *edges* are checked against;
+vertical allows half a block (`1.1` / `3.0`), horizontal allows `3.0` / `1.1`
+(the +1.9 cm registration's `−1.1 cm` X near edge sits inside it).
 
-At trim `0` neither grid is flush with a wall, so both have slack to absorb
-per-block error — but measure a real stack before trusting the last row of
-horizontal's 10.
+Vertical sits exactly on its cap; horizontal keeps ~1.9 cm of far-end slack on
+each axis after the registration — but measure a real stack before trusting the
+last row of horizontal's 10.
 
 Commands address col `0..cols` and row `0..rows`: `[0,0]` home, `[col,0]`
 X-only, and `[0,row]` Y-only. `GRID_TRIM_X_CM[]` and `GRID_TRIM_Y_CM[]` shift

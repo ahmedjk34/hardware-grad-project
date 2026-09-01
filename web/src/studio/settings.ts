@@ -4,9 +4,9 @@
  * stack height and the rig's real cycle time can only be settled on the machine.
  *
  * The two timing values feed the compiler's `ESTIMATES — NOT MEASUREMENTS`
- * duration: a build is ~40 s of motion and a mode latch homes X and Y. M7
- * measures the real mean against `--mock`; when it does, the constant moves and
- * the STUDIO.md changelog records that it came from a measurement.
+ * duration: M7 measured the mock route end to end while a mode latch remains a
+ * visible guess. The mock number is rehearsal/demo timing, not a claim about
+ * the physical arm; an operator can replace it with hardware measurements.
  */
 export interface StudioSettings {
   supportRatio: number;
@@ -19,8 +19,8 @@ export interface StudioSettings {
 export const SUPPORT_RATIO = 0.55;
 export const CLAW_MARGIN_MM = 8;
 export const LEVEL_CEILING = 6;
-/** rig/link.py: "A build is ~40 s of motion." Not yet measured against --mock. */
-export const BLOCK_CYCLE_SECONDS = 40;
+/** Five `--mock` placements: 2.113, 2.108, 2.112, 2.104, 2.140 s; mean 2.115. */
+export const BLOCK_CYCLE_SECONDS = 2.115;
 /** A latch homes X and Y — a whole-machine seek. A guess until M7 times it. */
 export const LATCH_HOMING_SECONDS = 16;
 export const STUDIO_SETTINGS_KEY = "rig.studio.settings.v1";

@@ -59,13 +59,19 @@ function useStaleSeconds(connected: boolean, lastUpdateAt: number | null): numbe
   return Math.max(0, Math.round((now - lastUpdateAt) / 1000));
 }
 
-export function TwinPanel({ state, connected, lastUpdateAt }: {
+export function TwinPanel({ state, connected, lastUpdateAt, modelId: controlledModelId,
+  onModelIdChange, modelSelectionDisabled = false }: {
   state: StateModel | null;
   connected: boolean;
   /** When the last state message arrived, for the STALE age. */
   lastUpdateAt: number | null;
+  /** Controlled by App while a program is armed so the twin cannot diverge. */
+  modelId?: string;
+  onModelIdChange?: (id: string) => void;
+  modelSelectionDisabled?: boolean;
 }) {
-  const [modelId, setModelId] = useState(storedModelId);
+  const [localModelId, setLocalModelId] = useState(storedModelId);
+  const modelId = controlledModelId ?? localModelId;
   const [progress, setProgress] = useState(emptyTwinProgress);
   const [synced, setSynced] = useState(false);
   const reducedMotion = useReducedMotion();
@@ -74,6 +80,8 @@ export function TwinPanel({ state, connected, lastUpdateAt }: {
   const document = useMemo(() => (modelId ? loadTwinModel(modelId) : null), [modelId]);
   const model = useMemo(() => twinModelOf(document), [document]);
   const staleSeconds = useStaleSeconds(connected, lastUpdateAt);
+
+  useEffect(() => { onModelIdChange?.(modelId); }, [modelId, onModelIdChange]);
 
   // A different model is a different set of ids; nothing carries over.
   useEffect(() => { setProgress(emptyTwinProgress()); }, [modelId]);
@@ -97,9 +105,13 @@ export function TwinPanel({ state, connected, lastUpdateAt }: {
         <span className="chip is-idle twin-mode" aria-label="Rig grid mode">
           <Icon name="axes" size={13} />{scene.mode ? scene.mode.toUpperCase() : "—"}
         </span>
-        <select className="twin-model" aria-label="Model shown in the twin"
+        <select className="twin-model" aria-label="Model shown in the twin" disabled={modelSelectionDisabled}
                 value={modelId}
-                onChange={event => { setModelId(event.target.value); rememberModelId(event.target.value); }}>
+                onChange={event => {
+                  setLocalModelId(event.target.value);
+                  onModelIdChange?.(event.target.value);
+                  rememberModelId(event.target.value);
+                }}>
           <option value="">No model loaded</option>
           {choices.map(choice => (
             <option key={choice.id} value={choice.id}>{choice.name}</option>

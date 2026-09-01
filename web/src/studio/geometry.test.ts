@@ -38,11 +38,11 @@ describe("machine-space geometry", () => {
     expect(footprintOverlapArea(a, a)).toBeCloseTo(22 * 60, 6);
     expect(footprintOverlapArea(a, aabbOf(block("vertical", 3, 1, 0)))).toBe(0);
     // A horizontal block spanning X overlaps a vertical one by the vertical
-    // block's own 22 mm width, over their shared Y run.
-    // 22 mm of the vertical block's width by the 19 mm the horizontal block's
-    // 22 mm depth shares with it: the cross-mode bridge, resting on a stack.
+    // block's own 22 mm width. With horizontal's +1.9 cm Y registration the
+    // horizontal block's full 22 mm depth now lands within the vertical block's
+    // Y run, so the cross-mode contact is the whole 22 x 22 mm.
     const overlap = footprintOverlapArea(aabbOf(block("horizontal", 1, 1, 1)), aabbOf(block("vertical", 2, 1, 0)));
-    expect(overlap).toBeCloseTo(22 * 19, 6);
+    expect(overlap).toBeCloseTo(22 * 22, 6);
   });
 
   it("touching faces do not count as an intersection", () => {
@@ -92,9 +92,11 @@ describe("grid shift clipping, as the firmware does it", () => {
   });
 
   it("checks the block EDGES against this mode's overhang budget", () => {
-    // Horizontal X tolerates 3.0 cm of edge overhang and its centres stop at
-    // 15.2 cm, so 7.6 cm of shift still fits and 8.0 cm does not.
-    expect(clippedCells("horizontal", { x_cm: 7.6, y_cm: 0 }).reachable.cols).toBe(3);
-    expect(clippedCells("horizontal", { x_cm: 8.0, y_cm: 0 }).reachable.cols).toBe(2);
+    // Horizontal X tolerates 3.0 cm of edge overhang and its last centre sits
+    // at trim_x 1.9 + 2 * 7.6 = 17.1 cm, so on top of that registration a
+    // further 5.7 cm of shift still lands the last centre on the 22.8 cm cap
+    // and 5.8 cm does not.
+    expect(clippedCells("horizontal", { x_cm: 5.7, y_cm: 0 }).reachable.cols).toBe(3);
+    expect(clippedCells("horizontal", { x_cm: 5.8, y_cm: 0 }).reachable.cols).toBe(2);
   });
 });

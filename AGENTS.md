@@ -166,8 +166,8 @@ Worked out for both at the shipped calibration:
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | vertical | X | 2.2 | 1.6 | 3.8 | **7** | 25.00 | 0.00 → 22.80 | −1.10 → 23.90 |
 | vertical | Y | 6.0 | 1.6 | 7.6 | **6** | 44.00 | 0.00 → 38.00 | −3.00 → 41.00 |
-| horizontal | X | 6.0 | 1.6 | 7.6 | **3** | 21.20 | 0.00 → 15.20 | −3.00 → 18.20 |
-| horizontal | Y | 2.2 | 1.6 | 3.8 | **10** | 36.40 | 1.60 → 35.80 | 0.50 → 36.90 |
+| horizontal | X | 6.0 | 1.6 | 7.6 | **3** | 21.20 | 1.90 → 17.10 | −1.10 → 20.10 |
+| horizontal | Y | 2.2 | 1.6 | 3.8 | **10** | 36.40 | 1.90 → 36.10 | 0.80 → 37.20 |
 
 `count` is a COUNT; the firmware's `S` and `GRID_COLS` / `GRID_ROWS` speak in
 highest indices, one less. `python/rig/grid.py` is the authoritative statement
@@ -177,10 +177,13 @@ by fixtures (`python/tools/dump_grid_fixtures.py`).
 The vertical grid ships at `trim_x = trim_y = 0` and sits EXACTLY on its travel
 cap and edge budget on both axes, so any trim at all is a geometry error there
 rather than a moved grid. The horizontal grid ships with
-`trim_y = +1.6 cm`: after pickup, the top 2.2 cm of the vertical feeder `[0,0]` cell is the horizontal `[0,0]`
-reference, with a 1.6 cm separation between the two 2.2 cm reference regions.
-This is a mode-specific grid registration shift, positive away from Y home;
-it is not a tool offset and must not be added to `tool_offsets.ccw`.
+`trim_x = trim_y = +1.9 cm`: the block is picked up standing at the vertical
+feeder `[0,0]`, centred on home, then rotated 90° about the grip. The rotated
+6.0 cm face overhangs the 2.2 cm vertical footprint by `6.0/2 − 2.2/2 = 1.9 cm`
+per side, so a +1.9 cm trim on each axis seats horizontal `[0,0]` flush against
+the vertical `[0,0]` block edge (near edge in X, far edge in Y). This is a
+mode-specific grid registration shift, positive away from each home switch; it
+is not a tool offset and must not be added to `tool_offsets.ccw`.
 **Horizontal's trims are still not vertical's and must not be copied from
 them.**
 
@@ -188,28 +191,28 @@ them.**
 
 The feeder/pickup area is physically a vertical block cell. When the build is
 switched to `RR`, the horizontal layout does not use the bare home point as its
-visual reference. Its reference is registered from the upper 2.2 cm region of
-the vertical pickup cell. Along the affected X direction, the relationship is:
+reference: it is registered +1.9 cm on BOTH axes from the vertical pickup cell.
+Along either axis the relationship is the same:
 
 ```text
-                         positive X / away from X home →
+                    positive / away from the home switch →
 
         vertical pickup cell [0,0]       horizontal grid reference
         ┌──────────────────────┐         ┌──────────────────────┐
         │                      │         │                      │
-        │       2.2 cm         │ 1.6 cm  │       2.2 cm          │
-        │   vertical pickup    │<------->│ horizontal [0,0]     │
-        │       region         │         │ reference region     │
+        │  vertical [0,0]      │ 1.9 cm  │  horizontal [0,0]    │
+        │  centre = 0          │<------->│  centre = +1.9       │
+        │                      │         │                      │
         └──────────────────────┘         └──────────────────────┘
 
-        The horizontal registration shift is +1.6 cm in X.
+        The horizontal registration shift is +1.9 cm in X AND in Y.
 ```
 
-This `1.6 cm` is not the ordinary cell gap. `gap_x_cm = 1.6` remains the
-repeat spacing component between horizontal cells and the gap before positive
-cell 1. `horizontal.trim_x_cm = +1.6` is a separate registration of the whole
-horizontal allocation relative to the feeder. Do not replace one with the
-other, and do not add this 1.6 cm to the CCW arm offset.
+This `1.9 cm` is not the ordinary cell gap. `gap_{x,y}_cm = 1.6` remains the
+repeat spacing between horizontal cells and the gap before positive cell 1.
+`horizontal.trim_x_cm = horizontal.trim_y_cm = +1.9` is a separate registration
+of the whole horizontal allocation relative to the feeder. Do not replace one
+with the other, and do not add this 1.9 cm to the CCW arm offset.
 
 The physical build sequence is:
 
@@ -236,9 +239,10 @@ error_offset_x_cm           = measured whole-grid placement error
 gap_x_cm                    = repeated spacing between cells
 ```
 
-The same separation applies on Y. If a future measurement shows that the
-pickup registration is actually along Y, use `horizontal.trim_y_cm` instead;
-do not silently move the correction into `tool_offsets`.
+The same separation applies on Y (`horizontal.trim_y_cm` carries the identical
++1.9 cm). A future rig measurement may refine the magnitude per axis; keep any
+such correction in `horizontal.trim_{x,y}_cm` and do not silently move it into
+`tool_offsets`.
 
 Each mode also declares `max_edge_overhang_x_cm` / `_y_cm`: the budget the
 block **edges** are checked against, on both machines. It is not a trim and
@@ -246,12 +250,13 @@ moves nothing.
 
 - vertical allows half a block on each axis (`1.1` / `3.0` = block_x/2 /
   block_y/2), the overhang a full-travel grid would produce;
-- horizontal allows **zero** — any overhang there means the trims are wrong.
+- horizontal allows `3.0` / `1.1` (block_x/2 on Y, block_y/2 on X are the
+  half-block figures; horizontal's are `max_edge_overhang_x_cm = 3.0`,
+  `_y_cm = 1.1`), which the +1.9 cm registration's `−1.1 cm` X near edge needs.
 
-**Neither grid is flush with a wall at trim 0**, so both have slack to absorb
-per-block error. Horizontal's Y still has the least margin (10 rows of 3.0 cm
-pitch = 30.0 cm into 40.0 cm): measure a real stack before trusting its last
-row.
+**Vertical sits exactly on its cap; horizontal has ~1.9 cm of far-end slack on
+each axis after the +1.9 cm registration** (X last centre 17.1 into 22.8, Y
+36.1 into 38.0). Measure a real stack before trusting horizontal's last row.
 
 The firmware owns the step counts and derives both steps/cm ratios at runtime;
 never hard-code either ratio and do not copy the `4750 × 8250` safety envelope
@@ -263,8 +268,9 @@ scale, while the firmware needs it to turn cell centres into steps, so those
 centimetre values genuinely have partners on both machines. Change both
 partners in the same commit. Positive trim moves the entire grid away from its
 home/feeder reference; negative trim moves it toward that reference. The
-shipped vertical trims are `0.0` on both axes; horizontal `trim_y` is `+1.6 cm`
-for the pickup-cell-to-horizontal-grid registration described above.
+shipped vertical trims are `0.0` on both axes; horizontal `trim_x` and `trim_y`
+are both `+1.9 cm` for the pickup-cell-to-horizontal-grid registration
+described above.
 The shipped error offsets are `0.0` on both axes of both modes: the earlier
 `+0.15 / +0.05` corrections were measured against the previous CENTRED
 allocation and mean nothing against the centre-anchored one, so they were reset

@@ -169,10 +169,11 @@ describe("footprint-area support", () => {
     }
 
     expect(found).toBeDefined();
-    // The scan above finds this named fixture from the shipped pitches. The
-    // shift is derived from the support edge, never from a copied centre.
+    // The scan above finds this named fixture from the shipped pitches and
+    // horizontal's +1.9 cm registration. The shift is derived from the support
+    // edge, never from a copied centre.
     expect(found?.supports.map(item => [item.col, item.row])).toEqual([[1, 1], [2, 1]]);
-    expect([found?.candidate.col, found?.candidate.row]).toEqual([0, 2]);
+    expect([found?.candidate.col, found?.candidate.row]).toEqual([0, 1]);
     const model = modelOf(...found!.supports, found!.candidate);
     const ctx = context({ mode: "horizontal", shifts: { horizontal: found!.shift } });
     expect(unsupported(model, found!.candidate, ctx)).toEqual([]);

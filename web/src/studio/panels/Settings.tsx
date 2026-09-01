@@ -47,10 +47,10 @@ export function Settings({ value, onChange }: {
         <span className="studio-setting-name">BLOCK CYCLE</span>
         <span className="studio-setting-value">
           <input id="studio-block-cycle" aria-label="Block cycle in seconds" type="number"
-                 min="1" step="1" value={value.blockCycleSeconds}
+                 min="0.001" step="0.001" value={value.blockCycleSeconds}
                  onChange={event => number("blockCycleSeconds", event.target.value)} /> s
         </span>
-        <span className="studio-setting-copy">Seconds of motion the estimate allows per placed block. From rig/link.py's "~40 s" — not yet timed against the mock.</span>
+        <span className="studio-setting-copy">Seconds per block, measured across five mock builds: 2.115 s mean. This times rehearsal transport, not the physical arm; replace it after a hardware run.</span>
       </label>
 
       <label className="studio-setting" htmlFor="studio-latch-homing">

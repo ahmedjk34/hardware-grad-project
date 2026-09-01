@@ -57,7 +57,7 @@ describe("LibraryDrawer — the cards", () => {
     writeModel(documentOf(tower(12), { id: "m1", name: "Slab", modified: new Date(Date.now() - 2 * 86400_000).toISOString() }),
                { storage, settings: DEFAULT_STUDIO_SETTINGS });
     draw();
-    expect(within(card("Slab")).getByTestId("meta")).toHaveTextContent("12 blocks · 0 latches · ~8:00 · 2d ago");
+    expect(within(card("Slab")).getByTestId("meta")).toHaveTextContent("12 blocks · 0 latches · ~0:25 · 2d ago");
   });
 
   it("marks the open model as selected, and nothing else", () => {

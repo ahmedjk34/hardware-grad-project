@@ -92,13 +92,12 @@ describe("Two towers, one span — the cross-mode bridge", () => {
   });
 
   it("carries the grid shift the span needs, which the rig is not applying", () => {
-    // The shipped lattices do not line up: the vertical pitch is 3.8 cm and the
-    // horizontal pitch 7.6 cm, so an unshifted horizontal block sits over the
-    // 1.6 cm gap between two vertical stacks and rests on 46.7% of its
-    // footprint, under the 55% support ratio. The search in the M5 commit swept
-    // every (tower pair, span cell, shift) triple through M3's validator; the
-    // shifts that produce a legal bridge are +0.8 to +1.1 and +2.7 to +3.0 cm.
-    // +1.0 is the round one, and v[2,2] v[3,2] with h[1,4] is its central case.
+    // Horizontal's +1.9 cm registration lands the span dead over the 1.6 cm gap
+    // between two vertical stacks: 73.3% contact, but centroid over air, so M3
+    // rejects it. Sweeping shiftX in 1 mm steps through M3's validator for the
+    // v[2,2] v[3,2] / h[1,4] fixture, the shifts that produce a legal bridge are
+    // -1.0 to -0.8 and +0.8 to +1.1 cm. +1.0 is the round one and rides the
+    // far tower (56.7% contact).
     expect(bridge().rig.shift_cm.horizontal).toEqual([BRIDGE_SHIFT_CM, 0]);
     expect(BRIDGE_SHIFT_CM).toBe(1);
   });
