@@ -539,6 +539,7 @@ def open_camera(backend="auto", size=DEFAULT_SIZE, device=None, controls=None):
     backend:  "auto"      try Picamera2, fall back to V4L2 (the default)
               "picamera2" Pi CSI only; raises if unavailable
               "v4l2"      /dev/video* only
+              "mock"      simulated workspace; no camera hardware needed
     device:   V4L2 path such as "/dev/video0"; None prompts interactively.
     controls: libcamera control dict (Sharpness, NoiseReductionMode, ...)
               applied at configure time. Picamera2 only; see build_controls.
@@ -547,6 +548,9 @@ def open_camera(backend="auto", size=DEFAULT_SIZE, device=None, controls=None):
     not produce a usable image from the CSI camera — if you see the fallback
     message on the Pi, treat it as the real error.
     """
+    if backend == "mock":
+        from vision.mock_camera import MockCamera
+        return MockCamera(size)
     if backend in ("auto", "picamera2"):
         try:
             return Picamera2Source(size, controls)

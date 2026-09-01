@@ -54,7 +54,7 @@ from camera.tk_camera_window import TkCameraWindow  # noqa: E402
 
 SETTINGS_PATH = Path(__file__).resolve().parents[1] / "config" / "camera_settings.json"
 CAPTURE_DIR = Path(__file__).resolve().parents[1] / "captures"
-VALID_BACKENDS = ("auto", "picamera2", "v4l2")
+VALID_BACKENDS = ("auto", "picamera2", "v4l2", "mock")
 VALID_FLIPS = ("none", "h", "v", "both")
 VALID_ROTATIONS = (0, 90, 180, 270)
 
