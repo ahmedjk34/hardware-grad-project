@@ -311,10 +311,10 @@ long auxAngleSteps = 0;
 //   the build sequence.
 
 // Half-period of the step pulse, in microseconds. One full step is
-// two of these, so 769 us => 1.538 ms per step => ~650 steps/sec.
+// two of these, so 625 us => 1.250 ms per step => 800 steps/sec.
 // RAISE the Z value to slow Z down (more torque, less chance of
 // losing steps under load); LOWER it to speed the lift up.
-unsigned int STEP_DELAY = 769; // X and Y, ~650 steps/sec
+unsigned int STEP_DELAY = 625; // X and Y, 800 steps/sec
 
 unsigned int STEP_DELAY_Z = 950; // Z only
 
