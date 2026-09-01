@@ -4,7 +4,7 @@ import {
   INTRO_MS, INTRO_START_DISTANCE_RATIO, MAX_POLAR_ANGLE, MIN_CAMERA_Y, TWEEN_MS,
   VIEWS, cameraTransitionMs, clampAboveGround, easeInOut, envelopeBoxScene,
   blockBoxScene, frameBox, frameDistance, introMs, introPose, modelBoxScene, screenAxes,
-  tweenMs, viewPose,
+  tweenMs, viewPose, workspaceBoxScene,
   type CameraPose,
 } from "./view";
 
@@ -305,5 +305,39 @@ describe("modelBoxScene — what a thumbnail is framed on", () => {
     }
     expect(box.max.y).toBeLessThanOrEqual(envelope.max.y);
     expect(box.max.y).toBeGreaterThan(box.min.y);
+  });
+});
+
+/**
+ * SYNC VIEW (Plan 4 §9.3) is `viewPose("top", aspect, workspaceBoxScene())`.
+ * M1 chose the top view's up vector so that this would line up with the
+ * overhead camera; this is the framing half of the same claim.
+ */
+describe("the workspace rectangle the camera frames", () => {
+  it("is the envelope's ground plane: the same footprint, no height at all", () => {
+    const envelope = envelopeBoxScene();
+    const ground = workspaceBoxScene();
+    expect(ground.min.x).toBeCloseTo(envelope.min.x, 6);
+    expect(ground.max.x).toBeCloseTo(envelope.max.x, 6);
+    expect(ground.min.z).toBeCloseTo(envelope.min.z, 6);
+    expect(ground.max.z).toBeCloseTo(envelope.max.z, 6);
+    expect(ground.min.y).toBeCloseTo(envelope.min.y, 6);
+    expect(ground.max.y).toBeCloseTo(envelope.min.y, 6);
+  });
+
+  it("frames tighter than the envelope does, because the cage's height is not on the bench", () => {
+    const aspect = 16 / 9;
+    const synced = viewPose("top", aspect, workspaceBoxScene());
+    const whole = viewPose("top", aspect);
+    expect(synced.position.y).toBeLessThan(whole.position.y);
+    expect(framesBox(synced, workspaceBoxScene(), aspect)).toBe(true);
+  });
+
+  it("keeps machine +X to the right and +Y up the screen, so the two panels agree", () => {
+    for (const aspect of [16 / 9, 4 / 3, 0.5]) {
+      const axes = screenAxes(viewPose("top", aspect, workspaceBoxScene()));
+      near(axes.right, dir({ x: 1, y: 0, z: 0 }));
+      near(axes.up, dir({ x: 0, y: 1, z: 0 }));
+    }
   });
 });

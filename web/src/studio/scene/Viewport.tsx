@@ -8,7 +8,7 @@
  * section 3.4 the frameloop is on demand, so an idle Studio renders nothing at
  * all rather than burning a phone's battery animating a still picture.
  */
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
 import { Vector3 } from "three";
@@ -31,20 +31,7 @@ import { Capture, type CaptureHandle } from "./Capture";
 import { DiagnosticMarkers } from "./DiagnosticMarkers";
 import { tokenColor } from "./theme";
 import type { SurfaceHandlers } from "./surface";
-
-const REDUCED_MOTION = "(prefers-reduced-motion: reduce)";
-
-function useReducedMotion(): boolean {
-  const [reduced, setReduced] = useState(() => window.matchMedia?.(REDUCED_MOTION).matches ?? false);
-  useEffect(() => {
-    const query = window.matchMedia?.(REDUCED_MOTION);
-    if (!query) return;
-    const update = () => setReduced(query.matches);
-    query.addEventListener?.("change", update);
-    return () => query.removeEventListener?.("change", update);
-  }, []);
-  return reduced;
-}
+import { useReducedMotion } from "../../media";
 
 const ease = (t: number) => 1 - Math.pow(1 - t, 3);
 

@@ -74,6 +74,20 @@ export function envelopeBoxScene(): Box {
   };
 }
 
+/**
+ * The rectangle the overhead camera actually frames: the envelope's ground
+ * plane, with none of the cage's height.
+ *
+ * Plan 4 §9.3's SYNC VIEW is `viewPose("top", aspect, workspaceBoxScene())`.
+ * Framing the full envelope instead would push the camera back by the cage's
+ * 26.5 cm of Z travel and the twin would show a smaller workspace than the
+ * video beside it - which is the one thing this toggle exists to prevent.
+ */
+export function workspaceBoxScene(): Box {
+  const box = envelopeBoxScene();
+  return { min: box.min, max: { x: box.max.x, y: box.min.y, z: box.max.z } };
+}
+
 export function boxCentre(box: Box): Vec3 {
   return {
     x: (box.min.x + box.max.x) / 2,

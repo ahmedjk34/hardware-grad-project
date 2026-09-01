@@ -4,10 +4,19 @@
  * A vertical and horizontal block are different physical boxes, not one box
  * rotated. Each block resolves through `coords.ts` using the mode stored on the
  * block, so changing the active lattice never moves existing geometry.
+ *
+ * `BlockBatch` is exported because Plan 4 §9's twin draws the same boxes with
+ * different materials, and two block renderers WOULD drift. It is generic over
+ * anything carrying a cell address, takes its instance colour from the caller,
+ * and has a `quality` switch: `"twin"` drops the arrival pass, the shadow
+ * receiver and the standard material, because that variant shares a phone with
+ * a live MJPEG stream and must never be the reason a video frame is dropped.
  */
 import { memo, useLayoutEffect, useMemo, useRef, type RefObject } from "react";
 import { useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
-import { DynamicDrawUsage, InstancedBufferAttribute, Matrix4, type InstancedMesh } from "three";
+import {
+  DynamicDrawUsage, InstancedBufferAttribute, Matrix4, type Color, type InstancedMesh,
+} from "three";
 import { RoundedBoxGeometry } from "three-stdlib";
 import {
   blockSceneSize, cellToScene, type ModeName, type Shift,
@@ -17,6 +26,11 @@ import { resolveTopTarget } from "../pick";
 import { arrivalFrame, rowArrivalDelays } from "../motion";
 import { tokenColor } from "./theme";
 import type { SurfaceHandlers, SurfacePointer } from "./surface";
+
+/** Everything `BlockBatch` needs to know: where the block is, and which box. */
+export interface BatchBlock { id: string; mode: ModeName; col: number; row: number; level: number }
+
+export type BlockQuality = "full" | "twin";
 
 const CAPACITY = 512;
 const CORNER_RADIUS_SCENE = 0.06; // 0.6 mm at 10 mm per scene unit.
@@ -40,8 +54,11 @@ function nativeHit(event: ThreeEvent<PointerEvent>, target: SurfacePointer["targ
   };
 }
 
-function BlockBatch({ blocks, animateIds, mode, activeMode, shift, opacity, reduced, handlers }: {
-  blocks: ModelBlock[];
+export function BlockBatch<T extends BatchBlock>({
+  blocks, animateIds, mode, activeMode, shift, opacity, reduced, handlers,
+  colourOf, quality = "full",
+}: {
+  blocks: T[];
   animateIds: Set<string>;
   mode: ModeName;
   activeMode: ModeName;
@@ -49,11 +66,16 @@ function BlockBatch({ blocks, animateIds, mode, activeMode, shift, opacity, redu
   opacity: number;
   reduced: boolean;
   handlers: SurfaceHandlers;
+  /** One resolved colour per instance. The Studio passes the block's own; the
+   *  twin passes its appearance, already lerped by `studio/twin.ts`. */
+  colourOf: (block: T) => Color;
+  quality?: BlockQuality;
 }) {
+  const cheap = quality === "twin";
   const settledMesh = useRef<InstancedMesh>(null);
   const arrivingMesh = useRef<InstancedMesh>(null);
-  const settledBlocks = useRef<ModelBlock[]>([]);
-  const arrivingBlocks = useRef<ModelBlock[]>([]);
+  const settledBlocks = useRef<T[]>([]);
+  const arrivingBlocks = useRef<T[]>([]);
   const { invalidate } = useThree();
   const settling = useRef(new Map<string, { started: number; delay: number }>());
   const matrix = useMemo(() => new Matrix4(), []);
@@ -79,9 +101,9 @@ function BlockBatch({ blocks, animateIds, mode, activeMode, shift, opacity, redu
   const writeInstances = (now: number) => {
     const settled = settledMesh.current;
     const arriving = arrivingMesh.current;
-    if (!settled || !arriving) return false;
+    if (!settled || (!arriving && !cheap)) return false;
     const settledHadColour = settled.instanceColor !== null;
-    const arrivingHadColour = arriving.instanceColor !== null;
+    const arrivingHadColour = arriving?.instanceColor != null;
     let active = false;
     let settledIndex = 0;
     let arrivingIndex = 0;
@@ -105,24 +127,26 @@ function BlockBatch({ blocks, animateIds, mode, activeMode, shift, opacity, redu
         } else settling.current.delete(block.id);
       }
       matrix.makeTranslation(rest.x, y, rest.z);
-      const target = isArriving ? arriving : settled;
+      const target = isArriving && arriving ? arriving : settled;
       const index = isArriving ? arrivingIndex++ : settledIndex++;
       target.setMatrixAt(index, matrix);
-      target.setColorAt(index, tokenColor(`--block-${block.colour}`));
+      target.setColorAt(index, colourOf(block));
       if (isArriving) instanceOpacity.setX(index, arrivalOpacity);
       (isArriving ? arrivingBlocks : settledBlocks).current.push(block);
     });
     settled.count = settledIndex;
-    arriving.count = arrivingIndex;
     settled.instanceMatrix.needsUpdate = true;
-    arriving.instanceMatrix.needsUpdate = true;
     if (settled.instanceColor) settled.instanceColor.needsUpdate = true;
-    if (arriving.instanceColor) arriving.instanceColor.needsUpdate = true;
     if (!settledHadColour && settled.instanceColor && !Array.isArray(settled.material)) {
       settled.material.needsUpdate = true;
     }
-    if (!arrivingHadColour && arriving.instanceColor && !Array.isArray(arriving.material)) {
-      arriving.material.needsUpdate = true;
+    if (arriving) {
+      arriving.count = arrivingIndex;
+      arriving.instanceMatrix.needsUpdate = true;
+      if (arriving.instanceColor) arriving.instanceColor.needsUpdate = true;
+      if (!arrivingHadColour && arriving.instanceColor && !Array.isArray(arriving.material)) {
+        arriving.material.needsUpdate = true;
+      }
     }
     instanceOpacity.needsUpdate = arrivingIndex > 0;
     return active;
@@ -148,13 +172,13 @@ function BlockBatch({ blocks, animateIds, mode, activeMode, shift, opacity, redu
     if (writeInstances(performance.now())) invalidate();
   });
 
-  const blockAt = (event: ThreeEvent<PointerEvent>, rendered: RefObject<ModelBlock[]>) => {
+  const blockAt = (event: ThreeEvent<PointerEvent>, rendered: RefObject<T[]>) => {
     if (event.instanceId === undefined) return null;
     const block = rendered.current[event.instanceId];
     return block ?? null;
   };
 
-  const topHit = (event: ThreeEvent<PointerEvent>, rendered: RefObject<ModelBlock[]>): SurfacePointer | null => {
+  const topHit = (event: ThreeEvent<PointerEvent>, rendered: RefObject<T[]>): SurfacePointer | null => {
     if (!event.face || event.face.normal.y < 0.45) return null;
     const block = blockAt(event, rendered);
     if (!block) return null;
@@ -162,7 +186,7 @@ function BlockBatch({ blocks, animateIds, mode, activeMode, shift, opacity, redu
     return target ? nativeHit(event, target, block.id) : null;
   };
 
-  const handle = (rendered: RefObject<ModelBlock[]>,
+  const handle = (rendered: RefObject<T[]>,
                   callback: SurfaceHandlers["onSurfaceMove"] | undefined, removeFromAnyFace = false) =>
     (event: ThreeEvent<PointerEvent>) => {
       const block = blockAt(event, rendered);
@@ -174,24 +198,34 @@ function BlockBatch({ blocks, animateIds, mode, activeMode, shift, opacity, redu
       callback(hit);
     };
 
+  // A read-only twin raycasts nothing: pointer handlers on an instanced mesh
+  // cost a raycast per move, and there is nothing on the index page to click.
+  const pointer = cheap ? {} : {
+    onPointerMove: handle(settledBlocks, handlers.onSurfaceMove),
+    onPointerDown: handle(settledBlocks, handlers.onSurfaceDown, true),
+    onPointerUp: handle(settledBlocks, handlers.onSurfaceUp, true),
+    onPointerOut: handlers.onSurfaceLeave,
+  };
+
   return (
     <>
       <instancedMesh
         ref={settledMesh}
         args={[geometry, undefined, CAPACITY]}
-        receiveShadow
-        onPointerMove={handle(settledBlocks, handlers.onSurfaceMove)}
-        onPointerDown={handle(settledBlocks, handlers.onSurfaceDown, true)}
-        onPointerUp={handle(settledBlocks, handlers.onSurfaceUp, true)}
-        onPointerOut={handlers.onSurfaceLeave}
+        receiveShadow={!cheap}
+        {...pointer}
       >
-        <meshStandardMaterial
-          vertexColors roughness={0.5} metalness={0}
-          emissive={tokenColor("--block-white")} emissiveIntensity={0.22}
-          transparent={opacity < 1} opacity={opacity} depthWrite={opacity >= 1}
-        />
+        {cheap
+          ? <meshLambertMaterial vertexColors
+              emissive={tokenColor("--block-white")} emissiveIntensity={0.12}
+              transparent={opacity < 1} opacity={opacity} depthWrite={opacity >= 1} />
+          : <meshStandardMaterial
+              vertexColors roughness={0.5} metalness={0}
+              emissive={tokenColor("--block-white")} emissiveIntensity={0.22}
+              transparent={opacity < 1} opacity={opacity} depthWrite={opacity >= 1}
+            />}
       </instancedMesh>
-      <instancedMesh
+      {cheap ? null : <instancedMesh
         ref={arrivingMesh}
         args={[geometry, undefined, CAPACITY]}
         receiveShadow
@@ -205,10 +239,13 @@ function BlockBatch({ blocks, animateIds, mode, activeMode, shift, opacity, redu
                               transparent opacity={opacity} depthWrite={false}
                               onBeforeCompile={configureArrivalShader}
                               customProgramCacheKey={arrivalShaderKey} />
-      </instancedMesh>
+      </instancedMesh>}
     </>
   );
 }
+
+/** The Studio's own colouring: the colour the author gave the block. */
+const authoredColour = (block: ModelBlock) => tokenColor(`--block-${block.colour}`);
 
 export const Blocks = memo(function Blocks({ blocks, activeMode, shift, heldLevel, reduced, ...handlers }: {
   blocks: ModelBlock[];
@@ -240,9 +277,11 @@ export const Blocks = memo(function Blocks({ blocks, activeMode, shift, heldLeve
     <>
       {(["vertical", "horizontal"] as ModeName[]).flatMap(mode => [
         <BlockBatch key={`${mode}-solid`} blocks={groups[mode].solid} animateIds={animateIds} mode={mode}
-          activeMode={activeMode} shift={shift} opacity={1} reduced={reduced} handlers={surfaceHandlers} />,
+          activeMode={activeMode} shift={shift} opacity={1} reduced={reduced} handlers={surfaceHandlers}
+          colourOf={authoredColour} />,
         <BlockBatch key={`${mode}-xray`} blocks={groups[mode].xray} animateIds={animateIds} mode={mode}
-          activeMode={activeMode} shift={shift} opacity={0.15} reduced={reduced} handlers={surfaceHandlers} />,
+          activeMode={activeMode} shift={shift} opacity={0.15} reduced={reduced} handlers={surfaceHandlers}
+          colourOf={authoredColour} />,
       ])}
     </>
   );

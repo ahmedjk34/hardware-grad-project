@@ -145,7 +145,7 @@ button:disabled { cursor: not-allowed; }
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr) auto;
   gap: var(--s3);
 }
 
@@ -317,6 +317,107 @@ button:disabled { cursor: not-allowed; }
 .toggle:hover { color: var(--text); background: var(--raised); }
 .toggle[aria-pressed="true"] { color: var(--text); background: var(--raised); border-color: var(--line-strong); }
 .toggle[aria-pressed="true"] .icon { color: var(--signal); }
+
+/* ── the instrument: camera and twin, in step (Plan 4 §9.1) ───────────── */
+
+/* One border around both, so they read as one instrument and not two widgets.
+   Desktop ≥900px only; below that they are a two-tab switcher. */
+.instrument {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: start;
+  gap: var(--s4);
+  min-height: 0;
+  padding: var(--s3);
+  background: var(--sunken);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+}
+
+.instrument.is-tabbed { grid-template-columns: minmax(0, 1fr); gap: var(--s2); }
+
+.instrument-pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  min-width: 0;
+  min-height: 0;
+}
+
+/* The pane borders would be a second frame inside the shared one. */
+.instrument .stage-area { border: none; border-radius: 0; padding: 0; background: none; }
+
+.instrument-tabs { display: flex; gap: var(--s2); }
+.instrument-tabs [role="tab"] { color: var(--text-dim); }
+.instrument-tabs [role="tab"][aria-selected="true"] {
+  color: var(--signal);
+  border-color: color-mix(in srgb, var(--signal) 45%, var(--line));
+  background: var(--wash-signal);
+}
+
+/* ── the twin ─────────────────────────────────────────────────────────── */
+
+.twin { display: contents; }
+.twin-stage { min-height: 0; }
+.twin-canvas { background: var(--vignette); }
+.twin-canvas canvas { display: block; }
+
+.twin-mode { letter-spacing: .18em; }
+
+.twin-model {
+  min-width: 0;
+  max-width: 16rem;
+  padding: 3px var(--s2);
+  color: var(--text);
+  font: var(--t-xs);
+  background: var(--sunken);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+}
+
+.twin-synced { color: var(--signal); font: var(--t-xs); letter-spacing: .12em; white-space: nowrap; }
+.twin .stage-toolbar .toggle { white-space: nowrap; }
+
+.twin-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  margin: 0;
+  color: var(--text-dim);
+  font: var(--t-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.twin-count { color: var(--text-faint); }
+.twin-readonly { margin: 0; }
+
+/* The block label in the scene, drawn by drei's Html. */
+.twin-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s1);
+  padding: 2px var(--s2);
+  color: var(--signal);
+  font: var(--t-xs);
+  white-space: nowrap;
+  background: var(--plate);
+  border: 1px solid color-mix(in srgb, var(--signal) 45%, var(--line));
+  border-radius: var(--r-sm);
+}
+
+.twin-label b { color: var(--text-dim); letter-spacing: .18em; }
+
+/* A dead socket freezes the twin and dims it; it never keeps animating. */
+.twin.is-stale .stage { opacity: .6; }
+/* Both plates are deliberately see-through: the frozen — or desaturated —
+   twin behind them is the evidence, and covering it would hide the one thing
+   the operator needs, which is how far the build actually got. */
+.stage-plate.stale { color: var(--motion); background: var(--plate); }
+.stage-plate.locked {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger-deep) 78%, transparent);
+}
+.twin.is-locked .stage { border-color: var(--danger); }
 
 /* ── camera stage ─────────────────────────────────────────────────────── */
 
@@ -763,7 +864,7 @@ svg.grid-overlay.selectable { cursor: crosshair; }
     overflow: visible;
   }
 
-  .pane-camera { grid-template-rows: auto auto auto; }
+  .pane-camera { grid-template-rows: auto auto; }
   .stage-area { --stage-h: 60vh; }
   .pane-rail { overflow: visible; padding-right: 0; }
   .stage { max-width: 100%; }

@@ -4,7 +4,13 @@ import type { LogLine, StateModel } from "./types";
  *  client keeps the same cap and folds each replay onto what it already has. */
 export const LOG_CAP = 200;
 
-export interface ConsoleSnapshot { state: StateModel | null; connected: boolean; log: LogLine[] }
+export interface ConsoleSnapshot {
+  state: StateModel | null;
+  connected: boolean;
+  log: LogLine[];
+  /** When the last state message arrived. The twin's STALE age counts from it. */
+  updatedAt: number | null;
+}
 
 export interface ConsoleStore {
   snapshot: ConsoleSnapshot;
@@ -25,7 +31,7 @@ function overlap(previous: LogLine[], lines: string[]): number {
 }
 
 export function createConsoleStore(): ConsoleStore {
-  let snapshot: ConsoleSnapshot = { state: null, connected: false, log: [] };
+  let snapshot: ConsoleSnapshot = { state: null, connected: false, log: [], updatedAt: null };
   let sequence = 0;
   const listeners = new Set<() => void>();
   const publish = () => listeners.forEach(listener => listener());
@@ -36,7 +42,7 @@ export function createConsoleStore(): ConsoleStore {
       return () => listeners.delete(listener);
     },
     apply(state) {
-      snapshot = { ...snapshot, state, connected: true };
+      snapshot = { ...snapshot, state, connected: true, updatedAt: Date.now() };
       publish();
     },
     connected() {

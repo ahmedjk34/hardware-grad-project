@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { CameraView } from "./components/CameraView";
+import { Instrument } from "./components/Instrument";
+import { TwinPanel } from "./components/TwinPanel";
 import { CommandReadout } from "./components/CommandReadout";
 import { ControlPanel } from "./components/ControlPanel";
 import { BuildButton } from "./components/BuildButton";
@@ -18,21 +20,9 @@ import { Icon } from "./components/Icon";
 import * as api from "./api";
 import type { StateModel } from "./types";
 import { preloadStudio } from "./routes/studio-loader";
+import { usePhone } from "./media";
 
 const store = createConsoleStore();
-const PHONE = "(max-width: 899px)";
-
-function usePhone(): boolean {
-  const [phone, setPhone] = useState(() => window.matchMedia?.(PHONE).matches ?? false);
-  useEffect(() => {
-    const query = window.matchMedia?.(PHONE);
-    if (!query) return;
-    const update = () => setPhone(query.matches);
-    query.addEventListener?.("change", update);
-    return () => query.removeEventListener?.("change", update);
-  }, []);
-  return phone;
-}
 
 /** Arrow keys move the selection one cell by re-selecting the neighbour's
  *  centre pixel — the server still decides whether that cell is legal. */
@@ -114,10 +104,19 @@ export function App() {
 
       <div className="workspace">
         <div className="pane-camera">
-          <CameraView
-            state={state}
-            connected={snapshot.connected}
-            onCalibrationPoint={cornerHandler ?? undefined}
+          {/* Real workspace and virtual workspace, in step: Plan 4 section 9. */}
+          <Instrument
+            camera={
+              <CameraView
+                state={state}
+                connected={snapshot.connected}
+                onCalibrationPoint={cornerHandler ?? undefined}
+              />
+            }
+            twin={
+              <TwinPanel state={state} connected={snapshot.connected}
+                         lastUpdateAt={snapshot.updatedAt} />
+            }
           />
           <RigLog log={snapshot.log} defaultOpen={!phone} />
         </div>

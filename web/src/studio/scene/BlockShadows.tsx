@@ -9,12 +9,12 @@
 import { memo, useLayoutEffect, useMemo, useRef } from "react";
 import { CircleGeometry, Matrix4, type InstancedMesh } from "three";
 import { blockSceneSize, cellToScene, type ModeName } from "../coords";
-import type { ModelBlock } from "../model";
+import type { BatchBlock } from "./Blocks";
 import { tokenColor } from "./theme";
 
 const MODES: ModeName[] = ["vertical", "horizontal"];
 
-function ShadowBatch({ blocks, mode }: { blocks: ModelBlock[]; mode: ModeName }) {
+function ShadowBatch({ blocks, mode }: { blocks: BatchBlock[]; mode: ModeName }) {
   const mesh = useRef<InstancedMesh>(null);
   const matrix = useMemo(() => new Matrix4(), []);
   const size = useMemo(() => blockSceneSize(mode), [mode]);
@@ -45,7 +45,7 @@ function ShadowBatch({ blocks, mode }: { blocks: ModelBlock[]; mode: ModeName })
   );
 }
 
-export const BlockShadows = memo(function BlockShadows({ blocks }: { blocks: ModelBlock[] }) {
+export const BlockShadows = memo(function BlockShadows({ blocks }: { blocks: BatchBlock[] }) {
   const groups = useMemo(() => ({
     vertical: blocks.filter(block => block.mode === "vertical"),
     horizontal: blocks.filter(block => block.mode === "horizontal"),

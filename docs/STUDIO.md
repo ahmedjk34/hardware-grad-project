@@ -33,11 +33,11 @@ console this attaches to).
 | M3 — Validation | ✅ delivered | one pure validator, live settings, diagnostics, ghost reasons and block markers |
 | M4 — The compiler | ✅ delivered | `compile.ts` (support graph, Kahn order, latch state machine, deterministic), `panels/ProgramView.tsx`, per-block/per-latch estimate settings |
 | M5 — Library | ✅ delivered | `rigmodel.ts` (the `rigmodel/1` file), `library.ts` (Result CRUD, 4 MB budget), `thumbnail.ts` + `scene/Capture.tsx`, `panels/LibraryDrawer.tsx`, three built-in examples |
-| M6 — The twin | not started | read-only scene beside the camera |
+| M6 — The twin | ✅ delivered | `twin.ts` (the whole state→picture mapping, fixture-tested against recorded server sessions), `scene/Twin.tsx`, `components/TwinPanel.tsx` + `Instrument.tsx` on the index page, SYNC VIEW, a read-only mode mirror |
 | M7 — The runner | not started | executing a compiled program through `/api/build` |
 | M8 — Wow pass | not started | shift gizmo, x-ray by level, cross-mode bridging |
 
-**Test suite.** `cd web && npm test` — **302 tests across 28 files**, all green.
+**Test suite.** `cd web && npm test` — **347 tests across 30 files**, all green.
 
 | file | tests | what it holds |
 | --- | --- | --- |
@@ -50,6 +50,8 @@ console this attaches to).
 | `studio/rigmodel.test.ts` | 19 | lossless round trip, eight named corrupt-file refusals, the migration hook, the library array file |
 | `studio/library.test.ts` | 20 | CRUD, index/body split, one corrupt body costing one card, unavailable and full storage, the budget refusal, export/import |
 | `studio/examples.test.ts` | 23 | the three examples as fixtures — round trip, no errors, compiled program, grid bounds, author order |
+| `studio/twin.test.ts` | 39 | every row of Plan 4 §9.2, LOCKED's explicit `animating === false`, the confirmation fold, and three **recorded** `/api/events` sessions (placed, rejected, aborted) |
+| `components/TwinPanel.test.tsx` | 6 | the read-only mode label, SYNC VIEW, the locked/stale/rejected banners, the model picker, and the desktop/phone instrument layout |
 | `studio/thumbnail.test.ts` | 5 | the bottom-up row flip, the 16:10 sizes, graceful absence of `OffscreenCanvas` |
 | `studio/panels/LibraryDrawer.test.tsx` | 18 | cards and meta line, inline rename, duplicate, delete with a real undo, the storage strip, the budget refusal, drop-import confirmation |
 | `studio/settings.test.ts` | 4 | conservative defaults, timing-field backfill, guarded versioned persistence |
@@ -68,17 +70,18 @@ console this attaches to).
 | `step7` / `step9` / `step10` | 5 / 4 / 1 | Plan 3 console guards — must never regress |
 | `lib/workspace.test.tsx` | 3 | the homography port |
 
-**Bundle**, from `npm run build` at the end of M5:
+**Bundle**, from `npm run build` at the end of M6:
 
 | chunk | size | notes |
 | --- | --- | --- |
-| console entry `index-*.js` | 218.73 kB (68.89 kB gzip) | contains **no** three.js; includes the tiny preload trigger. **Unchanged by M5** — every library module rides the lazy chunk |
-| `Studio-*.js` | 996.46 kB (270.07 kB gzip) | lazy; preloaded on idle or navigation intent. +20.7 kB for `rigmodel.ts`, `library.ts`, `examples.ts`, `thumbnail.ts`, `scene/Capture.tsx` and `LibraryDrawer.tsx` |
-| `index-*.css` | 34.15 kB (7.15 kB gzip) | console and Studio share one stylesheet; +4.6 kB for the drawer, cards, toast and import sheet |
+| console entry `index-*.js` | 254.93 kB (81.61 kB gzip) | still contains **no** three.js. **+36.2 kB over M5**, and all of it is the twin: `twin.ts` pulls in `library.ts` / `examples.ts` / `rigmodel.ts`, and `library.ts` statically imports `compile.ts` and `validate.ts` to build a card. That is the price of the model picker being on the index page; splitting it would put the picker behind a second async import for ~13 kB gzip |
+| `BlockShadows-*.js` | 917.35 kB (245.23 kB gzip) | the three.js/drei chunk, now **shared** by the Studio and the twin and lazily loaded by whichever arrives first. The name is Rolldown's pick of a shared entry point, not a claim about its contents |
+| `Studio-*.js` | 52.08 kB (16.54 kB gzip) | the Studio route alone, once three.js is shared out |
+| `Twin-*.js` | 3.40 kB (1.60 kB gzip) | `scene/Twin.tsx`, lazily imported by `TwinPanel` |
+| `index-*.css` | 36.09 kB (7.48 kB gzip) | +1.9 kB for the instrument, the tabs and the twin's plates |
 
-Before the Studio existed the console entry was 216.92 kB (68.24 kB gzip), so
-the console's first paint pays **1.81 kB** for the lazy route, hash router and
-preload trigger. Three.js remains absent from first paint. Check the split with:
+Three.js is still absent from first paint: the twin's canvas is a `React.lazy`
+import behind `routes/twin-loader.ts`, exactly as the Studio route is. Check with:
 
 ```sh
 cd web && npm run build
@@ -141,6 +144,7 @@ web/src/
     interaction.ts       click slop and keyboard gesture interpretation
     motion.ts            row sequencing + fade/downward arrival curves
     validate.ts          the one §6.4 rule table; model and ghost entry points
+    twin.ts              §9's whole state → picture mapping; the confirmation fold
     compile.ts           model → ordered B/R/RR program; support graph, Kahn order, latch state machine
     settings.ts          versioned physical estimates + the two estimate-timing constants, guarded localStorage I/O
     coords.fixtures.json 17 cases / 980 cells dumped from Python
@@ -151,6 +155,7 @@ web/src/
       Lattice.tsx        the active grid, the gaps, the hatched feeder
       Blocks.tsx         rounded instanced blocks, split by mode and x-ray state
       Ghost.tsx          exact legal/illegal hover preview
+      Twin.tsx           the read-only, reduced-cost variant on the index page
       DiagnosticMarkers.tsx static severity rings on offending top faces
       surface.ts         cell-space payload shared by raycast surfaces
     panels/
@@ -163,6 +168,11 @@ web/src/
     preload.ts           generic one-promise import cache
     studio-loader.ts     shared idle/intent/navigation Studio import
     Studio.tsx           the Studio route (chrome + viewport)
+    twin-loader.ts       shared lazy import of the twin's canvas
+  components/
+    Instrument.tsx       camera + twin: two columns, or a phone tab switcher
+    TwinPanel.tsx        the twin's chrome: mode mirror, SYNC VIEW, banners, picker
+  media.ts               the phone breakpoint, reduced motion, page visibility
   App.tsx                the operator console (Plan 3), still the console route
 ```
 
@@ -589,6 +599,86 @@ grid the 1.6 cm gaps mean no two cells ever touch, so five stacks side by side
 really are five separate structures. That is Plan 4 §3 fact 6 stated from the
 other direction, and it is why the bridge exists.
 
+### 5.13 `studio/twin.ts` — the mapping that is the twin
+
+Plan 4 §9's twin is a **claim about the machine**, so the whole of it is one
+pure function and the component draws the object it returns:
+
+```ts
+twinScene(state, model, progress, options) → {
+  blocks: { id, mode, col, row, level, appearance, token, mix, opacity, label, reason }[],
+  banner: "none" | "running" | "rejected" | "locked" | "stale",
+  bannerText: string | null,
+  animating: boolean,
+  desaturate: boolean,
+  mode: ModeName | null,     // a READ-ONLY mirror of state.mode
+  targetId: string | null,
+}
+```
+
+**DEVIATION from the milestone prompt**, which specified
+`twinScene(state, model, confirmed)`. `progress` *is* the confirmed set — plus
+the rejection the server reported, which arrives by the same route and which the
+component would otherwise have to remember on its own. Remembering is a rule.
+
+**The two rules that are the whole design.**
+
+*It never invents state.* A block is `placed` because its id is in
+`progress.confirmed`, and it gets there only through `foldTwinProgress`, which
+reads the server's `last_result`. There is no optimistic placement.
+`BuildController.build()` clears `selected` on PLACED, and that clearing is how
+the fold knows which block a result belongs to: **a `placed` result arriving
+with a selection still set is ignored**, which is exactly the payload a page
+load lands on when the previous build has already finished. The fold is
+idempotent, so the server repeating its last result twenty times a second, and
+React StrictMode invoking the effect twice, both cost nothing.
+
+*After an abort it stops.* LOCKED sets `animating: false`, `desaturate: true`,
+`targetId: null`, lerps every block's colour toward `--text-faint` by
+`LOCKED_MIX` **in the mapping, where it is asserted**, and demotes every
+unconfirmed block to a ghost. The machine's real state is unknown after an
+abort; a twin still rendering the plan is at its most misleading exactly when
+misleading is most expensive.
+
+| appearance | token | opacity | when |
+| --- | --- | --- | --- |
+| `ghost` | `--text-faint` | 0.2 | remaining work |
+| `target` | `--signal` | 0.45 | the server's current selection, labelled `B 3 2 0` |
+| `building` | `--motion` | 0.85 | that block while `build_state` is RUNNING |
+| `placed` | the block's own `--block-*` | 1 | the server said PLACED |
+| `rejected` | `--text-faint` | 0.2 | the server said REJECTED, with its reason |
+
+Two more deviations, both deliberate:
+
+- **Ghosts are 20%, not the prompt's 12%.** That is Plan 4 §9.2's own number.
+  At 12% against `--void`, at the twin's default framing, a ghost is not
+  visible at all.
+- **The `rejected` BANNER does not require the rejected cell to be in the
+  model.** The rig refused; that is worth saying either way. Only the block-level
+  `rejected` appearance needs an identified block.
+
+`banner` precedence is `locked` → `stale` → `running` → `rejected` → `none`.
+**LOCKED beats a dropped socket on purpose:** a locked session that has also
+lost its socket is still a locked session, and that is the more expensive fact.
+
+`twinSignature(state, progress, options)` is the other rule in here. The pipeline
+driver notifies on every camera frame, so `/api/events` delivers ~20 states a
+second that differ only in `camera_age_ms`; the signature states exactly what the
+picture depends on, and `TwinPanel` recomputes the scene — and therefore redraws
+the canvas — only when it changes.
+
+`descentOffsetScene()` is **an illustration of a descent, not a telemetry
+read-out**: the Arduino is deaf while `buildBlock()` runs and reports nothing
+until it is done, so the loop is timed against nothing in particular. Reduced
+motion returns exactly 0.
+
+`twin.fixtures.json` is dumped by `python/tools/dump_twin_states.py` from
+`web.app` running against `MockBoard`: three sessions — placed, rejected,
+aborted — one entry per state the socket would have delivered. The mapping is
+tested against what the server actually sends, not against payloads the test
+invented. Same bridge as the coordinate fixtures: **when the two disagree,
+Python is right.**
+
 ---
 
 ## 6. The scene layer
@@ -758,6 +848,58 @@ The card is a 16:10 thumbnail on `--sunken`, the name in `--t-md`, and one mono
 `--t-xs` meta line in `--text-dim`: `12 blocks · 1 latch · ~4:10 · 2d ago`. The
 selected card takes a `--signal` 1 px border and never a fill.
 
+### 6.10 `scene/Twin.tsx`, `TwinPanel.tsx` and `Instrument.tsx`
+
+`Twin.tsx` renders the `TwinScene` object and holds no logic. It is the same
+engine as the Studio and deliberately the cheap variant, because it shares a
+phone with a live MJPEG stream and **the camera is what the operator must be
+watching**:
+
+- `frameloop="demand"`, `dpr={[1, 1.5]}`, `antialias: false`,
+  `powerPreference: "low-power"`, and `frameloop="never"` whenever the panel is
+  off screen (a phone tab switched to the camera unmounts it; `document.hidden`
+  stops it).
+- `invalidate()` only when the mapping's answer changes (see `twinSignature`) or
+  while a descent is genuinely in flight.
+- No shadow maps and no post-processing. `BlockShadows`' instanced ellipses are
+  the whole grounding cue, as in the Studio.
+- **`Blocks.tsx`'s `BlockBatch` is reused, not forked** — two block renderers
+  would drift. It became generic over anything carrying a cell address, takes a
+  `colourOf(block)` from the caller and gained a `quality` prop: `"twin"` drops
+  the arrival pass and its custom shader, the shadow receiver, every pointer
+  handler, and swaps the standard material for a lambert one. One instanced
+  batch per (mode, appearance); the single block in flight is one plain mesh,
+  because the machine builds one at a time.
+
+`TwinPanel.tsx` is the chrome. **Its mode indicator is the trap in this
+milestone.** In the Studio a mode switch is free and instant, because there it
+is a view change; on the index page it is a physical latch that homes X and Y.
+So the twin's indicator is a plain read-only label mirroring `state.mode` —
+never the Studio's `[V|H]` segmented control — and there is no control in the
+panel that could latch anything. Mode changes go through the console's existing
+confirmed `POST /api/mode` in the rail, unchanged. `TwinPanel.test.tsx` asserts
+the label is not a button and that rendering the panel posts no mode at all.
+
+`SYNC VIEW` is `viewPose("top", aspect, workspaceBoxScene())` — the ground
+rectangle the overhead camera frames, from straight above, machine +X right and
++Y up the screen. M1 chose the top view's up vector for exactly this. While it
+is on the orbit is **disabled** and the chip's neighbour says `synced to
+camera`: an orbit that silently broke the sync would be a control that lies.
+Unsynced, the twin frames the envelope once on mount and then leaves the camera
+alone — a resize must never yank a view the operator orbited to.
+
+`Instrument.tsx` is the layout: on desktop the camera and the twin are equal
+columns inside **one** `--r-lg` border, top-aligned, so they read as one
+instrument; below 899px they become a two-tab switcher **defaulting to CAMERA**.
+BUILD cannot move: on desktop it is in the rail, a separate grid column, and on
+a phone it is in the sticky action sheet below the tabs.
+
+The model the twin shows is chosen in the panel — the three built-in examples
+plus whatever is in the library — and remembered in
+`rig.console.twin.model.v1`. Nothing is loaded by default: a model appearing
+that the operator did not choose is the same class of mistake as a block
+appearing that the rig did not place.
+
 ---
 
 ## 7. Routing and code-splitting
@@ -775,9 +917,14 @@ parse and module initialization away from the click without pulling Three.js
 back into the console's initial bundle. Touch, keyboard and mouse intent all
 take the same path.
 
-`App.tsx` is still the console; Plan 4 §7's `routes/Console.tsx` has not been
-split out, because moving it would churn the Plan 3 tests for no benefit until
-the twin (M6) needs it.
+`routes/twin-loader.ts` gives the twin's canvas the same treatment through the
+same `createPreloader()`, so the index page's first paint does not wait on
+three.js either. Both lazy chunks now share one Three.js chunk.
+
+`App.tsx` is still the console; Plan 4 §7's `routes/Console.tsx` has still not
+been split out. M6 was expected to force it and did not: the twin went in as two
+components (`Instrument`, `TwinPanel`) that `App.tsx` composes, which left every
+Plan 3 test untouched.
 
 The console's rail links to the Studio. `main.tsx` renders `<Root/>`; the Plan 3
 tests import `<App/>` directly and are untouched by the routing.
@@ -814,6 +961,10 @@ control contract; the file format's round trip and its eight named refusals;
 storage that is absent, throwing, full or over budget; and the three examples as
 fixtures. `view.test.ts` re-derives the perspective projection itself
 and checks every envelope corner rather than trusting the implementation.
+For the twin: every row of Plan 4 §9.2, the confirmation fold, the signature
+that decides when it may redraw, and three **recorded** server sessions replayed
+through the mapping — including the assertion the milestone exists for, that
+LOCKED sets `animating` to `false`.
 
 **Not tested, on purpose** (Plan 4 §0.4): pixels, materials, light positions,
 tween timings, anything that would be testing three.js rather than this project.
@@ -852,8 +1003,25 @@ first in the diff.
   refusal — different message, different remedy — but the number itself is a
   convention, not a measurement.
 - **The authoring mode is local route state; every block stores its own mode.**
-  The M6 twin's mode will instead be a read-only mirror of `state.mode`. Never
-  confuse them: a real latch homes X and Y, a Studio mode switch moves nothing.
+  The twin's mode is instead a read-only mirror of `state.mode`. Never confuse
+  them: a real latch homes X and Y, a Studio mode switch moves nothing.
+- **The twin was driven against `--mock` in headless Chrome** (software WebGL,
+  1440 × 900 and 760 × 900) for the ghost, target, `NEXT B 3 2 0` label, SYNC
+  VIEW and LOCKED states, and against recorded server sessions in Vitest for all
+  of them. **STALE was not confirmed by eye** — a headless screenshot latches
+  before a killed socket propagates — only by test. A human browser pass on the
+  Pi should judge it, and should judge frame rate with a real MJPEG stream.
+- **Ghosts read faintly at the default framing.** The twin frames the whole
+  travel envelope, which is 26.5 cm of mostly empty cage, so a five-block tower
+  is small. SYNC VIEW or an orbit in makes it plain. Framing on the model
+  instead was rejected: the twin is a picture of the machine, and matching the
+  camera is what §9 is for.
+- **`confirmed` starts empty on every page load.** The twin credits only the
+  builds it watched, because a `last_result` already on screen when the console
+  connects cannot be attributed to a block. Reloading mid-session therefore
+  loses the fill-in so far. Persisting it would mean persisting a claim about
+  the machine that nothing re-checks; M7's runner owns the program state
+  instead.
 - **`@react-three/drei` is a large dependency.** It remains confined to the lazy
   Studio chunk; the production console chunk still contains no `WebGLRenderer`.
 
@@ -863,6 +1031,50 @@ first in the diff.
 
 Newest first. One entry per landed change; note anything that contradicts the
 plan or that a future reader could not infer.
+
+### M6 — The twin
+
+- Added `studio/twin.ts`: the whole of Plan 4 §9 as one pure mapping —
+  `twinScene()`, the `foldTwinProgress()` confirmation fold, `twinSignature()`
+  and `descentOffsetScene()`. No React and no three.js in it; `scene/Twin.tsx`
+  draws what it returns and decides nothing.
+- Added `python/tools/dump_twin_states.py` and `studio/twin.fixtures.json`:
+  three real `/api/events` sessions (placed, rejected, aborted) recorded from
+  `web.app` against `MockBoard`, one entry per state the socket would deliver.
+  The mapping is tested against what the server sends, not against invented
+  payloads. The recording confirmed the load-bearing fact the fold rests on:
+  `selected` survives RUNNING and is cleared by `BuildController.build()` on
+  PLACED — and that the state right after a build carries `last_result: placed`
+  alongside the *next* selection, which is exactly what an optimistic twin
+  would place wrongly.
+- Added `scene/Twin.tsx`, `components/TwinPanel.tsx` and
+  `components/Instrument.tsx`; the index page now shows camera and twin as equal
+  columns in one border, and a CAMERA/TWIN tab switcher below 899px that
+  defaults to the camera.
+- **`Blocks.tsx`'s `BlockBatch` was generalised rather than forked**: generic
+  over any cell-addressed block, a caller-supplied `colourOf`, and a `quality`
+  prop whose `"twin"` setting drops the arrival shader, the shadow receiver,
+  every pointer handler and the standard material. Plan 4 asked for exactly
+  this; two block renderers would drift.
+- Added `view.workspaceBoxScene()` for SYNC VIEW — the envelope's ground plane,
+  with none of the cage's height — with three tests in `view.test.ts`, including
+  that the synced pose keeps machine +X to the right and +Y up the screen at
+  every aspect ratio.
+- Added `media.ts` (phone breakpoint, reduced motion, page visibility). It
+  replaces the copy of the breakpoint in `App.tsx` and the copy of the
+  reduced-motion query in `scene/Viewport.tsx`; two copies of a breakpoint is
+  how a layout ends up disagreeing with itself at 899px.
+- `store.ts` now records `updatedAt` on each state message, which is what the
+  STALE banner counts from.
+- Deviations, all argued in §5.13 and §6.10: the mapping's signature takes
+  `progress` rather than a bare `confirmed` set; ghosts are Plan 4 §9.2's 20%
+  rather than the prompt's 12%; the rejected banner does not require the
+  rejected cell to be in the loaded model; LOCKED outranks STALE.
+- The console entry grew 36.2 kB (12.7 kB gzip) because `twin.ts` reaches
+  `library.ts`, and `library.ts` statically reaches `compile.ts` and
+  `validate.ts`. Three.js is still absent from first paint.
+- `npm test`: **347 tests across 30 files**. Plan 3's `step7`, `step9`, `step10`
+  and `lib/workspace.test.tsx` are untouched and green.
 
 ### M5 — The library
 
