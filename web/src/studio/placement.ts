@@ -1,24 +1,28 @@
 /**
- * The intentionally small M2 placement gate.
- *
- * Only machine-local facts belong here today: the feeder is not a target, the
- * cell must exist in its own mode, and a cell-space slot cannot be occupied
- * twice. Structural support, collision and reachability are M3 rules.
+ * Compatibility wrapper for M2 callers. M3 owns the one real validator in
+ * `validate.ts`; this module only preserves the older `{legal, reason}` shape.
  */
-import { cellCount, isFeeder, type ModeName } from "./coords";
+import { type ModeName } from "./coords";
 import type { Model } from "./model";
 import type { CellTarget } from "./pick";
+import { DEFAULT_STUDIO_SETTINGS } from "./settings";
+import {
+  primaryDiagnostic, snapshotRigGeometry, validatePlacement, type DiagnosticCode,
+} from "./validate";
 
 export interface PlacementStatus { legal: boolean; reason: string | null }
 
 export function placementStatus(model: Model, mode: ModeName, target: CellTarget): PlacementStatus {
-  if (isFeeder(target.col, target.row)) return { legal: false, reason: "[0,0] is the feeder" };
-  const count = cellCount(mode);
-  if (target.col < 0 || target.col >= count.cols || target.row < 0 || target.row >= count.rows
-      || target.level < 0) return { legal: false, reason: "outside the grid" };
-  const occupied = model.blocks.some(block => block.mode === mode && block.col === target.col
-    && block.row === target.row && block.level === target.level);
-  return occupied
-    ? { legal: false, reason: "already a block here" }
-    : { legal: true, reason: null };
+  const diagnostics = validatePlacement(model, {
+    id: "ghost", mode, col: target.col, row: target.row, level: target.level, colour: "white",
+  }, { mode, settings: DEFAULT_STUDIO_SETTINGS, rigSnapshot: snapshotRigGeometry() });
+  const error = primaryDiagnostic(diagnostics.filter(item => item.severity === "error"));
+  if (!error) return { legal: true, reason: null };
+  const legacyReasons: Partial<Record<DiagnosticCode, string>> = {
+    FEEDER_CELL: "[0,0] is the feeder",
+    OUT_OF_GRID: "outside the grid",
+    DUPLICATE_CELL: "already a block here",
+  };
+  const legacyReason = legacyReasons[error.code];
+  return { legal: false, reason: legacyReason ?? error.message };
 }

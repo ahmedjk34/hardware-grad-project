@@ -9,7 +9,8 @@
  * Every distance here is in SCENE units, and every one of them comes out of
  * `coords.ts` - this module converts nothing itself.
  */
-import { MM_PER_CM, machineToScene, rigConfig, type Vec3 } from "./coords";
+import { MM_PER_CM, machineToScene, rigConfig, type Block, type Shift, type Vec3 } from "./coords";
+import { aabbOf } from "./geometry";
 
 /** arduino/build_test_v1: Z_TRAVEL_CM. The cage's height, not a build ceiling. */
 export const ENVELOPE_Z_CM = 26.5;
@@ -26,6 +27,20 @@ export const MAX_POLAR_ANGLE = Math.PI / 2;
 /** Explicit view changes stay legible without making the camera feel heavy. */
 export const TWEEN_MS = 260;
 
+/**
+ * The opening move, once per Studio mount: the camera starts in close on the
+ * machine and pulls back to the framed view while it swings round it, so
+ * the first thing an operator sees is that this is a 3D object and not a
+ * picture of one. Short enough that it never stands between them and the tool.
+ */
+export const INTRO_MS = 880;
+/** How close the camera starts, as a fraction of the final framing distance. */
+export const INTRO_START_DISTANCE_RATIO = 0.32;
+/** How far round the machine the pull-back sweeps, in radians (~49 degrees). */
+export const INTRO_SWEEP_RAD = 0.85;
+/** The start elevation, as a fraction of the final one: it rises as it pulls back. */
+export const INTRO_START_ELEVATION_RATIO = 0.45;
+
 export interface Box { min: Vec3; max: Vec3 }
 export interface CameraPose { position: Vec3; target: Vec3; up: Vec3 }
 
@@ -34,6 +49,10 @@ const scale = (v: Vec3, k: number): Vec3 => ({ x: v.x * k, y: v.y * k, z: v.z * 
 const cross = (a: Vec3, b: Vec3): Vec3 => ({
   x: a.y * b.z - a.z * b.y, y: a.z * b.x - a.x * b.z, z: a.x * b.y - a.y * b.x,
 });
+const lerp = (a: number, b: number, k: number) => a + (b - a) * k;
+/** Ease-in-out cubic: no jump at either end, and no jerk in the middle. */
+export const easeInOut = (t: number) =>
+  t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 const norm = (v: Vec3): Vec3 => {
   const length = Math.hypot(v.x, v.y, v.z);
   return length === 0 ? v : scale(v, 1 / length);
@@ -60,6 +79,21 @@ export function boxCentre(box: Box): Vec3 {
     x: (box.min.x + box.max.x) / 2,
     y: (box.min.y + box.max.y) / 2,
     z: (box.min.z + box.max.z) / 2,
+  };
+}
+
+/** A placed machine box converted at the same boundary as the whole scene. */
+export function blockBoxScene(block: Block, shift?: Shift): Box {
+  const machine = aabbOf(block, shift);
+  const first = machineToScene(machine.min);
+  const second = machineToScene(machine.max);
+  return {
+    min: {
+      x: Math.min(first.x, second.x), y: Math.min(first.y, second.y), z: Math.min(first.z, second.z),
+    },
+    max: {
+      x: Math.max(first.x, second.x), y: Math.max(first.y, second.y), z: Math.max(first.z, second.z),
+    },
   };
 }
 
@@ -114,20 +148,76 @@ export function viewPose(view: ViewName, aspect: number, box = envelopeBoxScene(
   }[view];
 
   if (view === "iso") {
-    // Off-axis, so frame the bounding sphere rather than a face: it holds for
-    // every orbit angle and cannot clip a corner.
-    const radius = Math.hypot(half.x, half.y, half.z);
-    const distance = frameDistance(radius, radius, FOV_DEG, aspect) + radius;
-    return { position: add(target, scale(framing.from, distance)), target, up };
+    return frameBox(box, aspect);
   }
 
   const distance = frameDistance(framing.width, framing.height, FOV_DEG, aspect) + framing.depth;
   return { position: add(target, scale(framing.from, distance)), target, up };
 }
 
+/**
+ * Frame an arbitrary scene-space box for diagnostic click-through. Off-axis
+ * framing uses the bounding sphere, exactly as the ISO envelope view does, so
+ * every corner stays visible and `frameDistance` remains the only perspective
+ * calculation in the Studio.
+ */
+export function frameBox(box: Box, aspect: number): CameraPose {
+  const target = boxCentre(box);
+  const half = halfExtents(box);
+  const radius = Math.hypot(half.x, half.y, half.z);
+  const distance = frameDistance(radius, radius, FOV_DEG, aspect) + radius;
+  const from = norm({ x: 1, y: 0.9, z: 1 });
+  return {
+    position: add(target, scale(from, distance)),
+    target,
+    up: { x: 0, y: 1, z: 0 },
+  };
+}
+
 /** The orbit constraint, as arithmetic: the camera never drops below ground. */
 export function clampAboveGround(position: Vec3, minY = MIN_CAMERA_Y): Vec3 {
   return position.y >= minY ? position : { x: position.x, y: minY, z: position.z };
+}
+
+/**
+ * The intro as a function of progress, in the pose's own orbit frame: the
+ * camera keeps looking at the same target throughout, and only its distance and
+ * its two angles move. `t >= 1` returns `final` itself, so the intro cannot
+ * leave the camera a rounding error away from the pose the snap buttons use.
+ */
+export function introPose(final: CameraPose, t: number): CameraPose {
+  if (!(t > 0)) t = 0;
+  if (t >= 1) return final;
+  const k = easeInOut(t);
+
+  const offset = {
+    x: final.position.x - final.target.x,
+    y: final.position.y - final.target.y,
+    z: final.position.z - final.target.z,
+  };
+  const distance = Math.hypot(offset.x, offset.y, offset.z);
+  if (distance === 0) return final;
+
+  const elevation = Math.asin(Math.max(-1, Math.min(1, offset.y / distance)));
+  const azimuth = Math.atan2(offset.x, offset.z);
+
+  const d = lerp(distance * INTRO_START_DISTANCE_RATIO, distance, k);
+  const e = lerp(elevation * INTRO_START_ELEVATION_RATIO, elevation, k);
+  const a = azimuth - INTRO_SWEEP_RAD * (1 - k);
+
+  const ground = Math.cos(e) * d;
+  return {
+    position: clampAboveGround(add(final.target, {
+      x: ground * Math.sin(a), y: Math.sin(e) * d, z: ground * Math.cos(a),
+    })),
+    target: final.target,
+    up: final.up,
+  };
+}
+
+/** DESIGN.md section 3.4: a reduced-motion viewer gets the destination, not the trip. */
+export function introMs(reducedMotion: boolean): number {
+  return reducedMotion ? 0 : INTRO_MS;
 }
 
 /** DESIGN.md section 3.4: a reduced-motion viewer gets the destination, not the trip. */
@@ -137,9 +227,10 @@ export function tweenMs(reducedMotion: boolean): number {
 
 /**
  * A camera transition is animation only when the operator explicitly asks for
- * one after initialization. The first pose and a size-only reframe must snap:
- * tweening either makes the canvas visibly zoom from Three.js's default pose,
- * and a settling ResizeObserver can otherwise restart that zoom several times.
+ * one after initialization. The first pose belongs to the intro (`introPose`),
+ * which runs once per mount; a size-only reframe must snap. Tweening either
+ * would let a settling ResizeObserver restart a zoom several times, which is
+ * exactly the "zooms in, then zooms out again" bug this guard exists to stop.
  */
 export function cameraTransitionMs(initialized: boolean, explicitCommand: boolean,
                                    reducedMotion: boolean): number {

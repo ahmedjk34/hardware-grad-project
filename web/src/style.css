@@ -866,6 +866,136 @@ svg.grid-overlay.selectable { cursor: crosshair; }
 
 .studio-stage { position: relative; min-height: 0; }
 
+.studio-sidepanels {
+  position: absolute;
+  z-index: var(--z-chrome);
+  top: var(--s4);
+  right: var(--s4);
+  display: grid;
+  gap: var(--s2);
+  width: clamp(280px, 25vw, 360px);
+  max-height: calc(100% - 76px);
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.studio-diagnostics,
+.studio-settings {
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--plate);
+}
+
+.studio-panel-header {
+  padding: var(--s2) var(--s3);
+  border-bottom: 1px solid var(--line);
+  color: var(--text-dim);
+  font: var(--t-xs);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .08em;
+}
+
+.studio-error-count { color: var(--danger); }
+.studio-warning-count { color: var(--motion); }
+.studio-count-word { color: var(--text-dim); font-weight: 400; }
+.studio-diagnostics-clean { color: var(--ready); }
+
+.studio-diagnostic-group + .studio-diagnostic-group {
+  border-top: 1px solid var(--line);
+}
+
+.studio-diagnostic-row {
+  display: grid;
+  grid-template-columns: 6px minmax(30px, auto) minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--s2);
+  padding: var(--s2) var(--s3);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
+}
+
+.studio-diagnostic-row + .studio-diagnostic-row { border-top: 1px solid var(--line); }
+.studio-diagnostic-row:hover { color: var(--text); background: var(--raised); }
+.studio-diagnostic-row:focus-visible {
+  outline: 2px solid var(--signal);
+  outline-offset: -2px;
+}
+
+.studio-severity {
+  width: 6px;
+  height: 6px;
+  margin-top: 5px;
+  border-radius: 50%;
+}
+
+.studio-severity-error { background: var(--danger); }
+.studio-severity-warning { background: var(--motion); }
+
+.studio-diagnostic-id {
+  color: var(--text);
+  font: var(--t-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.studio-diagnostic-message {
+  min-width: 0;
+  font: var(--t-sm);
+}
+
+.studio-diagnostic-fix {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--signal);
+  font: var(--t-xs);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.studio-diagnostic-fix:hover { text-decoration: underline; }
+.studio-diagnostic-fix:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+
+.studio-settings {
+  padding: var(--s3);
+  border-color: var(--motion);
+}
+
+.studio-settings h2 {
+  margin: 0 0 var(--s3);
+  color: var(--motion);
+  font: var(--t-xs);
+  letter-spacing: .08em;
+}
+
+.studio-setting {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 72px;
+  align-items: center;
+  gap: var(--s1) var(--s2);
+  padding: var(--s2) 0;
+  color: var(--text-dim);
+}
+
+.studio-setting + .studio-setting { border-top: 1px solid var(--line); }
+.studio-setting-name { color: var(--text); font: var(--t-xs); letter-spacing: .06em; }
+.studio-setting-value { color: var(--text-dim); font: var(--t-xs); white-space: nowrap; }
+
+.studio-setting input {
+  width: 72px;
+  min-width: 0;
+  padding: var(--s1) var(--s2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: var(--t-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.studio-setting input:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+.studio-setting-copy { grid-column: 1 / -1; font: var(--t-sm); }
+
 /* No infinite checkerboard — a vignette instead, so the model reads as lit
    from above (DESIGN.md §8.2) and nothing on the floor competes with it. */
 .studio-viewport {
@@ -1007,9 +1137,24 @@ svg.grid-overlay.selectable { cursor: crosshair; }
   letter-spacing: .02em;
 }
 
+.studio-ghost-warning {
+  color: var(--motion);
+  border-color: color-mix(in srgb, var(--motion) 60%, var(--line));
+}
+
 @media (max-height: 620px) {
   .studio-level { height: 12px; }
   .studio-levels { padding: var(--s1); }
+}
+
+@media (max-width: 760px) {
+  .studio-sidepanels {
+    top: var(--s2);
+    right: var(--s2);
+    width: min(280px, calc(100% - 88px));
+    max-height: calc(100% - 64px);
+  }
+  .studio-settings { padding: var(--s2); }
 }
 
 .studio-link { color: var(--signal); text-decoration: none; }

@@ -16,16 +16,18 @@ import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import type { ModeName, Shift } from "../coords";
 import type { Model } from "../model";
 import type { CellTarget } from "../pick";
-import type { PlacementStatus } from "../placement";
+import type { Diagnostic } from "../validate";
 import {
   FOV_DEG, MAX_POLAR_ANGLE, boxCentre, clampAboveGround, envelopeBoxScene,
-  cameraTransitionMs, viewPose, type ViewName,
+  cameraTransitionMs, frameBox, introMs, introPose, viewPose,
+  type Box, type CameraPose, type ViewName,
 } from "../view";
 import { Envelope } from "./Envelope";
 import { Lattice } from "./Lattice";
 import { Blocks } from "./Blocks";
 import { BlockShadows } from "./BlockShadows";
-import { Ghost } from "./Ghost";
+import { Ghost, type GhostStatus } from "./Ghost";
+import { DiagnosticMarkers } from "./DiagnosticMarkers";
 import { tokenColor } from "./theme";
 import type { SurfaceHandlers } from "./surface";
 
@@ -46,51 +48,119 @@ function useReducedMotion(): boolean {
 const ease = (t: number) => 1 - Math.pow(1 - t, 3);
 
 /**
- * Drives the camera to a snap pose. `view` changing starts a tween; a viewer
- * who has asked for reduced motion gets the destination on the next frame.
+ * Drives the camera. Three jobs, in order of how often they run:
+ *
+ *  1. The intro, once per mount: `view.introPose()` walks the camera from in
+ *     close out to the framed pose, swinging round the machine as it goes. It is guarded by `phase`, a ref, NOT by React state - a resize, a
+ *     browser zoom, a rerender or a reframe must never start a second one. That
+ *     was the "zooms in, then zooms out again" bug: the effect below reruns on
+ *     every size change, and without the guard each rerun restarted the move.
+ *  2. Explicit view commands after that, tweened for `TWEEN_MS`.
+ *  3. Everything else - a first pose under reduced motion, a size-only reframe -
+ *     snaps on the next frame, because animating those is the bug, not a feature.
+ *
+ * The frameloop is on demand, so `invalidate()` is called only while something
+ * is actually moving; the moment a move lands, the scene goes quiet again.
  */
-function CameraRig({ view, nonce, reduced }: { view: ViewName; nonce: number; reduced: boolean }) {
+function CameraRig({ view, nonce, reduced, focusBox }: {
+  view: ViewName; nonce: number; reduced: boolean; focusBox: Box | null;
+}) {
   const { camera, size, invalidate, controls } = useThree();
   const tween = useRef<{ from: { position: Vector3; target: Vector3; up: Vector3 };
                          to: { position: Vector3; target: Vector3; up: Vector3 };
                          start: number; duration: number } | null>(null);
+  /** The one-time intro guard. "pending" only ever becomes "intro" once. */
+  const phase = useRef<"pending" | "intro" | "live">("pending");
+  const intro = useRef<{ pose: CameraPose; start: number; duration: number } | null>(null);
   const previousCommand = useRef<string | null>(null);
 
-  useLayoutEffect(() => {
+  const apply = (to: { position: Vector3; target: Vector3; up: Vector3 }) => {
     const orbit = controls as OrbitControlsImpl | null;
-    const pose = viewPose(view, size.width / Math.max(size.height, 1));
-    const to = {
-      position: new Vector3(pose.position.x, pose.position.y, pose.position.z),
-      target: new Vector3(pose.target.x, pose.target.y, pose.target.z),
-      up: new Vector3(pose.up.x, pose.up.y, pose.up.z),
-    };
+    camera.up.copy(to.up);
+    camera.position.copy(to.position);
+    if (orbit) { orbit.target.copy(to.target); orbit.update(); }
+    camera.lookAt(to.target);
+  };
+
+  const vectors = (pose: CameraPose) => ({
+    position: new Vector3(pose.position.x, pose.position.y, pose.position.z),
+    target: new Vector3(pose.target.x, pose.target.y, pose.target.z),
+    up: new Vector3(pose.up.x, pose.up.y, pose.up.z),
+  });
+
+  useLayoutEffect(() => {
+    const aspect = size.width / Math.max(size.height, 1);
+    const pose = focusBox ? frameBox(focusBox, aspect) : viewPose(view, aspect);
     const command = `${view}:${nonce}`;
-    const initialized = previousCommand.current !== null;
-    const explicitCommand = initialized && previousCommand.current !== command;
-    const duration = cameraTransitionMs(initialized, explicitCommand, reduced);
+
+    // A resize mid-intro moves the DESTINATION, never the clock: the operator
+    // sees one continuous pull-back that happens to end correctly framed.
+    if (phase.current === "intro" && intro.current) {
+      intro.current.pose = pose;
+      invalidate();
+      return;
+    }
+
+    if (phase.current === "pending") {
+      previousCommand.current = command;
+      const duration = introMs(reduced);
+      if (duration === 0) { phase.current = "live"; apply(vectors(pose)); invalidate(); return; }
+      phase.current = "intro";
+      intro.current = { pose, start: performance.now(), duration };
+      apply(vectors(introPose(pose, 0)));
+      invalidate();
+      return;
+    }
+
+    const explicitCommand = previousCommand.current !== command;
+    const duration = cameraTransitionMs(true, explicitCommand, reduced);
     previousCommand.current = command;
     if (duration === 0) {
-      camera.up.copy(to.up);
-      camera.position.copy(to.position);
-      if (orbit) { orbit.target.copy(to.target); orbit.update(); }
-      camera.lookAt(to.target);
+      apply(vectors(pose));
       tween.current = null;
       invalidate();
       return;
     }
+    const orbit = controls as OrbitControlsImpl | null;
     tween.current = {
       from: {
         position: camera.position.clone(),
         target: orbit ? orbit.target.clone() : new Vector3(),
         up: camera.up.clone(),
       },
-      to, start: performance.now(), duration,
+      to: vectors(pose), start: performance.now(), duration,
     };
     invalidate();
-  }, [view, nonce, reduced, size.width, size.height, camera, controls, invalidate]);
+    // `apply` and `vectors` close over camera/controls, which the deps below track.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, nonce, reduced, focusBox, size.width, size.height, camera, controls, invalidate]);
+
+  // The operator wins: touching the controls during the intro lands it at once,
+  // so the tool never feels like it is holding the camera hostage.
+  useEffect(() => {
+    const orbit = controls as OrbitControlsImpl | null;
+    if (!orbit) return;
+    const land = () => {
+      if (phase.current !== "intro" || !intro.current) return;
+      phase.current = "live";
+      intro.current = null;
+      invalidate();
+    };
+    orbit.addEventListener("start", land);
+    return () => orbit.removeEventListener("start", land);
+  }, [controls, invalidate]);
 
   useFrame(() => {
     const orbit = controls as OrbitControlsImpl | null;
+
+    const opening = intro.current;
+    if (opening) {
+      const t = Math.min(1, (performance.now() - opening.start) / opening.duration);
+      apply(vectors(introPose(opening.pose, t)));
+      if (t >= 1) { intro.current = null; phase.current = "live"; } else invalidate();
+      return;
+    }
+
     const active = tween.current;
     if (active) {
       const t = Math.min(1, (performance.now() - active.start) / active.duration);
@@ -111,9 +181,11 @@ function CameraRig({ view, nonce, reduced }: { view: ViewName; nonce: number; re
   return null;
 }
 
-function Scene({ mode, shift, view, nonce, reduced, model, target, status, heldLevel, ...handlers }: {
+function Scene({ mode, shift, view, nonce, reduced, model, target, status, heldLevel,
+                 diagnostics, emphasizedId, focusBox, ...handlers }: {
   mode: ModeName; shift?: Shift; view: ViewName; nonce: number; reduced: boolean;
-  model: Model; target: CellTarget | null; status: PlacementStatus | null; heldLevel: number | null;
+  model: Model; target: CellTarget | null; status: GhostStatus | null; heldLevel: number | null;
+  diagnostics: Diagnostic[]; emphasizedId?: string | null; focusBox: Box | null;
 } & SurfaceHandlers) {
   const box = useMemo(() => envelopeBoxScene(), []);
   const centre = boxCentre(box);
@@ -132,6 +204,7 @@ function Scene({ mode, shift, view, nonce, reduced, model, target, status, heldL
       <BlockShadows blocks={model.blocks} />
       <Blocks blocks={model.blocks} activeMode={mode} shift={shift} heldLevel={heldLevel}
               reduced={reduced} {...handlers} />
+      <DiagnosticMarkers blocks={model.blocks} diagnostics={diagnostics} emphasizedId={emphasizedId} />
       <Ghost mode={mode} shift={shift} target={target} status={status} />
 
       <OrbitControls
@@ -141,7 +214,7 @@ function Scene({ mode, shift, view, nonce, reduced, model, target, status, heldL
         minDistance={4} maxDistance={260}
         zoomSpeed={1.25} rotateSpeed={0.9} panSpeed={0.9}
       />
-      <CameraRig view={view} nonce={nonce} reduced={reduced} />
+      <CameraRig view={view} nonce={nonce} reduced={reduced} focusBox={focusBox} />
     </>
   );
 }
@@ -154,11 +227,15 @@ export interface ViewportProps {
   nonce?: number;
   model: Model;
   target: CellTarget | null;
-  status: PlacementStatus | null;
+  status: GhostStatus | null;
   heldLevel: number | null;
+  diagnostics?: Diagnostic[];
+  emphasizedId?: string | null;
+  focusBox?: Box | null;
 }
 
 export function Viewport({ mode, shift, view, nonce = 0, model, target, status, heldLevel,
+                           diagnostics = [], emphasizedId, focusBox = null,
                            onSurfaceMove, onSurfaceDown, onSurfaceUp, onSurfaceLeave }: ViewportProps & SurfaceHandlers) {
   const reduced = useReducedMotion();
   return (
@@ -171,6 +248,7 @@ export function Viewport({ mode, shift, view, nonce = 0, model, target, status, 
       >
         <Scene mode={mode} shift={shift} view={view} nonce={nonce} reduced={reduced}
                model={model} target={target} status={status} heldLevel={heldLevel}
+               diagnostics={diagnostics} emphasizedId={emphasizedId} focusBox={focusBox}
                onSurfaceMove={onSurfaceMove} onSurfaceDown={onSurfaceDown}
                onSurfaceUp={onSurfaceUp} onSurfaceLeave={onSurfaceLeave} />
       </Canvas>

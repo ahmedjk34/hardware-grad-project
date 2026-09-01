@@ -30,21 +30,23 @@ console this attaches to).
 | M0 — Coordinates and fixtures | ✅ delivered | `coords.ts`, `geometry.ts`, fixtures dumped from Python |
 | M1 — Static viewport | ✅ delivered | `view.ts`, `lattice.ts`, `scene/`, the `#/studio` route |
 | M2 — Placement | ✅ delivered | ghost, top picking, click/alt/shift-drag, undo/redo, level x-ray |
-| M3 — Validation | not started | `validate.ts`, the diagnostics panel |
+| M3 — Validation | ✅ delivered | one pure validator, live settings, diagnostics, ghost reasons and block markers |
 | M4 — The compiler | not started | `compile.ts`, model → command program |
 | M5 — Library | not started | model document metadata, `library.ts`, thumbnails |
 | M6 — The twin | not started | read-only scene beside the camera |
 | M7 — The runner | not started | executing a compiled program through `/api/build` |
 | M8 — Wow pass | not started | shift gizmo, x-ray by level, cross-mode bridging |
 
-**Test suite.** `cd web && npm test` — **136 tests across 17 files**, all green.
+**Test suite.** `cd web && npm test` — **184 tests across 21 files**, all green.
 
 | file | tests | what it holds |
 | --- | --- | --- |
 | `studio/coords.test.ts` | 41 | the port of `python/rig/grid.py`, against dumped fixtures at 1e-6 |
 | `studio/geometry.test.ts` | 12 | AABBs, overlap, the firmware's clipping |
 | `studio/lattice.test.ts` | 14 | which cells are drawn, and in what state |
-| `studio/view.test.ts` | 13 | envelope framing, the four snaps, the orbit floor |
+| `studio/view.test.ts` | 27 | envelope/block framing, the four snaps, the orbit floor, the opening move |
+| `studio/validate.test.ts` | 27 | every §6.4 rule, modified configs, bridge scan, centroid and build order |
+| `studio/settings.test.ts` | 3 | conservative defaults and guarded versioned persistence |
 | `studio/model.test.ts` | 7 | immutable mutations; geometry/order separation |
 | `studio/history.test.ts` | 4 | generic undo/redo, branching and the 100-entry cap |
 | `studio/pick.test.ts` | 6 | cell/level resolution, gaps, hit priority and straight runs |
@@ -52,18 +54,20 @@ console this attaches to).
 | `studio/interaction.test.ts` | 5 | click slop, hover deduplication and keyboard interpretation |
 | `studio/motion.test.ts` | 4 | fade/drop curves, reduced motion and row sequencing |
 | `studio/panels/LevelScrubber.test.tsx` | 2 | accessible level hold/release controls |
+| `studio/panels/Diagnostics.test.tsx` | 2 | severity grouping, selection, hover and fixes |
+| `studio/panels/Settings.test.tsx` | 2 | visible estimates, copy and immediate edits |
 | `routes/preload.test.ts` | 1 | one cached route import shared by every preload trigger |
 | `redesign.test.tsx` | 10 | Plan 3 console |
 | `step7` / `step9` / `step10` | 5 / 4 / 1 | Plan 3 console guards — must never regress |
 | `lib/workspace.test.tsx` | 3 | the homography port |
 
-**Bundle**, from `npm run build` at the end of M2:
+**Bundle**, from `npm run build` at the end of M3:
 
 | chunk | size | notes |
 | --- | --- | --- |
 | console entry `index-*.js` | 218.73 kB (68.89 kB gzip) | contains **no** three.js; includes the tiny preload trigger |
-| `Studio-*.js` | 957.40 kB (257.30 kB gzip) | lazy; preloaded on idle or navigation intent |
-| `index-*.css` | 24.51 kB (5.76 kB gzip) | console and Studio share one stylesheet |
+| `Studio-*.js` | 969.26 kB (261.32 kB gzip) | lazy; preloaded on idle or navigation intent |
+| `index-*.css` | 27.55 kB (6.24 kB gzip) | console and Studio share one stylesheet |
 
 Before the Studio existed the console entry was 216.92 kB (68.24 kB gzip), so
 the console's first paint pays **1.81 kB** for the lazy route, hash router and
@@ -105,7 +109,7 @@ This is the whole architecture in one sentence: **the parts that must be correct
 are the parts that need no browser and no GPU.**
 
 ```
-studio/coords.ts geometry.ts lattice.ts view.ts model.ts history.ts pick.ts placement.ts interaction.ts motion.ts
+studio/coords.ts geometry.ts lattice.ts view.ts model.ts history.ts pick.ts placement.ts interaction.ts motion.ts validate.ts settings.ts
                                                         ← pure. Every rule. Tested.
 studio/scene/*.tsx panels/*.tsx routes/*.tsx             ← draws. No rules.
 ```
@@ -126,9 +130,11 @@ web/src/
     model.ts             immutable cell-space blocks + separate author order
     history.ts           generic bounded undo/redo
     pick.ts              raycast point → active-mode cell and stack level
-    placement.ts         M2's deliberately cheap local placement gate
+    placement.ts         compatibility wrapper around the one M3 validator
     interaction.ts       click slop and keyboard gesture interpretation
     motion.ts            row sequencing + fade/downward arrival curves
+    validate.ts          the one §6.4 rule table; model and ghost entry points
+    settings.ts          versioned physical estimates, guarded localStorage I/O
     coords.fixtures.json 17 cases / 980 cells dumped from Python
     scene/
       theme.ts           DESIGN.md tokens read off the document, as three colours
@@ -137,9 +143,12 @@ web/src/
       Lattice.tsx        the active grid, the gaps, the hatched feeder
       Blocks.tsx         rounded instanced blocks, split by mode and x-ray state
       Ghost.tsx          exact legal/illegal hover preview
+      DiagnosticMarkers.tsx static severity rings on offending top faces
       surface.ts         cell-space payload shared by raycast surfaces
     panels/
       LevelScrubber.tsx  explicit click/drag level hold
+      Diagnostics.tsx    grouped output + select/frame/fix dispatch
+      Settings.tsx       the three visible physical estimates
   routes/
     Root.tsx             hash routing + the lazy Studio import
     preload.ts           generic one-promise import cache
@@ -259,9 +268,30 @@ tested headlessly.
 | `screenAxes(pose)` | the pose's screen basis, built exactly as three.js builds a camera's |
 | `clampAboveGround(position, minY?)` | the orbit constraint as arithmetic |
 | `tweenMs(reducedMotion)` | `0` under `prefers-reduced-motion`, else `TWEEN_MS` |
+| `cameraTransitionMs(initialized, explicit, reduced)` | the one place that decides whether a camera move animates at all |
+| `introPose(final, t)` | the opening move as a function of progress `t ∈ [0,1]` |
+| `introMs(reducedMotion)` | `0` under `prefers-reduced-motion`, else `INTRO_MS` |
+| `easeInOut(t)` | cubic ease-in-out; no jump at either end, no jerk in the middle |
 
 Constants: `ENVELOPE_Z_CM = 26.5`, `FOV_DEG = 35`, `FRAME_MARGIN = 1.12`,
-`MIN_CAMERA_Y = 0.2`, `MAX_POLAR_ANGLE = π/2`, `TWEEN_MS = 420`, `VIEWS`.
+`MIN_CAMERA_Y = 0.2`, `MAX_POLAR_ANGLE = π/2`, `TWEEN_MS = 260`,
+`INTRO_MS = 880`, `INTRO_START_DISTANCE_RATIO = 0.32`,
+`INTRO_SWEEP_RAD = 0.85`, `INTRO_START_ELEVATION_RATIO = 0.45`, `VIEWS`.
+
+#### The opening move
+
+`introPose()` works in the final pose's own orbit frame: it decomposes
+`position − target` into a distance and two angles, then interpolates distance
+`0.32 → 1`, elevation `0.45 → 1` and azimuth `final − 0.85 rad → final`, all on
+one `easeInOut` curve. The target never moves, so the machine stays centred
+while the camera pulls back and swings round it — the reveal is that this is a
+3D object, not a picture of one.
+
+`t >= 1` returns the `final` object *itself* rather than recomputing it, so the
+intro cannot leave the camera a rounding error away from the pose the snap
+buttons use, and the envelope is exactly framed the moment it lands. The
+pull-back is asserted monotonic in `view.test.ts`: an intro that zoomed out and
+back in would fail there rather than in somebody's eyes.
 
 **`ENVELOPE_Z_CM` is the firmware's `Z_TRAVEL_CM` (26.5 cm)** and has no
 `rig.json` partner, exactly as with `BLOCK_HEIGHT_CM`. It is the cage's height —
@@ -350,12 +380,25 @@ cell-space surface callbacks in addition to `{ mode, shift?, view, nonce? }`.
   noise. The lit-from-above read comes from a CSS radial vignette behind the
   canvas (`--vignette`), which costs nothing to render.
 - **`frameloop="demand"`.** DESIGN.md §3.4 forbids motion on an idle screen, and
-  an idle Studio issues no draw calls at all. The view tween calls `invalidate()`
-  once per frame while it runs and stops; `prefers-reduced-motion` makes
-  `tweenMs()` zero, which snaps to the destination instead of animating to it.
+  an idle Studio issues no draw calls at all. The intro and the view tween call
+  `invalidate()` once per frame while they run and then stop; nothing in the
+  camera path holds the loop open afterwards. `prefers-reduced-motion` makes
+  `introMs()` and `tweenMs()` zero, which snaps to the destination instead of
+  animating to it.
+- **The intro runs once per mount**, guarded by a `phase` **ref**
+  (`"pending" → "intro" → "live"`), never by React state. The camera effect
+  reruns on every size change, so without that guard a settling
+  `ResizeObserver`, a browser-zoom change or an ordinary rerender each restarted
+  the pull-back — which is what the "zooms in, then zooms out again" bug was. A
+  resize *during* the intro updates the destination pose in place and leaves the
+  clock alone, so the move stays continuous and still lands correctly framed.
+  Touching the orbit controls lands the intro immediately; the operator wins.
 - **Pixel cost is capped** at DPR 1.5 and the WebGL context requests the
   high-performance adapter. This keeps fill rate bounded on the Pi display and
   high-DPI phones without making ordinary desktop output soft.
+- **Camera work happens in refs inside `useFrame`**, never through React state:
+  no scene rerender, no geometry, material, light or mesh is rebuilt while the
+  camera moves, and only position, orbit target and up are touched.
 - **The tween** interpolates position, orbit target and the camera's up vector
   with a cubic ease-out. Up is interpolated because `top` uses a different one;
   the path between `(0,1,0)` and `(0,0,−1)` never passes through zero length.
@@ -528,6 +571,20 @@ first in the diff.
 
 Newest first. One entry per landed change; note anything that contradicts the
 plan or that a future reader could not infer.
+
+### M2 — The opening move
+
+- Restored the cinematic mount intro in `view.ts` as pure arithmetic
+  (`introPose`, `introMs`, `easeInOut`): 880 ms, from 0.32× the framing distance
+  out to the framed pose, sweeping 0.85 rad of azimuth and rising in elevation
+  on one cubic ease-in-out. Nine headless cases, including that the pull-back is
+  monotonic and that `t >= 1` returns the framed pose itself.
+- Fixed the double-zoom: the intro is guarded by a one-time `phase` ref in
+  `CameraRig`, so resize, browser zoom, rerender and reframe cannot restart it.
+  A resize mid-intro retargets the move rather than replaying it.
+- `cameraTransitionMs` keeps its job — the *first* pose is now the intro's, and
+  size-only reframes still snap.
+- Corrected a stale `TWEEN_MS = 420` in §5.4; it has been 260 since M1.
 
 ### M2 — Performance and placement-motion pass
 

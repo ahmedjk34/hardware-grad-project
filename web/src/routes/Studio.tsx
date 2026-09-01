@@ -1,9 +1,9 @@
 /**
  * The 3D Build Studio.
  *
- * M2 makes that viewport an editor: surface hits become cell-space targets,
- * every completed gesture becomes one immutable history entry, and held-level
- * state remains explicit in both the rail and header.
+ * The route owns editor state; the pure validator owns every machine decision.
+ * The ghost and diagnostics panel enter the same RULES table, so an operator
+ * cannot see one answer before a click and another after it.
  *
  * This route is loaded lazily (see `routes/Root.tsx`) so the operator console's
  * first paint never pays for three.js.
@@ -12,20 +12,30 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Viewport } from "../studio/scene/Viewport";
 import { activeMode, cellCount, modeGeometry, reachableCells, type ModeName } from "../studio/coords";
 import { VIEWS, type ViewName } from "../studio/view";
-import { applyEdit, emptyModel, type Edit, type ModelBlock } from "../studio/model";
+import { blockBoxScene } from "../studio/view";
+import { applyEdit, emptyModel, type Edit, type Model, type ModelBlock } from "../studio/model";
 import { createHistory, push, redo, undo } from "../studio/history";
 import { keyboardAction, pointerIsClick, sameTarget, type Point2 } from "../studio/interaction";
-import { placementStatus } from "../studio/placement";
 import { runCells, type CellTarget } from "../studio/pick";
 import type { SurfacePointer } from "../studio/scene/surface";
 import { LevelScrubber } from "../studio/panels/LevelScrubber";
+import { Diagnostics } from "../studio/panels/Diagnostics";
+import { Settings } from "../studio/panels/Settings";
+import {
+  loadStudioSettings, saveStudioSettings, type StudioSettings,
+} from "../studio/settings";
+import {
+  placementDiagnosticMessage, primaryDiagnostic, snapshotRigGeometry,
+  validateModel, validatePlacement, type DiagnosticFix, type ValidationContext,
+} from "../studio/validate";
+import type { GhostStatus } from "../studio/scene/Ghost";
 
 const VIEW_LABEL: Record<ViewName, string> = {
   top: "TOP", front: "FRONT", side: "SIDE", iso: "ISO",
 };
 
-/** The current operator ceiling; M3 promotes this to a visible setting. */
-const LEVEL_CEILING = 17;
+/** The rail shows physical Z travel; the practical warning ceiling is a setting. */
+const THEORETICAL_LEVEL_CEILING = 17;
 
 /** A shift readout in the console's own register: signed, mono, two decimals. */
 function signed(value: number): string {
@@ -39,6 +49,11 @@ export default function Studio() {
   const [history, setHistory] = useState(() => createHistory(emptyModel()));
   const [target, setTarget] = useState<CellTarget | null>(null);
   const [heldLevel, setHeldLevel] = useState<number | null>(null);
+  const [settings, setSettings] = useState<StudioSettings>(() => loadStudioSettings());
+  const [hoveredDiagnosticId, setHoveredDiagnosticId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [focusBox, setFocusBox] = useState<ReturnType<typeof blockBoxScene> | null>(null);
+  const rigSnapshot = useRef(snapshotRigGeometry()).current;
   const nextId = useRef(1);
   const gesture = useRef<{
     start: Point2; anchor: CellTarget; mode: ModeName; pointerId: number;
@@ -46,17 +61,40 @@ export default function Studio() {
   } | null>(null);
 
   const model = history.present;
-  const status = useMemo(
-    () => target ? placementStatus(model, mode, target) : null,
-    [model, mode, target],
+  const validationContext = useMemo<ValidationContext>(
+    () => ({ mode, settings, rigSnapshot }),
+    [mode, settings, rigSnapshot],
   );
+  const diagnostics = useMemo(
+    () => validateModel(model, validationContext),
+    [model, validationContext],
+  );
+  const placementDiagnostics = useMemo(() => target ? validatePlacement(model, {
+    id: "ghost", mode, col: target.col, row: target.row, level: target.level, colour: "white",
+  }, validationContext) : [], [model, mode, target, validationContext]);
+  const status = useMemo<GhostStatus | null>(() => {
+    if (!target) return null;
+    const errors = placementDiagnostics.filter(item => item.severity === "error");
+    const primary = primaryDiagnostic(errors.length ? errors : placementDiagnostics);
+    return {
+      legal: errors.length === 0,
+      reason: primary ? placementDiagnosticMessage(primary) : null,
+      severity: primary?.severity ?? null,
+    };
+  }, [placementDiagnostics, target]);
+
+  useEffect(() => saveStudioSettings(settings), [settings]);
 
   const geometry = modeGeometry(mode);
   const requested = cellCount(mode);
   const reachable = reachableCells(mode);
   const clipped = reachable.cols < requested.cols || reachable.rows < requested.rows;
 
-  const snap = (next: ViewName) => { setView(next); setNonce(value => value + 1); };
+  const snap = (next: ViewName) => {
+    setView(next);
+    setFocusBox(null);
+    setNonce(value => value + 1);
+  };
   const commit = useCallback((edit: Edit) => {
     setHistory(current => {
       const next = applyEdit(current.present, edit);
@@ -85,10 +123,9 @@ export default function Studio() {
     };
   }, [atHeldLevel, mode]);
 
-  const newBlock = (blockMode: ModeName, cell: CellTarget): ModelBlock => ({
-    id: `b${nextId.current++}`, mode: blockMode,
-    col: cell.col, row: cell.row, level: cell.level, colour: "white",
-  });
+  const legalPlacement = useCallback((candidateModel: Model, candidate: ModelBlock) =>
+    !validatePlacement(candidateModel, candidate, validationContext)
+      .some(item => item.severity === "error"), [validationContext]);
 
   const surfaceUp = useCallback((raw: SurfacePointer) => {
     const start = gesture.current;
@@ -98,11 +135,20 @@ export default function Studio() {
     const end = { x: hit.clientX, y: hit.clientY };
 
     if (start.shift) {
-      const blocks = runCells(start.anchor, hit.target)
-        .map(cell => ({ ...cell, level: start.anchor.level }))
-        .filter(cell => placementStatus(model, start.mode, cell).legal)
-        .map(cell => newBlock(start.mode, cell));
+      const blocks: ModelBlock[] = [];
+      let preview = model;
+      for (const cell of runCells(start.anchor, hit.target)
+        .map(item => ({ ...item, level: start.anchor.level }))) {
+        const candidate: ModelBlock = {
+          id: `b${nextId.current + blocks.length}`, mode: start.mode,
+          col: cell.col, row: cell.row, level: cell.level, colour: "white",
+        };
+        if (!legalPlacement(preview, candidate)) continue;
+        blocks.push(candidate);
+        preview = applyEdit(preview, { type: "place", block: candidate });
+      }
       if (blocks.length) {
+        nextId.current += blocks.length;
         commit({ type: "placeRun", blocks });
         setTarget(null);
       }
@@ -117,11 +163,38 @@ export default function Studio() {
       }
       return;
     }
-    if (placementStatus(model, start.mode, hit.target).legal) {
-      commit({ type: "place", block: newBlock(start.mode, hit.target) });
+    const candidate = {
+      id: `b${nextId.current}`, mode: start.mode,
+      col: hit.target.col, row: hit.target.row, level: hit.target.level, colour: "white" as const,
+    };
+    if (legalPlacement(model, candidate)) {
+      nextId.current += 1;
+      commit({ type: "place", block: candidate });
       setTarget(null);
     }
-  }, [atHeldLevel, commit, model]);
+  }, [atHeldLevel, commit, legalPlacement, model]);
+
+  const selectDiagnostic = useCallback((id: string) => {
+    const block = model.blocks.find(item => item.id === id);
+    if (!block) return;
+    setSelectedId(id);
+    setFocusBox(blockBoxScene(block));
+    setNonce(value => value + 1);
+  }, [model.blocks]);
+
+  const applyFix = useCallback((fix: DiagnosticFix) => {
+    const edit = fix.edit;
+    if (edit.type === "reorder" && typeof edit.id === "string" && typeof edit.toIndex === "number") {
+      commit({ type: "reorder", id: edit.id, toIndex: edit.toIndex });
+      return;
+    }
+    if (edit.type === "move" && typeof edit.id === "string" && typeof edit.level === "number") {
+      const block = model.blocks.find(item => item.id === edit.id);
+      if (block) commit({
+        type: "move", id: block.id, mode: block.mode, col: block.col, row: block.row, level: edit.level,
+      });
+    }
+  }, [commit, model.blocks]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -136,7 +209,7 @@ export default function Studio() {
       else if (action === "redo") setHistory(current => redo(current));
       else if (action === "release-level") setHeldLevel(null);
       else if (action === "toggle-mode") setMode(current => current === "vertical" ? "horizontal" : "vertical");
-      else if (action.holdLevel <= LEVEL_CEILING) setHeldLevel(action.holdLevel);
+      else if (action.holdLevel <= THEORETICAL_LEVEL_CEILING) setHeldLevel(action.holdLevel);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -161,11 +234,20 @@ export default function Studio() {
       <div className="studio-stage">
         <Viewport mode={mode} view={view} nonce={nonce} model={model}
                   target={target} status={status} heldLevel={heldLevel}
+                  diagnostics={diagnostics}
+                  emphasizedId={hoveredDiagnosticId ?? selectedId}
+                  focusBox={focusBox}
                   onSurfaceMove={surfaceMove} onSurfaceDown={surfaceDown}
                   onSurfaceUp={surfaceUp} onSurfaceLeave={surfaceLeave} />
 
-        <LevelScrubber ceiling={LEVEL_CEILING} heldLevel={heldLevel}
+        <LevelScrubber ceiling={THEORETICAL_LEVEL_CEILING} heldLevel={heldLevel}
                        onHold={setHeldLevel} onRelease={() => setHeldLevel(null)} />
+
+        <div className="studio-sidepanels">
+          <Diagnostics diagnostics={diagnostics} onHover={setHoveredDiagnosticId}
+                       onSelect={selectDiagnostic} onFix={applyFix} />
+          <Settings value={settings} onChange={setSettings} />
+        </div>
 
         <div className="studio-views" role="group" aria-label="View">
           {VIEWS.map(name => (

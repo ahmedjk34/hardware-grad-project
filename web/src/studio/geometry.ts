@@ -13,8 +13,8 @@ import {
 export interface AABB { min: Vec3; max: Vec3 }
 
 /** The block's axis-aligned box in machine space, in millimetres. */
-export function aabbOf(block: Block): AABB {
-  const centre = cellToMachine(block.mode, block.col, block.row, block.level);
+export function aabbOf(block: Block, shift?: Shift): AABB {
+  const centre = cellToMachine(block.mode, block.col, block.row, block.level, shift);
   const size = blockExtents(block.mode);
   return {
     min: { x: centre.x - size.x / 2, y: centre.y - size.y / 2, z: centre.z - size.z / 2 },
@@ -41,6 +41,66 @@ export function footprintOverlapArea(a: AABB, b: AABB): number {
 
 export function footprintArea(box: AABB): number {
   return (box.max.x - box.min.x) * (box.max.y - box.min.y);
+}
+
+/** Does an XY footprint contain a point? Edges count as supported contact. */
+export function footprintContains(box: AABB, x: number, y: number): boolean {
+  return x >= box.min.x && x <= box.max.x && y >= box.min.y && y <= box.max.y;
+}
+
+/**
+ * Area of the union of axis-aligned footprints, clipped to one target. The
+ * sweep prevents two overlapping supports from being counted twice.
+ */
+export function footprintUnionArea(boxes: AABB[], clip: AABB): number {
+  const rectangles = boxes.flatMap(box => {
+    const minX = Math.max(box.min.x, clip.min.x);
+    const maxX = Math.min(box.max.x, clip.max.x);
+    const minY = Math.max(box.min.y, clip.min.y);
+    const maxY = Math.min(box.max.y, clip.max.y);
+    return minX < maxX && minY < maxY ? [{ minX, maxX, minY, maxY }] : [];
+  });
+  const xs = [...new Set(rectangles.flatMap(rect => [rect.minX, rect.maxX]))].sort((a, b) => a - b);
+  let area = 0;
+  for (let index = 0; index < xs.length - 1; index++) {
+    const left = xs[index];
+    const right = xs[index + 1];
+    const intervals = rectangles
+      .filter(rect => rect.minX < right && rect.maxX > left)
+      .map(rect => [rect.minY, rect.maxY] as const)
+      .sort((a, b) => a[0] - b[0]);
+    let covered = 0;
+    let start = 0;
+    let end = 0;
+    intervals.forEach((interval, intervalIndex) => {
+      if (intervalIndex === 0) { [start, end] = interval; return; }
+      if (interval[0] > end) { covered += end - start; [start, end] = interval; }
+      else end = Math.max(end, interval[1]);
+    });
+    if (intervals.length) covered += end - start;
+    area += (right - left) * covered;
+  }
+  return area;
+}
+
+/** The vertical descent volume over a footprint, inflated on every XY side. */
+export function descentPrism(box: AABB, marginMm: number, travelHeightMm: number): AABB {
+  return {
+    min: { x: box.min.x - marginMm, y: box.min.y - marginMm, z: box.max.z },
+    max: { x: box.max.x + marginMm, y: box.max.y + marginMm, z: travelHeightMm },
+  };
+}
+
+/** Physical face contact or shared volume; a corner/edge alone is not support. */
+export function contacts(a: AABB, b: AABB): boolean {
+  const overlap = (amin: number, amax: number, bmin: number, bmax: number) =>
+    Math.min(amax, bmax) - Math.max(amin, bmin);
+  const axes = [
+    overlap(a.min.x, a.max.x, b.min.x, b.max.x),
+    overlap(a.min.y, a.max.y, b.min.y, b.max.y),
+    overlap(a.min.z, a.max.z, b.min.z, b.max.z),
+  ];
+  return axes.every(value => value >= 0) && axes.filter(value => value > 0).length >= 2;
 }
 
 export interface Clipping {

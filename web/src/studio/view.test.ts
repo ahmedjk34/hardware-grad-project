@@ -1,9 +1,10 @@
 import { describe, expect, it, afterEach } from "vitest";
 import { machineToScene, rigConfig, setRigConfig, type Vec3 } from "./coords";
 import {
-  MAX_POLAR_ANGLE, MIN_CAMERA_Y, TWEEN_MS, VIEWS, cameraTransitionMs,
-  clampAboveGround, envelopeBoxScene, frameDistance, screenAxes, tweenMs,
-  viewPose, type CameraPose,
+  INTRO_MS, INTRO_START_DISTANCE_RATIO, MAX_POLAR_ANGLE, MIN_CAMERA_Y, TWEEN_MS,
+  VIEWS, cameraTransitionMs, clampAboveGround, easeInOut, envelopeBoxScene,
+  blockBoxScene, frameBox, frameDistance, introMs, introPose, screenAxes, tweenMs, viewPose,
+  type CameraPose,
 } from "./view";
 
 const shipped = rigConfig();
@@ -135,6 +136,44 @@ describe("view snaps", () => {
     const wide = frameDistance(10, 1, FOV, 1);
     expect(wide * half).toBeGreaterThanOrEqual(10);
   });
+
+  it("frames an arbitrary selected box by reusing the perspective distance", () => {
+    const selected = {
+      min: { x: 3, y: 0, z: -8 },
+      max: { x: 7, y: 2, z: -2 },
+    };
+    const pose = frameBox(selected, 16 / 9);
+    expect(pose.target).toEqual({ x: 5, y: 1, z: -5 });
+    expect(framesBox(pose, selected, 16 / 9)).toBe(true);
+    const envelope = viewPose("iso", 16 / 9);
+    const envelopeDistance = Math.hypot(
+      envelope.position.x - envelope.target.x,
+      envelope.position.y - envelope.target.y,
+      envelope.position.z - envelope.target.z,
+    );
+    const selectedDistance = Math.hypot(
+      pose.position.x - pose.target.x, pose.position.y - pose.target.y, pose.position.z - pose.target.z,
+    );
+    expect(selectedDistance).toBeLessThan(envelopeDistance);
+  });
+
+  it("converts a selected block box through the one coordinate boundary", () => {
+    const box = blockBoxScene({ mode: "vertical", col: 1, row: 1, level: 0 });
+    const expected = [
+      machineToScene({ x: 27, y: 46, z: 0 }),
+      machineToScene({ x: 49, y: 106, z: 15 }),
+    ];
+    expect(box.min).toEqual({
+      x: Math.min(expected[0].x, expected[1].x),
+      y: Math.min(expected[0].y, expected[1].y),
+      z: Math.min(expected[0].z, expected[1].z),
+    });
+    expect(box.max).toEqual({
+      x: Math.max(expected[0].x, expected[1].x),
+      y: Math.max(expected[0].y, expected[1].y),
+      z: Math.max(expected[0].z, expected[1].z),
+    });
+  });
 });
 
 describe("the orbit never goes below the ground plane", () => {
@@ -157,7 +196,7 @@ describe("motion", () => {
     expect(tweenMs(true)).toBe(0);
   });
 
-  it("shows the first camera pose immediately instead of zooming in from the Three.js default", () => {
+  it("leaves the first pose to the intro rather than tweening from the Three.js default", () => {
     expect(cameraTransitionMs(false, false, false)).toBe(0);
   });
 
@@ -171,5 +210,72 @@ describe("motion", () => {
 
   it("keeps explicit view commands instant under reduced motion", () => {
     expect(cameraTransitionMs(true, true, true)).toBe(0);
+  });
+});
+
+describe("the opening move", () => {
+  const final = viewPose("iso", 16 / 9);
+  const radius = (pose: CameraPose) => Math.hypot(
+    pose.position.x - final.target.x,
+    pose.position.y - final.target.y,
+    pose.position.z - final.target.z,
+  );
+
+  it("lasts long enough to read and short enough to stay out of the way", () => {
+    expect(INTRO_MS).toBeGreaterThanOrEqual(700);
+    expect(INTRO_MS).toBeLessThanOrEqual(1000);
+  });
+
+  it("is skipped entirely under prefers-reduced-motion", () => {
+    expect(introMs(false)).toBe(INTRO_MS);
+    expect(introMs(true)).toBe(0);
+  });
+
+  it("starts close to the rig and ends on the framed pose itself", () => {
+    expect(radius(introPose(final, 0))).toBeCloseTo(radius(final) * INTRO_START_DISTANCE_RATIO, 6);
+    expect(introPose(final, 1)).toBe(final);
+    expect(introPose(final, 1.4)).toBe(final);
+  });
+
+  it("pulls back monotonically — it never zooms out and back in", () => {
+    let previous = -Infinity;
+    for (let i = 0; i <= 60; i++) {
+      const r = radius(introPose(final, i / 60));
+      expect(r).toBeGreaterThan(previous);
+      previous = r;
+    }
+  });
+
+  it("orbits the machine on the way out, then arrives on the final heading", () => {
+    const azimuth = (pose: CameraPose) =>
+      Math.atan2(pose.position.x - final.target.x, pose.position.z - final.target.z);
+    expect(Math.abs(azimuth(introPose(final, 0)) - azimuth(final))).toBeGreaterThan(0.4);
+    expect(azimuth(introPose(final, 0.999))).toBeCloseTo(azimuth(final), 3);
+  });
+
+  it("keeps looking at the same point and never dips under the floor", () => {
+    for (let i = 0; i <= 60; i++) {
+      const pose = introPose(final, i / 60);
+      near(pose.target, final.target);
+      expect(pose.position.y).toBeGreaterThanOrEqual(MIN_CAMERA_Y);
+    }
+  });
+
+  it("eases in and out with no snap at either end and no jerk in the middle", () => {
+    expect(easeInOut(0)).toBe(0);
+    expect(easeInOut(1)).toBe(1);
+    expect(easeInOut(0.5)).toBeCloseTo(0.5, 6);
+    // Symmetric, and slow at both ends: the derivative is largest at the centre.
+    expect(easeInOut(0.25) + easeInOut(0.75)).toBeCloseTo(1, 6);
+    const step = (a: number, b: number) => easeInOut(b) - easeInOut(a);
+    expect(step(0.45, 0.55)).toBeGreaterThan(step(0, 0.1));
+    expect(step(0.45, 0.55)).toBeGreaterThan(step(0.9, 1));
+  });
+
+  it("frames the whole envelope the moment it finishes, at any aspect", () => {
+    for (const aspect of [16 / 9, 4 / 3, 0.5]) {
+      const pose = viewPose("iso", aspect);
+      expect(framesBox(introPose(pose, 1), envelopeBoxScene(), aspect)).toBe(true);
+    }
   });
 });
