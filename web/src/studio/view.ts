@@ -9,7 +9,7 @@
  * Every distance here is in SCENE units, and every one of them comes out of
  * `coords.ts` - this module converts nothing itself.
  */
-import { MM_PER_CM, machineToScene, rigConfig, type Block, type Shift, type Vec3 } from "./coords";
+import { MM_PER_CM, machineToScene, rigConfig, type Block, type ModeName, type Shift, type Vec3 } from "./coords";
 import { aabbOf } from "./geometry";
 
 /** arduino/build_test_v1: Z_TRAVEL_CM. The cage's height, not a build ceiling. */
@@ -94,6 +94,25 @@ export function blockBoxScene(block: Block, shift?: Shift): Box {
     max: {
       x: Math.max(first.x, second.x), y: Math.max(first.y, second.y), z: Math.max(first.z, second.z),
     },
+  };
+}
+
+/**
+ * The box the blocks themselves occupy, or `null` for an empty model.
+ *
+ * A thumbnail framed on the envelope gives every card the same picture of the
+ * same empty cage, which is worse than no thumbnail at all. Framed on this, a
+ * tower looks like a tower. The envelope still renders behind it, for scale.
+ */
+export function modelBoxScene(blocks: Block[],
+                              shifts?: Partial<Record<ModeName, Shift>>): Box | null {
+  if (blocks.length === 0) return null;
+  const boxes = blocks.map(block => blockBoxScene(block, shifts?.[block.mode]));
+  const reduce = (pick: (values: number[]) => number, axis: "x" | "y" | "z", side: "min" | "max") =>
+    pick(boxes.map(box => box[side][axis]));
+  return {
+    min: { x: reduce(v => Math.min(...v), "x", "min"), y: reduce(v => Math.min(...v), "y", "min"), z: reduce(v => Math.min(...v), "z", "min") },
+    max: { x: reduce(v => Math.max(...v), "x", "max"), y: reduce(v => Math.max(...v), "y", "max"), z: reduce(v => Math.max(...v), "z", "max") },
   };
 }
 

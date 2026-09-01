@@ -246,11 +246,48 @@ export const clawClearance = defineRule("CLAW_CLEARANCE", (model, block, ctx) =>
   }];
 });
 
+const signedCm = (pair: readonly (number | null)[]): string =>
+  pair.map(value => value === null ? "none"
+    : `${value < 0 ? "\u2212" : "+"}${Math.abs(value).toFixed(2)}`).join(", ");
+
+/**
+ * What actually differs, in the operator's own words. A model that opens saying
+ * only "the geometry changed" leaves somebody diffing two JSON files; one that
+ * says which knob moved, and to what, is a single instruction. The shift case
+ * is the common one — a model can legitimately need a shift the rig is not
+ * applying, and that is exactly what must be pushed before the build.
+ */
+export function describeDrift(model: RigGeometrySnapshot,
+                              live: RigGeometrySnapshot = snapshotRigGeometry()): string | null {
+  if (model.workspaceCm.join() !== live.workspaceCm.join()) {
+    return `this model was designed for a ${signedCm(model.workspaceCm)} cm workspace; the rig is now ${signedCm(live.workspaceCm)} cm`;
+  }
+  for (const mode of ["vertical", "horizontal"] as ModeName[]) {
+    const was = model.modes[mode];
+    const now = live.modes[mode];
+    if (was.cols !== now.cols || was.rows !== now.rows) {
+      return `this model was designed for a ${was.cols} \u00d7 ${was.rows} ${mode} grid; the rig is now ${now.cols} \u00d7 ${now.rows}`;
+    }
+    const knobs = ["shiftCm", "blockCm", "pitchCm", "trimCm", "errorOffsetCm", "maxEdgeOverhangCm"] as const;
+    const label: Record<typeof knobs[number], string> = {
+      shiftCm: "grid shift", blockCm: "block size", pitchCm: "pitch",
+      trimCm: "trim", errorOffsetCm: "calibration offset", maxEdgeOverhangCm: "edge overhang budget",
+    };
+    for (const knob of knobs) {
+      if (was[knob].join() === now[knob].join()) continue;
+      return `this model was designed with the ${mode} ${label[knob]} at ${signedCm(was[knob])} cm; the rig is at ${signedCm(now[knob])} cm`;
+    }
+  }
+  return null;
+}
+
 export const geometryDrift = defineRule("GEOMETRY_DRIFT", (_model, _block, ctx) => {
-  if (!ctx.rigSnapshot || JSON.stringify(ctx.rigSnapshot) === JSON.stringify(snapshotRigGeometry())) return [];
+  if (!ctx.rigSnapshot) return [];
+  const difference = describeDrift(ctx.rigSnapshot);
+  if (!difference) return [];
   return [{
     severity: "warning", code: "GEOMETRY_DRIFT",
-    message: "This model was designed for different rig geometry — review every placement before compiling",
+    message: `${difference} \u2014 review every placement before compiling`,
   }];
 });
 

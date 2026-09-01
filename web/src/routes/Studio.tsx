@@ -12,7 +12,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Viewport } from "../studio/scene/Viewport";
 import { activeMode, cellCount, modeGeometry, reachableCells, type ModeName } from "../studio/coords";
 import { VIEWS, type ViewName } from "../studio/view";
-import { blockBoxScene } from "../studio/view";
+import { blockBoxScene, modelBoxScene } from "../studio/view";
 import { applyEdit, emptyModel, type Edit, type Model, type ModelBlock } from "../studio/model";
 import { createHistory, push, redo, undo } from "../studio/history";
 import { keyboardAction, pointerIsClick, sameTarget, type Point2 } from "../studio/interaction";
@@ -22,15 +22,20 @@ import { LevelScrubber } from "../studio/panels/LevelScrubber";
 import { Diagnostics } from "../studio/panels/Diagnostics";
 import { Settings } from "../studio/panels/Settings";
 import { ProgramView } from "../studio/panels/ProgramView";
+import { LibraryDrawer } from "../studio/panels/LibraryDrawer";
 import { compile } from "../studio/compile";
 import {
   loadStudioSettings, saveStudioSettings, type StudioSettings,
 } from "../studio/settings";
 import {
-  placementDiagnosticMessage, primaryDiagnostic, snapshotRigGeometry,
+  placementDiagnosticMessage, primaryDiagnostic,
   validateModel, validatePlacement, type DiagnosticFix, type ValidationContext,
 } from "../studio/validate";
 import type { GhostStatus } from "../studio/scene/Ghost";
+import type { CaptureHandle } from "../studio/scene/Capture";
+import {
+  documentOf, fromFileRig, shiftsOf, structureOf, type StudioModel,
+} from "../studio/rigmodel";
 
 const VIEW_LABEL: Record<ViewName, string> = {
   top: "TOP", front: "FRONT", side: "SIDE", iso: "ISO",
@@ -55,7 +60,12 @@ export default function Studio() {
   const [hoveredDiagnosticId, setHoveredDiagnosticId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [focusBox, setFocusBox] = useState<ReturnType<typeof blockBoxScene> | null>(null);
-  const rigSnapshot = useRef(snapshotRigGeometry()).current;
+  /** The document the editor is currently inside: its identity, its name and
+   *  the rig geometry it was authored against. Loading a model replaces this
+   *  wholesale, which is what makes GEOMETRY_DRIFT reachable from the editor. */
+  const [modelDocument, setModelDocument] = useState<StudioModel>(() => documentOf(emptyModel(), { name: "Untitled" }));
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  const capture = useRef(null) as CaptureHandle;
   const nextId = useRef(1);
   const gesture = useRef<{
     start: Point2; anchor: CellTarget; mode: ModeName; pointerId: number;
@@ -63,17 +73,23 @@ export default function Studio() {
   } | null>(null);
 
   const model = history.present;
+  // The model's own rig snapshot drives BOTH the shift the lattice is drawn
+  // with and the snapshot GEOMETRY_DRIFT compares. A model that needs a shift
+  // the rig is not applying therefore renders where it will really be built,
+  // and says so, rather than looking right and building wrong.
+  const shifts = useMemo(() => shiftsOf(modelDocument.rig), [modelDocument.rig]);
+  const rigSnapshot = useMemo(() => fromFileRig(modelDocument.rig), [modelDocument.rig]);
   const validationContext = useMemo<ValidationContext>(
-    () => ({ mode, settings, rigSnapshot }),
-    [mode, settings, rigSnapshot],
+    () => ({ mode, settings, shifts, rigSnapshot }),
+    [mode, settings, shifts, rigSnapshot],
   );
   const diagnostics = useMemo(
     () => validateModel(model, validationContext),
     [model, validationContext],
   );
   const program = useMemo(
-    () => compile(model, { mode, settings, rigSnapshot }),
-    [model, mode, settings, rigSnapshot],
+    () => compile(model, { mode, settings, shifts, rigSnapshot }),
+    [model, mode, settings, shifts, rigSnapshot],
   );
   const placementDiagnostics = useMemo(() => target ? validatePlacement(model, {
     id: "ghost", mode, col: target.col, row: target.row, level: target.level, colour: "white",
@@ -202,6 +218,39 @@ export default function Studio() {
     }
   }, [commit, model.blocks]);
 
+  /**
+   * Snapshot the editor as a saveable document. The thumbnail is rendered off
+   * screen from the model's own bounding box (see `scene/Capture.tsx`); if the
+   * GPU cannot produce one the save still goes ahead with a plain card.
+   */
+  const captureCurrent = useCallback(async (): Promise<StudioModel> => {
+    const thumbnail = await capture.current?.(modelBoxScene(model.blocks, shifts));
+    return {
+      ...modelDocument,
+      blocks: model.blocks,
+      order: model.order,
+      modified: new Date().toISOString(),
+      ...(thumbnail === undefined ? {} : { thumbnail }),
+    };
+  }, [model, modelDocument, shifts]);
+
+  /** Load a document: its structure, its identity AND its geometry snapshot.
+   *  `nextId` moves past whatever the file used so a new block cannot collide
+   *  with an imported one. */
+  const openDocument = useCallback((incoming: StudioModel) => {
+    setModelDocument(incoming);
+    setHistory(createHistory(structureOf(incoming)));
+    setSelectedId(null);
+    setFocusBox(null);
+    setTarget(null);
+    setHeldLevel(null);
+    nextId.current = incoming.blocks.reduce(
+      (highest, block) => Math.max(highest, Number(/\d+$/.exec(block.id)?.[0] ?? 0) + 1), 1,
+    );
+    setLibraryOpen(false);
+    setNonce(value => value + 1);
+  }, []);
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const element = event.target instanceof HTMLElement ? event.target : null;
@@ -226,6 +275,11 @@ export default function Studio() {
       <header className="studio-bar">
         <a className="studio-back" href="#/">&#9664; CONSOLE</a>
         <span className="studio-title">BUILD STUDIO</span>
+        <button type="button" className="studio-back studio-library-toggle"
+                aria-expanded={libraryOpen} onClick={() => setLibraryOpen(open => !open)}>
+          LIBRARY
+        </button>
+        <span className="studio-readout studio-model-name">{modelDocument.name}</span>
         <span className="studio-readout">
           <b>{mode.toUpperCase()}</b> {requested.cols}&times;{requested.rows}
           {clipped && <em className="studio-clipped"> clipped to {reachable.cols}&times;{reachable.rows}</em>}
@@ -238,7 +292,8 @@ export default function Studio() {
       </header>
 
       <div className="studio-stage">
-        <Viewport mode={mode} view={view} nonce={nonce} model={model}
+        <Viewport mode={mode} shift={shifts[mode]} view={view} nonce={nonce} model={model}
+                  captureHandle={capture}
                   target={target} status={status} heldLevel={heldLevel}
                   diagnostics={diagnostics}
                   emphasizedId={hoveredDiagnosticId ?? selectedId}
@@ -265,6 +320,12 @@ export default function Studio() {
             </button>
           ))}
         </div>
+
+        <LibraryDrawer open={libraryOpen} onClose={() => setLibraryOpen(false)}
+                       currentId={modelDocument.id} onOpenModel={openDocument}
+                       captureCurrent={captureCurrent}
+                       onSaved={saved => setModelDocument(saved)}
+                       settings={settings} />
 
         <div className="studio-modes" role="group" aria-label="Grid mode">
           {(["vertical", "horizontal"] as ModeName[]).map(name => (

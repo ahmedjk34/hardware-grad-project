@@ -3,7 +3,8 @@ import { machineToScene, rigConfig, setRigConfig, type Vec3 } from "./coords";
 import {
   INTRO_MS, INTRO_START_DISTANCE_RATIO, MAX_POLAR_ANGLE, MIN_CAMERA_Y, TWEEN_MS,
   VIEWS, cameraTransitionMs, clampAboveGround, easeInOut, envelopeBoxScene,
-  blockBoxScene, frameBox, frameDistance, introMs, introPose, screenAxes, tweenMs, viewPose,
+  blockBoxScene, frameBox, frameDistance, introMs, introPose, modelBoxScene, screenAxes,
+  tweenMs, viewPose,
   type CameraPose,
 } from "./view";
 
@@ -277,5 +278,32 @@ describe("the opening move", () => {
       const pose = viewPose("iso", aspect);
       expect(framesBox(introPose(pose, 1), envelopeBoxScene(), aspect)).toBe(true);
     }
+  });
+});
+
+describe("modelBoxScene — what a thumbnail is framed on", () => {
+  const block = (mode: "vertical" | "horizontal", col: number, row: number, level: number) =>
+    ({ mode, col, row, level });
+
+  it("is null for an empty model, so the caller can fall back to the envelope", () => {
+    expect(modelBoxScene([])).toBeNull();
+  });
+
+  it("is exactly one block's box for one block", () => {
+    expect(modelBoxScene([block("vertical", 2, 2, 0)]))
+      .toEqual(blockBoxScene(block("vertical", 2, 2, 0)));
+  });
+
+  it("unions across modes and levels, and stays inside the envelope", () => {
+    const blocks = [block("vertical", 2, 2, 0), block("vertical", 3, 2, 1), block("horizontal", 1, 4, 2)];
+    const box = modelBoxScene(blocks)!;
+    const envelope = envelopeBoxScene();
+    for (const one of blocks) {
+      const single = blockBoxScene(one);
+      expect(box.min.x).toBeLessThanOrEqual(single.min.x);
+      expect(box.max.y).toBeGreaterThanOrEqual(single.max.y);
+    }
+    expect(box.max.y).toBeLessThanOrEqual(envelope.max.y);
+    expect(box.max.y).toBeGreaterThan(box.min.y);
   });
 });

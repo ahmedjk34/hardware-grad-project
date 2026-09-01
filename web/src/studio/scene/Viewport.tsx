@@ -27,6 +27,7 @@ import { Lattice } from "./Lattice";
 import { Blocks } from "./Blocks";
 import { BlockShadows } from "./BlockShadows";
 import { Ghost, type GhostStatus } from "./Ghost";
+import { Capture, type CaptureHandle } from "./Capture";
 import { DiagnosticMarkers } from "./DiagnosticMarkers";
 import { tokenColor } from "./theme";
 import type { SurfaceHandlers } from "./surface";
@@ -182,10 +183,11 @@ function CameraRig({ view, nonce, reduced, focusBox }: {
 }
 
 function Scene({ mode, shift, view, nonce, reduced, model, target, status, heldLevel,
-                 diagnostics, emphasizedId, focusBox, ...handlers }: {
+                 diagnostics, emphasizedId, focusBox, captureHandle, ...handlers }: {
   mode: ModeName; shift?: Shift; view: ViewName; nonce: number; reduced: boolean;
   model: Model; target: CellTarget | null; status: GhostStatus | null; heldLevel: number | null;
   diagnostics: Diagnostic[]; emphasizedId?: string | null; focusBox: Box | null;
+  captureHandle?: CaptureHandle;
 } & SurfaceHandlers) {
   const box = useMemo(() => envelopeBoxScene(), []);
   const centre = boxCentre(box);
@@ -215,6 +217,7 @@ function Scene({ mode, shift, view, nonce, reduced, model, target, status, heldL
         zoomSpeed={1.25} rotateSpeed={0.9} panSpeed={0.9}
       />
       <CameraRig view={view} nonce={nonce} reduced={reduced} focusBox={focusBox} />
+      {captureHandle ? <Capture handle={captureHandle} /> : null}
     </>
   );
 }
@@ -232,10 +235,12 @@ export interface ViewportProps {
   diagnostics?: Diagnostic[];
   emphasizedId?: string | null;
   focusBox?: Box | null;
+  /** Filled with a thumbnail capture while the canvas is mounted; see Capture. */
+  captureHandle?: CaptureHandle;
 }
 
 export function Viewport({ mode, shift, view, nonce = 0, model, target, status, heldLevel,
-                           diagnostics = [], emphasizedId, focusBox = null,
+                           diagnostics = [], emphasizedId, focusBox = null, captureHandle,
                            onSurfaceMove, onSurfaceDown, onSurfaceUp, onSurfaceLeave }: ViewportProps & SurfaceHandlers) {
   const reduced = useReducedMotion();
   return (
@@ -249,6 +254,7 @@ export function Viewport({ mode, shift, view, nonce = 0, model, target, status, 
         <Scene mode={mode} shift={shift} view={view} nonce={nonce} reduced={reduced}
                model={model} target={target} status={status} heldLevel={heldLevel}
                diagnostics={diagnostics} emphasizedId={emphasizedId} focusBox={focusBox}
+               captureHandle={captureHandle}
                onSurfaceMove={onSurfaceMove} onSurfaceDown={onSurfaceDown}
                onSurfaceUp={onSurfaceUp} onSurfaceLeave={onSurfaceLeave} />
       </Canvas>

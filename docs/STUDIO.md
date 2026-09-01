@@ -32,21 +32,26 @@ console this attaches to).
 | M2 — Placement | ✅ delivered | ghost, top picking, click/alt/shift-drag, undo/redo, level x-ray |
 | M3 — Validation | ✅ delivered | one pure validator, live settings, diagnostics, ghost reasons and block markers |
 | M4 — The compiler | ✅ delivered | `compile.ts` (support graph, Kahn order, latch state machine, deterministic), `panels/ProgramView.tsx`, per-block/per-latch estimate settings |
-| M5 — Library | not started | model document metadata, `library.ts`, thumbnails |
+| M5 — Library | ✅ delivered | `rigmodel.ts` (the `rigmodel/1` file), `library.ts` (Result CRUD, 4 MB budget), `thumbnail.ts` + `scene/Capture.tsx`, `panels/LibraryDrawer.tsx`, three built-in examples |
 | M6 — The twin | not started | read-only scene beside the camera |
 | M7 — The runner | not started | executing a compiled program through `/api/build` |
 | M8 — Wow pass | not started | shift gizmo, x-ray by level, cross-mode bridging |
 
-**Test suite.** `cd web && npm test` — **214 tests across 23 files**, all green.
+**Test suite.** `cd web && npm test` — **302 tests across 28 files**, all green.
 
 | file | tests | what it holds |
 | --- | --- | --- |
 | `studio/coords.test.ts` | 41 | the port of `python/rig/grid.py`, against dumped fixtures at 1e-6 |
 | `studio/geometry.test.ts` | 12 | AABBs, overlap, the firmware's clipping |
 | `studio/lattice.test.ts` | 14 | which cells are drawn, and in what state |
-| `studio/view.test.ts` | 27 | envelope/block framing, the four snaps, the orbit floor, the opening move |
+| `studio/view.test.ts` | 30 | envelope/block framing, the four snaps, the orbit floor, the opening move |
 | `studio/validate.test.ts` | 27 | every §6.4 rule, modified configs, bridge scan, centroid and build order |
 | `studio/compile.test.ts` | 25 | the four steps in isolation, one red-when-removed test per ordering constraint, the latch state machine, twenty-compile determinism |
+| `studio/rigmodel.test.ts` | 19 | lossless round trip, eight named corrupt-file refusals, the migration hook, the library array file |
+| `studio/library.test.ts` | 20 | CRUD, index/body split, one corrupt body costing one card, unavailable and full storage, the budget refusal, export/import |
+| `studio/examples.test.ts` | 23 | the three examples as fixtures — round trip, no errors, compiled program, grid bounds, author order |
+| `studio/thumbnail.test.ts` | 5 | the bottom-up row flip, the 16:10 sizes, graceful absence of `OffscreenCanvas` |
+| `studio/panels/LibraryDrawer.test.tsx` | 18 | cards and meta line, inline rename, duplicate, delete with a real undo, the storage strip, the budget refusal, drop-import confirmation |
 | `studio/settings.test.ts` | 4 | conservative defaults, timing-field backfill, guarded versioned persistence |
 | `studio/panels/ProgramView.test.tsx` | 4 | serial-log rendering, latch dividers, line selection, clipboard copy |
 | `studio/model.test.ts` | 7 | immutable mutations; geometry/order separation |
@@ -63,13 +68,13 @@ console this attaches to).
 | `step7` / `step9` / `step10` | 5 / 4 / 1 | Plan 3 console guards — must never regress |
 | `lib/workspace.test.tsx` | 3 | the homography port |
 
-**Bundle**, from `npm run build` at the end of M4:
+**Bundle**, from `npm run build` at the end of M5:
 
 | chunk | size | notes |
 | --- | --- | --- |
-| console entry `index-*.js` | 218.73 kB (68.89 kB gzip) | contains **no** three.js; includes the tiny preload trigger. Unchanged by M4 — the compiler is pure and rides only the lazy chunk |
-| `Studio-*.js` | 975.72 kB (263.21 kB gzip) | lazy; preloaded on idle or navigation intent. +6.5 kB for `compile.ts` and `ProgramView.tsx` |
-| `index-*.css` | 29.59 kB (6.52 kB gzip) | console and Studio share one stylesheet |
+| console entry `index-*.js` | 218.73 kB (68.89 kB gzip) | contains **no** three.js; includes the tiny preload trigger. **Unchanged by M5** — every library module rides the lazy chunk |
+| `Studio-*.js` | 996.46 kB (270.07 kB gzip) | lazy; preloaded on idle or navigation intent. +20.7 kB for `rigmodel.ts`, `library.ts`, `examples.ts`, `thumbnail.ts`, `scene/Capture.tsx` and `LibraryDrawer.tsx` |
+| `index-*.css` | 34.15 kB (7.15 kB gzip) | console and Studio share one stylesheet; +4.6 kB for the drawer, cards, toast and import sheet |
 
 Before the Studio existed the console entry was 216.92 kB (68.24 kB gzip), so
 the console's first paint pays **1.81 kB** for the lazy route, hash router and
@@ -452,6 +457,140 @@ records that it came from a measurement.
 
 ---
 
+### 5.9 `studio/rigmodel.ts` — the `rigmodel/1` file
+
+The one place a stranger's JSON is allowed to become a model. Nothing throws:
+every entry point returns `Result<T> = {ok: true, value} | {ok: false, reason}`,
+and `reason` is a sentence an operator can act on.
+
+| export | does |
+| --- | --- |
+| `SCHEMA` | `"rigmodel/1"` |
+| `StudioModel` | the whole document in memory: id, name, description, created, modified, `rig`, `blocks`, `order`, optional `thumbnail` |
+| `serialiseModel` / `parseModel` | two-space JSON out, `Result<StudioModel>` in |
+| `serialiseLibrary` / `parseLibraryFile` | the whole library as one array; a single-model file is also accepted |
+| `documentOf` / `structureOf` | document ⇄ the editable `{blocks, order}` |
+| `snapshotFileRig` / `toFileRig` / `fromFileRig` / `shiftsOf` | the `rig` block, both directions |
+| `MIGRATIONS` / `migrate` | the version hook |
+| `repairOrder` | an order that disagrees with the blocks is repaired, not refused |
+
+**Import order is fixed, and it is the whole safety argument:** validate the
+schema → run the migration hook → validate the structure → let the caller warn
+on drift. A migration that ran after structural validation would be validating
+the wrong document. **The file is never rewritten on open.**
+
+**Why it is a separate module from `model.ts`.** Plan 4 §7 sketches the file
+format inside `model.ts`. The `rig` snapshot has to be converted to and from
+`validate.ts`'s `RigGeometrySnapshot`, and `validate.ts` already imports
+`model.ts`; putting the conversion in `model.ts` would make that a runtime
+import cycle. `rigmodel.ts` depends on both and nothing depends on it except
+`library.ts` and the drawer.
+
+**One deviation from Plan 4 §5, recorded here as house style requires.** §5's
+`rig` example lists `cols`, `rows`, `block_cm` and `pitch_cm` per mode. The file
+also writes `trim_cm`, `error_offset_cm` and `max_edge_overhang_cm`. Drift is
+detected by comparing against `snapshotRigGeometry()`, which carries all of
+them; a snapshot missing those fields would have to invent zeros and would then
+report drift on every model the moment anyone set a non-zero trim. The `rig`
+block is otherwise exactly §5, `shift_cm` included.
+
+### 5.10 `studio/library.ts` — CRUD that cannot throw
+
+`localStorage` is genuinely unavailable in a private window, genuinely full at
+about 5 MB, and in some browsers genuinely throws on **access** rather than on
+write. Every function therefore returns a `Result` and every touch of the store
+is wrapped.
+
+```text
+listModels()          → Result<ModelCard[]>      readModel(id)      → Result<StudioModel>
+writeModel(model)     → Result<{bytes, remaining}>  removeModel(id) → Result<void>
+duplicateModel(id)    → Result<StudioModel>      renameModel(id, name) → Result<StudioModel>
+exportModel(model)    → string                   importModel(text)  → Result<StudioModel>
+exportLibrary()       → Result<string>           importLibrary(text)→ Result<StudioModel[]>
+storageReport()       → StorageReport            acceptsDroppedFile(name) → Result<void>
+```
+
+**Cards are separate from bodies.** `rig.studio.models.v1.index` holds the cards
+(id, name, block count, latch count, estimate, modified, bytes, thumbnail);
+`rig.studio.models.v1.<id>` holds each body. The drawer renders without parsing
+a single model, and a corrupt body costs **one card**, not the library. A
+corrupt *index* degrades to "no cards" with every body left on disk.
+
+**The budget is 4 MB of an assumed 5, and it refuses.** `writeModel` measures
+the whole namespace from the store's own keys — so a body orphaned by an
+interrupted write still counts — and when a write would exceed the budget it
+returns a reason naming the three largest models. **Nothing is ever evicted
+automatically.** Silently deleting saved work to make room for a save is the
+kind of behaviour that ends trust in a tool permanently, and this is a tool
+people use the night before a demo. The write order is body first, then index;
+if the index write fails the new body is removed again.
+
+**The server seam** for Plan 4 §8.7's optional `GET/PUT /api/models` is the
+four-method `LibraryStorage` interface this module is written against. That is
+the entire seam. There is no sync engine and M5 makes no network call.
+
+**One deviation from Plan 4 §8.7, recorded here.** "A zip of the whole library"
+is instead a single `.rigmodels.json` array. A zip would mean either a new
+dependency in a bundle served off a Pi or a hand-written stored-entry writer, to
+produce a file that is harder to inspect, diff and email than the JSON inside
+it. `parseLibraryFile` accepts a single-model file too, so an operator dragging
+one file in never has to know which kind it is.
+
+### 5.11 `studio/thumbnail.ts` — and the trap it exists for
+
+The frameloop is `demand` and the canvas has no `preserveDrawingBuffer`, so
+calling `toDataURL` in a save handler returns a **transparent rectangle**: the
+backbuffer has already been cleared. Turning `preserveDrawingBuffer` on globally
+would fix it at the cost of every frame of the whole application, for a feature
+used once per save. So `scene/Capture.tsx` renders the same scene into an
+off-screen `WebGLRenderTarget` and this module turns the pixels into a WebP.
+
+- `flipRows` — WebGL reads a framebuffer bottom-up, images are top-down. Pure,
+  and tested, because it is the part that would fail silently.
+- `THUMBNAIL` — rendered 640 × 400, stored 320 × 200, WebP quality 0.7. About
+  10–20 kB each, which is what makes the 4 MB budget hold ~200 models.
+- `encodeThumbnail` returns `undefined` rather than throwing where
+  `OffscreenCanvas` does not exist. A missing thumbnail is a plain card; a
+  thrown one would be a save the operator cannot complete.
+
+### 5.12 `studio/examples.ts` — three models that are also fixtures
+
+| id | name | shape |
+| --- | --- | --- |
+| `example-tower` | Single tower | vertical `[3,2]`, levels 0–4. No latch, five `B`s |
+| `example-bridge` | Two towers, one span | vertical `[2,2]` and `[3,2]` at levels 0–1, horizontal `[1,4]` at level 2. **One latch** |
+| `example-pyramid` | Stepped pyramid | 5 / 3 / 1 in vertical mode, every course resting fully on the one below |
+
+`examples.test.ts` asserts each one round-trips, validates with **no errors**,
+and compiles — so a geometry change in `rig.json` breaks a test rather than the
+presentation. They are listed in the drawer above the saved models and are
+**never written to storage**: they cost no budget and cannot be deleted.
+
+**The bridge carries `shiftX +1.00 cm` on the horizontal grid, and that is the
+finding of this milestone.** With the shipped `rig.json` and the default 0.55
+support ratio, *no* unshifted cross-mode bridge is legal. The vertical pitch is
+3.8 cm and the horizontal 7.6 cm, so a horizontal block always lands over the
+1.6 cm gap between two vertical stacks: the best available contact is 46.7% of
+its footprint (three vertical piers), under the ratio. The reverse — a vertical
+block on two horizontal piers — reaches 68.3% but puts its centroid in the gap,
+which §6.5's centroid rule refuses. A search over every (tower pair, span cell,
+shift in 1 mm steps) triple through `validateModel` found the legal shifts to be
+**+0.8…+1.1 cm and +2.7…+3.0 cm**; +1.0 is the round one, and `v[2,2] v[3,2]`
+with `h[1,4]` is its central case. All of that is recorded in
+`examples.ts`'s docstring and pinned by a test.
+
+Because the rig is not applying that shift, the bridge opens with a
+`GEOMETRY_DRIFT` warning naming it. **That warning is the feature**: it is the
+difference between an operator pushing `shiftX 1.0` before the build and
+watching a block fall between two towers.
+
+The pyramid opens with `ISLAND` warnings, and they are also correct: inside one
+grid the 1.6 cm gaps mean no two cells ever touch, so five stacks side by side
+really are five separate structures. That is Plan 4 §3 fact 6 stated from the
+other direction, and it is why the bridge exists.
+
+---
+
 ## 6. The scene layer
 
 Nothing in `scene/` decides anything. If you are about to write arithmetic here,
@@ -589,6 +728,38 @@ and renders it between the diagnostics and settings panels.
 
 ---
 
+### 6.9 `scene/Capture.tsx` and `panels/LibraryDrawer.tsx`
+
+`Capture` fills a ref with a thumbnail function while the canvas is mounted. It
+renders the **same scene** into a `WebGLRenderTarget` with a camera of its own,
+posed by `view.viewPose("iso", aspect, box)` on the **model's** bounding box
+(`view.modelBoxScene`), not the envelope — cards that all show the same empty
+cage are worse than no thumbnails. The envelope is still in the scene, so it
+renders faintly behind for scale. The visible camera is never moved.
+
+`LibraryDrawer` slides from the left at `--z-drawer` **over** the viewport, not
+beside it: the viewport is the point of this application and it is not squeezed
+to 288 px to list files. It only draws; every failure it can meet arrives as a
+`Result` reason it puts on screen. Three interaction choices worth recording:
+
+- **Rename is an inline edit on double-click**, not a modal. A modal for
+  renaming a local file is friction with no safety in it.
+- **Delete is immediate, with a six-second undo toast** (`UNDO_MS`). A confirm
+  dialog asks somebody to be careful; an undo lets them be wrong. The test
+  proves the undo really restores the body, and that letting it lapse stands.
+- **Import never lands silently.** A dropped file is gated by
+  `acceptsDroppedFile` (`.json` only, and a rejection names the file), parsed,
+  then shown in a confirm sheet with each model's name, block count and any
+  drift warning. A file that appeared in your library without being read is a
+  file you cannot trust. The drop listener is on the `window` and lives whether
+  the drawer is open or not.
+
+The card is a 16:10 thumbnail on `--sunken`, the name in `--t-md`, and one mono
+`--t-xs` meta line in `--text-dim`: `12 blocks · 1 latch · ~4:10 · 2d ago`. The
+selected card takes a `--signal` 1 px border and never a fill.
+
+---
+
 ## 7. Routing and code-splitting
 
 `routes/Root.tsx` is the whole of the routing: the console at `#/`, the Studio at
@@ -638,8 +809,10 @@ practice:
 **Tested, headlessly, in milliseconds:** every coordinate and geometry
 predicate; lattice state; camera arithmetic; every model mutation; bounded
 undo/redo; ray point → cell/level resolution including real gaps and hit ties;
-local legality; click/keyboard interpretation; and the scrubber's accessible
-control contract. `view.test.ts` re-derives the perspective projection itself
+local legality; click/keyboard interpretation; the scrubber's accessible
+control contract; the file format's round trip and its eight named refusals;
+storage that is absent, throwing, full or over budget; and the three examples as
+fixtures. `view.test.ts` re-derives the perspective projection itself
 and checks every envelope corner rather than trusting the implementation.
 
 **Not tested, on purpose** (Plan 4 §0.4): pixels, materials, light positions,
@@ -663,10 +836,21 @@ first in the diff.
 - **`ContactShadows frames={1}` plus `frameloop="demand"`** remains intentional.
   The contact component is keyed by geometry, so block changes remount its one
   frame without turning the idle stage into a loop.
-- **Shift is a prop that nothing sets yet.** `Viewport`, `Lattice` and
-  `latticeCells` all take one and honour it; the gizmo and the readout that drive
-  it are M8. The header currently reads the shipped `shift_*_cm` out of the
-  config.
+- **Shift now comes from the open model's own `rig` snapshot.** `Studio.tsx`
+  derives `shiftsOf(document.rig)` and threads it into the viewport, the
+  validator and the compiler, so a model that needs a shift renders where it
+  will really be built and says so through `GEOMETRY_DRIFT`. The **gizmo** that
+  edits a shift interactively, and the header readout that follows it, are still
+  M8; the header currently reads the shipped `shift_*_cm` out of the config.
+- **Thumbnails have not been seen on a GPU.** `flipRows` and `encodeThumbnail`
+  are tested headlessly and `Capture` follows the documented
+  `WebGLRenderTarget` → `readRenderTargetPixels` → `OffscreenCanvas` path, but
+  jsdom has no WebGL, so the first real capture is a browser check. Every
+  failure path returns `undefined` and the save still completes.
+- **The 4 MB budget assumes a 5 MB quota.** Browsers differ, and a real
+  `QuotaExceededError` under the budget is handled separately from the budget
+  refusal — different message, different remedy — but the number itself is a
+  convention, not a measurement.
 - **The authoring mode is local route state; every block stores its own mode.**
   The M6 twin's mode will instead be a read-only mirror of `state.mode`. Never
   confuse them: a real latch homes X and Y, a Studio mode switch moves nothing.
@@ -679,6 +863,60 @@ first in the diff.
 
 Newest first. One entry per landed change; note anything that contradicts the
 plan or that a future reader could not infer.
+
+### M5 — The library
+
+- Added `studio/rigmodel.ts`: the `rigmodel/1` document, `Result`-returning
+  parse/serialise, the migration hook, and the `rig` snapshot in both
+  directions. **Deviates from Plan 4 §7** by living outside `model.ts` (a
+  runtime import cycle through `validate.ts` otherwise) and **from §5** by also
+  writing `trim_cm`, `error_offset_cm` and `max_edge_overhang_cm` per mode, so
+  `GEOMETRY_DRIFT` compares the same fields it snapshots. Both are argued in
+  §5.9. On import: schema → migration → structure → drift, in that order, and
+  the file is never rewritten on open.
+- Added `studio/library.ts`: `localStorage` CRUD where nothing throws, the card
+  index kept separate from the bodies, and a **4 MB budget that refuses** and
+  names the three largest models rather than evicting anything. Handles storage
+  that is absent, that throws on access, and that returns a real
+  `QuotaExceededError` — three distinct messages, because they have three
+  distinct remedies. `LibraryStorage` is the only seam left for Plan 4 §8.7's
+  optional server persistence; no sync engine, no network call.
+- **Deviates from Plan 4 §8.7** by exporting the whole library as one
+  `.rigmodels.json` array rather than a zip — the reasoning is in §5.10.
+- Added `studio/thumbnail.ts` and `scene/Capture.tsx`. `preserveDrawingBuffer`
+  stays **off**; the capture renders the scene into a 640 × 400
+  `WebGLRenderTarget`, flips the rows, and encodes a 320 × 200 WebP at 0.7.
+  Framed on `view.modelBoxScene()` — the model's own box, added this milestone —
+  so cards do not all show the same empty cage.
+- Added `panels/LibraryDrawer.tsx`: cards over the viewport at `--z-drawer`,
+  inline rename on double-click, duplicate, delete with a real six-second undo,
+  export one or all, and a drop-import that shows what is about to be added with
+  its block count and drift warning before anything is written.
+- Added three built-in examples, listed but never stored, so an empty library
+  never looks broken and there is a demo to fall back on.
+- **Finding: with the shipped `rig.json` and the default 0.55 support ratio, no
+  UNSHIFTED cross-mode bridge is legal.** The best available contact for a
+  horizontal block over two vertical stacks is 46.7% of its footprint; the
+  reverse reaches 68.3% but puts its centroid in the 1.6 cm gap, which §6.5
+  refuses. A sweep of every (tower pair, span cell, shift) triple through
+  `validateModel` found the legal horizontal shifts to be +0.8…+1.1 and
+  +2.7…+3.0 cm. "Two towers, one span" carries **+1.00 cm**, and therefore opens
+  with a `GEOMETRY_DRIFT` warning naming it. This is Plan 4 §16 open question 3
+  answered from the geometry: bridging works, but only with a registration
+  shift, and the Studio has to say so. **No rule and no default was changed to
+  make the example pass.**
+- Improved `GEOMETRY_DRIFT` to name what actually differs — the mode, the knob
+  and both values (`describeDrift`) — instead of "the geometry changed". A model
+  that opens saying only that leaves somebody diffing two JSON files; one that
+  says which knob moved is a single instruction. This is the only M3 change in
+  the milestone and no M3 test's guard was weakened.
+- `Studio.tsx` now holds the open document, derives the shift and the drift
+  snapshot from **its** `rig` block, and threads both into the viewport, the
+  validator and the compiler. Loading a model resets history, selection and the
+  block-id counter past whatever the file used.
+- Suite grew from 214 tests / 23 files to **302 / 28**. The console entry is
+  unchanged at 218.73 kB; the lazy Studio chunk grew 20.7 kB and the shared
+  stylesheet 4.6 kB.
 
 ### M4 — The compiler
 
