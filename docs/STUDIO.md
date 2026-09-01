@@ -31,13 +31,13 @@ console this attaches to).
 | M1 — Static viewport | ✅ delivered | `view.ts`, `lattice.ts`, `scene/`, the `#/studio` route |
 | M2 — Placement | ✅ delivered | ghost, top picking, click/alt/shift-drag, undo/redo, level x-ray |
 | M3 — Validation | ✅ delivered | one pure validator, live settings, diagnostics, ghost reasons and block markers |
-| M4 — The compiler | not started | `compile.ts`, model → command program |
+| M4 — The compiler | ✅ delivered | `compile.ts` (support graph, Kahn order, latch state machine, deterministic), `panels/ProgramView.tsx`, per-block/per-latch estimate settings |
 | M5 — Library | not started | model document metadata, `library.ts`, thumbnails |
 | M6 — The twin | not started | read-only scene beside the camera |
 | M7 — The runner | not started | executing a compiled program through `/api/build` |
 | M8 — Wow pass | not started | shift gizmo, x-ray by level, cross-mode bridging |
 
-**Test suite.** `cd web && npm test` — **184 tests across 21 files**, all green.
+**Test suite.** `cd web && npm test` — **214 tests across 23 files**, all green.
 
 | file | tests | what it holds |
 | --- | --- | --- |
@@ -46,7 +46,9 @@ console this attaches to).
 | `studio/lattice.test.ts` | 14 | which cells are drawn, and in what state |
 | `studio/view.test.ts` | 27 | envelope/block framing, the four snaps, the orbit floor, the opening move |
 | `studio/validate.test.ts` | 27 | every §6.4 rule, modified configs, bridge scan, centroid and build order |
-| `studio/settings.test.ts` | 3 | conservative defaults and guarded versioned persistence |
+| `studio/compile.test.ts` | 25 | the four steps in isolation, one red-when-removed test per ordering constraint, the latch state machine, twenty-compile determinism |
+| `studio/settings.test.ts` | 4 | conservative defaults, timing-field backfill, guarded versioned persistence |
+| `studio/panels/ProgramView.test.tsx` | 4 | serial-log rendering, latch dividers, line selection, clipboard copy |
 | `studio/model.test.ts` | 7 | immutable mutations; geometry/order separation |
 | `studio/history.test.ts` | 4 | generic undo/redo, branching and the 100-entry cap |
 | `studio/pick.test.ts` | 6 | cell/level resolution, gaps, hit priority and straight runs |
@@ -61,13 +63,13 @@ console this attaches to).
 | `step7` / `step9` / `step10` | 5 / 4 / 1 | Plan 3 console guards — must never regress |
 | `lib/workspace.test.tsx` | 3 | the homography port |
 
-**Bundle**, from `npm run build` at the end of M3:
+**Bundle**, from `npm run build` at the end of M4:
 
 | chunk | size | notes |
 | --- | --- | --- |
-| console entry `index-*.js` | 218.73 kB (68.89 kB gzip) | contains **no** three.js; includes the tiny preload trigger |
-| `Studio-*.js` | 969.26 kB (261.32 kB gzip) | lazy; preloaded on idle or navigation intent |
-| `index-*.css` | 27.55 kB (6.24 kB gzip) | console and Studio share one stylesheet |
+| console entry `index-*.js` | 218.73 kB (68.89 kB gzip) | contains **no** three.js; includes the tiny preload trigger. Unchanged by M4 — the compiler is pure and rides only the lazy chunk |
+| `Studio-*.js` | 975.72 kB (263.21 kB gzip) | lazy; preloaded on idle or navigation intent. +6.5 kB for `compile.ts` and `ProgramView.tsx` |
+| `index-*.css` | 29.59 kB (6.52 kB gzip) | console and Studio share one stylesheet |
 
 Before the Studio existed the console entry was 216.92 kB (68.24 kB gzip), so
 the console's first paint pays **1.81 kB** for the lazy route, hash router and
@@ -134,7 +136,8 @@ web/src/
     interaction.ts       click slop and keyboard gesture interpretation
     motion.ts            row sequencing + fade/downward arrival curves
     validate.ts          the one §6.4 rule table; model and ghost entry points
-    settings.ts          versioned physical estimates, guarded localStorage I/O
+    compile.ts           model → ordered B/R/RR program; support graph, Kahn order, latch state machine
+    settings.ts          versioned physical estimates + the two estimate-timing constants, guarded localStorage I/O
     coords.fixtures.json 17 cases / 980 cells dumped from Python
     scene/
       theme.ts           DESIGN.md tokens read off the document, as three colours
@@ -148,7 +151,8 @@ web/src/
     panels/
       LevelScrubber.tsx  explicit click/drag level hold
       Diagnostics.tsx    grouped output + select/frame/fix dispatch
-      Settings.tsx       the three visible physical estimates
+      Settings.tsx       the five visible physical estimates
+      ProgramView.tsx    the compiled program as a serial log, latches set apart, copy-to-clipboard
   routes/
     Root.tsx             hash routing + the lazy Studio import
     preload.ts           generic one-promise import cache
@@ -357,6 +361,95 @@ together; each distinct row in gesture order starts 34 ms after the previous
 one. A single placement always has delay zero, regardless of its machine row.
 The maths is pure and tested; `Blocks.tsx` only applies its result.
 
+### 5.8 `studio/compile.ts` — model to command program
+
+The intellectual core of Plan 4. `compile(model, { mode, settings, shifts?,
+rigSnapshot? })` returns `{ valid, program, stats, diagnostics }` exactly as
+Plan 4 §6.1. `mode` is the starting board mode — the live `state.mode` when
+there is one, `vertical` otherwise, because a board reset returns to vertical.
+
+**Why it is not a flat list.** `B <col> <row> <level>` carries no orientation;
+how a block is laid comes from a mode latch (`R` vertical, `RR` horizontal)
+which homes X and Y, is refused mid-air, and is refused if the board is already
+in that mode. A mixed-orientation model is therefore a partial order sorted into
+same-mode runs, each run costing a homing move.
+
+Four named steps, each its own exported function so a test points at one claim:
+
+| step | does |
+| --- | --- |
+| `supportGraph(model, shifts?)` | `id → the ids it rests on`, from machine-space footprint overlap at the matching base/top Z. Cross-mode: a horizontal span depends on every vertical stack under it. Built by iterating `model.blocks`, never a `Set`'s order |
+| `orderBlocks(model, graph, startingMode, terms?)` | Kahn's algorithm; the ready array is re-sorted on every pop by a comparator chain, `O(n² log n)` on a list that never exceeds a few hundred and obviously deterministic |
+| `emitOps(ordered, startingMode)` | the latch state machine — one variable, the board mode. Emits a `mode` op **only on an actual change** and annotates it `{ cost: "homes X and Y" }`. Kept separate from ordering: a different kind of correctness |
+| `summarise(ops, settings)` | `{ blocks, latches, modeSwitches, levels, estimateSeconds }`. `modeSwitches` is an alias of `latches` for the §6.1 shape |
+
+**The comparator, in priority order** — each an exported term composed by
+`chain()`, listed in `ORDER_TERMS`:
+
+    byLevel        bottom-up; a block can never precede its support
+    byCurrentMode  prefer the latched mode. STATEFUL — recomputed each pop
+                   against the mode the emitter would be in by then
+    byAuthorIndex  the author's order, wherever it is still legal
+    byCell         column, then row
+    byId           the total order, so ties cannot exist
+
+`orderBlocks` and `comparatorFor` both take an optional `terms` list. Removing a
+constraint is then deleting one term (or passing `new Map()` for the support
+graph), and `compile.test.ts` has one test per constraint that goes red when it
+is removed. Confirmed by deleting each in turn:
+
+| removed | test that fails |
+| --- | --- |
+| support graph (`new Map()`) | `supportGraph` edge tests + `CONSTRAINT 1, support before supported` |
+| `byLevel` | `CONSTRAINT 2, bottom-up` (and, cascading, 3) |
+| `byCurrentMode` | `CONSTRAINT 3 + the stateful comparator` |
+| `byAuthorIndex` | `CONSTRAINT 4, author order wins where legal` |
+| `byCell` | `CONSTRAINT 5, deterministic tie-break` |
+| `byId` | `CONSTRAINT 5` (byId sub-assertion) + `ORDER_TERMS` |
+
+**Serial text is built in one place**, `commandText(op)` → `"B 3 2 1" | "R" |
+"RR"`. `ProgramView` and the future M7 runner both consume `op.text`; a second
+formatter is how `B 3 2 1 ccw` reaches a firmware that reads a fourth word as a
+parse error.
+
+**Invalid models compile to nothing.** `compile` runs M3's `validateModel`
+itself — it never re-implements a rule. Any `error` diagnostic → `{ valid:
+false, program: [], stats: all-zero, diagnostics }`. A half-program is the
+single most dangerous artefact this codebase could produce. Warnings do not
+block.
+
+**Determinism** is a requirement, not a nicety: `compile.test.ts` compiles the
+same model twenty times and asserts byte-identical output, and separately that
+the program depends only on `model.order`, not the `blocks` array order. Every
+collection is built from model order; every comparator chain ends in `byId`.
+(The `diagnostics` array still reflects `model.blocks` order, which is M3's
+behaviour, so the byte-identical program/stats check excludes it.)
+
+**The estimate** is `blocks × blockCycleSeconds + latches × latchHomingSeconds`,
+both named constants in `settings.ts` (`BLOCK_CYCLE_SECONDS = 40` from
+`rig/link.py`'s "~40 s", `LATCH_HOMING_SECONDS = 16`) and both editable in the
+`ESTIMATES — NOT MEASUREMENTS` settings block. `estimateLabel(stats)` renders
+`4 blocks · 1 latch · ~2:56` — the `~` is always shown. M7 measures the real
+mean against `--mock`; when it does, the constant moves and this changelog
+records that it came from a measurement.
+
+**Report-back (from the milestone prompt).**
+- *Worst case.* The heuristic re-homes once per mode transition per level band.
+  A model that alternates orientation on every level — a vertical block, then a
+  horizontal block resting on it, then a vertical block resting on that, all the
+  way up — forces one latch per block after the first: `n` blocks, `n − 1`
+  latches. That is genuinely minimal for that structure: bottom-up ordering is
+  forced by support, and within each single-block level band there is only one
+  block to place, so no grouping can remove a transition.
+- *A cheaper ordering.* None exists for the true alternating-stack case above.
+  For the common case — several blocks per level band, mixed orientation — the
+  `byCurrentMode` grouping already achieves the minimum of one latch per
+  orientation change per band, and re-keying on the live mode means a band that
+  ends horizontal is entered horizontal by the next.
+- *Valid but uncompilable.* None found. Every model the M3 validator accepts
+  (no cycle is possible — support always points strictly downward in Z) produces
+  a total order and a program.
+
 ---
 
 ## 6. The scene layer
@@ -479,6 +572,21 @@ fades every block above it to 15%. Escape or the rail's explicit `ESC` control
 releases it. The current 17-level ceiling is the theoretical travel ceiling;
 M3 promotes the practical operator limit to a visible setting.
 
+### 6.8 `panels/ProgramView.tsx`
+
+The compiled program drawn as a serial log — the register this console speaks
+in. Mono throughout: line numbers `--text-faint`, command text `--text`, block
+id `--text-dim` right-aligned. Line numbers count build ops only, so they run
+continuously past a latch. A latch is a full-width row — an amber `--motion`
+chip (`R` / `RR`) on the left, a 1px `--motion` rule, `homes X and Y` in
+`--text-dim` on the right — full-width because the cost is a whole-machine
+event. Selecting a line calls the same `onSelect` the diagnostics panel uses, so
+it selects and frames the block in the viewport. A copy control writes every
+`op.text`, one per line, to the clipboard for pasting into a serial monitor. The
+component only draws; ordering, latches and the estimate are all `compile.ts`.
+`Studio.tsx` compiles in a `useMemo` over `{ model, mode, settings, rigSnapshot }`
+and renders it between the diagnostics and settings panels.
+
 ---
 
 ## 7. Routing and code-splitting
@@ -571,6 +679,51 @@ first in the diff.
 
 Newest first. One entry per landed change; note anything that contradicts the
 plan or that a future reader could not infer.
+
+### M4 — The compiler
+
+- Added `studio/compile.ts`: `supportGraph → orderBlocks → emitOps →
+  summarise`, and one public `compile(model, { mode, settings, shifts?,
+  rigSnapshot? }) → { valid, program, stats, diagnostics }` (Plan 4 §6.1).
+- The ordering is Kahn's algorithm with the ready array re-sorted on every pop
+  by `chain(byLevel, byCurrentMode, byAuthorIndex, byCell, byId)`. Each term is
+  exported; `orderBlocks`/`comparatorFor` take an optional `terms` list, and
+  `supportGraph` can be replaced with `new Map()`, so "remove a constraint" is a
+  one-line experiment. `compile.test.ts` has one red-when-removed test per
+  constraint (mapping table in §5.8), verified by deleting each in turn.
+- `byCurrentMode` is **stateful** — recomputed each pop against the mode the
+  emitter would be in by then. A static preference (computed once from the
+  starting mode) re-homes on every level band; the determinism/latch test pins
+  the dynamic behaviour at 2 latches vs a static 4 for the interleaved fixture.
+- `emitOps` is the latch state machine and the **only** place a `mode` op is
+  produced — emitted solely on an actual change, annotated `{ cost: "homes X
+  and Y" }`, initial state the caller's `mode` (live `state.mode`, else
+  `vertical`). `commandText(op)` is the **only** place serial text is built:
+  `"B c r l" | "R" | "RR"`.
+- Invalid models compile to `{ valid: false, program: [], stats: all-zero }`.
+  `compile` runs M3's `validateModel` itself and never re-implements a rule;
+  `error` blocks, `warning` does not. No partial programs, ever.
+- Determinism test: twenty compiles byte-identical, plus program/stats
+  independent of `blocks` array order. `diagnostics` order still tracks
+  `model.blocks` (M3 behaviour) so it is excluded from that byte check.
+- Added `panels/ProgramView.tsx` — the program as a serial log, latches as
+  full-width `--motion` dividers, line selection wired to the viewport, and a
+  copy-to-clipboard of the exact `op.text` lines. New `.studio-program-*` CSS.
+- `settings.ts` gained `blockCycleSeconds` (40, from `rig/link.py`'s "~40 s")
+  and `latchHomingSeconds` (16), both visible and editable in the `ESTIMATES —
+  NOT MEASUREMENTS` block. `STUDIO_SETTINGS_KEY` stays `v1`: a pre-existing blob
+  missing the two fields **backfills** the defaults rather than being rejected.
+  `estimateLabel` renders `4 blocks · 1 latch · ~2:56`, `~` always shown. M7
+  moves these constants once it times the real mean against `--mock`.
+- `Studio.tsx` compiles in a `useMemo` and renders `ProgramView` between the
+  diagnostics and settings panels.
+- Fixed a pre-existing `Diagnostics.test.tsx` query (`"1 ERROR"` is split across
+  `<b>`/`<span>`); the guard it checks is unchanged.
+- Suite 184→214 across 21→23 files. Console entry unchanged (compiler is pure,
+  lazy-chunk only); `Studio-*.js` +6.5 kB.
+- Report-back (worst case, cheaper ordering, uncompilable models) recorded in
+  §5.8: the true alternating-orientation stack forces `n − 1` latches and that
+  is minimal; no valid-but-uncompilable model exists (support is acyclic in Z).
 
 ### M2 — The opening move
 

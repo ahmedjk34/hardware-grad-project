@@ -42,6 +42,26 @@ export function Settings({ value, onChange }: {
                onChange={event => number("levelCeiling", event.target.value)} />
         <span className="studio-setting-copy">How high you are allowed to build. An operator limit, not a physical one — the Z travel would allow about 17.</span>
       </label>
+
+      <label className="studio-setting" htmlFor="studio-block-cycle">
+        <span className="studio-setting-name">BLOCK CYCLE</span>
+        <span className="studio-setting-value">
+          <input id="studio-block-cycle" aria-label="Block cycle in seconds" type="number"
+                 min="1" step="1" value={value.blockCycleSeconds}
+                 onChange={event => number("blockCycleSeconds", event.target.value)} /> s
+        </span>
+        <span className="studio-setting-copy">Seconds of motion the estimate allows per placed block. From rig/link.py's "~40 s" — not yet timed against the mock.</span>
+      </label>
+
+      <label className="studio-setting" htmlFor="studio-latch-homing">
+        <span className="studio-setting-name">LATCH HOMING</span>
+        <span className="studio-setting-value">
+          <input id="studio-latch-homing" aria-label="Latch homing in seconds" type="number"
+                 min="0" step="1" value={value.latchHomingSeconds}
+                 onChange={event => number("latchHomingSeconds", event.target.value)} /> s
+        </span>
+        <span className="studio-setting-copy">Seconds the estimate adds per mode latch, which homes X and Y. A guess until M7 measures it.</span>
+      </label>
     </section>
   );
 }

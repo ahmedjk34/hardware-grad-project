@@ -996,6 +996,80 @@ svg.grid-overlay.selectable { cursor: crosshair; }
 .studio-setting input:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
 .studio-setting-copy { grid-column: 1 / -1; font: var(--t-sm); }
 
+/* The compiled program, drawn as a serial log — the register this console
+   speaks in. Mono throughout; a latch is a whole-machine event, so it is a
+   full-width rule, not a chip on its own. */
+.studio-program {
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--plate);
+}
+
+.studio-program-head { display: flex; align-items: center; gap: var(--s2); }
+.studio-program-estimate { color: var(--text-dim); }
+.studio-program-invalid { color: var(--danger); }
+
+.studio-program-copy {
+  margin-left: auto;
+  padding: 1px var(--s2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--text-dim);
+  font: var(--t-xs);
+  letter-spacing: .08em;
+  cursor: pointer;
+}
+
+.studio-program-copy:hover:not(:disabled) { color: var(--text); border-color: var(--line-strong); }
+.studio-program-copy:disabled { opacity: .4; cursor: default; }
+.studio-program-copy:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+
+.studio-program-body { padding: var(--s1) 0; }
+.studio-program-empty { padding: var(--s3); margin: 0; color: var(--text-faint); font: var(--t-xs); letter-spacing: .06em; }
+
+.studio-program-line {
+  display: grid;
+  grid-template-columns: 3ch minmax(0, 1fr) auto;
+  gap: var(--s2);
+  align-items: baseline;
+  padding: 2px var(--s3);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.studio-program-line:hover { background: var(--raised); }
+.studio-program-line:focus-visible { outline: 2px solid var(--signal); outline-offset: -2px; }
+.studio-program-line[aria-pressed="true"] { background: var(--wash-signal); }
+.studio-program-num { color: var(--text-faint); }
+.studio-program-text { color: var(--text); white-space: pre; overflow-x: auto; }
+.studio-program-block { color: var(--text-dim); text-align: right; }
+
+.studio-program-latch {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s1) var(--s3);
+  margin: var(--s1) 0;
+}
+
+.studio-program-chip {
+  padding: 0 var(--s1);
+  border: 1px solid color-mix(in srgb, var(--motion) 45%, var(--line));
+  border-radius: var(--r-sm);
+  background: var(--motion-deep);
+  color: var(--motion);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: .08em;
+}
+
+.studio-program-rule { height: 1px; background: var(--motion); opacity: .6; }
+.studio-program-cost { color: var(--text-dim); font: var(--t-xs); letter-spacing: .04em; }
+
 /* No infinite checkerboard — a vignette instead, so the model reads as lit
    from above (DESIGN.md §8.2) and nothing on the floor competes with it. */
 .studio-viewport {

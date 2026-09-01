@@ -21,6 +21,8 @@ import type { SurfacePointer } from "../studio/scene/surface";
 import { LevelScrubber } from "../studio/panels/LevelScrubber";
 import { Diagnostics } from "../studio/panels/Diagnostics";
 import { Settings } from "../studio/panels/Settings";
+import { ProgramView } from "../studio/panels/ProgramView";
+import { compile } from "../studio/compile";
 import {
   loadStudioSettings, saveStudioSettings, type StudioSettings,
 } from "../studio/settings";
@@ -68,6 +70,10 @@ export default function Studio() {
   const diagnostics = useMemo(
     () => validateModel(model, validationContext),
     [model, validationContext],
+  );
+  const program = useMemo(
+    () => compile(model, { mode, settings, rigSnapshot }),
+    [model, mode, settings, rigSnapshot],
   );
   const placementDiagnostics = useMemo(() => target ? validatePlacement(model, {
     id: "ghost", mode, col: target.col, row: target.row, level: target.level, colour: "white",
@@ -246,6 +252,8 @@ export default function Studio() {
         <div className="studio-sidepanels">
           <Diagnostics diagnostics={diagnostics} onHover={setHoveredDiagnosticId}
                        onSelect={selectDiagnostic} onFix={applyFix} />
+          <ProgramView program={program.program} valid={program.valid} stats={program.stats}
+                       selectedId={selectedId} onSelect={selectDiagnostic} />
           <Settings value={settings} onChange={setSettings} />
         </div>
 

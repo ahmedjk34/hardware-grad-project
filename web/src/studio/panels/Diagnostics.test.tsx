@@ -13,8 +13,9 @@ const diagnostics: Diagnostic[] = [
 describe("Diagnostics panel", () => {
   it("groups errors before warnings and reports a clean model plainly", () => {
     const { rerender } = render(<Diagnostics diagnostics={diagnostics} />);
-    expect(screen.getByText("1 ERROR")).toBeInTheDocument();
-    expect(screen.getByText("1 WARNING")).toBeInTheDocument();
+    // The count is split across <b> and <span>, so normalise whitespace.
+    expect(screen.getByText(/ERROR/).closest(".studio-error-count")).toHaveTextContent("1 ERROR");
+    expect(screen.getByText(/WARNING/).closest(".studio-warning-count")).toHaveTextContent("1 WARNING");
     const rows = screen.getAllByRole("button", { name: /b[47]/ });
     expect(rows[0]).toHaveTextContent("b4");
     expect(rows[1]).toHaveTextContent("b7");
