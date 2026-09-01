@@ -148,6 +148,8 @@ class WorkspaceMap:
                     if "max_edge_overhang_y_cm" in geometry else None),
                 error_offset_x_cm=float(geometry.get("error_offset_x_cm", 0.0)),
                 error_offset_y_cm=float(geometry.get("error_offset_y_cm", 0.0)),
+                shift_x_cm=float(geometry.get("shift_x_cm", 0.0)),
+                shift_y_cm=float(geometry.get("shift_y_cm", 0.0)),
                 mode=self.mode,
             )
 
@@ -181,6 +183,8 @@ class WorkspaceMap:
             "max_edge_overhang_y_cm": grid.max_edge_overhang_y_cm,
             "error_offset_x_cm": grid.error_offset_x_cm,
             "error_offset_y_cm": grid.error_offset_y_cm,
+            "shift_x_cm": grid.shift_x_cm,
+            "shift_y_cm": grid.shift_y_cm,
         }
         return cls(grid.cols, grid.rows, [(x / w, y / h) for x, y in corners],
                    projection, geometry, grid.mode or DEFAULT_GRID_MODE)
@@ -323,6 +327,10 @@ class WorkspaceMap:
                  == grid.max_edge_overhang_y_cm)
             and float(geometry.get("error_offset_x_cm", 0.0)) == grid.error_offset_x_cm
             and float(geometry.get("error_offset_y_cm", 0.0)) == grid.error_offset_y_cm
+            # Absent in maps saved before shiftX/shiftY existed: absence means
+            # "unshifted", so an old map still matches an unshifted grid.
+            and float(geometry.get("shift_x_cm", 0.0)) == grid.shift_x_cm
+            and float(geometry.get("shift_y_cm", 0.0)) == grid.shift_y_cm
         )
 
     def normalized_at(self, point, image_size):

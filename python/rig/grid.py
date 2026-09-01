@@ -12,7 +12,7 @@
 
 The lattice, in one line
 ------------------------
-    centre(i) = trim + error_offset + i * pitch        pitch = block + gap
+    centre(i) = trim + error_offset + shift + i * pitch     pitch = block + gap
 
 Cell indices are 0-BASED and coordinate 0 is a real block, whose CENTRE sits on
 the home corner - so the last vertical centre lands exactly on the software cap
@@ -121,6 +121,21 @@ class MachineGrid:
     # They apply exactly like trim_x_cm/trim_y_cm and shift every grid centre.
     error_offset_x_cm: float = 0.0
     error_offset_y_cm: float = 0.0
+    # The live GRID SHIFT: the firmware's shiftX / shiftY, config's
+    # grid.modes.<mode>.shift_x_cm / shift_y_cm. Distinct from error_offset_*
+    # (a calibration nudge that starts at 0) - this is an operator-driven
+    # registration shift of the WHOLE lattice, [0,0] reference included, that
+    # the Pi pushes after the mode latch and before `S`. It applies exactly
+    # like a trim (see cell_center_*), and a shift that pushes the far block
+    # past the travel cap clips `cols`/`rows` down to what still fits, keeping
+    # the request in requested_cols / requested_rows so clearing the shift
+    # restores the full grid. The PICK-UP is never shifted; only placement.
+    shift_x_cm: float = 0.0
+    shift_y_cm: float = 0.0
+    # The cols/rows asked for before a shift clipped them. Set in __post_init__;
+    # equal to cols/rows whenever no shift trims the grid.
+    requested_cols: int | None = None
+    requested_rows: int | None = None
 
     @classmethod
     def from_config(cls, cfg: dict | None = None, mode: str | None = None,
@@ -154,6 +169,10 @@ class MachineGrid:
             max_edge_overhang_y_cm=max_edge_overhang_cm(grid, "y"),
             error_offset_x_cm=float(grid.get("error_offset_x_cm", 0.0)),
             error_offset_y_cm=float(grid.get("error_offset_y_cm", 0.0)),
+            # An explicit shift kwarg wins over the config value, so a caller
+            # can preview "what would a 1.6 cm shift do" without editing cfg.
+            shift_x_cm=float(kwargs.pop("shift_x_cm", grid.get("shift_x_cm", 0.0))),
+            shift_y_cm=float(kwargs.pop("shift_y_cm", grid.get("shift_y_cm", 0.0))),
             **kwargs,
         )
 
@@ -179,8 +198,41 @@ class MachineGrid:
                 raise ValueError("grid gaps must be finite and non-negative")
             if not all(math.isfinite(value) for value in (
                     self.trim_x_cm, self.trim_y_cm,
-                    self.error_offset_x_cm, self.error_offset_y_cm)):
-                raise ValueError("grid trims and error offsets must be finite")
+                    self.error_offset_x_cm, self.error_offset_y_cm,
+                    self.shift_x_cm, self.shift_y_cm)):
+                raise ValueError(
+                    "grid trims, error offsets and shifts must be finite")
+            # Genuine geometry errors are judged with the shift removed. A shift
+            # that pushes the far block off the machine is NOT an error - it
+            # CLIPS cols/rows down to what still fits, mirroring the firmware
+            # where `S` is the requested size and the live shift trims it.
+            self.requested_cols = self.cols
+            self.requested_rows = self.rows
+            self._assert_fits(ignore_shift=True)
+            if self.shift_x_cm or self.shift_y_cm:
+                while self.cols > 1 and not self._axis_fits("x"):
+                    self.cols -= 1
+                while self.rows > 1 and not self._axis_fits("y"):
+                    self.rows -= 1
+                if not (self._axis_fits("x") and self._axis_fits("y")):
+                    raise ValueError(
+                        f"a shift of ({self.shift_x_cm:g}, {self.shift_y_cm:g}) cm "
+                        f"leaves no {(self.mode or '').strip()} cell on the "
+                        f"{self.workspace_width_cm:g}x{self.workspace_height_cm:g} cm "
+                        "holder-travel envelope"
+                    )
+
+    def _assert_fits(self, *, ignore_shift: bool) -> None:
+        """The pre-shift geometry check: centres reachable, block edges in budget.
+
+        Temporarily zeroes ``shift_*_cm`` when ``ignore_shift`` so the
+        centre/edge properties report the un-shifted lattice - that is the one
+        that has to be a valid grid regardless of what shift is applied.
+        """
+        sx, sy = self.shift_x_cm, self.shift_y_cm
+        if ignore_shift:
+            self.shift_x_cm = self.shift_y_cm = 0.0
+        try:
             if self.x_first_center_cm < 0 or self.y_first_center_cm < 0 \
                     or self.x_last_center_cm > self.workspace_width_cm \
                     or self.y_last_center_cm > self.workspace_height_cm:
@@ -190,6 +242,30 @@ class MachineGrid:
                     "holder-travel envelope"
                 )
             self._check_block_edges()
+        finally:
+            self.shift_x_cm, self.shift_y_cm = sx, sy
+
+    def _axis_fits(self, axis: str) -> bool:
+        """Whether one axis' centres and block edges fit WITH the live shift.
+
+        The bool form of :meth:`_assert_fits` for a single axis, used to clip
+        ``cols``/``rows`` when a shift trims the reachable grid. Slack matches
+        the firmware's ``gridGeometryFits``.
+        """
+        slack = 1e-4
+        if axis == "x":
+            first, last = self.x_first_center_cm, self.x_last_center_cm
+            near, far = self.x_start_cm, self.x_end_cm
+            budget, travel = self.max_edge_overhang_x_cm, self.workspace_width_cm
+        else:
+            first, last = self.y_first_center_cm, self.y_last_center_cm
+            near, far = self.y_start_cm, self.y_end_cm
+            budget, travel = self.max_edge_overhang_y_cm, self.workspace_height_cm
+        if first < -slack or last > travel + slack:
+            return False
+        if budget is None:
+            return True
+        return near >= -budget - slack and far <= travel + budget + slack
 
     def _check_block_edges(self) -> None:
         """The other half of the geometry check: where the BLOCKS end up.
@@ -269,10 +345,12 @@ class MachineGrid:
         return 0.0 if row < 1 else self.gap_y_cm
 
     def cell_center_x_cm(self, col: int) -> float:
-        return self.trim_x_cm + self.error_offset_x_cm + col * self.pitch_x_cm
+        return (self.trim_x_cm + self.error_offset_x_cm + self.shift_x_cm
+                + col * self.pitch_x_cm)
 
     def cell_center_y_cm(self, row: int) -> float:
-        return self.trim_y_cm + self.error_offset_y_cm + row * self.pitch_y_cm
+        return (self.trim_y_cm + self.error_offset_y_cm + self.shift_y_cm
+                + row * self.pitch_y_cm)
 
     def slot_bottom_x_cm(self, col: int) -> float:
         """Near edge of `col`. Negative for col 0 on an untrimmed axis."""
@@ -358,6 +436,9 @@ class MachineGrid:
         cell's centre IS the home corner - so this is (0, 0) and a pick-up is a
         plain home with no move afterwards. The claw closes on the middle of
         the block, which is its centre, so no tool offset applies either.
+
+        A grid shift (``shift_x_cm``/``shift_y_cm``) does NOT move this: the
+        firmware picks up with a raw home, so only placement rides the shift.
         """
         return 0.0, 0.0
 
@@ -466,6 +547,8 @@ class MachineGrid:
             and self.max_edge_overhang_y_cm == other.max_edge_overhang_y_cm
             and self.error_offset_x_cm == other.error_offset_x_cm
             and self.error_offset_y_cm == other.error_offset_y_cm
+            and self.shift_x_cm == other.shift_x_cm
+            and self.shift_y_cm == other.shift_y_cm
         )
 
     def describe(self) -> str:
@@ -479,7 +562,14 @@ class MachineGrid:
                 f", pitch {self.pitch_x_cm:g}x{self.pitch_y_cm:g} cm"
                 f", footprint {self.packed_width_cm:g}x{self.packed_height_cm:g} cm"
             )
-        return (f"{named}{self.cols}x{self.rows} cells{physical}"
+        shifted = ""
+        if self.shift_x_cm or self.shift_y_cm:
+            shifted = f", shifted ({self.shift_x_cm:g}, {self.shift_y_cm:g}) cm"
+            if (self.requested_cols, self.requested_rows) != (self.cols, self.rows) \
+                    and self.requested_cols is not None:
+                shifted += (f" [clipped from "
+                            f"{self.requested_cols}x{self.requested_rows}]")
+        return (f"{named}{self.cols}x{self.rows} cells{physical}{shifted}"
                 f", [1,1] at {self.origin}{turned}")
 
     def ascii_map(self, here: tuple[int, int] | None = None) -> str:

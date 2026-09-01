@@ -50,7 +50,19 @@
       (This changed: 0 used to mean "leave that axis at the origin", so
       G 5 0 was an X-only move. It is now the cell [5,0].)
     S <cols> <rows> = change the HIGHEST INDEX live, for the ACTIVE grid
-      only. The other mode keeps the size it was last given.
+      only. The other mode keeps the size it was last given. This is the
+      REQUESTED size; a live shiftX/shiftY may clip what is reachable.
+
+    shiftX <cm> / shiftY <cm> = translate the WHOLE placement lattice of the
+      ACTIVE grid by <cm>, measured from and including the [0,0] reference,
+      in that axis. Decimal and sign allowed; + is away from the home switch.
+      shiftX 0 / shiftY 0 clears it. Per mode, like the trims. The PICK-UP is
+      NOT shifted - it is a plain home to [0,0], so a build still lifts the
+      block off the un-shifted feeder and only the PLACEMENT rides the shift.
+      [0,0] stays the feeder and is never built on. The reachable build range
+      is recomputed: a shift that pushes the far block past the travel cap
+      drops that column/row (shiftX/shiftY 0 restores it); a shift that leaves
+      no cell on the machine is refused and reverted.
 
     B <col> <row> <level>   = BUILD one block   <<< NEW
       B 0 0 is a no-op: [0,0] is the FEEDER in both modes and is never
@@ -704,6 +716,25 @@ float GRID_TRIM_Y_CM[GRID_MODE_COUNT] = {0.0, 1.6};
 float GRID_ERROR_OFFSET_X_CM[GRID_MODE_COUNT] = {0.0, 0.0};
 float GRID_ERROR_OFFSET_Y_CM[GRID_MODE_COUNT] = {0.0, 0.0};
 
+// The live GRID SHIFT, per mode. Set by the shiftX / shiftY serial commands,
+// cleared to 0 by shiftX 0 / shiftY 0 and by every board reset. It is folded
+// into gridTrimCmOf() and so rides through every lattice consumer EXACTLY like
+// a trim - cellCentreCmOf(), gridGeometryFits(), gridCountMaxOf(),
+// cellTargetPosition(), positionToIndex() - which is what makes the whole grid,
+// [0,0] reference included, translate by <cm>.
+//
+// It is deliberately NOT the same knob as GRID_ERROR_OFFSET_*: that one is a
+// calibration nudge that starts at 0 and stays paired with config/rig.json's
+// error_offset_*; this one is an operator-driven registration shift the Pi
+// pushes from config/rig.json's shift_x_cm / shift_y_cm after the mode latch
+// and before S. Keep them separate so a shift never masquerades as calibration.
+//
+// THE PICK-UP DOES NOT SEE THIS. A build picks up with a plain home to raw
+// [0,0] (goToFeeder -> goToOrigin), which touches no lattice math, so the shift
+// only ever moves the PLACEMENT. See SECTION 6C header and applyGridShift().
+float GRID_SHIFT_X_CM[GRID_MODE_COUNT] = {0.0, 0.0};
+float GRID_SHIFT_Y_CM[GRID_MODE_COUNT] = {0.0, 0.0};
+
 // How far past the travel limit this mode lets a placed block's own EDGE sit.
 // This is NOT a trim: it moves nothing. It is the budget gridGeometryFits()
 // measures the block edges against, and it exists because a centre-only check
@@ -721,19 +752,34 @@ float GRID_MAX_EDGE_OVERHANG_Y_CM[GRID_MODE_COUNT] = {3.0, 1.1};
 // rows 0..5, horizontal columns 0..2 and rows 0..10. gridSlotsOf() adds the
 // one. Per mode, so that S applies to the grid the operator is looking at and
 // the other mode keeps whatever size it was given.
+//
+// This is the REQUESTED highest index. A non-zero GRID_SHIFT_* can push the
+// far block past the travel cap; gridColsNow() / gridRowsNow() then report the
+// clipped, actually-reachable highest index while these keep the request, so
+// clearing the shift (shiftX/shiftY 0) restores the full grid with no re-S.
 long GRID_COLS[GRID_MODE_COUNT] = {6, 2};
 long GRID_ROWS[GRID_MODE_COUNT] = {5, 9};
 
 // Read these rather than indexing the tables. Everything downstream of here
 // is written against the ACTIVE mode and never mentions the other one.
+//
+// The returned value is min(requested, highest index that still fits under the
+// live GRID_SHIFT_*). With no shift it is just GRID_COLS/GRID_ROWS[gridMode].
+// It can be -1 if a shift leaves not even cell 0 on the machine, which makes
+// gridReady() fail loudly rather than silently accepting a broken grid;
+// applyGridShift() refuses such a shift up front so this is only transient.
 long gridColsNow()
 {
-  return GRID_COLS[gridMode];
+  long requested = GRID_COLS[gridMode];
+  long fits = gridCountMaxOf(AXIS_X);
+  return (fits < requested) ? fits : requested;
 }
 
 long gridRowsNow()
 {
-  return GRID_ROWS[gridMode];
+  long requested = GRID_ROWS[gridMode];
+  long fits = gridCountMaxOf(AXIS_Y);
+  return (fits < requested) ? fits : requested;
 }
 
 const char *gridModeName(uint8_t mode)
@@ -1381,6 +1427,14 @@ void handleLine(char *line)
       return;
     }
     handleSingleChar(head);
+    return;
+  }
+
+  // shiftX / shiftY are routed here, BEFORE the switch on head, so the leading
+  // 'S' never has to be shared with 'S <cols> <rows>'. Two-letter "sh" prefix.
+  if ((line[0] == 's' || line[0] == 'S') && (line[1] == 'h' || line[1] == 'H'))
+  {
+    handleShiftCommand(line);
     return;
   }
 
@@ -2412,11 +2466,27 @@ float gridPitchCmOf(uint8_t axis)
   return gridBlockCmOf(axis) + gridGapCmOf(axis);
 }
 
-float gridTrimCmOf(uint8_t axis)
+// Trim + error offset + live shift, all three of which move the lattice against
+// the home switches by exactly the same rule. Folding the shift in here is what
+// makes shiftX/shiftY translate every centre, every block edge and the [0,0]
+// reference together. gridTrimCmZeroShiftOf() is the same sum with the shift
+// left out - used where the PHYSICAL grid size has to be judged (S, mode latch)
+// independent of whatever shift happens to be applied right now.
+float gridTrimCmZeroShiftOf(uint8_t axis)
 {
   return (axis == AXIS_X)
              ? GRID_TRIM_X_CM[gridMode] + GRID_ERROR_OFFSET_X_CM[gridMode]
              : GRID_TRIM_Y_CM[gridMode] + GRID_ERROR_OFFSET_Y_CM[gridMode];
+}
+
+float gridShiftCmOf(uint8_t axis)
+{
+  return (axis == AXIS_X) ? GRID_SHIFT_X_CM[gridMode] : GRID_SHIFT_Y_CM[gridMode];
+}
+
+float gridTrimCmOf(uint8_t axis)
+{
+  return gridTrimCmZeroShiftOf(axis) + gridShiftCmOf(axis);
 }
 
 // The ACTIVE mode's block-edge overhang budget. See SECTION 6C for why this is
@@ -2577,6 +2647,35 @@ long gridCountMaxOf(uint8_t axis)
       maximum = index;
   }
   return maximum;
+}
+
+// gridGeometryFits / gridCountMaxOf evaluated with this mode's GRID_SHIFT_*
+// momentarily removed. S and the R/RR mode latch judge the PHYSICAL grid -
+// "does the size the operator asked for fit the travel at all" - and must not
+// be blocked or unblocked by whatever shift is applied at the moment; the live
+// shift then clips the usable range in gridColsNow()/gridRowsNow(). The value
+// is restored on every path (including the false branch), so this reads the
+// geometry without leaving the shift disturbed.
+bool physicalGridGeometryFits(uint8_t axis, long count)
+{
+  float *slot = (axis == AXIS_X) ? &GRID_SHIFT_X_CM[gridMode]
+                                 : &GRID_SHIFT_Y_CM[gridMode];
+  float saved = *slot;
+  *slot = 0.0;
+  bool result = gridGeometryFits(axis, count);
+  *slot = saved;
+  return result;
+}
+
+long physicalGridCountMaxOf(uint8_t axis)
+{
+  float *slot = (axis == AXIS_X) ? &GRID_SHIFT_X_CM[gridMode]
+                                 : &GRID_SHIFT_Y_CM[gridMode];
+  float saved = *slot;
+  *slot = 0.0;
+  long result = gridCountMaxOf(axis);
+  *slot = saved;
+  return result;
 }
 
 // Centre of cell `index` (0-based), measured from the home switch corner.
@@ -2753,14 +2852,17 @@ void setGridSize(long cols, long rows)
   }
 
   // These are HIGHEST INDEX, not counts, so 0 is a legal (single-cell) axis.
+  // Judged against the PHYSICAL grid (shift removed): S stores the requested
+  // size and a live shiftX/shiftY clips what gridColsNow()/gridRowsNow() report,
+  // so a shift must not be able to reject a size that genuinely fits the rig.
   if (cols < 0 || rows < 0 ||
-      cols > gridCountMaxOf(AXIS_X) || rows > gridCountMaxOf(AXIS_Y) ||
-      !gridGeometryFits(AXIS_X, cols) || !gridGeometryFits(AXIS_Y, rows))
+      cols > physicalGridCountMaxOf(AXIS_X) || rows > physicalGridCountMaxOf(AXIS_Y) ||
+      !physicalGridGeometryFits(AXIS_X, cols) || !physicalGridGeometryFits(AXIS_Y, rows))
   {
     Serial.print(F("  ERROR - highest col index must be 0.."));
-    Serial.print(gridCountMaxOf(AXIS_X));
+    Serial.print(physicalGridCountMaxOf(AXIS_X));
     Serial.print(F(" and highest row index 0.."));
-    Serial.print(gridCountMaxOf(AXIS_Y));
+    Serial.print(physicalGridCountMaxOf(AXIS_Y));
     Serial.println(F("."));
     return;
   }
@@ -2841,10 +2943,12 @@ bool setGridMode(uint8_t mode)
   uint8_t previous = gridMode;
   gridMode = mode;
 
-  // The other mode's counts and trims are now live. If they do not fit, say
-  // so and stay where we were rather than latching into an unusable grid.
-  if (!gridGeometryFits(AXIS_X, gridColsNow())
-      || !gridGeometryFits(AXIS_Y, gridRowsNow()))
+  // The other mode's counts and trims are now live. If its REQUESTED size does
+  // not physically fit (judged with that mode's shift removed), say so and stay
+  // where we were rather than latching into an unusable grid. A shift that only
+  // clips the far column/row is fine - gridColsNow()/gridRowsNow() absorb it.
+  if (!physicalGridGeometryFits(AXIS_X, GRID_COLS[gridMode])
+      || !physicalGridGeometryFits(AXIS_Y, GRID_ROWS[gridMode]))
   {
     gridMode = previous;
     Serial.print(F("  ERROR - the "));
@@ -2865,6 +2969,196 @@ bool setGridMode(uint8_t mode)
   Serial.println(F("  The claw did NOT move. The next B turns it at the feeder."));
   printGridConfig();
   return true;
+}
+
+// ============================================================
+// GRID SHIFT LATCH                                    <<< NEW
+// ============================================================
+//
+//   shiftX <cm> / shiftY <cm>  translate the ACTIVE mode's whole placement
+//   lattice - every cell centre, every block edge, and the [0,0] reference the
+//   lattice is anchored on - by <cm> along that axis. + is away from the home
+//   switch, the same sense as the trims. It is per mode and it is stored in
+//   GRID_SHIFT_*_CM, which gridTrimCmOf() folds into the lattice.
+//
+//   IT MOVES NOTHING and it does NOT touch the pick-up. A build picks up with a
+//   plain home to raw [0,0] (goToFeeder -> goToOrigin), which runs no lattice
+//   math, so phases 1-7 happen on the un-shifted grid and only the PLACEMENT
+//   (phase 8 onward, via cellTargetPosition -> cellCentreCmOf) rides the shift.
+//   [0,0] stays the feeder and the inert B 0 0 no-op in both modes.
+//
+//   The reachable range is recomputed: gridColsNow()/gridRowsNow() clip the
+//   requested GRID_COLS/GRID_ROWS to whatever still fits the X/Y travel under
+//   the shift, so a shift that pushes the far column/row past the cap simply
+//   drops it (shiftX/shiftY 0 brings it back). A shift that leaves not even
+//   cell 0 on the machine is refused and the previous value restored.
+
+// A signed decimal number of centimetres: optional +/-, digits, optional
+// fractional part. Leading separators are tolerated (the caller passes the
+// slice right after the axis letter); a trailing non-space is an error.
+bool parseSignedCm(const char *s, float *out)
+{
+  uint8_t i = 0;
+  while (s[i] == ' ' || s[i] == '\t' || s[i] == ',' || s[i] == ':' || s[i] == '=')
+  {
+    i++;
+  }
+
+  bool negative = false;
+  if (s[i] == '+' || s[i] == '-')
+  {
+    negative = (s[i] == '-');
+    i++;
+  }
+
+  bool sawDigit = false;
+  float value = 0.0;
+  while (s[i] >= '0' && s[i] <= '9')
+  {
+    value = value * 10.0 + (float)(s[i] - '0');
+    sawDigit = true;
+    i++;
+  }
+  if (s[i] == '.')
+  {
+    i++;
+    float place = 0.1;
+    while (s[i] >= '0' && s[i] <= '9')
+    {
+      value += (float)(s[i] - '0') * place;
+      place *= 0.1;
+      sawDigit = true;
+      i++;
+    }
+  }
+
+  if (!sawDigit)
+  {
+    return false;
+  }
+  while (s[i] == ' ' || s[i] == '\t')
+  {
+    i++;
+  }
+  if (s[i] != '\0')
+  {
+    return false;
+  }
+
+  *out = negative ? -value : value;
+  return true;
+}
+
+// Set the ACTIVE mode's shift on `axis` to `cm` absolute (cm == 0 clears it).
+// Refuses - and restores the previous value - if the result leaves no cell on
+// the X/Y travel. Never moves the machine.
+void applyGridShift(uint8_t axis, float cm)
+{
+  Serial.println();
+  ackSeq++;
+
+  if (!clawRotationKnown)
+  {
+    Serial.println(F("  ERROR - claw is at an arbitrary manual A angle."));
+    Serial.println(F("  shiftX/shiftY needs a calibrated 0/+90/-90 angle; run B first."));
+    ackReason(F("ERR"), F("claw angle uncalibrated"));
+    return;
+  }
+
+  float *slot = (axis == AXIS_X) ? &GRID_SHIFT_X_CM[gridMode]
+                                 : &GRID_SHIFT_Y_CM[gridMode];
+  float previous = *slot;
+  *slot = cm;
+
+  if (gridCountMaxOf(AXIS_X) < 0 || gridCountMaxOf(AXIS_Y) < 0)
+  {
+    *slot = previous;
+    Serial.print(F("  ERROR - a "));
+    Serial.print(cm, 3);
+    Serial.print(F(" cm "));
+    Serial.print((axis == AXIS_X) ? F("X") : F("Y"));
+    Serial.println(F(" shift leaves no cell on the X/Y travel. Reverted."));
+    ackReason(F("SAFE"), F("shift makes the grid unusable"));
+    return;
+  }
+
+  // Old cell numbers were measured against the un-shifted lattice.
+  curCol = positionToIndex(AXIS_X, axisPos[AXIS_X], clawRotation);
+  curRow = positionToIndex(AXIS_Y, axisPos[AXIS_Y], clawRotation);
+
+  Serial.print(F("GRID SHIFT ["));
+  Serial.print(gridModeName(gridMode));
+  Serial.print(F("] "));
+  Serial.print((axis == AXIS_X) ? F("X") : F("Y"));
+  Serial.print(F("  "));
+  Serial.print(previous, 3);
+  Serial.print(F(" -> "));
+  Serial.print(cm, 3);
+  Serial.println(F(" cm   (pick-up NOT shifted; applied from [0,0])"));
+
+  long req = (axis == AXIS_X) ? GRID_COLS[gridMode] : GRID_ROWS[gridMode];
+  long eff = (axis == AXIS_X) ? gridColsNow() : gridRowsNow();
+  if (eff < req)
+  {
+    Serial.print(F("  highest "));
+    Serial.print((axis == AXIS_X) ? F("col") : F("row"));
+    Serial.print(F(" index clipped to "));
+    Serial.print(eff);
+    Serial.print(F(" of "));
+    Serial.print(req);
+    Serial.print(F(" requested  (shift"));
+    Serial.print((axis == AXIS_X) ? F("X") : F("Y"));
+    Serial.println(F(" 0 restores it)"));
+  }
+
+  printGridConfig();
+  ackReason(F("OK"), F("grid shifted"));
+}
+
+// Parse "shiftX <cm>" / "shiftY <cm>" (any case) and apply it. `line` is the
+// whole command line; the caller has already checked it begins "sh".
+void handleShiftCommand(const char *line)
+{
+  const char *tag = "SHIFT";
+  for (uint8_t i = 0; i < 5; i++)
+  {
+    if (toUpperChar(line[i]) != tag[i])
+    {
+      statBadCommands++;
+      Serial.println();
+      Serial.println(F("  ERROR - use:  shiftX <cm>   or   shiftY <cm>"));
+      return;
+    }
+  }
+
+  char axisChar = toUpperChar(line[5]);
+  uint8_t axis;
+  if (axisChar == 'X')
+  {
+    axis = AXIS_X;
+  }
+  else if (axisChar == 'Y')
+  {
+    axis = AXIS_Y;
+  }
+  else
+  {
+    statBadCommands++;
+    Serial.println();
+    Serial.println(F("  ERROR - use:  shiftX <cm>   or   shiftY <cm>   (axis must be X or Y)"));
+    return;
+  }
+
+  float cm = 0.0;
+  if (!parseSignedCm(line + 6, &cm))
+  {
+    statBadCommands++;
+    Serial.println();
+    Serial.println(F("  ERROR - use:  shiftX <cm>   e.g.  shiftX 1.6   shiftY -0.8   shiftX 0"));
+    return;
+  }
+
+  applyGridShift(axis, cm);
 }
 
 // ============================================================
@@ -3177,6 +3471,14 @@ void printBuildUsage()
   Serial.print(gridRowsNow());
   Serial.println(F("      (0 is a real cell)"));
   Serial.println(F("    [0,0] is the FEEDER and is never built on."));
+  if (gridColsNow() < GRID_COLS[gridMode] || gridRowsNow() < GRID_ROWS[gridMode])
+  {
+    Serial.print(F("    (grid shift clipped this from col 0.."));
+    Serial.print(GRID_COLS[gridMode]);
+    Serial.print(F(" / row 0.."));
+    Serial.print(GRID_ROWS[gridMode]);
+    Serial.println(F("; shiftX/shiftY 0 restores it)"));
+  }
   Serial.print(F("    level 0.."));
   Serial.print(maxBuildLevel());
   Serial.print(F("   (0 = ground, 1 = "));
@@ -4248,6 +4550,15 @@ void printGridConfig()
   Serial.print(gridRowsNow());
   Serial.println(F("  (0 is a real cell; [0,0] is the feeder)"));
 
+  if (gridColsNow() < GRID_COLS[gridMode] || gridRowsNow() < GRID_ROWS[gridMode])
+  {
+    Serial.print(F("   (requested col 0.."));
+    Serial.print(GRID_COLS[gridMode]);
+    Serial.print(F(" / row 0.."));
+    Serial.print(GRID_ROWS[gridMode]);
+    Serial.println(F(" - clipped by the grid shift; shiftX/shiftY 0 restores it)"));
+  }
+
   Serial.println(F("Feeder cell: [0,0] centre = the home corner (0,0), both modes"));
 
   Serial.print(F("Block footprint: "));
@@ -4291,6 +4602,12 @@ void printGridConfig()
   Serial.print(F(" cm / Y "));
   Serial.print(GRID_TRIM_Y_CM[gridMode], 3);
   Serial.println(F(" cm  (+ away from home, per mode)"));
+
+  Serial.print(F("Grid shift : X "));
+  Serial.print(GRID_SHIFT_X_CM[gridMode], 3);
+  Serial.print(F(" cm / Y "));
+  Serial.print(GRID_SHIFT_Y_CM[gridMode], 3);
+  Serial.println(F(" cm  (shiftX/shiftY; whole lattice, pick-up excluded)"));
 
   Serial.print(F("Edge budget: X "));
   Serial.print(gridMaxEdgeOverhangCmOf(AXIS_X), 3);
@@ -5240,7 +5557,10 @@ void printInstructions()
   Serial.println(F("--------------------------------------"));
   Serial.println(F("G <col> <row>   goto cell, e.g.  G 3 5"));
   Serial.println(F("    col/row 0 skips that axis (stays at origin); G 0 0 goes home"));
-  Serial.println(F("S <cols> <rows> fixed-pitch count for the ACTIVE grid"));
+  Serial.println(F("S <cols> <rows> fixed-pitch count for the ACTIVE grid (requested size)"));
+  Serial.println(F("shiftX <cm> / shiftY <cm>  translate the ACTIVE lattice from [0,0]"));
+  Serial.println(F("    per mode; + away from home; 0 clears; pick-up is NOT shifted;"));
+  Serial.println(F("    a shift past the cap drops the far col/row (0 restores it)"));
   Serial.println(F("--------------------------------------"));
   Serial.println(F("B <col> <row> <level>   BUILD one block"));
   Serial.println(F("    build calibration: col/row 0 skips that axis; B 0 0 is no-op"));

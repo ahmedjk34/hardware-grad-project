@@ -10,6 +10,7 @@ expected map below is transcribed from it — so this is the desktop half of tha
 check, and holding `map` next to a real `9` is the other half.
 """
 
+import copy
 import os
 from pathlib import Path
 import math
@@ -587,6 +588,89 @@ try:
     check("crossed workspace refused", False)
 except ValueError:
     check("crossed workspace refused", True)
+
+# ------------------------------------------------------------------
+# GRID SHIFT (the firmware's shiftX / shiftY)
+# ------------------------------------------------------------------
+# The whole placement lattice - every centre, every edge and the [0,0]
+# reference - translates by shift_*_cm, exactly like a trim. A shift that
+# pushes the far block past the travel cap clips cols/rows down to what still
+# fits and keeps the ask in requested_cols/requested_rows; the feeder never
+# moves.
+
+base_v = MachineGrid.from_config(mode="vertical")
+shifted_v = MachineGrid.from_config(mode="vertical", shift_y_cm=1.6)
+
+check("no shift leaves cell 0 on the home corner",
+      base_v.cell_center_y_cm(0) == 0.0)
+check("+1.6 cm Y shift moves cell 0 to 1.6",
+      math.isclose(shifted_v.cell_center_y_cm(0), 1.6))
+check("the shift is a plain translation of every centre",
+      math.isclose(shifted_v.cell_center_y_cm(3) - base_v.cell_center_y_cm(3), 1.6))
+check("+1.6 cm Y shift drops the far vertical row",
+      shifted_v.rows == base_v.rows - 1, f"{shifted_v.rows} vs {base_v.rows}")
+check("the requested row count is preserved through the clip",
+      shifted_v.requested_rows == base_v.rows)
+check("the shift does not touch the column count",
+      shifted_v.cols == base_v.cols)
+check("clearing the shift restores the full grid",
+      MachineGrid.from_config(mode="vertical", shift_y_cm=0.0).rows == base_v.rows)
+check("the feeder is never shifted",
+      shifted_v.feeder_center_cm() == (0.0, 0.0))
+check("[0,0] stays the feeder / non-build target under a shift",
+      not shifted_v.contains_build_target(0, 0))
+check("describe() reports the shift and the clip",
+      "shifted (0, 1.6) cm" in shifted_v.describe()
+      and "clipped from" in shifted_v.describe(), shifted_v.describe())
+
+# A shift the config carries is read straight off the mode entry. Deep-copy so
+# the shared load() cache is not polluted for later checks.
+_cfg = copy.deepcopy(load())
+_cfg["grid"]["modes"]["vertical"]["shift_x_cm"] = 0.5
+check("from_config reads grid.modes.<mode>.shift_x_cm",
+      MachineGrid.from_config(_cfg, mode="vertical").shift_x_cm == 0.5)
+check("a shifted grid no longer matches the unshifted config",
+      not MachineGrid.from_config(_cfg, mode="vertical").matches())
+
+# Horizontal has a +1.6 cm Y registration trim, so a modest negative shift is
+# still a legal grid; a big one that unseats cell 0 is refused outright.
+check("horizontal tolerates a -1.0 cm Y shift (trim headroom)",
+      math.isclose(horizontal_at(0.0, 1.6).cell_center_y_cm(0), 1.6)
+      and math.isclose(
+          MachineGrid(
+              cols=3, rows=10, mode="horizontal",
+              block_x_cm=6.0, block_y_cm=2.2, gap_x_cm=1.6, gap_y_cm=1.6,
+              workspace_width_cm=22.8, workspace_height_cm=38.0,
+              trim_x_cm=0.0, trim_y_cm=1.6,
+              max_edge_overhang_x_cm=3.0, max_edge_overhang_y_cm=3.0,
+              shift_y_cm=-1.0,
+          ).cell_center_y_cm(0), 0.6))
+try:
+    MachineGrid(
+        cols=7, rows=6, mode="vertical",
+        block_x_cm=2.2, block_y_cm=6.0, gap_x_cm=1.6, gap_y_cm=1.6,
+        workspace_width_cm=22.8, workspace_height_cm=38.0,
+        max_edge_overhang_x_cm=1.1, max_edge_overhang_y_cm=3.0,
+        shift_y_cm=-5.0,
+    )
+    check("a shift that unseats cell 0 is refused", False)
+except ValueError as exc:
+    check("a shift that unseats cell 0 is refused",
+          "leaves no" in str(exc), str(exc))
+
+# A non-finite shift is a config error, like a non-finite trim.
+try:
+    MachineGrid(
+        cols=7, rows=6, mode="vertical",
+        block_x_cm=2.2, block_y_cm=6.0, gap_x_cm=1.6, gap_y_cm=1.6,
+        workspace_width_cm=22.8, workspace_height_cm=38.0,
+        max_edge_overhang_x_cm=1.1, max_edge_overhang_y_cm=3.0,
+        shift_x_cm=float("inf"),
+    )
+    check("a non-finite shift is refused", False)
+except ValueError as exc:
+    check("a non-finite shift is refused", "finite" in str(exc), str(exc))
+
 
 print(f"\n{len(PASSED)} passed, {len(FAILED)} failed")
 if FAILED:

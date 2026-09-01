@@ -21,6 +21,11 @@ is measurement.
 The firmware also keeps its own copy of the machine numbers (step envelope, Z
 levels, pin assignments) and stays the authority on them. The grid count is
 Python-side intent and is pushed with 'S <cols> <rows>' on every connection.
+The optional per-mode `shift_x_cm` / `shift_y_cm` (the firmware's shiftX /
+shiftY, default 0.0) are Python-side intent too: `rig.link` pushes them after
+the mode latch and before 'S' on every connection, since a port-open reset
+clears them. They translate the whole placement lattice, [0,0] reference
+included, but never the pick-up.
 The `workspace` X/Y holder displacement, block footprint, 0.5 cm gaps and
 signed trims are also consumed by the Pi's camera mapping. Python serial
 clients prefer `/dev/ttyACM0` and fall back to `/dev/ttyACM1` if needed.

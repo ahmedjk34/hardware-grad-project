@@ -1,5 +1,19 @@
 # Firmware
 
+## Container + belt controller
+
+Flash `belt_v1/belt_v1.ino` for the container sequence. Its wiring is:
+
+- A4988 belt driver: `DIR = 2`, `STEP = 3`
+- HC-SR04 ultrasonic: `TRIG = 4`, `ECHO = 5`
+- Container servo signal: pin `6`
+
+Commands are `O` to open the container to 140 degrees and arm detection, and
+`C` to close it to 20 degrees and stop the belt. The first ultrasonic reading
+strictly below 10 cm after opening runs the belt counter-clockwise for five
+seconds, then stops. If the belt turns the wrong physical direction, invert
+`BELT_CCW_DIRECTION_LEVEL` in the sketch.
+
 ## `build_test_v1/` is the sketch on the rig
 
 Flash this one. Everything on the Python side is written against the commands

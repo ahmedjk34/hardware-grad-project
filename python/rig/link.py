@@ -333,12 +333,13 @@ class Rig:
            explicit horizontal-mode request: its ``RR`` latch is only legal
            after X/Y are homed.
         3. push the grid MODE from config/rig.json (or an explicit one-session
-           override), then send
+           override), then the grid SHIFT (`shiftX`/`shiftY`), then
            `S <cols> <rows>` — in that order. The sketch has no EEPROM and the
-           port-open reset just wiped both back to the compiled vertical
-           default, so neither is optional. The order is not arbitrary: the
-           firmware validates `S` against the active mode's geometry, so
-           sending it first would check the counts against the wrong grid.
+           port-open reset wiped all three back to the compiled vertical
+           default, so none is optional. The order is not arbitrary: the
+           firmware validates `S` against the active mode's SHIFTED geometry,
+           so sending it before the mode or the shift would check the counts
+           against the wrong grid.
         4. optionally `0+` — home Z, park it at the top, home X/Y.
 
         `home` defaults to FALSE because opening a connection should not make
@@ -384,6 +385,7 @@ class Rig:
                 raise RigError("X/Y home did not reach the origin before configuration")
         if configure:
             self.sync_mode()
+            self.set_shift()
             self.set_grid()
         if home:
             self.home()
@@ -621,7 +623,8 @@ class Rig:
         D9 therefore makes an automatic horizontal latch impossible and the
         build UI deliberately never calls this method: a person must inspect
         the claw and consciously authorize the recovery homing move. Once
-        homed, replay the same safe order as connect: mode first, then ``S``.
+        homed, replay the same safe order as connect: mode, then shift, then
+        ``S``.
         """
         if not self._reset_detected:
             return
@@ -638,6 +641,7 @@ class Rig:
                 raise RigError("reset recovery homing did not reach the origin")
             self.ready_mode = DEFAULT_GRID_MODE
             self.sync_mode()
+            self.set_shift()
             self.set_grid()
         except Exception:
             self._reset_detected = True
@@ -670,6 +674,41 @@ class Rig:
                 + "\n  ".join(line for line in out if "ERROR" in line or "cols" in line)
             )
 
+    def set_shift(self, x_cm: float | None = None,
+                  y_cm: float | None = None) -> None:
+        """Push the ACTIVE mode's grid shift (`shiftX` / `shiftY`) to the board.
+
+        The board forgot it on reset, the same as the mode and `S`, so
+        `connect()` and `recover_after_reset()` replay it - AFTER the mode
+        latch and BEFORE `S`, because the firmware validates `S` against the
+        shifted lattice.
+
+        An axis whose target is ``0.0`` is skipped unless it was passed
+        explicitly: ``0`` is the board's compiled default, so a freshly-reset
+        board already agrees and a needless ``shiftX 0`` would only add noise.
+        """
+        self._require_not_reset()
+        targets = (
+            ("shiftX", self.grid.shift_x_cm if x_cm is None else float(x_cm),
+             x_cm is not None),
+            ("shiftY", self.grid.shift_y_cm if y_cm is None else float(y_cm),
+             y_cm is not None),
+        )
+        for command, value, explicit in targets:
+            if value == 0.0 and not explicit:
+                continue
+            out = self._send_and_settle(
+                f"{command} {value:g}",
+                timeout=10.0,
+                done=("GRID SHIFT", "ERROR -"),
+                quiet=3.0,
+            )
+            if not any("GRID SHIFT" in line for line in out):
+                raise RigError(
+                    f"the rig refused {command} {value:g} from config/rig.json:\n  "
+                    + "\n  ".join(line.strip() for line in out if line.strip())
+                )
+
     def set_mode(self, mode: str, timeout: float = 20.0,
                  push_grid: bool = True) -> None:
         """Latch the board's grid mode with `R` (vertical) or `RR` (horizontal).
@@ -682,9 +721,10 @@ class Rig:
         redefines what the current cell means). It does NOT home for you: an
         un-homed rig raises rather than starting an unasked-for motion.
 
-        `push_grid` re-sends `S` afterwards, because the board's counts for the
-        newly selected mode are ITS compiled defaults, not this config's.
-        `connect()` passes False only because it sends `S` itself immediately
+        `push_grid` re-sends the new mode's grid SHIFT and then `S` afterwards,
+        because the board's shift and counts for the newly selected mode are
+        ITS compiled defaults (0 and the compiled size), not this config's.
+        `connect()` passes False only because it sends both itself immediately
         after.
         """
         self._require_not_reset()
@@ -719,6 +759,7 @@ class Rig:
         self.grid = grid
         self.cols, self.rows = grid.cols, grid.rows
         if push_grid:
+            self.set_shift()
             self.set_grid()
 
     def sync_mode(self, timeout: float = 20.0) -> None:

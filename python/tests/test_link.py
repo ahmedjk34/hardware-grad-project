@@ -19,6 +19,7 @@ ack lines have never been printed by an actual board. This is the desktop half
 of the testing; the other half is flashing it and watching.
 """
 
+import copy
 import os
 import sys
 import threading
@@ -293,6 +294,47 @@ rig.close()
 rig, fake = fake_rig(home=True)
 check("connect(home=True) homes", "0+" in fake.written, str(fake.written))
 rig.close()
+
+# A vertical session with no shift in the config sends no shiftX / shiftY:
+# 0 is the board's compiled default, so a freshly-reset board already agrees.
+rig, fake = fake_rig()
+check("no shift command when the config shift is zero",
+      not any(w.lower().startswith("shift") for w in fake.written), str(fake.written))
+rig.close()
+
+# A config that carries a grid shift pushes it on connect, AFTER the mode latch
+# and BEFORE S - the firmware validates S against the shifted lattice.
+SHIFTED_CFG = copy.deepcopy(CFG)
+SHIFTED_CFG["grid"]["modes"]["vertical"]["shift_y_cm"] = 4.0
+SHIFT_OK = [
+    "",
+    "GRID SHIFT [vertical] Y  0.000 -> 4.000 cm   (pick-up NOT shifted; applied from [0,0])",
+    "--- GRID ---",
+]
+rig, fake = fake_rig(
+    replies={"S ": GRID_RESIZED, "SHIFTY": SHIFT_OK, "R": MODE_ALREADY},
+    cfg=SHIFTED_CFG,
+)
+check("connect pushes the Y shift", "shiftY 4" in fake.written, str(fake.written))
+check("connect sends no shiftX when the X shift is zero",
+      not any(w.startswith("shiftX") for w in fake.written), str(fake.written))
+check("the shift is pushed before S",
+      "shiftY 4" in fake.written and "S 8 4" in fake.written
+      and fake.written.index("shiftY 4") < fake.written.index("S 8 4"),
+      str(fake.written))
+rig.close()
+
+# A board that refuses the shift stops connect rather than pressing on to S.
+SHIFT_REFUSED = [
+    "",
+    "  ERROR - a 4.000 cm Y shift leaves no cell on the X/Y travel. Reverted.",
+]
+try:
+    fake_rig(replies={"S ": GRID_RESIZED, "SHIFTY": SHIFT_REFUSED, "R": MODE_ALREADY},
+             cfg=SHIFTED_CFG)
+    check("a refused shift aborts connect", False)
+except link.RigError:
+    check("a refused shift aborts connect", True)
 
 # An explicit horizontal session has to home X/Y before it can send RR. The
 # order is physical safety, not cosmetic: the firmware rejects RR otherwise.

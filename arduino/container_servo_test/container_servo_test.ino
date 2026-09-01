@@ -5,8 +5,8 @@ const uint8_t SERVO_PINS[] = {2, 3, 4};
 const uint8_t SERVO_COUNT = sizeof(SERVO_PINS) / sizeof(SERVO_PINS[0]);
 
 // Adjust these two angles to match the mechanical containers.
-const uint8_t SERVO_CLOSED_ANGLE = 0;
-const uint8_t SERVO_OPEN_ANGLE = 30;
+const uint8_t SERVO_CLOSED_ANGLE = 20;
+const uint8_t SERVO_OPEN_ANGLE = 140;
 
 const unsigned long OPEN_TIME_MS = 2000;
 
