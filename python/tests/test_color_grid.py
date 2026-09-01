@@ -150,9 +150,9 @@ horizontal_spec = ColorGridSpec.from_config(rig_config, mode="horizontal")
 horizontal_grid = MachineGrid.from_config(rig_config, mode="horizontal")
 H_COLS, H_ROWS = horizontal_spec.cols, horizontal_spec.rows       # 3 x 11
 H_CELLS = H_COLS * H_ROWS                                         # 33
-check("horizontal sheet maps the complete 3x11 coordinate grid",
+check("horizontal sheet maps the complete 3x10 coordinate grid",
       (horizontal_spec.mode, horizontal_spec.cols, horizontal_spec.rows)
-      == ("horizontal", 3, 11), horizontal_spec.describe())
+      == ("horizontal", 3, 10), horizontal_spec.describe())
 
 # The real horizontal paper has spare width.  Five long-side columns gives the
 # detector that same window-search problem while retaining the 3x11 mapped
@@ -197,16 +197,16 @@ check("horizontal mode recovers weak ink without bending the fit",
               for choice in horizontal_dim_choices),
       f"{len(horizontal_dim_choices)} choices with "
       f"{[choice.metrics.window_observed for choice in horizontal_dim_choices]}")
-# The horizontal sheet model has not caught up with the machine's alternating
-# Y lattice yet, so calibrating a horizontal map must REFUSE rather than write
-# a map that is 7.8 cm out by row 10.
-try:
-    horizontal.workspace_corners(horizontal_grid, "firmware")
-    check("horizontal sheet calibration is refused until the sheet model "
-          "learns the alternating Y lattice", False)
-except ColorGridError as exc:
-    check("horizontal sheet calibration is refused until the sheet model "
-          "learns the alternating Y lattice", "ALTERNATING" in str(exc), str(exc))
+# The sheet and the machine agree on pitch again now that every gap is 1.6, so
+# a horizontal map is buildable exactly like a vertical one.
+horizontal_workspace = WorkspaceMap.from_grid(
+    horizontal_grid, horizontal.workspace_corners(horizontal_grid, "firmware"),
+    horizontal_image.shape[1::-1], {"test": "horizontal"})
+check("horizontal printed cells map to horizontal machine cells",
+      horizontal_workspace.cell_at(
+          horizontal.cell_center(horizontal_grid.max_col, horizontal_grid.max_row),
+          horizontal_image.shape[1::-1])
+      == (horizontal_grid.max_col, horizontal_grid.max_row))
 
 try:
     # The explicit count/layout cross-check protects a caller that accidentally

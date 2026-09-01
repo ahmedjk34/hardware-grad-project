@@ -148,13 +148,6 @@ class WorkspaceMap:
                     if "max_edge_overhang_y_cm" in geometry else None),
                 error_offset_x_cm=float(geometry.get("error_offset_x_cm", 0.0)),
                 error_offset_y_cm=float(geometry.get("error_offset_y_cm", 0.0)),
-                # The derived horizontal Y lattice. Absent in maps saved before
-                # coordinate zero became a real block; those reconstruct as a
-                # uniform lattice, which is what they were calibrated against.
-                gap_y_alt_cm=(float(geometry["gap_y_alt_cm"])
-                              if geometry.get("gap_y_alt_cm") is not None
-                              else None),
-                y_lattice_start_cm=float(geometry.get("y_lattice_start_cm", 0.0)),
                 mode=self.mode,
             )
 
@@ -189,13 +182,6 @@ class WorkspaceMap:
             "error_offset_x_cm": grid.error_offset_x_cm,
             "error_offset_y_cm": grid.error_offset_y_cm,
         }
-        # Without these two the map reconstructs horizontal Y as a uniform
-        # pitch, and every row past the first lands in the wrong place. Only
-        # written when the grid actually has a derived lattice, so a vertical
-        # map keeps the exact key set older readers expect.
-        if grid.gap_y_alt_cm is not None:
-            geometry["gap_y_alt_cm"] = grid.gap_y_alt_cm
-            geometry["y_lattice_start_cm"] = grid.y_lattice_start_cm
         return cls(grid.cols, grid.rows, [(x / w, y / h) for x, y in corners],
                    projection, geometry, grid.mode or DEFAULT_GRID_MODE)
 
@@ -324,9 +310,6 @@ class WorkspaceMap:
             and float(_block_cm(geometry, "y")) == grid.block_y_cm
             and float(geometry["gap_x_cm"]) == grid.gap_x_cm
             and float(geometry["gap_y_cm"]) == grid.gap_y_cm
-            and (geometry.get("gap_y_alt_cm") == grid.gap_y_alt_cm)
-            and (float(geometry.get("y_lattice_start_cm", 0.0))
-                 == grid.y_lattice_start_cm)
             and float(geometry.get("trim_x_cm", 0.0)) == grid.trim_x_cm
             and float(geometry.get("trim_y_cm", 0.0)) == grid.trim_y_cm
             # v2 maps did not record D20's safety budget. Its absence means

@@ -125,38 +125,39 @@ check("build target still rejects negative/outside coordinates",
       not from_cfg.contains_build_target(-1, 1)
       and not from_cfg.contains_build_target(7, 0)
       and not from_cfg.contains_build_target(0, 6))
-check("block/internal-gap footprint is 25.0x40.0 cm",
+check("block/internal-gap footprint is 25.0x44.0 cm",
       math.isclose(from_cfg.packed_width_cm, 25.0)
-      and math.isclose(from_cfg.packed_height_cm, 40.0))
-check("the lattice is anchored, so the span reaches the far block edge",
-      math.isclose(from_cfg.allocation_width_cm, 25.0)
-      and math.isclose(from_cfg.allocation_height_cm, 40.0))
-check("the lattice is anchored on the home corner, with both trims zero",
-      math.isclose(from_cfg.x_allocation_start_cm, 0.0)
-      and math.isclose(from_cfg.y_allocation_start_cm, 0.0))
-check("cell 0's outer edge sits on the home corner",
-      math.isclose(from_cfg.x_start_cm, 0.0)
-      and math.isclose(from_cfg.y_start_cm, 0.0))
-check("first physical cell centre",
+      and math.isclose(from_cfg.packed_height_cm, 44.0))
+check("the span reaches the far block edge",
+      math.isclose(from_cfg.allocation_width_cm, 23.9)
+      and math.isclose(from_cfg.allocation_height_cm, 41.0))
+check("cell [0,0]'s CENTRE is the home corner",
       all(math.isclose(a, b) for a, b in
-          zip(from_cfg.cell_center_cm(0, 0), (1.1, 3.0))))
-check("last physical cell centre",
+          zip(from_cfg.cell_center_cm(0, 0), (0.0, 0.0))))
+check("its block therefore hangs half a block back past the switches",
+      math.isclose(from_cfg.x_start_cm, -1.1)
+      and math.isclose(from_cfg.y_start_cm, -3.0))
+check("last physical cell centre lands exactly on the travel caps",
       all(math.isclose(a, b) for a, b in
-          zip(from_cfg.cell_center_cm(6, 5), (23.9, 37.0))))
-check("the feeder is the vertical [0,0] centre",
-      all(math.isclose(a, b) for a, b in
-          zip(from_cfg.feeder_center_cm(), (1.1, 3.0))))
+          zip(from_cfg.cell_center_cm(6, 5), (22.8, 38.0)))
+      and math.isclose(from_cfg.x_last_center_cm, from_cfg.workspace_width_cm)
+      and math.isclose(from_cfg.y_last_center_cm, from_cfg.workspace_height_cm))
+check("the feeder is [0,0]'s centre, which IS home - a pick-up is a plain home",
+      from_cfg.feeder_center_cm() == (0.0, 0.0))
 check("all placement centres remain inside holder travel",
       from_cfg.x_first_center_cm >= 0 and from_cfg.y_first_center_cm >= 0
       and from_cfg.x_last_center_cm <= from_cfg.workspace_width_cm
       and from_cfg.y_last_center_cm <= from_cfg.workspace_height_cm)
-check("the far block edges land on the grid span",
-      math.isclose(from_cfg.x_end_cm, 25.0)
-      and math.isclose(from_cfg.y_end_cm, 40.0))
-check("vertical X overhangs 0.7 cm, inside its 1.1 cm budget",
-      from_cfg.x_end_cm - from_cfg.workspace_width_cm > 0
-      and (from_cfg.x_end_cm - from_cfg.workspace_width_cm
-           <= from_cfg.max_edge_overhang_x_cm))
+check("the far block edges overhang by exactly half a block",
+      math.isclose(from_cfg.x_end_cm, 23.9)
+      and math.isclose(from_cfg.y_end_cm, 41.0))
+check("that overhang is exactly each axis' budget, both ends",
+      math.isclose(from_cfg.x_end_cm - from_cfg.workspace_width_cm,
+                   from_cfg.max_edge_overhang_x_cm)
+      and math.isclose(from_cfg.y_end_cm - from_cfg.workspace_height_cm,
+                       from_cfg.max_edge_overhang_y_cm)
+      and math.isclose(-from_cfg.x_start_cm, from_cfg.max_edge_overhang_x_cm)
+      and math.isclose(-from_cfg.y_start_cm, from_cfg.max_edge_overhang_y_cm))
 
 # ------------------------------------------------------------------
 # The dual-orientation numeric contract
@@ -167,44 +168,47 @@ check("vertical X overhangs 0.7 cm, inside its 1.1 cm budget",
 # recomputed: a test that redoes the arithmetic would agree with a bug.
 #
 #  All rows are at the shipped trim of 0.0, i.e. each allocation centred in the
-#  24.3 x 40.0 cm travel. The lattice is ANCHORED on the home corner and
-#  coordinate 0 is a REAL block, so counts include it and there is no centring.
+#  22.8 x 38.0 cm travel (4550 x 7600 steps). The lattice is CENTRE-ANCHORED:
+#  the centre of cell 0 sits on the home corner, so the last vertical centre
+#  lands exactly on the software cap and cell 0's block hangs half a block back
+#  past the switches. Gaps are a uniform 1.6 cm on every axis of both modes.
 #
-#  mode        axis  block  gap        pitch  count  span     centres
-#  vertical    X     2.2    1.6        3.8      7    25.0     1.10 -> 23.90
-#  vertical    Y     6.0    0.8        6.8      6    40.0     3.00 -> 37.00
-#  horizontal  X     6.0    1.6        7.6      3    21.2     3.00 -> 18.20
-#  horizontal  Y     2.2    0.8/1.6    alt     11    36.2     4.90 -> 38.90
+#  mode        axis  block  gap  pitch  n   centres          block edges
+#  vertical    X     2.2    1.6  3.8    7   0.0  -> 22.8     -1.1 -> 23.9
+#  vertical    Y     6.0    1.6  7.6    6   0.0  -> 38.0     -3.0 -> 41.0
+#  horizontal  X     6.0    1.6  7.6    3   0.0  -> 15.2     -3.0 -> 18.2
+#  horizontal  Y     2.2    1.6  3.8   10   1.6  -> 35.8      0.5 -> 36.9
 #
-#  Horizontal Y is the vertical Y lattice read at double density: its rows are
-#  the lower and upper 2.2 cm halves of each vertical row, so its gaps
-#  alternate 0.8 (between vertical blocks) and 1.6 (inside one). Its span runs
-#  3.8 -> 40.0, ending on the vertical grid's top edge.
+#  Vertical fills its travel exactly: 6 * 3.8 = 22.8 and 5 * 7.6 = 38.0. That
+#  is what "the build area IS the travel area" means, and it is why vertical X
+#  has seven columns rather than six. Horizontal is registered +1.6 cm on Y
+#  (the move the arm makes after picking up, before rotating) and not shifted
+#  on X at all - a 4th X column would geometrically fit but is not used.
 
 SECTION_3 = {
     "vertical": {
         "counts": (7, 6),
         "block": (2.2, 6.0),
-        "gap": (1.6, 0.8),
-        "pitch": (3.8, 6.8),
-        "footprint": (25.00, 40.00),
-        "first_centre": (1.10, 3.00),
-        "last_centre": (23.90, 37.00),
-        "first_edge": (0.00, 0.00),
-        "last_edge": (25.00, 40.00),
+        "gap": (1.6, 1.6),
+        "pitch": (3.8, 7.6),
+        "footprint": (25.00, 44.00),
+        "first_centre": (0.00, 0.00),
+        "last_centre": (22.80, 38.00),
+        "first_edge": (-1.10, -3.00),
+        "last_edge": (23.90, 41.00),
         "cells": 42,
     },
     "horizontal": {
-        "counts": (3, 11),
+        "counts": (3, 10),
         "block": (6.0, 2.2),
-        "gap": (1.6, 0.8),
-        "pitch": (7.6, 3.0),
-        "footprint": (21.20, 36.20),
-        "first_centre": (3.00, 4.90),
-        "last_centre": (18.20, 38.90),
-        "first_edge": (0.00, 3.80),
-        "last_edge": (21.20, 40.00),
-        "cells": 33,
+        "gap": (1.6, 1.6),
+        "pitch": (7.6, 3.8),
+        "footprint": (21.20, 36.40),
+        "first_centre": (0.00, 1.60),
+        "last_centre": (15.20, 35.80),
+        "first_edge": (-3.00, 0.50),
+        "last_edge": (18.20, 36.90),
+        "cells": 30,
     },
 }
 
@@ -260,18 +264,14 @@ def fits(mode, cols, rows):
                     workspace_height_cm=m.workspace_height_cm,
                     trim_x_cm=m.trim_x_cm, trim_y_cm=m.trim_y_cm,
                     max_edge_overhang_x_cm=m.max_edge_overhang_x_cm,
-                    max_edge_overhang_y_cm=m.max_edge_overhang_y_cm,
-                    # carry the derived lattice, or horizontal falls back to a
-                    # uniform pitch and accepts rows that do not really fit
-                    gap_y_alt_cm=m.gap_y_alt_cm,
-                    y_lattice_start_cm=m.y_lattice_start_cm)
+                    max_edge_overhang_y_cm=m.max_edge_overhang_y_cm)
         return True
     except ValueError:
         return False
 
 check("a 4th horizontal column cannot fit", not fits("horizontal", 4, 11))
-check("the 3rd horizontal column still fits", fits("horizontal", 3, 11))
-check("a 12th horizontal row cannot fit", not fits("horizontal", 3, 12))
+check("the 3rd horizontal column still fits", fits("horizontal", 3, 10))
+check("an 11th horizontal row cannot fit", not fits("horizontal", 3, 11))
 check("an 8th vertical column cannot fit", not fits("vertical", 8, 6))
 check("the 7th vertical column still fits", fits("vertical", 7, 6))
 check("a 7th vertical row cannot fit", not fits("vertical", 7, 7))
@@ -281,11 +281,11 @@ vertical_grid = MachineGrid.from_config(config, mode="vertical")
 horizontal_grid = MachineGrid.from_config(config, mode="horizontal")
 check("vertical addresses a 7 x 6 coordinate grid",
       (vertical_grid.cols, vertical_grid.rows) == (7, 6))
-check("horizontal addresses a 3 x 11 coordinate grid",
-      (horizontal_grid.cols, horizontal_grid.rows) == (3, 11))
-check("horizontal ascii map is 3 wide and 11 tall",
+check("horizontal addresses a 3 x 10 coordinate grid",
+      (horizontal_grid.cols, horizontal_grid.rows) == (3, 10))
+check("horizontal ascii map is 3 wide and 10 tall",
       len(horizontal_grid.ascii_map().splitlines()[3].split()) == 3 + 2
-      and horizontal_grid.ascii_map().splitlines()[3].startswith(" 10 |"),
+      and horizontal_grid.ascii_map().splitlines()[3].startswith("  9 |"),
       repr(horizontal_grid.ascii_map().splitlines()[3]))
 
 # D14 / R2: a centre-only validator accepts a grid whose far block hangs off
@@ -295,67 +295,69 @@ check("horizontal ascii map is 3 wide and 11 tall",
 # wall must still be refused.
 
 
-def horizontal_at(trim_x, trim_y, budget=0.0):
+def horizontal_at(trim_x, trim_y, budget=3.0):
     return MachineGrid(
-        cols=3, rows=11, mode="horizontal",
-        block_x_cm=6.0, block_y_cm=2.2, gap_x_cm=1.6, gap_y_cm=0.8,
-        workspace_width_cm=24.3, workspace_height_cm=40.0,
+        cols=3, rows=10, mode="horizontal",
+        block_x_cm=6.0, block_y_cm=2.2, gap_x_cm=1.6, gap_y_cm=1.6,
+        workspace_width_cm=22.8, workspace_height_cm=38.0,
         trim_x_cm=trim_x, trim_y_cm=trim_y,
         max_edge_overhang_x_cm=budget, max_edge_overhang_y_cm=budget,
-        # The derived horizontal Y lattice, as from_config() computes it from
-        # the vertical entry: gaps alternate 0.8 / 1.6 and row 0 starts 3.8 out.
-        gap_y_alt_cm=6.0 - 2 * 2.2, y_lattice_start_cm=6.0 - 2.2,
     )
 
 
-# Unbudgeted, the bad grid is accepted and its own numbers show why that is wrong.
+# Centre-anchoring changed what this guard catches. Cell 0's block ALWAYS
+# hangs half a block back past home, so a budget below block/2 is impossible -
+# and at exactly block/2 the far-edge test turns out to be implied by the
+# centre test (centre legal <=> trim <= 7.6 <=> far edge within budget). The
+# guard now bites on a budget someone has tightened below the half block.
 unchecked = MachineGrid(
-    cols=3, rows=11, mode="horizontal",
-    block_x_cm=6.0, block_y_cm=2.2, gap_x_cm=1.6, gap_y_cm=0.8,
-    workspace_width_cm=24.3, workspace_height_cm=40.0,
-    trim_x_cm=3.55, trim_y_cm=0.0,
-    max_edge_overhang_x_cm=3.0, max_edge_overhang_y_cm=3.0,
-    gap_y_alt_cm=6.0 - 2 * 2.2, y_lattice_start_cm=6.0 - 2.2,
+    cols=3, rows=10, mode="horizontal",
+    block_x_cm=6.0, block_y_cm=2.2, gap_x_cm=1.6, gap_y_cm=1.6,
+    workspace_width_cm=22.8, workspace_height_cm=38.0,
+    trim_x_cm=5.05, trim_y_cm=1.6,
+    max_edge_overhang_x_cm=8.0, max_edge_overhang_y_cm=8.0,
 )
-check("a +3.55 cm X trim keeps horizontal's last centre legal",
+check("a +5.05 cm X trim keeps horizontal's last centre legal",
       unchecked.x_last_center_cm <= unchecked.workspace_width_cm,
       f"last centre {unchecked.x_last_center_cm:g} cm")
-check("...but pushes the far block edge 0.45 cm past the X limit (R2)",
+check("...and its far block edge then sits 0.45 cm past the X limit",
       math.isclose(unchecked.x_end_cm - unchecked.workspace_width_cm, 0.45,
                    abs_tol=1e-9),
-      f"far edge {unchecked.x_end_cm:g} cm vs 24.3 cm travel")
+      f"far edge {unchecked.x_end_cm:g} cm vs 22.8 cm travel")
 
 try:
-    horizontal_at(3.55, 0.0)
-    check("horizontal at a +3.55 cm X trim is refused by the zero budget (R2)",
-          False)
+    horizontal_at(5.05, 1.6, budget=0.4)
+    check("a budget tighter than that overhang refuses the grid (R2)", False)
 except ValueError as exc:
-    check("horizontal at a +3.55 cm X trim is refused by the zero budget (R2)",
-          "X block edges" in str(exc), str(exc))
+    check("a budget tighter than that overhang refuses the grid (R2)",
+          "block edges" in str(exc), str(exc))
+
+try:
+    horizontal_at(0.0, 1.6, budget=0.0)
+    check("a zero budget is now impossible - cell 0 always overhangs", False)
+except ValueError as exc:
+    check("a zero budget is now impossible - cell 0 always overhangs",
+          "before home" in str(exc), str(exc))
 
 check("horizontal at the shipped trims is accepted",
-      horizontal_at(0.0, 0.0).mode == "horizontal")
-# The old +1.6 cm Y registration trim is now DOUBLE-COUNTING and must be
-# refused: horizontal row 0 already starts 3.8 cm out, structurally, because it
-# is the upper half of vertical row 0. Adding the trim on top overruns Y.
-try:
-    horizontal_at(0.0, 1.6)
-    check("the old +1.6 cm Y registration trim is now refused", False)
-except ValueError as exc:
-    check("the old +1.6 cm Y registration trim is now refused", True, str(exc))
-check("horizontal row 0 starts 3.8 cm out with no trim at all",
-      math.isclose(horizontal_at(0.0, 0.0).y_start_cm, 3.8))
-check("horizontal Y gaps alternate 0.8 / 1.6",
-      [round(horizontal_at(0.0, 0.0).gap_before_row_cm(r), 3)
-       for r in range(1, 11)] == [0.8, 1.6] * 5)
+      horizontal_at(0.0, 1.6).mode == "horizontal")
+check("horizontal row 0 sits +1.6 cm out - the registration shift",
+      math.isclose(horizontal_at(0.0, 1.6).cell_center_y_cm(0), 1.6))
+check("horizontal X is NOT shifted: column 0's centre is the home corner",
+      math.isclose(horizontal_at(0.0, 1.6).cell_center_x_cm(0), 0.0))
+check("every Y gap is a uniform 1.6 - no alternation anywhere",
+      [round(horizontal_at(0.0, 1.6).gap_before_row_cm(r), 3)
+       for r in range(1, 10)] == [1.6] * 9)
 
 # Vertical keeps its half-block budget (block_x/2 = 1.1, block_y/2 = 3.0).
 check("vertical's budget is half a block on each axis",
       (vertical_grid.max_edge_overhang_x_cm,
        vertical_grid.max_edge_overhang_y_cm) == (1.1, 3.0))
-check("horizontal's budget is zero on both axes",
+# Every budget is exactly half a block: the overhang a centre-anchored cell 0
+# necessarily produces, and no more.
+check("horizontal's budget is half a block on each axis",
       (horizontal_grid.max_edge_overhang_x_cm,
-       horizontal_grid.max_edge_overhang_y_cm) == (0.0, 0.0))
+       horizontal_grid.max_edge_overhang_y_cm) == (3.0, 1.1))
 try:
     MachineGrid(
         cols=7, rows=6, mode="vertical",
@@ -383,10 +385,10 @@ turned_horizontal = MachineGrid.from_config(config, mode="horizontal",
                                             swap_axes=True)
 check("mode and swap_axes stay independent",
       turned_horizontal.mode == "horizontal" and turned_horizontal.swap_axes
-      and (turned_horizontal.nx, turned_horizontal.ny) == (11, 3),
+      and (turned_horizontal.nx, turned_horizontal.ny) == (10, 3),
       f"{turned_horizontal.nx}x{turned_horizontal.ny}")
 check("a horizontal grid is not axis-swapped by default",
-      not horizontal_grid.swap_axes and (horizontal_grid.nx, horizontal_grid.ny) == (3, 11))
+      not horizontal_grid.swap_axes and (horizontal_grid.nx, horizontal_grid.ny) == (3, 10))
 
 # An unknown mode is a readable error rather than a KeyError, at this layer too.
 try:
@@ -506,7 +508,7 @@ for name, expected in paired_values.items():
 # rig.json, but the desktop check should still make an accidental change
 # of the live Y cap visible before flashing.
 y_soft_limit = firmware_number("SOFT_LIMIT_Y_TRAVEL")
-check("live Y software limit is 8250 steps", y_soft_limit == 8250,
+check("live Y software limit is 7600 steps", y_soft_limit == 7600,
       f"firmware {y_soft_limit}")
 y_steps_per_cm = y_soft_limit / from_cfg.workspace_height_cm
 y_row_targets = [round(from_cfg.cell_center_cm(0, row)[1] * y_steps_per_cm)
@@ -520,7 +522,7 @@ check("Y row targets are one pitch apart",
       all(abs(gap - expected_gap) <= 1 for gap in row_gaps),
       f"targets {y_row_targets}, gaps {row_gaps}, pitch {expected_gap}")
 x_soft_limit = firmware_number("SOFT_LIMIT_X_TRAVEL")
-check("live X software limit is 4750 steps", x_soft_limit == 4750,
+check("live X software limit is 4550 steps", x_soft_limit == 4550,
       f"firmware {x_soft_limit}")
 
 try:

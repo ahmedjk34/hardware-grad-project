@@ -33,10 +33,10 @@
     O = Servo OPEN   (pin 6)
     C = Servo CLOSE  (pin 6)
 
-    R  = select the VERTICAL grid    (cols 0..6, rows 0..5,  block 2.2 x 6.0)
-    RR = select the HORIZONTAL grid  (cols 0..2, rows 0..10, block 6.0 x 2.2)
-      The horizontal grid is DERIVED from the vertical one, so its Y gaps
-      alternate 0.8 / 1.6 cm. See SECTION 6C.
+    R  = select the VERTICAL grid    (cols 0..6, rows 0..5, block 2.2 x 6.0)
+    RR = select the HORIZONTAL grid  (cols 0..2, rows 0..9, block 6.0 x 2.2)
+      Gaps are a uniform 1.6 cm on every axis of both grids. Horizontal is
+      registered +1.6 cm along Y and not shifted at all on X. See SECTION 6C.
       These LATCH a grid layout. NEITHER MOVES ANYTHING. Each is refused
       when it is already true, and both need X/Y homed first. The claw's
       rotation is owned entirely by the build cycle.
@@ -77,13 +77,14 @@
   Each axis travels AWAY from its own home switch. The two switches
   sit at OPPOSITE ends now, so the two axes no longer share a sign:
 
-      X switch at the X+ end  ->  X runs   0  ...  -4750   (soft limit)
-      Y switch at the Y- end  ->  Y runs   0  ...  +8250   (soft limit)
+      X switch at the X+ end  ->  X runs   0  ...  -4550   (soft limit)
+      Y switch at the Y- end  ->  Y runs   0  ...  +7600   (soft limit)
       Z switch at the Z- end  ->  Z runs   0  ...  +1350   (TOP SWITCH)
 
-  The current software-safe envelope is 4750 x 8250 steps. The measured
-  HOLDER displacement to those caps is 24.3 x 40 cm. The active rectangle is
-  X in [-4750, 0], Y in [0, +8250]. Grid
+  The current software-safe envelope is 4550 x 7600 steps. The measured
+  HOLDER displacement to those caps is 22.8 x 38.0 cm - 199.56 and 200.00
+  steps/cm. The active rectangle is
+  X in [-4550, 0], Y in [0, +7600]. Grid
   indices hide this sign mess:
 
       col 0  = nearest the X switch (X = 0 side, the X+ end)
@@ -91,8 +92,9 @@
       row 0  = nearest the Y switch (Y = 0 side)
       row M  = far end of Y travel  (Y = +8250 side)
 
-  Coordinate 0 is a REAL BLOCK, whose outer edge sits on the home corner -
-  not a bare home point. [0,0] is the feeder. See SECTION 6C.
+  Coordinate 0 is a REAL BLOCK whose CENTRE sits on the home corner, so the
+  last cell's centre lands exactly on the software cap and cell 0's block
+  hangs half a block past the switches. [0,0] is the feeder. See SECTION 6C.
 
   Generalised in code as: each axis extends from 0 in the direction
   travelEndOf(axis), for axisTravelOf(axis) steps - whether that far
@@ -138,10 +140,9 @@
   BUILD SEQUENCE  (the B command)                        <<< NEW
   ------------------------------------------------------------
     1. Z up to the TOP SWITCH                    (clear of everything)
-    2. X/Y home, then out to the FEEDER cell [0,0] centre. That is the
-       VERTICAL [0,0] centre in BOTH modes - the feeder never rotates, it
-       always presents a block standing. It is the cell CENTRE, not raw
-       home, because home is that cell's outer corner.
+    2. X/Y home. That IS the feeder: the lattice is centre-anchored, so
+       vertical [0,0]'s centre is the home corner. The feeder never
+       rotates - it always presents a block standing, in both modes.
     3. Return the claw to neutral (including any manual A jog)
     4. Open the claw
     5. Z down to GROUND (into the Z switch - this also re-zeroes Z)
@@ -314,7 +315,7 @@ long auxAngleSteps = 0;
 // two of these, so 2000 us => 4.000 ms per step => ~250 steps/sec.
 // RAISE the Z value to slow Z down (more torque, less chance of
 // losing steps under load); LOWER it to speed the lift up.
-unsigned int STEP_DELAY = 2000; // X and Y, 2000 us per half-period
+unsigned int STEP_DELAY = 575; // X and Y, 2000 us per half-period
 
 unsigned int STEP_DELAY_Z = 950; // Z only
 
@@ -501,8 +502,8 @@ const uint8_t LIMIT_CHECK_EVERY_N_STEPS = 1;
 
 const long SOFT_LIMIT_INFINITE = 0; // sentinel: no cap at all
 
-long SOFT_LIMIT_X_TRAVEL = 4750;                      // X- travel cap, in steps
-long SOFT_LIMIT_Y_TRAVEL = 8250;                      // Y+ travel cap, in steps
+long SOFT_LIMIT_X_TRAVEL = 4550;                      // X- travel cap, in steps
+long SOFT_LIMIT_Y_TRAVEL = 7600;                      // Y+ travel cap, in steps
 const long SOFT_LIMIT_Z_TRAVEL = SOFT_LIMIT_INFINITE; // Z: switch, not a cap
 
 // Measured HOLDER displacement from each home switch to the active software
@@ -512,8 +513,8 @@ const long SOFT_LIMIT_Z_TRAVEL = SOFT_LIMIT_INFINITE; // Z: switch, not a cap
 //
 //   X scale = 4750 / 24.3 = 195.4733 steps/cm
 //   Y scale = 8250 / 40.0 = 206.2500 steps/cm
-float X_TRAVEL_CM = 24.3;
-float Y_TRAVEL_CM = 40.0;
+float X_TRAVEL_CM = 22.8;
+float Y_TRAVEL_CM = 38.0;
 
 const int8_t SOFT_LIMIT_X_AT_END = DIR_NEG; // guards the X- end
 const int8_t SOFT_LIMIT_Y_AT_END = DIR_POS; // guards the Y+ end
@@ -544,102 +545,87 @@ const bool SOFT_LIMIT_VERBOSE = true;
 //   HORIZONTAL (mode 1)  block 6.0 X x 2.2 Y      2 cols x 10 rows
 //
 // ------------------------------------------------------------
-//   COORDINATE 0 IS A REAL BLOCK NOW
+//   COORDINATE 0 IS A REAL BLOCK, AND ITS CENTRE IS HOME
 // ------------------------------------------------------------
 // It used to be the home POINT, with only a gap before cell 1, and the whole
 // allocation was then CENTRED in the holder travel. Both of those are gone.
-// The lattice is ANCHORED on the home corner and coordinate 0 is a full block
-// footprint, exactly like the printed calibration sheet draws it:
+// The lattice is a plain run of centres anchored on the home corner:
 //
-//   vertical    X: 7 slots (0..6)  7 * 2.2 + 6 * 1.6 = 25.0 cm
-//               Y: 6 slots (0..5)  6 * 6.0 + 5 * 0.8 = 40.0 cm
-//   horizontal  X: 3 slots (0..2)  3 * 6.0 + 2 * 1.6 = 21.2 cm
-//               Y: 11 slots (0..10) 11 * 2.2 + ALTERNATING gaps = 36.2 cm
+//       centre(i) = trim + i * pitch          pitch = block + gap
+//
+// so the LAST centre lands exactly on the software cap, and cell 0's block
+// hangs half a block past the home switches:
+//
+//   vertical    X: 7 cells (0..6)  centres 0 .. 22.8   pitch 3.8
+//               Y: 6 cells (0..5)  centres 0 .. 38.0   pitch 7.6
+//   horizontal  X: 3 cells (0..2)  centres 0 .. 15.2   pitch 7.6
+//               Y: 10 cells (0..9) centres 1.6 .. 35.8 pitch 3.8
 //
 // GRID_COLS / GRID_ROWS hold the HIGHEST INDEX, not a count, which is why they
-// still read 6/5 and 2/10 - there are 7/6 and 3/11 addressable cells.
+// read 6/5 and 2/9 - there are 7/6 and 3/10 addressable cells.
 //
-// Slot i of a uniform axis spans [i * pitch, i * pitch + block]. Vertical X
-// wants 25.0 cm inside 24.3 cm of travel: every CENTRE is reachable (col 6 sits
-// at 23.9) and the far edge overhangs 0.7 cm, inside the 1.1 cm budget below.
-// Vertical Y is 40.0 in 40.0 with no slack at all.
+// Vertical fills its travel exactly on both axes: 6 * 3.8 = 22.8 and
+// 5 * 7.6 = 38.0. That is not a coincidence to be tuned away - it is what
+// "the build area IS the travel area" means, and it is why vertical X has
+// seven columns rather than six.
+//
+// ------------------------------------------------------------
+//   THE GAPS ARE UNIFORM - 1.6 cm, EVERY AXIS, BOTH MODES
+// ------------------------------------------------------------
+// A vertical block reads 2.2 + 1.6 + 2.2 along its 6.0 cm length, and
+// consecutive blocks are also 1.6 cm apart, so the 2.2 cm sub-cells repeat at
+// one unbroken 3.8 cm pitch. Measured off the printed sheet: tiles 6.00 cm,
+// gaps 1.56 cm, identical on both axes.
+//
+// An earlier revision had a 0.8 cm block gap, which made the horizontal Y
+// lattice alternate 0.8 / 1.6. That alternation was an artefact of the wrong
+// gap, not a real feature of the paper. Do not reintroduce it without
+// re-measuring the sheet.
 //
 // ------------------------------------------------------------
 //   [0,0] IS THE FEEDER, IN BOTH MODES, AND IS NEVER BUILT ON
 // ------------------------------------------------------------
 // The feeder never rotates: a block is always presented standing, on the
-// VERTICAL [0,0] footprint (X 0..2.2, Y 0..6.0), whichever mode is latched.
-// The claw therefore descends on the vertical [0,0] centre - (1.1, 3.0) cm -
-// for every pick-up, and buildFeederPosition() computes that from the vertical
-// tables directly rather than from the active mode.
+// VERTICAL [0,0] footprint, whichever mode is latched. Because the lattice is
+// centre-anchored, that cell's centre IS the home corner - so a pick-up is a
+// plain home with no move afterwards, and the claw, which closes on the middle
+// of the block, closes on its centre.
 //
-// That kills exactly one cell per mode and no more:
-//     vertical   [0,0]     IS the feeder                     -> refused
-//     horizontal [0,0]     X 0..6.0 x Y 3.8..6.0 overlaps it -> refused
-//     every other row-0 / col-0 cell clears the feeder        -> buildable
-// So B 0 0 stays the inert no-op it always was, while B 0 3 and B 4 0 are now
-// real placements instead of the old "move one axis only" sentinel.
+// That kills exactly one cell per mode and no more. Every other row-0 /
+// column-0 cell is a real placement, so B 0 0 stays the inert no-op it always
+// was, while B 0 3 and B 4 0 are ordinary builds rather than the old "move one
+// axis only" sentinel.
 //
 // ------------------------------------------------------------
-//   THE HORIZONTAL LATTICE IS DERIVED FROM THE VERTICAL ONE
+//   HOW THE TWO GRIDS RELATE
 // ------------------------------------------------------------
-// A horizontal block is a vertical block turned 90 degrees, so its grid is not
-// an independent set of numbers - it is the SAME lattice read at a different
-// density, and deriving it is what stops the two drifting apart:
+//   X  a horizontal column covers two vertical columns plus the gap between
+//      them: block 6.0 = 2.2 + 1.6 + 2.2, pitch 7.6 = 2 * 3.8. NOT shifted.
+//   Y  a vertical row holds two horizontal rows - its lower and upper 2.2 cm.
+//      The horizontal grid is registered +1.6 cm along Y (GRID_TRIM_Y_CM),
+//      which is the move the arm makes after picking up and before rotating.
 //
-//   X  one horizontal column covers two vertical columns plus the gap between
-//      them:  block 6.0 = 2 * 2.2 + 1.6,  pitch 7.6 = 2 * 3.8,  gap 1.6.
-//      Uses vertical columns 0-1, 2-3, 4-5; vertical column 6 is unused.
+// Nothing here swaps an X extent for a Y one; see D12 in
+// plans/dual-orientation-grid.md.
 //
-//   Y  one vertical row holds two horizontal rows - its lower and its upper
-//      2.2 cm. Horizontal row r is sub-slot (r+1) of that sequence, so row 0
-//      is the UPPER half of vertical row 0 and the grid starts 3.8 cm out.
-//
-// Nothing here swaps an X extent for a Y one: X is derived from X and Y from Y.
-// plans/dual-orientation-grid.md D12 forbids the swap, not the derivation.
-//
-// ------------------------------------------------------------
-//   WHICH IS WHY THE HORIZONTAL Y GAPS ALTERNATE
-// ------------------------------------------------------------
-// Consecutive 2.2 cm horizontal rows are separated either by the MIDDLE of one
-// vertical block or by the GAP between two vertical blocks, and those are not
-// the same distance:
-//
-//   |<-2.2->|<-1.6->|<-2.2->|<-0.8->|<-2.2->|<-1.6->|<-2.2->|<-0.8->|
-//    h row 0  within  h row 1 between  h row 2 within  h row 3 between
-//              a block          blocks          a block         blocks
-//
-//   gap after an EVEN row = 0.8 = GRID_GAP_Y_CM[vertical]
-//   gap after an ODD  row = 1.6 = block_y[vertical] - 2 * block_y[horizontal]
-//
-// Both are derived, never typed in twice. The old code used a single uniform
-// 3.0 cm pitch here; the true mean is 3.4 cm, so it was losing 0.4 cm per row
-// and 4.0 cm - almost two whole blocks - by row 10.
-//
-// The holder travel is 24.3 x 40.0 cm, PHYSICAL and unchanged by the mode.
-//
-// EACH MODE STATES BOTH BLOCK EXTENTS OUTRIGHT.  Nothing here swaps a width
-// for a length.  A swap would have to be performed identically here, in
-// python/rig/grid.py and in the camera overlay - three chances to get an axis
-// backwards, for no gain.  See plans/dual-orientation-grid.md D12.
-//
-// The near edge of slot 0 sits ON the home corner: coordinate 0 cm is the
-// outer edge of cell [0,0], the edge facing the home switches. The printed
-// sheet is registered the same way - lay its [0,0] block's outer corner on the
-// holder home point and printed [c,r] is firmware [c,r].
+// THE PRINTED SHEET is registered the same way: lay it so the CENTRE of its
+// [0,0] block sits on the holder home point, and printed [c,r] is firmware
+// [c,r]. Half of that block hangs back past the switches - that is expected.
 //
 // PHYSICAL RR REGISTRATION (Y axis, positive away from Y home):
 //
-//   |<------ vertical row 0, 6.0 cm ------>|<-0.8->|<-- vertical row 1 ...
-//   |<- 2.2 cm ->|<- 1.6 cm ->|<- 2.2 cm ->|
-//    h row -                   h ROW 0       h row 1 is the lower half of
-//    (unused)                  = the pick-   vertical row 1, 0.8 cm further on
-//                              up cell's
-//                              upper half
+//    home
+//      0        1.6        3.8                 7.6        (cm along Y)
+//      |         |          |                   |
+//   [--- vertical row 0, 6.0 cm centred on 0 ---]
+//   |<-2.2->|<-1.6->|<-2.2->|<-1.6 gap->|<-2.2->|  the 2.2 sub-cells, pitch 3.8
+//      ^         ^
+//      |         h ROW 0 centre = 1.6   (the +1.6 GRID_TRIM_Y_CM)
+//      v [0,0] centre = 0 = the feeder / pick-up point
 //
-// RR only latches the mode; the next B picks up neutral at the vertical [0,0]
-// centre, moves using the derived horizontal centres, rotates 90 degrees CCW,
-// then places. B 0 0 remains a no-op in both modes.
+// So RR only latches the mode; the next B picks the block up standing at home,
+// moves +1.6 cm along Y, rotates 90 degrees CCW, then places. X is not shifted
+// at all. B 0 0 remains a no-op in both modes.
 //
 // Targets are computed as absolute physical cell centres and rounded only
 // once, so sub-step rounding error never accumulates between cells.
@@ -676,7 +662,7 @@ uint8_t gridMode = GRID_MODE_VERTICAL;
 float GRID_BLOCK_X_CM[GRID_MODE_COUNT] = {2.2, 6.0};
 float GRID_BLOCK_Y_CM[GRID_MODE_COUNT] = {6.0, 2.2};
 float GRID_GAP_X_CM[GRID_MODE_COUNT] = {1.6, 1.6};
-float GRID_GAP_Y_CM[GRID_MODE_COUNT] = {0.8, 0.8};
+float GRID_GAP_Y_CM[GRID_MODE_COUNT] = {1.6, 1.6};
 
 // ------------------------------------------------------------
 //   THE FOUR OFFSET FAMILIES, AND WHAT EACH ONE IS FOR
@@ -706,7 +692,7 @@ float GRID_GAP_Y_CM[GRID_MODE_COUNT] = {0.8, 0.8};
 // Signed whole-allocation shift, per mode. Not copied between modes - see
 // above. Both zero: the lattice is anchored on the home corner, not centred.
 float GRID_TRIM_X_CM[GRID_MODE_COUNT] = {0.0, 0.0};
-float GRID_TRIM_Y_CM[GRID_MODE_COUNT] = {0.0, 0.0};
+float GRID_TRIM_Y_CM[GRID_MODE_COUNT] = {0.0, 1.6};
 
 // AI AGENT NOTE: For any user-marked "error" offsetting, use these variables.
 // They apply exactly like GRID_TRIM_* and shift every grid centre from home.
@@ -728,15 +714,15 @@ float GRID_ERROR_OFFSET_Y_CM[GRID_MODE_COUNT] = {0.0, 0.0};
 // centred grid it ships as.  Horizontal gets zero, because any overhang there
 // means the trims are wrong.
 // Keep paired with config/rig.json -> grid.modes.*.max_edge_overhang_*_cm.
-float GRID_MAX_EDGE_OVERHANG_X_CM[GRID_MODE_COUNT] = {1.1, 0.0};
-float GRID_MAX_EDGE_OVERHANG_Y_CM[GRID_MODE_COUNT] = {3.0, 0.0};
+float GRID_MAX_EDGE_OVERHANG_X_CM[GRID_MODE_COUNT] = {1.1, 3.0};
+float GRID_MAX_EDGE_OVERHANG_Y_CM[GRID_MODE_COUNT] = {3.0, 1.1};
 
 // THE HIGHEST VALID INDEX, not a count: vertical addresses columns 0..6 and
 // rows 0..5, horizontal columns 0..2 and rows 0..10. gridSlotsOf() adds the
 // one. Per mode, so that S applies to the grid the operator is looking at and
 // the other mode keeps whatever size it was given.
 long GRID_COLS[GRID_MODE_COUNT] = {6, 2};
-long GRID_ROWS[GRID_MODE_COUNT] = {5, 10};
+long GRID_ROWS[GRID_MODE_COUNT] = {5, 9};
 
 // Read these rather than indexing the tables. Everything downstream of here
 // is written against the ACTIVE mode and never mentions the other one.
@@ -771,8 +757,8 @@ float TOOL_OFFSET_NEUTRAL_X_CM = 0.0;
 float TOOL_OFFSET_NEUTRAL_Y_CM = 0.0;
 float TOOL_OFFSET_CW_X_CM = 0.0;
 float TOOL_OFFSET_CW_Y_CM = 0.0;
-float TOOL_OFFSET_CCW_X_CM = 3.75;
-float TOOL_OFFSET_CCW_Y_CM = 1.4;
+float TOOL_OFFSET_CCW_X_CM = 0.0;
+float TOOL_OFFSET_CCW_Y_CM = 0.0;
 
 // The ASCII map is only drawn when the grid is small enough to be
 // readable. Bigger grids print a numeric summary instead.
@@ -2450,13 +2436,25 @@ float xyStepsPerCmOf(uint8_t axis)
 // ------------------------------------------------------------
 //   THE LATTICE
 // ------------------------------------------------------------
-//   Every axis is a run of `gridSlotsOf()` block footprints starting on the
-//   home corner. Three of the four axes are uniform, so slot i simply sits at
-//   i * pitch. The fourth - horizontal Y - alternates, because it is the
-//   vertical Y lattice read at double density; see SECTION 6C.
+//   Every axis is a run of evenly spaced block CENTRES. The centre of cell 0
+//   sits on the home corner itself - not its edge - so a full-travel grid has
+//   its last centre exactly on the software limit, and cell 0's block hangs
+//   half a block past the home switches. That half block is what
+//   GRID_MAX_EDGE_OVERHANG_* budgets for.
 //
-//   Everything else in this file goes through cellCentreCmOf() and
-//   gridSlotBottomCmOf(), so the alternating case is written exactly once.
+//       centre(i) = trim + errorOffset + i * pitch
+//
+//   That is the whole model. There is no leading gap, no trailing gap and no
+//   centring: the trim IS the only thing that moves a grid, which is how the
+//   horizontal Y registration (+1.6 cm) is expressed.
+//
+//   THE GAPS ARE UNIFORM. A vertical block reads 2.2 + 1.6 + 2.2 along its
+//   6.0 cm length, and consecutive blocks are also 1.6 cm apart, so the 2.2 cm
+//   sub-cells repeat at one unbroken 3.8 cm pitch. An earlier revision had a
+//   0.8 cm block gap, which made the horizontal Y lattice alternate 0.8/1.6;
+//   measuring the printed sheet (tiles 6.00 cm, gaps 1.56 cm, identical on
+//   both axes) showed the gap is 1.6 everywhere and the alternation was an
+//   artefact of the wrong number. Do not reintroduce it without re-measuring.
 
 // Highest index + 1. GRID_COLS/GRID_ROWS hold the highest INDEX.
 long gridSlotsOf(uint8_t axis)
@@ -2464,108 +2462,46 @@ long gridSlotsOf(uint8_t axis)
   return gridCountOf(axis) + 1;
 }
 
-// Is this the one axis whose gaps alternate?
-bool gridAxisAlternates(uint8_t axis)
-{
-  return axis == AXIS_Y && gridMode == GRID_MODE_HORIZONTAL;
-}
-
-// ---- the horizontal Y lattice, derived from the vertical tables ----
-//
-// Read the VERTICAL mode's numbers directly rather than gridBlockCmOf(), which
-// would return the active (horizontal) mode's. Y is derived from Y only.
-
-float verticalPitchYCm()
-{
-  return GRID_BLOCK_Y_CM[GRID_MODE_VERTICAL] + GRID_GAP_Y_CM[GRID_MODE_VERTICAL];
-}
-
-// The 1.6 cm that separates the two halves of one vertical block: what is left
-// of a 6.0 cm block once both 2.2 cm horizontal rows are taken out of it.
-float horizontalYInnerGapCm()
-{
-  return GRID_BLOCK_Y_CM[GRID_MODE_VERTICAL]
-       - 2.0 * GRID_BLOCK_Y_CM[GRID_MODE_HORIZONTAL];
-}
-
-// How far the first slot sits from the home corner. Zero everywhere except
-// horizontal Y, where row 0 is the UPPER half of vertical row 0 and so starts
-// one block-minus-a-row out: 6.0 - 2.2 = 3.8 cm.
+// Where the first centre sits: the trim, and nothing else.
 float gridLatticeStartCmOf(uint8_t axis)
 {
-  float start = 0.0;
-  if (gridAxisAlternates(axis))
-  {
-    start = GRID_BLOCK_Y_CM[GRID_MODE_VERTICAL]
-          - GRID_BLOCK_Y_CM[GRID_MODE_HORIZONTAL];
-  }
-  return start + gridTrimCmOf(axis);
+  return gridTrimCmOf(axis);
 }
 
-// Near edge of slot `index`, measured from the home switch corner.
+// Near edge of the block on cell `index`, measured from the home switch.
+// NEGATIVE for cell 0 on an untrimmed axis - the block overhangs home by half
+// its own width, which is exactly the point of a centre-anchored lattice.
 float gridSlotBottomCmOf(uint8_t axis, long index)
 {
-  if (index < 0)
-  {
-    return gridLatticeStartCmOf(axis);
-  }
-  if (!gridAxisAlternates(axis))
-  {
-    return gridLatticeStartCmOf(axis) + (float)index * gridPitchCmOf(axis);
-  }
-
-  // Horizontal row r is sub-slot (r+1) of the vertical lattice: even sub-slots
-  // are the lower half of a vertical row, odd ones the upper half. The lattice
-  // start already carries the "upper half" offset, so an EVEN row adds it and
-  // an ODD row (a lower half) takes it back off.
-  long whole = (index + 1) / 2; // how many complete vertical rows below us
-  float bottom = (float)whole * verticalPitchYCm();
-  if ((index % 2) == 0)
-  {
-    bottom += GRID_BLOCK_Y_CM[GRID_MODE_VERTICAL]
-            - GRID_BLOCK_Y_CM[GRID_MODE_HORIZONTAL];
-  }
-  return bottom + gridTrimCmOf(axis);
+  return cellCentreCmOf(axis, index) - gridBlockCmOf(axis) * 0.5;
 }
 
-// The gap between slot `index - 1` and slot `index`. Uniform axes always
-// answer gridGapCmOf(); horizontal Y alternates 0.8 / 1.6.
+// The gap between cell `index - 1` and cell `index`. Uniform on every axis.
 float gridGapBeforeSlotCmOf(uint8_t axis, long index)
 {
-  if (index < 1)
-  {
-    return 0.0;
-  }
-  if (!gridAxisAlternates(axis))
-  {
-    return gridGapCmOf(axis);
-  }
-  // Odd index = a lower half following an upper half = the between-blocks gap.
-  return (index % 2) ? GRID_GAP_Y_CM[GRID_MODE_VERTICAL]
-                     : horizontalYInnerGapCm();
+  return (index < 1) ? 0.0 : gridGapCmOf(axis);
 }
 
-// Home corner to the FAR edge of the last slot. This is the whole grid, blocks
-// and internal gaps together: vertical 25.0 x 40.0, horizontal 21.2 x 40.0 cm
-// (the horizontal Y figure includes its 3.8 cm lattice start).
+// Home corner to the FAR edge of the last block. Vertical 23.9 x 41.0 cm,
+// horizontal 18.2 x 36.9 - both wider than the holder travel, by the half
+// block that hangs off each end.
 float gridBlockEndCmOf(uint8_t axis, long count)
 {
   if (count < 0)
   {
     return gridLatticeStartCmOf(axis);
   }
-  return gridSlotBottomCmOf(axis, count) + gridBlockCmOf(axis);
+  return cellCentreCmOf(axis, count) + gridBlockCmOf(axis) * 0.5;
 }
 
-// Near edge of slot 0.
+// Near edge of cell 0.
 float gridBlockStartCmOf(uint8_t axis, long count)
 {
   (void)count;
   return gridSlotBottomCmOf(axis, 0);
 }
 
-// Blocks plus the gaps between them - the same span as above, measured from
-// the first block edge rather than from home.
+// Blocks plus the gaps between them.
 float gridBlockFootprintCmOf(uint8_t axis, long count)
 {
   if (count < 0)
@@ -2575,9 +2511,7 @@ float gridBlockFootprintCmOf(uint8_t axis, long count)
   return gridBlockEndCmOf(axis, count) - gridBlockStartCmOf(axis, count);
 }
 
-// Kept as the name the reports use. With the lattice anchored rather than
-// centred there is no separate "allocation" any more: it is the footprint plus
-// however far the lattice starts from home.
+// Kept as the name the reports use.
 float gridAllocationCmOf(uint8_t axis, long count)
 {
   return gridBlockEndCmOf(axis, count);
@@ -2595,11 +2529,6 @@ bool gridGeometryFits(uint8_t axis, long count)
   if (count < 0 || xyStepsPerCmOf(axis) <= 0.0
       || gridBlockCmOf(axis) <= 0.0 || gridGapCmOf(axis) < 0.0)
   {
-    return false;
-  }
-  if (gridAxisAlternates(axis) && horizontalYInnerGapCm() < 0.0)
-  {
-    // Two horizontal rows have to fit inside one vertical block.
     return false;
   }
   const float slack = 0.0001;
@@ -2638,16 +2567,9 @@ long gridCountMaxOf(uint8_t axis)
   {
     return -1;
   }
-  // Alternating axes step by half a vertical pitch, so bound the search on the
-  // smaller of the two - never overestimate how many slots could be tried.
-  float step = gridAxisAlternates(axis) ? (verticalPitchYCm() * 0.5) : pitch;
-  if (step <= 0.0)
-  {
-    return -1;
-  }
   long plausible = (long)ceil((xyTravelCmOf(axis)
                               + 2.0 * fabs(gridTrimCmOf(axis))
-                              + 2.0 * pitch) / step);
+                              + 2.0 * pitch) / pitch);
   long maximum = -1;
   for (long index = 0; index <= plausible; index++)
   {
@@ -2657,14 +2579,15 @@ long gridCountMaxOf(uint8_t axis)
   return maximum;
 }
 
-// Centre of cell `index` (0-based; slot 0 is a real block), measured from the
-// home switch corner. Vertical trim-0 examples:
-//   X0 = 1.1, X1 = 4.9, ... X6 = 23.9 cm
-//   Y0 = 3.0, Y1 = 9.8, ... Y5 = 37.0 cm
-// Horizontal Y alternates: 4.9, 7.9, 11.7, 14.7, ... 38.9 cm.
+// Centre of cell `index` (0-based), measured from the home switch corner.
+// Cell 0's CENTRE is the home corner itself, so the whole model is one line.
+//   vertical   X: 0, 3.8, 7.6, 11.4, 15.2, 19.0, 22.8   (22.8 = the X cap)
+//   vertical   Y: 0, 7.6, 15.2, 22.8, 30.4, 38.0        (38.0 = the Y cap)
+//   horizontal X: 0, 7.6, 15.2
+//   horizontal Y: 1.6, 5.4, 9.2 ... 35.8                (the +1.6 registration)
 float cellCentreCmOf(uint8_t axis, long index)
 {
-  return gridSlotBottomCmOf(axis, index) + gridBlockCmOf(axis) * 0.5;
+  return gridTrimCmOf(axis) + (float)index * gridPitchCmOf(axis);
 }
 
 float toolOffsetCmOf(uint8_t axis, int8_t rotation)
@@ -2708,23 +2631,11 @@ bool cellTargetPosition(uint8_t axis, long index, int8_t rotation,
   return true;
 }
 
-// Centre-to-centre pitch, averaged over the alternation where there is one.
-// Horizontal Y has NO single pitch - its centres step 3.0, 3.8, 3.0, 3.8 - so
-// this is the mean (3.4 cm) and is for REPORTING ONLY. Nothing that positions
-// the machine may use it; go through gridSlotBottomCmOf() instead.
-float gridMeanPitchCmOf(uint8_t axis)
-{
-  if (!gridAxisAlternates(axis))
-  {
-    return gridPitchCmOf(axis);
-  }
-  return gridBlockCmOf(axis)
-       + 0.5 * (GRID_GAP_Y_CM[GRID_MODE_VERTICAL] + horizontalYInnerGapCm());
-}
-
+// Centre-to-centre pitch in steps. One number per axis: every lattice here is
+// uniform.
 float gridPitchStepsOf(uint8_t axis)
 {
-  return gridMeanPitchCmOf(axis) * xyStepsPerCmOf(axis);
+  return gridPitchCmOf(axis) * xyStepsPerCmOf(axis);
 }
 
 // Which physical block footprint the HOLDER/tool position falls in. Adding the
@@ -2792,69 +2703,20 @@ bool gridReady()
 // ============================================================
 //
 // The feeder does not rotate. A block is always presented STANDING, on the
-// VERTICAL [0,0] footprint, whichever grid is latched - so the pick-up point is
-// read out of the vertical tables directly and does NOT move when RR is sent.
+// VERTICAL [0,0] footprint, whichever grid is latched.
 //
-// Note this is the vertical [0,0] CENTRE (1.1, 3.0 cm), not raw home (0,0).
-// Home is the outer corner of that cell; descending there would grip the block
-// by its corner.
+// And because the lattice is CENTRE-anchored, vertical [0,0]'s centre IS the
+// home corner: picking up is a plain home, with no move out to a cell centre
+// afterwards. (An edge-anchored draft of this file walked out to (1.1, 3.0)
+// after homing - that was wrong, and it would have gripped every block 1.1 cm
+// off along X and 3.0 cm off along Y.)
+//
+// The claw closes on the middle of the block, which is its centre, so the
+// neutral tool offset is genuinely zero rather than merely unmeasured.
 
-float feederCentreCmOf(uint8_t axis)
-{
-  float block = (axis == AXIS_X) ? GRID_BLOCK_X_CM[GRID_MODE_VERTICAL]
-                                 : GRID_BLOCK_Y_CM[GRID_MODE_VERTICAL];
-  float trim = (axis == AXIS_X)
-                   ? GRID_TRIM_X_CM[GRID_MODE_VERTICAL]
-                         + GRID_ERROR_OFFSET_X_CM[GRID_MODE_VERTICAL]
-                   : GRID_TRIM_Y_CM[GRID_MODE_VERTICAL]
-                         + GRID_ERROR_OFFSET_Y_CM[GRID_MODE_VERTICAL];
-  return trim + block * 0.5;
-}
-
-// Holder step target for the pick-up. The claw is ALWAYS neutral here, so the
-// neutral tool offset is the right one regardless of the latched mode.
-bool feederTargetPosition(uint8_t axis, long *targetPosition)
-{
-  float holderCm = feederCentreCmOf(axis) - toolOffsetCmOf(axis, ROT_NONE);
-  float scale = xyStepsPerCmOf(axis);
-  const float slack = 0.0001;
-
-  if (scale <= 0.0 || holderCm < -slack || holderCm > xyTravelCmOf(axis) + slack)
-  {
-    return false;
-  }
-  long mag = lround(holderCm * scale);
-  if (mag < 0 || mag > gridTravelOf(axis))
-  {
-    return false;
-  }
-  *targetPosition = mag * (long)gridDirOf(axis);
-  return true;
-}
-
-// Home, then walk out to the feeder cell centre. Every pick-up goes here.
 bool goToFeeder()
 {
-  long targetX = 0;
-  long targetY = 0;
-  if (!feederTargetPosition(AXIS_X, &targetX)
-      || !feederTargetPosition(AXIS_Y, &targetY))
-  {
-    Serial.println(F("  ERROR - the feeder cell is outside the X/Y travel."));
-    return false;
-  }
-  if (!goToOrigin())
-  {
-    return false;
-  }
-  if (!moveAxisTo(AXIS_Y, targetY) || !moveAxisTo(AXIS_X, targetX))
-  {
-    Serial.println(F("  ERROR - a limit stopped the move to the feeder."));
-    return false;
-  }
-  curCol = 0;
-  curRow = 0;
-  return true;
+  return goToOrigin();
 }
 
 // [0,0] is the FEEDER in both modes and is never built on; every other cell,
@@ -3619,7 +3481,7 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
 
   // The feeder is the VERTICAL [0,0] cell CENTRE, not raw home - home is that
   // cell's outer corner. Same point in both modes: the feeder never rotates.
-  buildStep(2, "Home X/Y, then out to the feeder cell [0,0] centre");
+  buildStep(2, "Home X/Y to the feeder cell [0,0] (its centre IS home)");
   if (!goToFeeder())
   {
     buildAbort("could not reach the feeder cell");
@@ -4369,22 +4231,8 @@ void printGridConfig()
   Serial.print(F("Pitch     : "));
   Serial.print(gridPitchCmOf(AXIS_X), 2);
   Serial.print(F(" x "));
-  if (gridAxisAlternates(AXIS_Y))
-  {
-    // No single Y pitch here - say so rather than print a number that would
-    // be wrong for every other row.
-    Serial.print(gridMeanPitchCmOf(AXIS_Y), 2);
-    Serial.print(F(" cm  (X block+gap; Y ALTERNATES "));
-    Serial.print(gridBlockCmOf(AXIS_Y) + GRID_GAP_Y_CM[GRID_MODE_VERTICAL], 2);
-    Serial.print(F(" / "));
-    Serial.print(gridBlockCmOf(AXIS_Y) + horizontalYInnerGapCm(), 2);
-    Serial.println(F(" - mean shown)"));
-  }
-  else
-  {
-    Serial.print(gridPitchCmOf(AXIS_Y), 2);
-    Serial.println(F(" cm  (block + gap)"));
-  }
+  Serial.print(gridPitchCmOf(AXIS_Y), 2);
+  Serial.println(F(" cm  (block + gap, uniform on both axes)"));
 
   Serial.print(F("Division : "));
   Serial.print(gridSlotsOf(AXIS_X));
@@ -4400,11 +4248,7 @@ void printGridConfig()
   Serial.print(gridRowsNow());
   Serial.println(F("  (0 is a real cell; [0,0] is the feeder)"));
 
-  Serial.print(F("Feeder cell: X "));
-  Serial.print(feederCentreCmOf(AXIS_X), 3);
-  Serial.print(F(" cm / Y "));
-  Serial.print(feederCentreCmOf(AXIS_Y), 3);
-  Serial.println(F(" cm  (vertical [0,0] centre, both modes)"));
+  Serial.println(F("Feeder cell: [0,0] centre = the home corner (0,0), both modes"));
 
   Serial.print(F("Block footprint: "));
   Serial.print(gridBlockFootprintCmOf(AXIS_X, gridColsNow()), 2);

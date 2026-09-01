@@ -64,8 +64,8 @@ horizontal = grid_geometry(config, "horizontal")
 # speaks in highest indices; rig/link.py is the one place that converts.
 check("vertical is 7 x 6 (D1)",
       (vertical["cols"], vertical["rows"]) == (7, 6))
-check("horizontal is 3 x 11 (D1)",
-      (horizontal["cols"], horizontal["rows"]) == (3, 11))
+check("horizontal is 3 x 10 (D1)",
+      (horizontal["cols"], horizontal["rows"]) == (3, 10))
 
 # D12: each mode states both block extents outright, and they are the swap of
 # each other only as a matter of physical fact - no code performs that swap.
@@ -73,15 +73,21 @@ check("vertical block is 2.2 x 6.0 cm",
       (vertical["block_x_cm"], vertical["block_y_cm"]) == (2.2, 6.0))
 check("horizontal block is 6.0 x 2.2 cm",
       (horizontal["block_x_cm"], horizontal["block_y_cm"]) == (6.0, 2.2))
-check("both modes share the 1.6 X / 0.8 Y gap",
-      (vertical["gap_x_cm"], vertical["gap_y_cm"]) == (1.6, 0.8)
-      and (horizontal["gap_x_cm"], horizontal["gap_y_cm"]) == (1.6, 0.8))
+# One gap, every axis, both modes. A vertical block reads 2.2 + 1.6 + 2.2 along
+# its 6.0 cm length and consecutive blocks are also 1.6 apart, so the 2.2 cm
+# sub-cells repeat at one unbroken 3.8 cm pitch. Measured off the printed sheet.
+check("every axis of both modes uses the same 1.6 cm gap",
+      (vertical["gap_x_cm"], vertical["gap_y_cm"]) == (1.6, 1.6)
+      and (horizontal["gap_x_cm"], horizontal["gap_y_cm"]) == (1.6, 1.6))
 
 # D14: the trims ship at 0.0 pending a rig re-measurement per mode; horizontal
 # must never simply inherit vertical's once they are measured.
-check("both modes seed at trim 0.0 / 0.0 (D14)",
+# Vertical is anchored dead on the home corner. Horizontal carries the +1.6 cm
+# Y registration - the move the arm makes after picking up, before rotating -
+# and is NOT shifted on X at all.
+check("vertical seeds at trim 0.0 / 0.0, horizontal at 0.0 / +1.6 (D14)",
       (vertical["trim_x_cm"], vertical["trim_y_cm"]) == (0.0, 0.0)
-      and (horizontal["trim_x_cm"], horizontal["trim_y_cm"]) == (0.0, 0.0))
+      and (horizontal["trim_x_cm"], horizontal["trim_y_cm"]) == (0.0, 1.6))
 
 check("no mode is asked to share the other's numbers",
       all(set(("cols", "rows", "block_x_cm", "block_y_cm", "gap_x_cm", "gap_y_cm",
@@ -98,12 +104,18 @@ check("default mode is the active one",
 
 check("travel is mode-independent",
       (config["workspace"]["width_cm"], config["workspace"]["height_cm"])
-      == (24.3, 40.0))
+      == (22.8, 38.0))
 check("tool_offsets keeps neutral/cw/ccw (D15)",
       set(config["tool_offsets"]) == {"neutral", "cw", "ccw"})
-check("horizontal CCW tool offset is calibrated",
-      (config["tool_offsets"]["ccw"]["x_cm"],
-       config["tool_offsets"]["ccw"]["y_cm"]) == (3.75, 1.4))
+# All three ship at zero, deliberately. The claw closes on the middle of the
+# block, which is its centre, so neutral is genuinely zero rather than merely
+# unmeasured - and the horizontal registration is a GRID trim now, not a tool
+# offset, so the old (3.75, 1.4) CCW pair would double-count it. Re-measure
+# these on the rig after the geometry change before putting numbers back.
+check("every tool offset starts at zero, pending re-measurement",
+      all((config["tool_offsets"][k]["x_cm"],
+           config["tool_offsets"][k]["y_cm"]) == (0.0, 0.0)
+          for k in ("neutral", "cw", "ccw")))
 
 # ------------------------------------------------------------------
 # Legacy migration

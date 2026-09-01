@@ -102,7 +102,7 @@ controller.select((6, 5))
 controller.set_mode("horizontal")
 check("set_mode latched the rig", rig.mode_calls == ["horizontal"])
 check("set_mode re-read the grid", controller.mode == "horizontal"
-      and (rig.grid.cols, rig.grid.rows) == (3, 11))
+      and (rig.grid.cols, rig.grid.rows) == (3, 10))
 check("a mode switch drops the pending selection", controller.selected is None)
 check("cells the new grid lacks are now refused",
       not rig.grid.contains_build_target(6, 5))
@@ -144,9 +144,9 @@ check("the refused mode sent nothing",
 # turn is the grid's, and the firmware derives it from the mode.
 horizontal = BuildController(FakeRig([BuildResult(PLACED)], mode="horizontal"),
                              level=1)
-horizontal.select((2, 10))
+horizontal.select((2, 9))
 check("horizontal builds carry no rotation word either",
-      horizontal.command == "B 2 10 1", horizontal.command)
+      horizontal.command == "B 2 9 1", horizontal.command)
 check("horizontal knows which grid it is in", horizontal.mode == "horizontal")
 
 locked = BuildController(FakeRig([]))

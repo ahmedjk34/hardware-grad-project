@@ -267,11 +267,18 @@ class ColorGridSpec:
     """The printed sheet's geometry, which is the rig's block geometry.
 
     ``cols``/``rows`` are the *complete* coordinate map including zero — 7 x 6
-    in vertical mode and 3 x 11 in horizontal — because the sheet prints a real
-    block at every coordinate, coordinate zero included. That is the one place
-    the paper and the firmware disagree, and it is why the mapping back onto
-    the machine envelope is an explicit convention rather than an assumption.
+    in vertical mode and 3 x 10 in horizontal — because the sheet prints a real
+    block at every coordinate, coordinate zero included. The machine counts the
+    same cells; the two differ only over which part of cell [0,0] the home
+    corner sits on, which is why the mapping back onto the machine envelope is
+    an explicit convention rather than an assumption.
     See :meth:`ColorGridCalibration.workspace_corners`.
+
+    The gaps are a uniform 1.6 cm on both axes: a vertical block reads
+    2.2 + 1.6 + 2.2 along its 6.0 cm length and consecutive blocks are also
+    1.6 apart, so the 2.2 cm sub-cells repeat at one unbroken 3.8 cm pitch.
+    Measured off the printed sheet - tiles 6.00 cm, gaps 1.56 cm, identical on
+    both axes. Keep paired with config/rig.json.
     """
 
     cols: int = 7
@@ -279,7 +286,7 @@ class ColorGridSpec:
     block_x_cm: float = 2.2
     block_y_cm: float = 6.0
     gap_x_cm: float = 1.6
-    gap_y_cm: float = 0.8
+    gap_y_cm: float = 1.6
     mode: str = "vertical"
 
     @classmethod
@@ -562,24 +569,6 @@ class ColorGridCalibration:
         return [self.point_at(*to_grid(x, y)) for x, y in corners_cm]
 
     def _check_geometry_matches(self, grid):
-        # The horizontal machine grid is DERIVED from the vertical one: its Y
-        # rows are the lower and upper 2.2 cm halves of each vertical row, so
-        # its gaps alternate 0.8 / 1.6 cm. ColorGridSpec still models the sheet
-        # as a single uniform pitch, which is right for vertical and wrong for
-        # horizontal - by row 10 the two disagree by 7.8 cm.
-        #
-        # Refusing is the only safe answer: a wrong workspace map written to
-        # disk is worse than no map (printed-grid-spec.md, "explicitly out of
-        # scope"). Teaching the detector the alternating lattice is the
-        # remaining work; until then, calibrate in vertical.
-        if getattr(grid, "alternates_y", False) and not getattr(
-                self.spec, "alternates_y", False):
-            raise ColorGridError(
-                "the horizontal machine grid now uses an ALTERNATING Y lattice "
-                "(0.8 / 1.6 cm gaps, derived from the vertical grid), but the "
-                "printed-sheet model is still a single uniform 3.0 cm pitch - "
-                "they diverge by 7.8 cm across 11 rows. Calibrate the camera in "
-                "vertical mode; the saved map is shared geometry either way.")
         if self.spec.mode != grid.mode:
             raise ColorGridError(
                 f"the {self.spec.mode} printed sheet cannot calibrate the "

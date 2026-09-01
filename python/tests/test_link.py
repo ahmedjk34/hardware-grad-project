@@ -193,8 +193,9 @@ CFG = {
                 "cols": 3, "rows": 9,
                 "block_x_cm": 7.5, "block_y_cm": 2.2,
                 "gap_x_cm": 0.5, "gap_y_cm": 0.5,
-                "trim_x_cm": 0.0, "trim_y_cm": -0.25,
-                "max_edge_overhang_x_cm": 0.0, "max_edge_overhang_y_cm": 0.0,
+                "trim_x_cm": 0.0, "trim_y_cm": 0.25,
+                # half a block on each axis: a centre-anchored cell 0 always overhangs
+                "max_edge_overhang_x_cm": 3.75, "max_edge_overhang_y_cm": 1.1,
             },
         },
     },

@@ -4,11 +4,28 @@
     from rig.grid import MachineGrid
 
     grid = MachineGrid.from_config()                   # the active mode
-    grid = MachineGrid.from_config(mode="horizontal")  # 3 positive cols x 15 rows
-    grid.cell_at(0, 4)                   # image cell (left, bottom) -> (1, 1)
-    grid.image_cell(3, 5)                # (col, row) -> the image cell to draw in
-    grid.contains_build_target(0, 5)     # calibration target: skip X
+    grid = MachineGrid.from_config(mode="horizontal")  # 3 cols x 10 rows
+    grid.cell_center_cm(0, 0)            # (0.0, 0.0) - cell 0's centre IS home
+    grid.cell_at(0, 5)                   # image cell (left, bottom) -> (0, 0)
+    grid.contains_build_target(0, 0)     # False: [0,0] is the feeder
     print(grid.ascii_map())              # the same picture the rig's '9' prints
+
+The lattice, in one line
+------------------------
+    centre(i) = trim + error_offset + i * pitch        pitch = block + gap
+
+Cell indices are 0-BASED and coordinate 0 is a real block, whose CENTRE sits on
+the home corner - so the last vertical centre lands exactly on the software cap
+and cell 0's block hangs half a block back past the switches. There is no
+leading gap, no trailing gap and no centring; the trim is the only thing that
+moves a grid. Gaps are a uniform 1.6 cm on every axis of both modes.
+
+    vertical    7 cols x 6 rows   centres X 0..22.8   Y 0..38.0
+    horizontal  3 cols x 10 rows  centres X 0..15.2   Y 1.6..35.8
+
+[0,0] is the FEEDER in both modes and is never built on. The feeder does not
+rotate, and because the lattice is centre-anchored its centre is home itself,
+so a pick-up is a plain home with no move afterwards.
 
 Two different grids, and only one of them is real
 -------------------------------------------------
@@ -18,22 +35,23 @@ thing and nothing so far has said how one relates to the other — the viewer's
 8x8 was a straightness ruler, not a map of the machine.
 
 This module fixes the half of that which is knowable without a calibration:
-**how many cells there are, how they are numbered, and which corner is [1,1]**.
+**how many cells there are, how they are numbered, and which corner is [0,0]**.
 It does NOT know where the build area sits in the image. Until Plan 2 step 4
 clicks four corners, the caller can only spread this grid over the whole frame,
 which is very unlikely to be where the build area actually is. Say so on screen.
 
 The numbering, and where it comes from
 --------------------------------------
-Straight out of `printGrid()` in build_test_v1.ino: positive block cells are
-1-based, while row/col 0 are drawn explicitly as the home and axis-only
-coordinates. Col 1 is nearest the X switch and row 1 is nearest the Y switch;
-rows increase upward in the machine's own drawing.
+Straight out of `printGrid()` in build_test_v1.ino: every cell is a real block
+and indices are 0-based. Col 0 is nearest the X switch and row 0 is nearest the
+Y switch; rows increase upward in the machine's own drawing. `cols`/`rows` here
+are COUNTS, while the firmware's `S` command speaks in highest indices -
+rig/link.py is the one place that converts.
 
 Two orientations, and both of them are real
 -------------------------------------------
-A block can stand with its 7.5 cm side along Y (`vertical`, 9 x 5) or lie with
-that side along X (`horizontal`, 3 x 15). These are separate grids with
+A block can stand with its 6.0 cm side along Y (`vertical`, 7 x 6) or lie with
+that side along X (`horizontal`, 3 x 10). These are separate grids with
 separate counts, separate trims and separate calibrations, and `mode` names
 which one this object is. Every mode declares both `block_x_cm` and
 `block_y_cm` outright, so nothing in this module swaps an X extent for a Y one
@@ -48,7 +66,7 @@ Why the orientation is a setting at all
 ---------------------------------------
 The camera's rotation and mirroring relative to the rig is arbitrary — nobody
 has promised that the machine's origin is at the bottom-left of the *image*. So
-`origin` names which image corner holds cell [1,1], and `swap_axes` covers a
+`origin` names which image corner holds cell [0,0], and `swap_axes` covers a
 camera mounted a quarter turn out, where the machine's columns run down the
 picture rather than across it. Eight combinations, all reachable, none of them
 requiring anyone to think about signs.
@@ -67,7 +85,7 @@ import math
 from rig.config import (active_grid_mode, grid_geometry, load,
                         max_edge_overhang_cm)
 
-# Which image corner holds machine cell [1,1].
+# Which image corner holds machine cell [0,0].
 ORIGIN_CORNERS = ("bottom-left", "bottom-right", "top-left", "top-right")
 
 DEFAULT_ORIGIN = "bottom-left"  # what the firmware's own map draws
@@ -103,17 +121,6 @@ class MachineGrid:
     # They apply exactly like trim_x_cm/trim_y_cm and shift every grid centre.
     error_offset_x_cm: float = 0.0
     error_offset_y_cm: float = 0.0
-    # --- the derived horizontal Y lattice ---------------------------------
-    # A horizontal block is a vertical block turned 90 degrees, so the
-    # horizontal Y grid is the vertical Y grid read at DOUBLE density: each
-    # vertical row holds two horizontal rows, its lower and upper 2.2 cm.
-    # That makes the Y gaps alternate, and it makes row 0 start part-way out.
-    # Both are derived from the vertical mode's entry by from_config().
-    #
-    # None/0.0 means "not derived" and gives a plain uniform lattice, which is
-    # what a count-only or directly constructed grid gets.
-    gap_y_alt_cm: float | None = None   # the second, wider gap (1.6)
-    y_lattice_start_cm: float = 0.0     # how far row 0 sits from home (3.8)
 
     @classmethod
     def from_config(cls, cfg: dict | None = None, mode: str | None = None,
@@ -147,38 +154,8 @@ class MachineGrid:
             max_edge_overhang_y_cm=max_edge_overhang_cm(grid, "y"),
             error_offset_x_cm=float(grid.get("error_offset_x_cm", 0.0)),
             error_offset_y_cm=float(grid.get("error_offset_y_cm", 0.0)),
-            **cls._derived_y_lattice(cfg, name, grid),
             **kwargs,
         )
-
-    @staticmethod
-    def _derived_y_lattice(cfg: dict, name: str, grid: dict) -> dict:
-        """The horizontal Y lattice, read off the VERTICAL mode's geometry.
-
-        Y is derived from Y - no axis is ever swapped for the other, so
-        plans/dual-orientation-grid.md D12 still holds. D12 forbids swapping a
-        width for a length; it does not forbid one mode's grid being defined in
-        terms of the other's, which is a physical fact about a turned block.
-
-        Reads the vertical entry rather than hardcoding 6.0/0.8, so re-measuring
-        the block moves both grids together instead of only one of them.
-        """
-        if name != "horizontal":
-            return {}
-        try:
-            vertical = grid_geometry(cfg, "vertical")
-        except Exception:
-            # A config with no vertical mode cannot derive one. Fall back to a
-            # uniform lattice rather than guessing at the numbers.
-            return {}
-        vertical_block_y = float(vertical["block_y_cm"])
-        block_y = float(grid["block_y_cm"])
-        return {
-            # what is left of a vertical block once both horizontal rows are out
-            "gap_y_alt_cm": vertical_block_y - 2 * block_y,
-            # row 0 is the UPPER half of vertical row 0
-            "y_lattice_start_cm": vertical_block_y - block_y,
-        }
 
     def __post_init__(self):
         if self.origin not in ORIGIN_CORNERS:
@@ -253,13 +230,20 @@ class MachineGrid:
         return self.block_x_cm is not None
 
     # --- the lattice --------------------------------------------------------
-    # Mirrors gridSlotBottomCmOf() in build_test_v1.ino exactly. Coordinate 0 is
-    # a REAL block whose outer edge sits on the home corner: the lattice is
-    # ANCHORED there, not centred in the travel the way it used to be.
+    # Mirrors cellCentreCmOf() in build_test_v1.ino exactly:
     #
-    # Three of the four axes are uniform, so slot i sits at i * pitch. The
-    # fourth - horizontal Y - is the vertical Y lattice read at double density,
-    # and its gaps therefore alternate. See SECTION 6C of the sketch.
+    #     centre(i) = trim + error_offset + i * pitch      pitch = block + gap
+    #
+    # The CENTRE of cell 0 sits on the home corner, not its edge, so a
+    # full-travel grid puts its last centre exactly on the software cap and
+    # cell 0's block hangs half a block back past the switches. There is no
+    # leading gap, no trailing gap and no centring - the trim is the only thing
+    # that moves a grid, which is how horizontal's +1.6 cm Y registration is
+    # expressed.
+    #
+    # Every gap is 1.6 cm, on both axes of both modes. A vertical block reads
+    # 2.2 + 1.6 + 2.2 along its 6.0 cm length and consecutive blocks are also
+    # 1.6 apart, so the 2.2 cm sub-cells repeat at one unbroken 3.8 cm pitch.
 
     @property
     def max_col(self) -> int:
@@ -271,98 +255,48 @@ class MachineGrid:
         return self.rows - 1
 
     @property
-    def alternates_y(self) -> bool:
-        """Is Y the derived, alternating-gap axis?
-
-        Keyed off the DERIVATION being present, not off the mode name: a
-        horizontal grid built without ``gap_y_alt_cm`` (a count-only drawing, a
-        legacy saved calibration, or a config with no vertical mode to derive
-        from) has a plain uniform lattice and must not pretend otherwise.
-        """
-        return (self.mode == "horizontal"
-                and self.gap_y_alt_cm is not None
-                and self.gap_y_alt_cm != self.gap_y_cm)
-
-    @property
     def pitch_x_cm(self) -> float:
-        """Centre-to-centre X pitch: block + gap. Vertical 3.8, horizontal 7.6 cm."""
+        """Centre-to-centre X pitch: block + gap. Vertical 3.8, horizontal 7.6."""
         return self.block_x_cm + self.gap_x_cm
 
     @property
     def pitch_y_cm(self) -> float:
-        """Centre-to-centre Y pitch: block + gap.
-
-        Vertical 6.8 cm. For horizontal this is the *even-row* pitch (3.0) and
-        NOT the whole story - see :attr:`mean_pitch_y_cm` and
-        :meth:`slot_bottom_y_cm`. Nothing that positions the machine may use it.
-        """
+        """Centre-to-centre Y pitch: block + gap. Vertical 7.6, horizontal 3.8."""
         return self.block_y_cm + self.gap_y_cm
 
-    @property
-    def inner_gap_y_cm(self) -> float:
-        """The second, wider gap on an alternating axis.
-
-        Horizontal Y alternates two gaps: ``gap_y_cm`` (0.8 - between two
-        vertical blocks) and this one (1.6 - the middle of a single vertical
-        block, what is left once both 2.2 cm horizontal rows are taken out of
-        it). :meth:`from_config` derives it from the vertical mode's entry.
-        """
-        return self.gap_y_alt_cm if self.gap_y_alt_cm is not None else self.gap_y_cm
-
-    @property
-    def mean_pitch_y_cm(self) -> float:
-        """Reporting only. Horizontal Y steps 3.0, 3.8, 3.0, 3.8 - mean 3.4."""
-        if not self.alternates_y:
-            return self.pitch_y_cm
-        return self.block_y_cm + (self.gap_y_cm + self.inner_gap_y_cm) / 2
-
     def gap_before_row_cm(self, row: int) -> float:
-        """Gap between row-1 and row. Alternates 0.8 / 1.6 on horizontal."""
-        if row < 1:
-            return 0.0
-        if not self.alternates_y:
-            return self.gap_y_cm
-        # Odd row = a lower half following an upper half = between two vertical
-        # blocks. Even row = the two halves of one vertical block.
-        return self.gap_y_cm if row % 2 else self.inner_gap_y_cm
+        """Gap between row-1 and row. Uniform on every axis."""
+        return 0.0 if row < 1 else self.gap_y_cm
+
+    def cell_center_x_cm(self, col: int) -> float:
+        return self.trim_x_cm + self.error_offset_x_cm + col * self.pitch_x_cm
+
+    def cell_center_y_cm(self, row: int) -> float:
+        return self.trim_y_cm + self.error_offset_y_cm + row * self.pitch_y_cm
 
     def slot_bottom_x_cm(self, col: int) -> float:
-        """Near edge of column `col`, measured from the X home switch."""
-        return (self.trim_x_cm + self.error_offset_x_cm
-                + col * self.pitch_x_cm)
+        """Near edge of `col`. Negative for col 0 on an untrimmed axis."""
+        return self.cell_center_x_cm(col) - self.block_x_cm / 2
 
     def slot_bottom_y_cm(self, row: int) -> float:
-        """Near edge of `row`, measured from the Y home switch."""
-        base = self.trim_y_cm + self.error_offset_y_cm
-        if not self.alternates_y:
-            return base + row * self.pitch_y_cm
-        # Horizontal row r is sub-slot (r+1) of the vertical lattice: even rows
-        # are the UPPER half of a vertical row, odd rows the lower half. One
-        # vertical row spans two horizontal rows plus the gap between them.
-        vertical_pitch = 2 * self.block_y_cm + self.inner_gap_y_cm + self.gap_y_cm
-        whole = (row + 1) // 2
-        bottom = whole * vertical_pitch
-        if row % 2 == 0:
-            bottom += self.y_lattice_start_cm
-        return base + bottom
+        """Near edge of `row`. Negative for row 0 on an untrimmed axis."""
+        return self.cell_center_y_cm(row) - self.block_y_cm / 2
 
     @property
     def x_start_cm(self) -> float:
-        """Near edge of column 0 - on the home corner unless trimmed."""
         return self.slot_bottom_x_cm(0)
 
     @property
     def y_start_cm(self) -> float:
-        """Near edge of row 0. Horizontal starts 3.8 cm out; see above."""
         return self.slot_bottom_y_cm(0)
 
     @property
     def x_end_cm(self) -> float:
-        return self.slot_bottom_x_cm(self.max_col) + self.block_x_cm
+        return self.cell_center_x_cm(self.max_col) + self.block_x_cm / 2
 
     @property
     def y_end_cm(self) -> float:
-        return self.slot_bottom_y_cm(self.max_row) + self.block_y_cm
+        return self.cell_center_y_cm(self.max_row) + self.block_y_cm / 2
 
     @property
     def packed_width_cm(self) -> float:
@@ -371,17 +305,15 @@ class MachineGrid:
 
     @property
     def packed_height_cm(self) -> float:
-        """Vertical 40.0 cm; horizontal 36.2 cm (11 rows, alternating gaps)."""
+        """Vertical 44.0 cm; horizontal 36.4 cm."""
         return self.y_end_cm - self.y_start_cm
 
     @property
     def allocation_width_cm(self) -> float:
-        """Home corner to the far X block edge."""
         return self.x_end_cm
 
     @property
     def allocation_height_cm(self) -> float:
-        """Home corner to the far Y block edge. 40.0 cm in BOTH modes."""
         return self.y_end_cm
 
     @property
@@ -394,19 +326,19 @@ class MachineGrid:
 
     @property
     def x_first_center_cm(self) -> float:
-        return self.slot_bottom_x_cm(0) + self.block_x_cm / 2
+        return self.cell_center_x_cm(0)
 
     @property
     def y_first_center_cm(self) -> float:
-        return self.slot_bottom_y_cm(0) + self.block_y_cm / 2
+        return self.cell_center_y_cm(0)
 
     @property
     def x_last_center_cm(self) -> float:
-        return self.slot_bottom_x_cm(self.max_col) + self.block_x_cm / 2
+        return self.cell_center_x_cm(self.max_col)
 
     @property
     def y_last_center_cm(self) -> float:
-        return self.slot_bottom_y_cm(self.max_row) + self.block_y_cm / 2
+        return self.cell_center_y_cm(self.max_row)
 
     def cell_center_cm(self, col: int, row: int) -> tuple[float, float]:
         """Physical centre measured away from the X/Y home-switch corner."""
@@ -414,10 +346,7 @@ class MachineGrid:
             raise ValueError("this grid has no physical scale")
         if not self.contains(col, row):
             raise ValueError(f"cell [{col},{row}] is outside {self.cols}x{self.rows}")
-        return (
-            self.slot_bottom_x_cm(col) + self.block_x_cm / 2,
-            self.slot_bottom_y_cm(row) + self.block_y_cm / 2,
-        )
+        return self.cell_center_x_cm(col), self.cell_center_y_cm(row)
 
     # --- the feeder ---------------------------------------------------------
 
@@ -425,16 +354,12 @@ class MachineGrid:
         """Where the claw descends to pick up, in BOTH modes.
 
         The feeder never rotates: a block is always presented standing, on the
-        VERTICAL [0,0] footprint. So this is read off the vertical geometry and
-        does not move when the horizontal mode is latched. It is that cell's
-        CENTRE, not raw home - home is its outer corner.
+        VERTICAL [0,0] footprint. Because the lattice is centre-anchored, that
+        cell's centre IS the home corner - so this is (0, 0) and a pick-up is a
+        plain home with no move afterwards. The claw closes on the middle of
+        the block, which is its centre, so no tool offset applies either.
         """
-        vertical = (self if self.mode != "horizontal"
-                    else MachineGrid.from_config(mode="vertical"))
-        return (vertical.trim_x_cm + vertical.error_offset_x_cm
-                + vertical.block_x_cm / 2,
-                vertical.trim_y_cm + vertical.error_offset_y_cm
-                + vertical.block_y_cm / 2)
+        return 0.0, 0.0
 
     @staticmethod
     def is_feeder(col: int, row: int) -> bool:
