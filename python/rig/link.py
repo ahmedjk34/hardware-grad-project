@@ -257,7 +257,7 @@ class Rig:
     raise `RigBusy` rather than queueing behind each other."""
 
     def __init__(self, cfg: dict | None = None, on_line=None, on_error=None,
-                 mode: str | None = None):
+                 mode: str | None = None, serial_factory=None):
         """`on_line` is called from the reader thread with every raw line the
         rig prints, acks included. That is how `rig_console.py` still shows
         everything while this class quietly parses the same stream.
@@ -281,6 +281,12 @@ class Rig:
 
         self._on_line = on_line
         self._on_error = on_error
+        # The default remains pyserial.  Tests and the web console's --mock
+        # mode inject a pyserial-shaped transport without monkeypatching this
+        # module or opening a real device.
+        self._serial_factory = serial_factory or (
+            lambda port, baud, timeout: serial.Serial(port, baud, timeout=timeout)
+        )
         self._port: serial.Serial | None = None
         self._reader: threading.Thread | None = None
         self._stopping = threading.Event()
@@ -348,7 +354,7 @@ class Rig:
             try:
                 # timeout= is the per-readline timeout, not a connect timeout:
                 # the reader thread needs to wake up regularly to notice stop.
-                self._port = serial.Serial(candidate, self.baud, timeout=0.2)
+                self._port = self._serial_factory(candidate, self.baud, 0.2)
                 self.port_name = candidate
                 break
             except serial.SerialException as exc:

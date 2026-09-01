@@ -20,7 +20,6 @@ of the testing; the other half is flashing it and watching.
 """
 
 import os
-import queue
 import sys
 import threading
 import time
@@ -28,61 +27,12 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import rig.link as link
+from rig.mock_board import FakeSerial
 
 
 # ------------------------------------------------------------------
 # A fake build_test_v1 on a fake serial port
 # ------------------------------------------------------------------
-
-
-class FakeSerial:
-    """Enough of pyserial's Serial for the reader thread: readline, write, close.
-
-    `replies` maps a command prefix to the lines the sketch prints for it. Each
-    line can be a float instead, meaning "stay silent for this long" — that is
-    how the homing tests reproduce `seekLimit()` driving a motor for ten seconds
-    without a word.
-    """
-
-    def __init__(self, script, acks=True):
-        self.is_open = True
-        self.written = []
-        self._script = script
-        self._acks = acks
-        self._out = queue.Queue()
-        self._emit(script["banner"])
-
-    def _emit(self, lines):
-        def run():
-            for line in lines:
-                if isinstance(line, float):
-                    time.sleep(line)
-                    continue
-                if not self._acks and line.startswith("@"):
-                    continue
-                self._out.put((line + "\r\n").encode())
-
-        threading.Thread(target=run, daemon=True).start()
-
-    def readline(self):
-        if not self.is_open:
-            raise OSError("port closed")
-        try:
-            return self._out.get(timeout=0.2)
-        except queue.Empty:
-            return b""
-
-    def write(self, data):
-        text = data.decode().strip()
-        self.written.append(text)
-        for prefix, lines in self._script.get("replies", {}).items():
-            if text.upper().startswith(prefix):
-                self._emit(lines)
-                break
-        return len(data)
-
-    def close(self):
-        self.is_open = False
 
 
 # ------------------------------------------------------------------
