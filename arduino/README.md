@@ -19,7 +19,7 @@ commands need a newline; single digits do not. `V <angle>` sets the gripper
 servo to an arbitrary angle from 0 to 180 degrees. The `O` command checks the
 X/Y home switches: when both are active at the feeder it opens to **0 degrees**;
 otherwise it opens to the wider **30-degree** position. `C` closes it at
-90 degrees.
+50 degrees.
 
 The auxiliary 28BYJ-48 stepper uses these ULN2003 connections:
 

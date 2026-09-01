@@ -227,7 +227,7 @@ const int SERVO_PIN = 6;
 // margin. The home-switch check is made at the instant O/openServo() runs.
 const int SERVO_HOME_OPEN_ANGLE = 0;
 const int SERVO_OPEN_ANGLE = 30;
-const int SERVO_CLOSE_ANGLE = 90;
+const int SERVO_CLOSE_ANGLE = 50;
 
 // The servo is commanded and then forgotten - nothing reports back
 // when it has actually arrived. The build sequence must not start
