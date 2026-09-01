@@ -523,6 +523,16 @@ def pair_samples(camera: ColorSamples, reference: ColorSamples):
 # transform is destroying detail rather than correcting colour.
 MAX_NEW_CLIPPING = 0.02
 
+# The tuned transform must leave the frame's darkest 2% no lower than this on a
+# 0..255 grey scale, and must not newly push more than MAX_NEW_BLACK of the
+# frame below NEAR_BLACK. The distribution transfer likes to pair a big contrast
+# stretch with a deep negative offset; on a frame a little darker than the one
+# it was fit to that buries the low end in black, so tune_to_reference softens
+# the whole transform back toward identity until both hold.
+MIN_TUNED_SHADOW = 22.0
+NEAR_BLACK = 16
+MAX_NEW_BLACK = 0.01
+
 
 def color_similarity(image_a, image_b) -> float:
     """A 0..1 score for how alike two frames are in COLOUR, framing aside.
@@ -659,12 +669,20 @@ class TuningResult:
     clipping: float
     notes: list
     passed: bool
+    strength: float = 1.0
+    shadow_before: float = 0.0
+    shadow_after: float = 0.0
 
     def summary(self) -> str:
         state = "target reached" if self.passed else "best safe result"
-        return (f"{self.similarity * 100:.1f}% colour similarity ({state}), "
+        text = (f"{self.similarity * 100:.1f}% colour similarity ({state}), "
                 f"up from {self.baseline * 100:.1f}%, after {self.iterations} "
                 f"tone iteration(s); {self.clipping * 100:.2f}% newly clipped")
+        if self.strength < 0.999:
+            text += (f"; softened to {self.strength * 100:.0f}% strength to hold "
+                     f"shadows (darkest 2% {self.shadow_before:.0f} -> "
+                     f"{self.shadow_after:.0f})")
+        return text
 
 
 def _new_clipping(before, after):
@@ -676,6 +694,82 @@ def _new_clipping(before, after):
 def _neutral_ramp():
     ramp = np.repeat(np.arange(256, dtype=np.uint8)[None, :, None], 3, axis=2)
     return np.ascontiguousarray(np.repeat(ramp, 2, axis=0))
+
+
+def _identity_affine():
+    return np.hstack([np.eye(3), np.zeros((3, 1))])
+
+
+def _shadow_level(image):
+    """Where the frame's darkest 2% sits on a 0..255 grey scale."""
+    grey = cv2.cvtColor(np.ascontiguousarray(image), cv2.COLOR_BGR2GRAY)
+    return float(np.percentile(grey, 2))
+
+
+def _blend_toward_identity(correction, alpha):
+    """A weaker version of *correction*: ``alpha`` of it, ``1 - alpha`` of doing
+    nothing. ``alpha = 1`` is the correction itself, ``alpha = 0`` is identity.
+    Matrix, gamma and saturation are all pulled back together so the hue shift,
+    the contrast stretch and the offset weaken in step.
+    """
+    identity = _identity_affine()
+    return ColorCorrection(
+        enabled=True,
+        matrix=alpha * correction.matrix + (1.0 - alpha) * identity,
+        gamma=alpha * correction.gamma + (1.0 - alpha) * 1.0,
+        saturation=alpha * correction.saturation + (1.0 - alpha) * 1.0,
+        source=correction.source)
+
+
+# The live feed swings darker than the one still frame the tuner is fit to
+# (auto-exposure, a light that moved). The darkening guard is checked at this
+# exposure too, so the saved profile has headroom for a dimmer frame.
+_DIM_FACTOR = 0.82
+
+
+def _crushes_shadows(correction, frame, was_black):
+    corrected = correction.apply(frame)
+    if _shadow_level(corrected) < MIN_TUNED_SHADOW:
+        return True
+    now_black = (corrected < NEAR_BLACK).any(2)
+    return float((now_black & ~was_black).mean()) > MAX_NEW_BLACK
+
+
+def _limit_darkening(correction, camera):
+    """Return ``(correction, strength, before, after)`` softened just enough that
+    it stops burying the frame's shadows in black.
+
+    The bound is absolute, not relative to the input: the darkest 2% must land
+    at or above :data:`MIN_TUNED_SHADOW`, and no more than :data:`MAX_NEW_BLACK`
+    of the frame may be newly pushed under :data:`NEAR_BLACK`. It is enforced
+    both at the tuning frame's exposure and at a dimmer one, so a live view that
+    drops below the still does not crush. Binary-searches the blend factor for
+    the strongest correction that clears both exposures; full strength is
+    returned untouched when it already does.
+    """
+    before = _shadow_level(camera)
+    dim = np.clip(camera.astype(np.float32) * _DIM_FACTOR, 0, 255).astype(np.uint8)
+    exposures = (
+        (camera, (camera < NEAR_BLACK).any(2)),
+        (dim, (dim < NEAR_BLACK).any(2)),
+    )
+
+    def crushes(candidate):
+        return any(_crushes_shadows(candidate, frame, was_black)
+                   for frame, was_black in exposures)
+
+    if not crushes(correction):
+        return correction, 1.0, before, _shadow_level(correction.apply(camera))
+
+    low, high = 0.0, 1.0
+    for _ in range(24):
+        mid = (low + high) / 2.0
+        if crushes(_blend_toward_identity(correction, mid)):
+            high = mid
+        else:
+            low = mid
+    softened = _blend_toward_identity(correction, low)
+    return softened, low, before, _shadow_level(softened.apply(camera))
 
 
 def _hard_faults(correction, corrected, clipping):
@@ -748,9 +842,15 @@ def tune_to_reference(camera_image, reference_image, *, mode="matrix",
          inverted, the neutral ramp still monotone, and no more than
          :data:`MAX_NEW_CLIPPING` of the frame newly crushed or blown. If the
          requested fit fails a hard check, fall back to ``affine`` then ``gain``
-         and take the first that is safe.
+         and take the first that is safe;
+      5. soften the whole transform back toward identity (:func:`_limit_darkening`)
+         until its darkest 2% clears :data:`MIN_TUNED_SHADOW` and it adds no
+         more than :data:`MAX_NEW_BLACK` of near-black — the fix for a
+         correction that looks right on the frame it was fit to but buries a
+         slightly darker live view in black.
 
-    Returns a :class:`TuningResult`.
+    Returns a :class:`TuningResult`; ``strength`` is 1.0 unless step 5 had to
+    dial it back.
     """
     camera = np.ascontiguousarray(np.asarray(camera_image))
     reference = np.ascontiguousarray(np.asarray(reference_image))
@@ -783,11 +883,26 @@ def tune_to_reference(camera_image, reference_image, *, mode="matrix",
             chosen = record
 
     correction, similarity, iterations, clipping, faults, solve_notes = chosen
+
+    correction, strength, shadow_before, shadow_after = _limit_darkening(
+        correction, camera)
+    if strength < 0.999:
+        notes.append(
+            f"softened to {strength * 100:.0f}% strength to keep shadows from "
+            f"crushing (darkest 2% held at ~{shadow_after:.0f}, was "
+            f"~{shadow_before:.0f})")
+        corrected = correction.apply(camera)
+        clipping = _new_clipping(camera, corrected)
+        faults = _hard_faults(correction, corrected, clipping)
+        similarity = color_similarity(corrected, reference)
+        # solve_notes described the pre-softening matrix; re-read the final one.
+        solve_notes = correction.implausibilities()
     notes.extend(solve_notes)
+
     if similarity + 1e-6 < baseline:
         notes.append(
             f"tuning did not beat the untouched frame "
             f"({similarity * 100:.1f}% vs {baseline * 100:.1f}%)")
     passed = bool(similarity >= target and not faults)
     return TuningResult(correction, similarity, baseline, iterations, clipping,
-                        notes, passed)
+                        notes, passed, strength, shadow_before, shadow_after)

@@ -1,51 +1,55 @@
 {
   "_about": "Written by vision/tune_color_to_raw_phone.py. The 'colour' block is the same one config/camera_settings.json carries; Camera Studio's TUNE TO RAW PHONE IMAGE button loads this file and applies it without re-tuning.",
-  "generated_at": "2026-09-01T12:06:27",
+  "generated_at": "2026-09-01T12:52:11",
   "reference_image": "raw_with_phone.jpeg",
   "camera_image": "current_live_view.png",
-  "similarity": 0.79842,
+  "similarity": 0.66879,
   "baseline_similarity": 0.40389,
   "target": 0.95,
   "target_met": false,
   "iterations": 6,
+  "strength": 0.7618,
+  "shadow_darkest_2pct_before": 122.0,
+  "shadow_darkest_2pct_after": 74.0,
   "new_clipping_fraction": 0.0,
   "notes": [
-    "an offset reaches 217 levels, far outside the brightness range the sheet could measure"
+    "softened to 76% strength to keep shadows from crushing (darkest 2% held at ~74, was ~122)",
+    "an offset reaches 165 levels, far outside the brightness range the sheet could measure"
   ],
   "colour": {
     "enabled": true,
     "matrix": [
       [
-        1.911465,
-        0.20402,
-        -0.068505,
-        -216.688328
+        1.694366,
+        0.155425,
+        -0.052188,
+        -165.075982
       ],
       [
-        0.20402,
-        1.272178,
-        0.2156,
-        -139.740333
+        0.155425,
+        1.207349,
+        0.164247,
+        -106.456
       ],
       [
-        -0.068505,
-        0.2156,
-        1.806391,
-        -195.605905
+        -0.052188,
+        0.164247,
+        1.614319,
+        -149.015118
       ]
     ],
     "gain": [
-      1.91146,
-      1.27218,
-      1.80639
+      1.69437,
+      1.20735,
+      1.61432
     ],
     "offset": [
-      -216.6883,
-      -139.7403,
-      -195.6059
+      -165.076,
+      -106.456,
+      -149.0151
     ],
     "gamma": 1.0,
-    "saturation": 0.9,
+    "saturation": 0.9238,
     "source": "tuned to raw_with_phone.jpeg"
   }
 }

@@ -80,17 +80,19 @@ def apply_bgr_affine(img, linear, offset):
 
 
 reference = scene(0)
-# A cast like the rig's: blue lifted, green starved, and the whole thing lower
-# contrast (a milky camera), plus a different crop so nothing lines up pixel to
-# pixel — exactly the raw-phone situation.
-CAST_LINEAR = np.diag([1.0 / 0.62, 1.0 / 1.15, 1.0 / 0.82])
-CAST_LINEAR = np.linalg.inv(CAST_LINEAR)          # invert: forward camera cast
-contrast = 0.6
-CAST_LINEAR = CAST_LINEAR * contrast
-CAST_OFFSET = np.array([40.0, 55.0, 35.0])
+# A cast like the rig's: blue lifted, green starved, mildly lower contrast, plus
+# a different crop so nothing lines up pixel to pixel — the raw-phone situation.
+# Kept gentle enough that a clean recovery does not need the darkening guard.
+CAST_LINEAR = np.linalg.inv(np.diag([1.0 / 0.82, 1.0 / 1.08, 1.0 / 0.9])) * 0.85
+CAST_OFFSET = np.array([16.0, 24.0, 14.0])
 camera_full = apply_bgr_affine(reference, CAST_LINEAR, CAST_OFFSET)
 camera = camera_full[10:210, 20:300]             # a different framing
 reference_crop = reference[0:230, 10:320]
+
+# A harsher cast that WILL need softening: heavy contrast crush and a deep lift.
+HARSH_LINEAR = np.linalg.inv(np.diag([1.0 / 0.6, 1.0 / 1.2, 1.0 / 0.8])) * 0.55
+HARSH_OFFSET = np.array([55.0, 70.0, 48.0])
+harsh_camera = apply_bgr_affine(reference, HARSH_LINEAR, HARSH_OFFSET)
 
 
 # --- 1. the similarity metric --------------------------------------------------
@@ -193,6 +195,45 @@ check("an unreachable target is reported, not faked",
       hard.summary())
 check("the result summary reads cleanly",
       "colour similarity" in hard.summary())
+
+
+# --- 3b. the darkening guard --------------------------------------------
+
+from vision.color_correction import MIN_TUNED_SHADOW, NEAR_BLACK  # noqa: E402
+
+
+def near_black_fraction(img):
+    return float((img < NEAR_BLACK).any(2).mean())
+
+
+gentle = tune_to_reference(camera_full, reference, target=0.9)
+check("a gentle cast is corrected at full strength",
+      gentle.strength > 0.999, f"strength {gentle.strength:.2f}")
+
+softened = tune_to_reference(harsh_camera, reference, target=0.9)
+check("a harsh contrast-crushing cast is softened, not applied raw",
+      softened.strength < 0.999, f"strength {softened.strength:.2f}")
+check("softening still improves on the untouched frame",
+      softened.similarity > softened.baseline + 0.05,
+      f"{softened.baseline:.3f} -> {softened.similarity:.3f}")
+check("the softened profile keeps the darkest 2% out of the floor",
+      softened.shadow_after >= MIN_TUNED_SHADOW - 1.0,
+      f"darkest 2% at {softened.shadow_after:.0f}")
+check("the softened profile does not crush the frame to black",
+      near_black_fraction(softened.correction.apply(harsh_camera)) < 0.02,
+      f"{near_black_fraction(softened.correction.apply(harsh_camera)) * 100:.1f}% near-black")
+dimmer = np.clip(harsh_camera.astype(np.float32) * 0.82, 0, 255).astype(np.uint8)
+was = near_black_fraction(dimmer)
+check("the softened profile holds up on a dimmer exposure too",
+      near_black_fraction(softened.correction.apply(dimmer)) - was < 0.03,
+      f"{was * 100:.1f}% -> "
+      f"{near_black_fraction(softened.correction.apply(dimmer)) * 100:.1f}%")
+check("softening is recorded in the notes and summary",
+      any("soften" in n for n in softened.notes)
+      and "strength" in softened.summary())
+check("the softened correction stays finite and positive-gain",
+      np.all(np.isfinite(softened.correction.matrix))
+      and min(softened.correction.gain) > 0)
 
 
 # --- 4. the committed capture pair ----------------------------------------

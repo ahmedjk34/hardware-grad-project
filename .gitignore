@@ -20,6 +20,5 @@ pnpm-debug.log*
 .idea/
 .vscode/
 
-# Local captures and generated calibration artefacts
-python/captures/
+# Generated calibration artefacts
 config/workspace_map.json

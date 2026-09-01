@@ -834,6 +834,10 @@ class Studio:
                 match += " (best safe result)"
         else:
             match = "similarity not recorded"
+        strength = data.get("strength")
+        if strength is not None and strength < 0.999:
+            match += (f", softened to {strength * 100:.0f}% strength to protect "
+                      f"shadows")
         self.colour_status = (f"{source}, {match} — loaded from {path.name}, "
                               f"not re-tuned")
         for note in data.get("notes", []):
