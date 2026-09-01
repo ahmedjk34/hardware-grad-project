@@ -97,7 +97,7 @@ Then start only the backend on the Pi (or the machine physically connected to
 the rig):
 
 ```bash
-cd /path/to/hardware-grad-project
+cd /home/ahmedjk34/hardware-grad-project
 PYTHONPATH=python .venv/bin/python -m web --host 0.0.0.0 --port 8000
 ```
 
@@ -106,9 +106,11 @@ opens the configured serial port during startup. If startup cannot home/connect
 cleanly, stop and inspect the camera, USB cable, board reset, and the values in
 `config/rig.json`; do not work around it by starting another process.
 
-From a phone or tablet on the trusted LAN, open the Vite-built app served by
-your HTTPS reverse proxy. The backend itself is HTTP unless you place it behind
-such a proxy. Do not expose port 8000 directly to the public Internet.
+From a phone or tablet on the trusted LAN, open `http://<raspberry-pi-ip>:8000/`
+if you have copied/built `web/dist/` on the Pi. The FastAPI process serves that
+bundle and the `/api/*` routes from the same origin. The backend itself is HTTP
+unless you place it behind an HTTPS reverse proxy; do not expose port 8000
+directly to the public Internet.
 
 ## 5. Build and serve the PWA
 
@@ -119,6 +121,23 @@ cd web
 npm test
 npm run build
 ```
+
+For a no-separate-frontend-server deployment, build on the Pi (or copy the
+resulting `web/dist/` directory to the Pi) and then start the backend from the
+repository root:
+
+```bash
+cd /home/ahmedjk34/hardware-grad-project/web
+npm install
+npm test
+npm run build
+cd /home/ahmedjk34/hardware-grad-project
+PYTHONPATH=python .venv/bin/python -m web --host 0.0.0.0 --port 8000
+```
+
+Open `http://<raspberry-pi-ip>:8000/` on the phone. There is exactly one server
+process: FastAPI serves `web/dist/`, REST, the WebSocket, and MJPEG stream.
+Node/npm is needed to build the bundle, not to keep the live UI running.
 
 The generated `web/dist/` directory is a deployment artefact and is ignored by
 Git. Serve it from a static web server or local HTTPS reverse proxy, forwarding

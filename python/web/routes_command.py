@@ -32,7 +32,7 @@ class LevelRequest(BaseModel):
     delta: int | None = None
     value: int | None = None
 
-    @root_validator
+    @root_validator(skip_on_failure=True)
     def exactly_one_adjustment(cls, values):
         if (values.get("delta") is None) == (values.get("value") is None):
             raise ValueError("provide exactly one of delta or value")

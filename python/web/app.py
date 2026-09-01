@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import AsyncIterator
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.staticfiles import StaticFiles
 
 from camera.camera_feed import SETTINGS_PATH
 from rig.build_controller import BuildController
@@ -208,6 +209,12 @@ def create_app(options: ConsoleAppOptions | None = None) -> FastAPI:
                     sent_log_revision = log_revision
         except WebSocketDisconnect:
             return
+
+    # Register the catch-all only after REST and WebSocket routes, otherwise a
+    # StaticFiles mount would try to handle the WebSocket handshake as HTTP.
+    static_dir = Path(__file__).resolve().parents[2] / "web" / "dist"
+    if static_dir.is_dir():
+        app.mount("/", StaticFiles(directory=static_dir, html=True), name="frontend")
 
     return app
 
