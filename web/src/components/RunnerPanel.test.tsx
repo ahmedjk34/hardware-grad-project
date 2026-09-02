@@ -96,6 +96,28 @@ describe("RunnerPanel", () => {
     expect(api.build).toHaveBeenCalledOnce();
   });
 
+  it("continues RUN when placed arrives before its READY state snapshot", async () => {
+    const api = mockedApi();
+    let selection = 0;
+    api.select = vi.fn(async () => readyState({
+      selected: [3, 2], command: `B 3 2 ${selection++}`,
+    }));
+    const { rerender } = render(<RunnerPanel state={readyState()} connected modelId="example-tower" api={api} />);
+    fireEvent.click(screen.getByRole("button", { name: "RUN" }));
+    fireEvent.click(screen.getByRole("button", { name: "START RUN" }));
+    await waitFor(() => expect(api.build).toHaveBeenCalledWith("B 3 2 0"));
+
+    // This is the production WebSocket order: the durable placed result is
+    // delivered before the coalesced READY snapshot.
+    rerender(<RunnerPanel state={readyState({ build_state: "RUNNING", selected: [3, 2], command: "B 3 2 0" })}
+                          connected modelId="example-tower" api={api}
+                          lastResult={settled("placed", null)} />);
+
+    await waitFor(() => expect(api.build).toHaveBeenCalledWith("B 3 2 1"));
+    expect(api.setLevel).toHaveBeenCalledWith(1);
+    expect(screen.queryByText("RUN PAUSED")).not.toBeInTheDocument();
+  });
+
   it("preserves an aborted program read-only with no recovery control", async () => {
     const api = mockedApi();
     const { rerender } = render(<RunnerPanel state={readyState()} connected modelId="example-tower" api={api} />);

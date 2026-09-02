@@ -53,7 +53,15 @@ export function RunnerPanel({ state, connected, modelId, api, delay, onActiveCha
   const dispatchRef = useRef<(event: RunEvent) => void>(() => {});
   const observedRunning = useRef(false);
   const settledResultId = useRef(0);
-  serverRef.current = state;
+  const terminalStateRef = useRef<"READY" | "LOCKED" | null>(null);
+  // `build_result` is a durable event and intentionally arrives before the
+  // coalesced state snapshot.  Until that snapshot catches up, preserve the
+  // terminal state the server has already confirmed; otherwise RUN would try
+  // its next select against the previous build's stale RUNNING snapshot.
+  const terminalState = terminalStateRef.current;
+  serverRef.current = terminalState !== null && state.build_state === "RUNNING"
+    ? { ...state, build_state: terminalState }
+    : state;
 
   const modelDocument = useMemo(() => modelId ? loadTwinModel(modelId) : null, [modelId]);
   const compiled = useMemo(() => modelDocument ? compile(structureOf(modelDocument), {
@@ -64,6 +72,9 @@ export function RunnerPanel({ state, connected, modelId, api, delay, onActiveCha
   }) : null, [modelDocument, state.mode]);
 
   const applyEvent = useCallback((event: RunEvent) => {
+    // This is the acceptance of a *new* B, so any prior terminal-state bridge
+    // must no longer mask the real RUNNING snapshot.
+    if (event.type === "build-running") terminalStateRef.current = null;
     const turn = step(runRef.current, event);
     runRef.current = turn.state;
     setRun(turn.state);
@@ -106,7 +117,7 @@ export function RunnerPanel({ state, connected, modelId, api, delay, onActiveCha
   // next one's; the event carries the command it belongs to.
   useEffect(() => {
     const current = runRef.current;
-    const observed = serverRef.current;
+    let observed = serverRef.current;
     if (observed.build_state === "RUNNING" && current.inFlight && currentOp(current)?.op === "build") {
       observedRunning.current = true;
     }
@@ -115,6 +126,12 @@ export function RunnerPanel({ state, connected, modelId, api, delay, onActiveCha
         && lastResult.result !== null) {
       settledResultId.current = lastResult.eventId;
       observedRunning.current = false;
+      // A terminal result is authoritative: BuildJob has stopped, so the
+      // controller is READY unless the result says the session is locked.  The
+      // matching state snapshot is queued behind this durable event.
+      terminalStateRef.current = lastResult.locked ? "LOCKED" : "READY";
+      serverRef.current = { ...observed, build_state: terminalStateRef.current };
+      observed = serverRef.current;
       const verification = (observed as StateModel & { vision_verification?: string | null }).vision_verification ?? undefined;
       const thumbnail = captureCameraThumbnail(document.querySelector<HTMLImageElement>('img[alt="Live rig camera"]'));
       applyEvent({
