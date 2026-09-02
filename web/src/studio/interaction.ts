@@ -13,7 +13,7 @@ export function sameTarget(a: CellTarget | null, b: CellTarget | null): boolean 
   return a === b || (!!a && !!b && a.col === b.col && a.row === b.row && a.level === b.level);
 }
 
-export type KeyboardAction = "undo" | "redo" | "release-level" | "toggle-mode"
+export type KeyboardAction = "undo" | "redo" | "release-level" | "toggle-mode" | "save"
   | { holdLevel: number };
 
 interface ShortcutInput {
@@ -30,6 +30,7 @@ export function keyboardAction(input: ShortcutInput): KeyboardAction | null {
   if (input.contentEditable || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return null;
   const modifier = input.ctrlKey || input.metaKey;
   const key = input.key.toLowerCase();
+  if (modifier && key === "s") return "save";
   if (modifier && key === "z") return input.shiftKey ? "redo" : "undo";
   if (modifier && key === "y") return "redo";
   if (!modifier && input.key === "Escape") return "release-level";

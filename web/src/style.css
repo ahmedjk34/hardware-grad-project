@@ -1541,6 +1541,87 @@ svg.grid-overlay.selectable { cursor: crosshair; }
 .studio-model-name { color: var(--text); }
 .studio-library-toggle { cursor: pointer; background: none; }
 
+/* ── Saving a build ───────────────────────────────────────────────────────
+   SAVE is a first-class toolbar action, not something you have to open a
+   drawer to find. A dirty build carries a --signal dot on the button and an
+   "— unsaved" tag after the name; a clean one carries neither. Success is a
+   brief auto-dismissing toast (never silent); a refusal is an amber toast
+   that also opens the library, where the delete controls live. */
+
+.studio-save {
+  cursor: pointer;
+  background: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s1);
+  white-space: nowrap;
+}
+.studio-save[data-dirty] { color: var(--text); border-color: color-mix(in srgb, var(--signal) 55%, var(--line)); }
+
+.studio-save-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--signal); }
+
+.studio-unsaved { color: var(--signal); font-variant-numeric: normal; letter-spacing: .04em; }
+
+.studio-toast {
+  position: absolute;
+  left: 50%;
+  bottom: var(--s4);
+  z-index: var(--z-modal);
+  transform: translateX(-50%);
+  padding: var(--s2) var(--s3);
+  font: var(--t-sm);
+  color: var(--text);
+  background: var(--plate);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  box-shadow: var(--sheet-shadow);
+  animation: studio-toast-in var(--base) var(--ease);
+}
+.studio-toast--ok   { border-color: color-mix(in srgb, var(--ready) 55%, var(--line-strong)); color: var(--ready); }
+.studio-toast--warn { border-color: var(--motion); color: var(--motion); }
+
+@keyframes studio-toast-in {
+  from { opacity: 0; transform: translate(-50%, var(--s2)); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .studio-toast { animation: none; }
+}
+
+/* The first-save name prompt reuses the library sheet chrome, centred. */
+.studio-name-sheet { inset: 0; margin: auto; height: max-content; width: min(24rem, 92vw); }
+.studio-name-sheet .studio-library-rename { grid-column: auto; margin-bottom: var(--s3); width: 100%; }
+
+.studio-library-save[data-dirty] {
+  color: var(--text) !important;
+  border-color: color-mix(in srgb, var(--signal) 55%, var(--line)) !important;
+}
+.studio-library-save[data-dirty]::after {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: var(--s1);
+  border-radius: 50%;
+  background: var(--signal);
+  vertical-align: middle;
+}
+
+/* Library card: a clearer hover, and a CURRENT tag on the open build. */
+.studio-library-card { transition: border-color var(--fast) var(--ease); }
+.studio-library-card:hover { border-color: var(--line-strong); }
+.studio-library-card[aria-current="true"] .studio-library-name::after {
+  content: "CURRENT";
+  margin-left: var(--s2);
+  padding: 1px var(--s1);
+  font: var(--t-xs);
+  letter-spacing: .1em;
+  color: var(--signal);
+  border: 1px solid var(--signal-dim);
+  border-radius: var(--r-sm);
+  vertical-align: middle;
+}
+
 /* ── Program runner (Plan 4 M7) ───────────────────────────────────────────
    The strip is evidence-first: exact commands and measured elapsed time. The
    only ambient motion remains the console's RUNNING banner. */

@@ -1,7 +1,7 @@
 // Container + belt controller for an Arduino Mega 2560.
 //
-// Opening the container arms the ultrasonic sensor. When a block is detected
-// closer than 10 cm, the belt runs counter-clockwise for five seconds.
+// RUN performs a complete cycle: close, open, detect a block, then run the
+// belt for ten seconds.
 //
 // Default wiring:
 //   A4988 DIR  = 2, STEP = 3
@@ -19,8 +19,9 @@ uint8_t echoPin1 = 5;
 uint8_t servoPin = 6;
 
 const uint8_t SERVO_CLOSE_ANGLE = 20;
-const uint8_t SERVO_OPEN_ANGLE = 0;
-const unsigned long BELT_RUN_TIME_MS = 5000;
+const uint8_t SERVO_OPEN_ANGLE = 140;
+const unsigned long BELT_RUN_TIME_MS = 10000;
+const unsigned long RUN_CLOSE_SETTLE_MS = 500;
 // Flip this if the installed belt turns clockwise with LOW.
 const uint8_t BELT_CCW_DIRECTION_LEVEL = LOW;
 
@@ -36,6 +37,10 @@ bool beltRunning = false;
 bool containerOpen = false;
 bool sensorArmed = false;
 bool blockTriggered = false;
+bool fullRunMode = false;
+bool timedBeltRun = false;
+unsigned long beltStopAtMs = 0;
+unsigned long fullRunOpenAtMs = 0;
 
 float distance1Cm = -1.0;
 bool sensor1Detected = false;
@@ -62,7 +67,65 @@ bool objectDetected(float distanceCm) {
 
 void stopBelt() {
   beltRunning = false;
+  timedBeltRun = false;
   digitalWrite(stepPin, LOW);
+}
+
+void cancelFullRun() {
+  fullRunMode = false;
+  sensorArmed = false;
+}
+
+void openContainer(bool armSensor) {
+  containerServo.write(SERVO_OPEN_ANGLE);
+  containerOpen = true;
+  sensorArmed = armSensor;
+  blockTriggered = false;
+  sensor1Detected = false;
+  Serial.println(armSensor ? F("CONTAINER OPEN (140 deg); ultrasonic armed")
+                           : F("CONTAINER OPEN (140 deg)"));
+}
+
+void closeContainer() {
+  stopBelt();
+  containerServo.write(SERVO_CLOSE_ANGLE);
+  containerOpen = false;
+  sensorArmed = false;
+  blockTriggered = false;
+  sensor1Detected = false;
+  Serial.println(F("CONTAINER CLOSED (20 deg)"));
+}
+
+void startFullRun() {
+  stopBelt();
+  fullRunMode = true;
+  closeContainer();
+  fullRunOpenAtMs = millis() + RUN_CLOSE_SETTLE_MS;
+  Serial.println(F("FULL RUN: closed; opening in 500 ms"));
+}
+
+void updateFullRun() {
+  if (!fullRunMode || containerOpen || millis() < fullRunOpenAtMs) {
+    return;
+  }
+
+  openContainer(true);
+  Serial.println(F("FULL RUN: waiting for object below 10 cm"));
+}
+
+void updateTimedBeltRun() {
+  if (!timedBeltRun || millis() < beltStopAtMs) {
+    return;
+  }
+
+  timedBeltRun = false;
+  stopBelt();
+  if (fullRunMode) {
+    fullRunMode = false;
+    sensorArmed = false;
+    Serial.println(F("FULL RUN COMPLETE"));
+  }
+  Serial.println(F("BELT STOPPED after 10 seconds"));
 }
 
 void setMotorSpeed(int speed) {
@@ -74,21 +137,12 @@ void setMotorSpeed(int speed) {
   Serial.println(F(" steps/second"));
 }
 
-void runBeltCounterClockwiseForFiveSeconds() {
-  Serial.println(F("BLOCK detected (<10 cm) -> BELT CCW for 5 seconds"));
+void runBeltCounterClockwiseForTenSeconds() {
+  Serial.println(F("BLOCK detected (<10 cm) -> BELT CCW for 10 seconds"));
   beltRunning = true;
-  unsigned long startedAt = millis();
+  timedBeltRun = true;
+  beltStopAtMs = millis() + BELT_RUN_TIME_MS;
   digitalWrite(dirPin, BELT_CCW_DIRECTION_LEVEL);
-
-  while (millis() - startedAt < BELT_RUN_TIME_MS) {
-    digitalWrite(stepPin, HIGH);
-    delayMicroseconds(5);
-    digitalWrite(stepPin, LOW);
-    delayMicroseconds(stepIntervalUs);
-  }
-
-  stopBelt();
-  Serial.println(F("BELT STOPPED after 5 seconds"));
 }
 
 void updateSensors() {
@@ -103,7 +157,7 @@ void updateSensors() {
   if (sensor1Detected) {
     blockTriggered = true;
     sensorArmed = false;
-    runBeltCounterClockwiseForFiveSeconds();
+    runBeltCounterClockwiseForTenSeconds();
   }
 }
 
@@ -125,7 +179,9 @@ void printStatus() {
   Serial.print(F("Belt: "));
   Serial.println(beltRunning ? F("RUNNING") : F("STOPPED"));
   Serial.print(F("Container: "));
-  Serial.println(containerOpen ? F("OPEN (0 deg)") : F("CLOSED (20 deg)"));
+  Serial.println(containerOpen ? F("OPEN (140 deg)") : F("CLOSED (20 deg)"));
+  Serial.print(F("Full run: "));
+  Serial.println(fullRunMode ? F("ACTIVE") : F("OFF"));
   Serial.print(F("Ultrasonic armed: "));
   Serial.println(sensorArmed ? F("YES") : F("NO"));
   Serial.print(F("Speed: "));
@@ -135,18 +191,47 @@ void printStatus() {
 }
 
 void printHelp() {
-  Serial.println(F("S <speed>    change speed; example: S 500"));
-  Serial.println(F("I <ms>       change ultrasonic read interval"));
-  Serial.println(F("O            open container (0 deg) and arm ultrasonic"));
-  Serial.println(F("C            close container (20 deg) and stop belt"));
-  Serial.println(F("ON           start belt"));
-  Serial.println(F("OFF          stop belt"));
-  Serial.println(F("F            run belt forward"));
-  Serial.println(F("B            run belt backward"));
-  Serial.println(F("T            toggle direction and run"));
-  Serial.println(F("X            stop belt (alias for OFF)"));
-  Serial.println(F("P            print status and distances"));
-  Serial.println(F("H            print this help"));
+  Serial.println();
+  Serial.println(F("=================================================="));
+  Serial.println(F("              BELT TEST V1 MENU"));
+  Serial.println(F("=================================================="));
+  Serial.println(F("WIRING: A4988 STEP = D3 | DIR = D2 | ENABLE = GND"));
+  Serial.println(F("DEFAULT MOTOR SPEED: 200 steps/second"));
+  Serial.println();
+  Serial.println(F("[FULL AUTOMATIC TEST]"));
+  Serial.println(F("  RUN              Complete test cycle"));
+  Serial.println(F("                   Close 20 deg -> Open 140 deg"));
+  Serial.println(F("                   Detect object -> Run belt 10 sec"));
+  Serial.println();
+  Serial.println(F("[SERVO / CONTAINER CONTROL]"));
+  Serial.println(F("  OPEN             Open servo to 140 deg  [O]"));
+  Serial.println(F("  CLOSE            Close servo to 20 deg  [C]"));
+  Serial.println(F("  ANGLE 90         Move servo to custom angle 0-180"));
+  Serial.println(F("  ARM              Enable ultrasonic detection"));
+  Serial.println();
+  Serial.println(F("[MOTOR CONTROL]"));
+  Serial.println(F("  ON               Start motor"));
+  Serial.println(F("  OFF              Stop motor             [X]"));
+  Serial.println(F("  F                Forward"));
+  Serial.println(F("  B                Backward               [R]"));
+  Serial.println(F("  T                Toggle direction"));
+  Serial.println(F("  S 200            Set speed in steps/sec"));
+  Serial.println(F("                   Range: 10 to 3000"));
+  Serial.println();
+  Serial.println(F("[SENSOR / INFORMATION]"));
+  Serial.println(F("  US               Read ultrasonic once"));
+  Serial.println(F("  P                Print status"));
+  Serial.println(F("  I 100            Set sensor interval in ms"));
+  Serial.println(F("  H or ?           Show this menu"));
+  Serial.println();
+  Serial.println(F("[QUICK START EXAMPLES]"));
+  Serial.println(F("  RUN              Start the complete automatic test"));
+  Serial.println(F("  OPEN             Test opening the container"));
+  Serial.println(F("  ANGLE 90         Test a custom servo position"));
+  Serial.println(F("  S 500            Set motor speed to 500 steps/sec"));
+  Serial.println(F("  F                Run forward"));
+  Serial.println(F("  OFF              Stop immediately"));
+  Serial.println(F("=================================================="));
 }
 
 void readSerialCommand() {
@@ -158,7 +243,9 @@ void readSerialCommand() {
   command.trim();
   command.toUpperCase();
 
-  if (command.startsWith("S ")) {
+  if (command == "RUN") {
+    startFullRun();
+  } else if (command.startsWith("S ")) {
     setMotorSpeed(command.substring(2).toInt());
   } else if (command.startsWith("I ")) {
     unsigned long value = command.substring(2).toInt();
@@ -167,39 +254,52 @@ void readSerialCommand() {
       Serial.println(F("Sensor interval updated."));
     }
   } else if (command == "ON") {
+    cancelFullRun();
     beltRunning = true;
     Serial.println(F("BELT RUNNING"));
   } else if (command == "OFF" || command == "X") {
+    cancelFullRun();
     stopBelt();
     Serial.println(F("BELT STOPPED"));
   } else if (command == "F") {
+    cancelFullRun();
     digitalWrite(dirPin, HIGH);
     beltRunning = true;
     Serial.println(F("BELT RUNNING FORWARD"));
   } else if (command == "B" || command == "R") {
+    cancelFullRun();
     digitalWrite(dirPin, BELT_CCW_DIRECTION_LEVEL);
     beltRunning = true;
     Serial.println(F("BELT RUNNING BACKWARD"));
   } else if (command == "T") {
+    cancelFullRun();
     digitalWrite(dirPin, digitalRead(dirPin) == HIGH ? BELT_CCW_DIRECTION_LEVEL : HIGH);
     beltRunning = true;
     Serial.println(F("BELT DIRECTION TOGGLED"));
-  } else if (command == "O") {
+  } else if (command == "OPEN" || command == "O") {
+    cancelFullRun();
     stopBelt();
-    containerServo.write(SERVO_OPEN_ANGLE);
-    containerOpen = true;
+    openContainer(false);
+  } else if (command == "CLOSE" || command == "C") {
+    cancelFullRun();
+    closeContainer();
+  } else if (command.startsWith("ANGLE ") || command.startsWith("A ")) {
+    cancelFullRun();
+    int angle = command.startsWith("ANGLE ") ? command.substring(6).toInt()
+                                             : command.substring(2).toInt();
+    angle = constrain(angle, 0, 180);
+    containerServo.write(angle);
+    containerOpen = angle != SERVO_CLOSE_ANGLE;
+    Serial.print(F("SERVO ANGLE: "));
+    Serial.println(angle);
+  } else if (command == "ARM") {
     sensorArmed = true;
     blockTriggered = false;
-    sensor1Detected = false;
-    Serial.println(F("CONTAINER OPEN (0 deg); ultrasonic armed"));
-  } else if (command == "C") {
-    stopBelt();
-    containerServo.write(SERVO_CLOSE_ANGLE);
-    containerOpen = false;
-    sensorArmed = false;
-    blockTriggered = false;
-    sensor1Detected = false;
-    Serial.println(F("CONTAINER CLOSED (20 deg)"));
+    Serial.println(F("ULTRASONIC ARMED"));
+  } else if (command == "US") {
+    distance1Cm = readDistanceCm(trigPin1, echoPin1);
+    sensor1Detected = objectDetected(distance1Cm);
+    printDistance("US1", distance1Cm, sensor1Detected);
   } else if (command == "P") {
     printStatus();
   } else if (command == "H" || command == "?") {
@@ -226,7 +326,9 @@ void setup() {
 
 void loop() {
   readSerialCommand();
+  updateFullRun();
   updateSensors();
+  updateTimedBeltRun();
 
   if (beltRunning) {
     digitalWrite(stepPin, HIGH);

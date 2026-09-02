@@ -37,7 +37,9 @@ console this attaches to).
 | M7 — The runner | ✅ delivered | pure exhaustive runner reducer, guarded effect driver, STEP/RUN/DRY RUN, feeder guidance, failure lock/pause, Markdown evidence report |
 | M8 — Wow pass | not started | shift gizmo, x-ray by level, cross-mode bridging |
 
-**Test suite.** `cd web && npm test` — **380 tests across 34 files**, all green.
+**Test suite.** `cd web && npm test` — **454 tests across 36 files**, all green.
+(The per-file table below is maintained for the Studio's own files; a few rows
+have drifted behind the total as unrelated console work landed.)
 
 | file | tests | what it holds |
 | --- | --- | --- |
@@ -66,7 +68,7 @@ console this attaches to).
 | `studio/history.test.ts` | 4 | generic undo/redo, branching and the 100-entry cap |
 | `studio/pick.test.ts` | 6 | cell/level resolution, gaps, hit priority and straight runs |
 | `studio/placement.test.ts` | 4 | M2's feeder, grid and occupied-slot gate |
-| `studio/interaction.test.ts` | 5 | click slop, hover deduplication and keyboard interpretation |
+| `studio/interaction.test.ts` | 6 | click slop, hover deduplication, keyboard interpretation, the Ctrl/Cmd-S save mapping |
 | `studio/motion.test.ts` | 4 | fade/drop curves, reduced motion and row sequencing |
 | `studio/panels/LevelScrubber.test.tsx` | 2 | accessible level hold/release controls |
 | `studio/panels/Diagnostics.test.tsx` | 2 | severity grouping, selection, hover and fixes |
@@ -391,8 +393,10 @@ rejected a stable low-contact bridge) and too loose (it passed a high-contact
 overhang).
 
 `interaction.ts` owns the 4 px click slop and keyboard mapping. Undo is
-Ctrl/Cmd-Z; redo is Ctrl/Cmd-Shift-Z or Ctrl/Cmd-Y. Inputs and editable elements
-are ignored. Escape releases a held level, digits 0–9 hold one, and `M` toggles
+Ctrl/Cmd-Z; redo is Ctrl/Cmd-Shift-Z or Ctrl/Cmd-Y. **Ctrl/Cmd-S is `"save"`**
+and the Studio route calls `preventDefault()` on it like every other action, so
+the browser's own save dialog never appears. Inputs and editable elements are
+ignored. Escape releases a held level, digits 0–9 hold one, and `M` toggles
 the authoring lattice.
 
 ### 5.7 `studio/motion.ts` — one arrival, two explanations
@@ -969,7 +973,36 @@ to 288 px to list files. It only draws; every failure it can meet arrives as a
 
 The card is a 16:10 thumbnail on `--sunken`, the name in `--t-md`, and one mono
 `--t-xs` meta line in `--text-dim`: `12 blocks · 1 latch · ~4:10 · 2d ago`. The
-selected card takes a `--signal` 1 px border and never a fill.
+selected card takes a `--signal` 1 px border and never a fill, and — when it is
+the build the editor is actually tracking — a small `CURRENT` tag after its
+name. Hover lifts the border to `--line-strong`.
+
+#### Saving a build — `Studio.tsx` owns it, the drawer delegates
+
+Saving used to be a single unlabelled button inside the library drawer, with a
+silent success and no first-save name. The route now owns the whole flow:
+
+- **`SAVE` is in the toolbar** next to `LIBRARY`, plus **Ctrl/Cmd-S**
+  (`interaction.ts`, §5.6). The drawer keeps its own `SAVE` button but it just
+  calls the route's `onSave`; its self-contained `save()` path survives only as
+  the fallback when no `onSave` is passed, which is what `LibraryDrawer.test.tsx`
+  exercises.
+- **`savedId: string \| null` is the identity the editor tracks.** `null` means
+  "never saved" — a blank build, or one opened from a built-in example
+  (`isExampleId`), so the next save **mints a fresh id** and asks for a name in
+  a small centred sheet rather than overwriting anything. A tracked build
+  overwrites itself with no prompt.
+- **`dirty`** is `signatureOf(blocks, order, name) !== savedSignature`, guarded
+  so an empty never-saved build is not "unsaved work". It drives a `--signal`
+  dot on both `SAVE` buttons and an `— unsaved` tag after the model name, and
+  arms a `beforeunload` confirm — the only `beforeunload` in the Studio.
+- **Success is a toast, never silent** (`--ready`, auto-dismiss 2.4 s):
+  `Saved "name"`. A refusal — storage unavailable, over budget — is an amber
+  toast (5.2 s) that **also opens the library**, because the full remedy with
+  its "delete the three largest" controls already lives in the drawer strip.
+- `openDocument` resets `savedId` and `savedSignature` together with history, so
+  a freshly opened model reads as clean and an opened example reads as a new
+  unsaved build.
 
 ### 6.10 `scene/Twin.tsx`, `TwinPanel.tsx` and `Instrument.tsx`
 
@@ -1189,6 +1222,33 @@ first in the diff.
 
 Newest first. One entry per landed change; note anything that contradicts the
 plan or that a future reader could not infer.
+
+### Saving a build is a first-class action, with a name and a confirmation
+
+The library and its `localStorage` CRUD were already delivered in M5; what was
+missing was a save flow anyone would find. Saving lived behind the `LIBRARY`
+drawer, wrote `Untitled` with no prompt, and succeeded silently.
+
+- **`interaction.ts`**: new `"save"` keyboard action for **Ctrl/Cmd-S**;
+  `interaction.test.ts` +1 (browser-default suppression asserted). It is
+  `preventDefault()`d in `Studio.tsx` like every other action.
+- **`Studio.tsx`** now owns saving: a toolbar `SAVE` button beside `LIBRARY`;
+  `savedId: string | null` as the tracked identity (`null` for a blank build or
+  one opened from an example — `isExampleId` — so the next save forks a fresh
+  id and prompts for a name in a centred sheet); a `dirty` fingerprint
+  (`blocks + order + name` vs the signature at the last save/open) driving a
+  `--signal` dot on `SAVE`, an `— unsaved` name tag, and a `beforeunload`
+  confirm; a `--ready` success toast (`Saved "name"`, auto-dismiss 2.4 s) and an
+  amber refusal toast that also opens the library so its delete controls are to
+  hand. `openDocument` resets `savedId`/`savedSignature` with history.
+- **`LibraryDrawer.tsx`**: new optional `onSave` / `dirty` props. Its `SAVE`
+  button delegates to `onSave` when given (the route path) and keeps its
+  self-contained `save()` only as the fallback — which is the path
+  `LibraryDrawer.test.tsx` still drives, so all 20 of its tests are untouched.
+  Dirty dot via `[data-dirty]`; a `CURRENT` tag on the tracked card; a clearer
+  card hover; empty-state copy now names Ctrl/⌘S.
+- No change to `library.ts`, `rigmodel.ts` or the storage format. The console
+  entry still ships no `WebGLRenderer`; `Studio-*.js` +2.5 kB.
 
 ### Serial-driven build progress — the firmware says what it is doing
 

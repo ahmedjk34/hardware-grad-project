@@ -49,6 +49,12 @@ export interface LibraryDrawerProps {
    *  drawer owns the write so the budget refusal has somewhere to appear. */
   captureCurrent: () => Promise<StudioModel>;
   onSaved?: (document: StudioModel) => void;
+  /** When the route owns saving (naming the first save, the success toast, the
+   *  Ctrl/⌘S path), the drawer's SAVE button just delegates to it. Without it
+   *  the drawer falls back to its own self-contained write. */
+  onSave?: () => void;
+  /** Whether the open build has unsaved edits — drives the dot on SAVE. */
+  dirty?: boolean;
   settings: StudioSettings;
   storage?: LibraryStorage;
 }
@@ -100,7 +106,8 @@ function download(filename: string, text: string): void {
 const safeFilename = (name: string) => name.replace(/[^\w. -]+/g, "_").trim() || "model";
 
 export function LibraryDrawer({
-  open, onClose, currentId, onOpenModel, captureCurrent, onSaved, settings, storage,
+  open, onClose, currentId, onOpenModel, captureCurrent, onSaved, onSave, dirty,
+  settings, storage,
 }: LibraryDrawerProps) {
   const options = { storage, settings };
   const [cards, setCards] = useState<ModelCard[]>([]);
@@ -270,7 +277,8 @@ export function LibraryDrawer({
       <aside className="studio-library" hidden={!open} aria-label="Model library">
         <header className="studio-panel-header studio-library-head">
           <span>LIBRARY</span>
-          <button type="button" onClick={() => void save()}>SAVE</button>
+          <button type="button" className="studio-library-save" data-dirty={dirty || undefined}
+                  onClick={() => (onSave ? onSave() : void save())}>SAVE</button>
           <button type="button" onClick={() => {
             const text = exportLibrary(options);
             if (text.ok) download(`library${LIBRARY_FILE_EXTENSION}`, text.value);
@@ -299,7 +307,9 @@ export function LibraryDrawer({
 
         <h3 className="studio-library-section">SAVED</h3>
         {cards.length === 0 ? (
-          <p className="studio-library-empty">No saved models yet — open an example, or press SAVE.</p>
+          <p className="studio-library-empty">
+            No saved models yet — build something, then press SAVE (or Ctrl/⌘S).
+          </p>
         ) : (
           <ul className="studio-library-list">{cards.map(card => renderCard(card))}</ul>
         )}

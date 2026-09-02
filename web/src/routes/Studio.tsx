@@ -23,6 +23,8 @@ import { Diagnostics } from "../studio/panels/Diagnostics";
 import { Settings } from "../studio/panels/Settings";
 import { ProgramView } from "../studio/panels/ProgramView";
 import { LibraryDrawer } from "../studio/panels/LibraryDrawer";
+import { writeModel } from "../studio/library";
+import { isExampleId } from "../studio/examples";
 import { compile } from "../studio/compile";
 import {
   loadStudioSettings, saveStudioSettings, type StudioSettings,
@@ -34,7 +36,7 @@ import {
 import type { GhostStatus } from "../studio/scene/Ghost";
 import type { CaptureHandle } from "../studio/scene/Capture";
 import {
-  documentOf, fromFileRig, shiftsOf, structureOf, type StudioModel,
+  documentOf, fromFileRig, newModelId, shiftsOf, structureOf, type StudioModel,
 } from "../studio/rigmodel";
 
 const VIEW_LABEL: Record<ViewName, string> = {
@@ -47,6 +49,12 @@ const THEORETICAL_LEVEL_CEILING = 17;
 /** A shift readout in the console's own register: signed, mono, two decimals. */
 function signed(value: number): string {
   return `${value < 0 ? "−" : "+"}${Math.abs(value).toFixed(2)}`;
+}
+
+/** A cheap fingerprint of everything a save would persist about the geometry —
+ *  used to tell a clean build from one with unsaved edits. */
+function signatureOf(blocks: Model["blocks"], order: Model["order"], name: string): string {
+  return JSON.stringify({ blocks, order, name });
 }
 
 export default function Studio() {
@@ -65,6 +73,16 @@ export default function Studio() {
    *  wholesale, which is what makes GEOMETRY_DRIFT reachable from the editor. */
   const [modelDocument, setModelDocument] = useState<StudioModel>(() => documentOf(emptyModel(), { name: "Untitled" }));
   const [libraryOpen, setLibraryOpen] = useState(false);
+  /** The library id this editor is tracking — `null` means "never saved" (a
+   *  blank build, or one opened from a built-in example), so the next save has
+   *  to mint an id and ask for a name rather than overwrite anything. */
+  const [savedId, setSavedId] = useState<string | null>(null);
+  /** A cheap fingerprint of the geometry + name at the last save or open.
+   *  Anything else means there is unsaved work. */
+  const [savedSignature, setSavedSignature] = useState("");
+  const [naming, setNaming] = useState(false);
+  const [nameDraft, setNameDraft] = useState("");
+  const [toast, setToast] = useState<{ kind: "ok" | "warn"; text: string } | null>(null);
   const capture = useRef(null) as CaptureHandle;
   const nextId = useRef(1);
   const gesture = useRef<{
@@ -73,6 +91,15 @@ export default function Studio() {
   } | null>(null);
 
   const model = history.present;
+  const currentSignature = useMemo(
+    () => signatureOf(model.blocks, model.order, modelDocument.name),
+    [model, modelDocument.name],
+  );
+  /** An empty, never-saved build is not "unsaved work" — there is nothing to
+   *  lose yet. Anything placed, or any tracked model diverging, is. */
+  const dirty = currentSignature !== savedSignature
+    && (model.blocks.length > 0 || savedId !== null);
+
   // The model's own rig snapshot drives BOTH the shift the lattice is drawn
   // with and the snapshot GEOMETRY_DRIFT compares. A model that needs a shift
   // the rig is not applying therefore renders where it will really be built,
@@ -234,6 +261,66 @@ export default function Studio() {
     };
   }, [model, modelDocument, shifts]);
 
+  /**
+   * Write the current build to the library. A never-saved build (`savedId ===
+   * null`) is minted a fresh id and keeps the name it was just given; a tracked
+   * build overwrites itself in place. A refusal — storage full, over budget —
+   * becomes a warning toast and opens the library, where the full remedy with
+   * its delete controls already lives.
+   */
+  const performSave = useCallback(async (name?: string): Promise<void> => {
+    const base = await captureCurrent();
+    const document: StudioModel = savedId === null
+      ? { ...base, id: newModelId(), name: (name ?? base.name).trim() || "Untitled" }
+      : { ...base, id: savedId };
+    const written = writeModel(document, { settings });
+    if (!written.ok) {
+      setToast({ kind: "warn", text: written.reason });
+      setLibraryOpen(true);
+      return;
+    }
+    setModelDocument(document);
+    setSavedId(document.id);
+    setSavedSignature(signatureOf(document.blocks, document.order, document.name));
+    setToast({ kind: "ok", text: `Saved “${document.name}”` });
+  }, [captureCurrent, savedId, settings]);
+
+  /** The one entry point for SAVE and Ctrl/Cmd-S: name a build the first time,
+   *  overwrite silently after that. */
+  const requestSave = useCallback(() => {
+    if (savedId === null) {
+      setNameDraft(modelDocument.name === "Untitled" ? "" : modelDocument.name);
+      setNaming(true);
+      return;
+    }
+    void performSave();
+  }, [savedId, modelDocument.name, performSave]);
+
+  const confirmName = useCallback(() => {
+    setNaming(false);
+    void performSave(nameDraft);
+  }, [nameDraft, performSave]);
+
+  // The keydown listener is bound once; this ref keeps Ctrl/Cmd-S pointed at
+  // the current save closure without re-subscribing on every edit.
+  const requestSaveRef = useRef(requestSave);
+  requestSaveRef.current = requestSave;
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = window.setTimeout(() => setToast(null), toast.kind === "ok" ? 2400 : 5200);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
+
+  // A page unload with unsaved work gets the browser's own confirm. This is the
+  // only place the Studio leans on `beforeunload`; it is armed only while dirty.
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [dirty]);
+
   /** Load a document: its structure, its identity AND its geometry snapshot.
    *  `nextId` moves past whatever the file used so a new block cannot collide
    *  with an imported one. */
@@ -244,6 +331,9 @@ export default function Studio() {
     setFocusBox(null);
     setTarget(null);
     setHeldLevel(null);
+    // An example is a starting point, not a saved slot: the next save forks it.
+    setSavedId(isExampleId(incoming.id) ? null : incoming.id);
+    setSavedSignature(signatureOf(incoming.blocks, incoming.order, incoming.name));
     nextId.current = incoming.blocks.reduce(
       (highest, block) => Math.max(highest, Number(/\d+$/.exec(block.id)?.[0] ?? 0) + 1), 1,
     );
@@ -262,6 +352,7 @@ export default function Studio() {
       event.preventDefault();
       if (action === "undo") setHistory(current => undo(current));
       else if (action === "redo") setHistory(current => redo(current));
+      else if (action === "save") requestSaveRef.current();
       else if (action === "release-level") setHeldLevel(null);
       else if (action === "toggle-mode") setMode(current => current === "vertical" ? "horizontal" : "vertical");
       else if (action.holdLevel <= THEORETICAL_LEVEL_CEILING) setHeldLevel(action.holdLevel);
@@ -279,7 +370,16 @@ export default function Studio() {
                 aria-expanded={libraryOpen} onClick={() => setLibraryOpen(open => !open)}>
           LIBRARY
         </button>
-        <span className="studio-readout studio-model-name">{modelDocument.name}</span>
+        <button type="button" className="studio-back studio-save"
+                data-dirty={dirty || undefined}
+                title="Save this build  (Ctrl/⌘ S)"
+                onClick={requestSave}>
+          SAVE{dirty ? <span className="studio-save-dot" aria-hidden="true" /> : null}
+        </button>
+        <span className="studio-readout studio-model-name">
+          {modelDocument.name}
+          {dirty ? <span className="studio-unsaved" title="unsaved changes"> — unsaved</span> : null}
+        </span>
         <span className="studio-readout">
           <b>{mode.toUpperCase()}</b> {requested.cols}&times;{requested.rows}
           {clipped && <em className="studio-clipped"> clipped to {reachable.cols}&times;{reachable.rows}</em>}
@@ -322,10 +422,37 @@ export default function Studio() {
         </div>
 
         <LibraryDrawer open={libraryOpen} onClose={() => setLibraryOpen(false)}
-                       currentId={modelDocument.id} onOpenModel={openDocument}
+                       currentId={savedId} onOpenModel={openDocument}
                        captureCurrent={captureCurrent}
+                       onSave={requestSave} dirty={dirty}
                        onSaved={saved => setModelDocument(saved)}
                        settings={settings} />
+
+        {naming ? (
+          <div className="studio-library-sheet studio-name-sheet" role="dialog"
+               aria-modal="true" aria-label="Name this build">
+            <h3>NAME THIS BUILD</h3>
+            <input className="studio-library-rename" autoFocus aria-label="Build name"
+                   placeholder="e.g. Demo tower" value={nameDraft}
+                   onChange={event => setNameDraft(event.target.value)}
+                   onKeyDown={event => {
+                     if (event.key === "Enter") confirmName();
+                     if (event.key === "Escape") setNaming(false);
+                   }} />
+            <div className="studio-library-sheet-actions">
+              <button type="button" onClick={() => setNaming(false)}>CANCEL</button>
+              <button type="button" className="studio-library-primary" onClick={confirmName}>
+                SAVE
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        {toast ? (
+          <div className={`studio-toast studio-toast--${toast.kind}`} role="status">
+            {toast.text}
+          </div>
+        ) : null}
 
         <div className="studio-modes" role="group" aria-label="Grid mode">
           {(["vertical", "horizontal"] as ModeName[]).map(name => (

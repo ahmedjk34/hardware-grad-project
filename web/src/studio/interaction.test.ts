@@ -13,6 +13,12 @@ describe("Studio input interpretation", () => {
     expect(keyboardAction({ key: "y", ctrlKey: true, shiftKey: false })).toBe("redo");
   });
 
+  it("maps Ctrl/Cmd-S to save and swallows the browser default", () => {
+    expect(keyboardAction({ key: "s", ctrlKey: true })).toBe("save");
+    expect(keyboardAction({ key: "S", metaKey: true, shiftKey: true })).toBe("save");
+    expect(keyboardAction({ key: "s", ctrlKey: true, targetTag: "INPUT" })).toBeNull();
+  });
+
   it("maps escape and digits to level actions", () => {
     expect(keyboardAction({ key: "Escape" })).toBe("release-level");
     expect(keyboardAction({ key: "7" })).toEqual({ holdLevel: 7 });
