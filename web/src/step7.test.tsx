@@ -6,12 +6,11 @@ import { LockedBanner } from "./components/LockedBanner";
 import { createConsoleStore } from "./store";
 import * as api from "./api";
 import type { StateModel } from "./types";
+import { testState } from "./test-state";
 
-const state = (overrides: Partial<StateModel> = {}): StateModel => ({
+const state = (overrides: Partial<StateModel> = {}): StateModel => testState({
   mode: "vertical", cols: 6, rows: 5, calibrated: false, selected: null,
-  command: null, level: 0, build_state: "READY", locked_reason: null,
-  camera: "LIVE", camera_age_ms: 1, last_result: null,
-  last_result_reason: null, views: { grid: true, detect: true, paper: false, overlay: true },
+  views: { grid: true, detect: true, paper: false, overlay: true },
   geometry: { image_size: [640, 480], calibrated: false, grid: [], selected: null, detections: [], paper: null },
   ...overrides,
 });
@@ -19,7 +18,10 @@ const state = (overrides: Partial<StateModel> = {}): StateModel => ({
 describe("Step 7 console shell", () => {
   it("updates the store from state messages and marks close disconnected", () => {
     const store = createConsoleStore();
-    store.apply(state({ selected: [3, 5], command: "B 3 5 0" }));
+    store.applyEvent({
+      type: "state", event_id: 1, at: 1,
+      state: state({ selected: [3, 5], command: "B 3 5 0" }),
+    });
     expect(store.snapshot.state?.selected).toEqual([3, 5]);
     store.disconnected();
     expect(store.snapshot.connected).toBe(false);

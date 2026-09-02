@@ -1161,6 +1161,64 @@ void ackField(const __FlashStringHelper *name, long value)
   Serial.print(value);
 }
 
+// A key=value pair whose value is a WORD rather than a number.
+//
+// Deliberately not an ackField() overload: an integer literal 0 is also a
+// null pointer constant, so ackField(F("level"), 0) would become ambiguous
+// and every existing numeric call site is one edit away from that trap.
+void ackWord(const __FlashStringHelper *name, const __FlashStringHelper *value)
+{
+  Serial.print(' ');
+  Serial.print(name);
+  Serial.print('=');
+  Serial.print(value);
+}
+
+// ---- STEP: real-time build progress, one line per PHASE ----
+//
+// A build is ~40 seconds of motion during which the sketch never reads
+// serial, so without these the Pi learns nothing between "B sent" and
+// the terminal ack. One line per phase - FOURTEEN lines per build, not
+// one per motor step. At 9600 baud fourteen lines is about 0.3 s of
+// airtime inside a 40 s build; one line per step would be minutes and
+// would starve the terminal ack that actually matters.
+//
+//     @12 STEP step=8 total=14 phase=move_to_target action=move
+//         text=Move_XY_to_target status=begin
+//
+// STEP is NOT terminal. It carries the same ackSeq as the B command it
+// belongs to, so the Pi can attribute every phase to one command.
+//
+//   step    1..BUILD_STEP_COUNT
+//   total   BUILD_STEP_COUNT, so the Pi never hard-codes 14
+//   phase   a STABLE identifier - the thing UIs switch on. Never
+//           reword one of these without changing the Pi with it.
+//   action  what the phase is expected to do: move / grip / release /
+//           rotate / park. Coarse on purpose; the twin needs to know
+//           whether a block is being carried, not which motor turns.
+//   text    the human label, underscored so it stays one token
+//   status  'begin' before the phase runs. The single 'done' is
+//           phase 11, which is the moment the block leaves the claw -
+//           see the note at its call site.
+//
+// Emitted whatever BUILD_VERBOSE says: the prose is for the human and
+// may be turned off, but the machine channel is not a debug aid.
+void ackStep(uint8_t n,
+             const __FlashStringHelper *phase,
+             const __FlashStringHelper *action,
+             const __FlashStringHelper *label,
+             const __FlashStringHelper *status)
+{
+  ackStart(F("STEP"));
+  ackField(F("step"), (long)n);
+  ackField(F("total"), (long)BUILD_STEP_COUNT);
+  ackWord(F("phase"), phase);
+  ackWord(F("action"), action);
+  ackWord(F("text"), label);
+  ackWord(F("status"), status);
+  Serial.println();
+}
+
 // One complete ack with a trailing reason. The const char* overload
 // takes the SAME pointer the prose above it already printed, so it
 // costs no extra SRAM.
@@ -3573,6 +3631,17 @@ void handleBuildCommand(const char *args)
   }
 
   statBuildCommands++;
+
+  // Parsed and accepted. Not terminal, and not yet validated - buildBlock()
+  // may still reject the cell. This is the line that pins ackSeq to this B
+  // for everything that follows, including every STEP.
+  ackStart(F("RECV"));
+  ackWord(F("cmd"), F("B"));
+  ackField(F("col"), v[0]);
+  ackField(F("row"), v[1]);
+  ackField(F("level"), v[2]);
+  Serial.println();
+
   buildBlock(v[0], v[1], v[2], buildRotationForMode());
 }
 
@@ -3584,8 +3653,17 @@ void buildPause()
   }
 }
 
-void buildStep(uint8_t n, const char *what)
+// Announce one phase BEFORE it runs: the machine line first, then the
+// prose. The machine line goes out even with BUILD_VERBOSE off - see
+// ackStep() in SECTION 7C for why, and for the field list.
+void buildStep(uint8_t n,
+               const __FlashStringHelper *phase,
+               const __FlashStringHelper *action,
+               const __FlashStringHelper *label,
+               const char *what)
 {
+  ackStep(n, phase, action, label, F("begin"));
+
   if (!BUILD_VERBOSE)
   {
     return;
@@ -3656,7 +3734,9 @@ void countPlacedBlock(long level)
 // is a warning rather than an abort - the build itself succeeded.
 bool buildPark()
 {
-  buildStep(12, "Raise Z clear of the block just placed");
+  buildStep(12, F("park_clear"), F("park"),
+            F("Raise_Z_clear_of_the_stack"),
+            "Raise Z clear of the block just placed");
   if (!zGoTop())
   {
     Serial.println(F("  !! could not raise Z - NOT parking X/Y."));
@@ -3665,7 +3745,9 @@ bool buildPark()
   }
   buildPause();
 
-  buildStep(13, "Return X/Y to the origin");
+  buildStep(13, F("park_home"), F("park"),
+            F("Return_XY_to_the_origin"),
+            "Return X/Y to the origin");
   if (!goToOrigin())
   {
     Serial.println(F("  !! X/Y did not reach the origin."));
@@ -3673,7 +3755,9 @@ bool buildPark()
   }
   buildPause();
 
-  buildStep(14, "Return the claw to its original rotation");
+  buildStep(14, F("park_rotation"), F("park"),
+            F("Return_the_claw_to_neutral"),
+            "Return the claw to its original rotation");
   rotateClawTo(ROT_NONE);
 
   return true;
@@ -3798,7 +3882,9 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
 
   // ---- 1. get clear of whatever is already built ----
 
-  buildStep(1, "Raise Z into the top switch (clearance)");
+  buildStep(1, F("raise_clear"), F("move"),
+            F("Raise_Z_into_the_top_switch"),
+            "Raise Z into the top switch (clearance)");
   if (!zGoTop())
   {
     buildAbort("could not raise Z to the top switch");
@@ -3810,7 +3896,9 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
 
   // The feeder is the VERTICAL [0,0] cell CENTRE, not raw home - home is that
   // cell's outer corner. Same point in both modes: the feeder never rotates.
-  buildStep(2, "Home X/Y to the feeder cell [0,0] (its centre IS home)");
+  buildStep(2, F("home_feeder"), F("move"),
+            F("Home_XY_to_the_feeder"),
+            "Home X/Y to the feeder cell [0,0] (its centre IS home)");
   if (!goToFeeder())
   {
     buildAbort("could not reach the feeder cell");
@@ -3822,19 +3910,25 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
 
   // Normally a no-op, because phase 14 already left the claw neutral.
   // It also corrects a manually requested A angle before a new pickup.
-  buildStep(3, "Return the claw to neutral before picking up");
+  buildStep(3, F("neutralise_claw"), F("rotate"),
+            F("Return_the_claw_to_neutral"),
+            "Return the claw to neutral before picking up");
   rotateClawTo(ROT_NONE);
   buildPause();
 
   // ---- 4. open the jaws BEFORE descending onto the block ----
 
-  buildStep(4, "Open the claw");
+  buildStep(4, F("open_claw"), F("release"),
+            F("Open_the_claw"),
+            "Open the claw");
   openServoAndWait();
   buildPause();
 
   // ---- 5. down to ground (this also re-zeroes Z) ----
 
-  buildStep(5, "Lower Z to GROUND (bottom Z switch)");
+  buildStep(5, F("lower_to_ground"), F("move"),
+            F("Lower_Z_to_the_ground_switch"),
+            "Lower Z to GROUND (bottom Z switch)");
   if (!zGoGround())
   {
     buildAbort("Z never reached the ground switch");
@@ -3844,13 +3938,17 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
 
   // ---- 6. grab it ----
 
-  buildStep(6, "Close the claw (grip the block)");
+  buildStep(6, F("grip"), F("grip"),
+            F("Close_the_claw_and_grip"),
+            "Close the claw (grip the block)");
   closeServoAndWait();
   buildPause();
 
   // ---- 7. lift to carry height ----
 
-  buildStep(7, "Raise Z into the top switch (carry height)");
+  buildStep(7, F("lift_block"), F("move"),
+            F("Raise_Z_to_carry_height"),
+            "Raise Z into the top switch (carry height)");
   if (!zGoTop())
   {
     buildAbort("could not lift the block to carry height");
@@ -3860,7 +3958,9 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
 
   // ---- 8. fly to the target cell ----
 
-  buildStep(8, "Move X/Y to the target cell");
+  buildStep(8, F("move_to_target"), F("move"),
+            F("Move_XY_to_the_target_cell"),
+            "Move X/Y to the target cell");
   if (!gotoBuildTarget(col, row, wantRot))
   {
     buildAbort("could not reach the target cell");
@@ -3870,13 +3970,17 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
 
   // ---- 9. turn the block, still above the stack ----
 
-  buildStep(9, "Apply the requested rotation");
+  buildStep(9, F("rotate_to_grid"), F("rotate"),
+            F("Apply_the_grid_rotation"),
+            "Apply the requested rotation");
   rotateClawTo(wantRot);
   buildPause();
 
   // ---- 10. down onto the stack ----
 
-  buildStep(10, "Lower Z to the target block level");
+  buildStep(10, F("lower_to_level"), F("move"),
+            F("Lower_Z_to_the_target_level"),
+            "Lower Z to the target block level");
   if (!zGoLevel(level))
   {
     buildAbort("Z did not reach the target level");
@@ -3886,8 +3990,19 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
 
   // ---- 11. let go ----
 
-  buildStep(11, "Open the claw (release the block)");
+  buildStep(11, F("release"), F("release"),
+            F("Open_the_claw_and_release"),
+            "Open the claw (release the block)");
   openServoAndWait();
+
+  // The ONE 'done' STEP in the protocol. Every other phase is announced
+  // before it runs, but this instant - the jaws open and the block is on
+  // the stack - is a fact the Pi cannot infer from the next 'begin': with
+  // BUILD_PARK_AFTER_PLACE false there is no phase 12 to imply it. It is
+  // NOT a terminal ack: the command is still running, the rig still has to
+  // park, and only the OK below says the block is finally placed.
+  ackStep(11, F("release"), F("release"),
+          F("Open_the_claw_and_release"), F("done"));
 
   // ---- the block is down: book it BEFORE parking ----
   //

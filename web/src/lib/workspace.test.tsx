@@ -4,6 +4,7 @@ import fixtures from "./workspace.fixtures.json";
 import { WorkspaceProjection, type ProjectionFixture } from "./workspace";
 import { GridOverlay } from "../components/GridOverlay";
 import type { StateModel } from "../types";
+import { testState } from "../test-state";
 
 describe("Step 8 workspace projection", () => {
   it("matches every Python cell and target polygon fixture", () => {
@@ -29,4 +30,4 @@ describe("Step 8 workspace projection", () => {
   });
 });
 
-function overlayState(): StateModel { return { mode: "vertical", cols: 2, rows: 1, calibrated: false, selected: [1, 0], command: "B 1 0 0", level: 0, build_state: "READY", locked_reason: null, camera: "LIVE", camera_age_ms: 1, last_result: null, last_result_reason: null, views: {}, geometry: { image_size: [100, 100], calibrated: false, grid: [{ col: 0, row: 0, polygon: [[0, 0], [50, 0], [50, 100], [0, 100]] }, { col: 1, row: 0, polygon: [[50, 0], [100, 0], [100, 100], [50, 100]] }], selected: { col: 1, row: 0, polygon: [[50, 0], [100, 0], [100, 100], [50, 100]] }, detections: [], paper: null } }; }
+function overlayState(): StateModel { return testState({ cols: 2, rows: 1, calibrated: false, selected: [1, 0], command: "B 1 0 0", geometry: { image_size: [100, 100], calibrated: false, grid: [{ col: 0, row: 0, polygon: [[0, 0], [50, 0], [50, 100], [0, 100]] }, { col: 1, row: 0, polygon: [[50, 0], [100, 0], [100, 100], [50, 100]] }], selected: { col: 1, row: 0, polygon: [[50, 0], [100, 0], [100, 100], [50, 100]] }, detections: [], paper: null } }); }

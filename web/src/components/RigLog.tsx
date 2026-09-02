@@ -2,16 +2,40 @@ import { useEffect, useRef, useState } from "react";
 import { Icon } from "./Icon";
 import type { LogLine } from "../types";
 
-function tone(text: string) {
-  if (/ERROR|ABORT/.test(text)) return "error";
-  if (text.includes("PLACED")) return "placed";
-  if (text.trimStart().startsWith("@")) return "ack";
+/**
+ * The log shows EVERY raw line: prose, `@` acknowledgements, `@n STEP` phases,
+ * terminal results and serial errors. It is the transcript, not the state — the
+ * console's build progress comes from the structured events, never from
+ * scraping this. The tone is display only.
+ */
+function tone(line: LogLine) {
+  if (line.kind === "error" || /ERROR|ABORT/.test(line.text)) return "error";
+  if (line.text.includes("PLACED")) return "placed";
+  // Structured phases get their own treatment so a build reads as a sequence
+  // rather than as more ack noise.
+  if (line.kind === "step") return "step";
+  if (line.kind === "ack") return "ack";
   return "";
+}
+
+/** `@12 STEP step=8 total=14 phase=… text=Move_XY…` -> `8/14 Move XY…`. */
+function stepSummary(text: string): string | null {
+  const step = /\bstep=(\d+)\b/.exec(text);
+  const total = /\btotal=(\d+)\b/.exec(text);
+  const label = /\btext=(\S+)/.exec(text);
+  if (!step || !total) return null;
+  const status = /\bstatus=done\b/.test(text) ? " · released" : "";
+  return `${step[1]}/${total[1]} ${label ? label[1].replace(/_/g, " ") : ""}${status}`;
 }
 
 const stamp = (at: number) => new Date(at).toLocaleTimeString([], { hour12: false });
 
-export function RigLog({ log, defaultOpen }: { log: LogLine[]; defaultOpen: boolean }) {
+export function RigLog({ log, defaultOpen, gap = false }: {
+  log: LogLine[];
+  defaultOpen: boolean;
+  /** True when a reconnect could not be filled from the server's replay buffer. */
+  gap?: boolean;
+}) {
   const [open, setOpen] = useState(defaultOpen);
   const [following, setFollowing] = useState(true);
   const body = useRef<HTMLDivElement>(null);
@@ -55,9 +79,17 @@ export function RigLog({ log, defaultOpen }: { log: LogLine[]; defaultOpen: bool
         <>
           <div className="log-body" ref={body} onScroll={onScroll} role="log" aria-label="Rig serial log">
             {log.length === 0 && <div className="log-empty">No serial lines yet.</div>}
+            {gap && (
+              <div className="log-line error" role="status">
+                <span>— lines were missed while the socket was down —</span>
+              </div>
+            )}
             {log.map(line => (
-              <div key={line.id} className={`log-line ${tone(line.text)}`}>
+              <div key={line.id} className={`log-line ${tone(line)}`}>
                 <time dateTime={new Date(line.at).toISOString()}>{stamp(line.at)}</time>
+                {line.kind === "step" && stepSummary(line.text) && (
+                  <span className="log-step" aria-hidden="true">{stepSummary(line.text)}</span>
+                )}
                 <span>{line.text}</span>
               </div>
             ))}

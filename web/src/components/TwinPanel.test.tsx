@@ -11,6 +11,7 @@ import { TwinPanel } from "./TwinPanel";
 import * as api from "../api";
 import { EXAMPLES } from "../studio/examples";
 import type { StateModel } from "../types";
+import { testState } from "../test-state";
 
 vi.mock("../routes/twin-loader", () => ({
   preloadTwin: () => Promise.resolve({
@@ -19,11 +20,9 @@ vi.mock("../routes/twin-loader", () => ({
   }),
 }));
 
-const state = (overrides: Partial<StateModel> = {}): StateModel => ({
+const state = (overrides: Partial<StateModel> = {}): StateModel => testState({
   mode: "vertical", cols: 7, rows: 6, calibrated: true, selected: null,
-  command: null, level: 0, build_state: "READY", locked_reason: null,
-  camera: "LIVE", camera_age_ms: 40, last_result: null, last_result_reason: null,
-  views: {}, geometry: null, ...overrides,
+  ...overrides,
 });
 
 const panel = (props: Partial<Parameters<typeof TwinPanel>[0]> = {}) =>

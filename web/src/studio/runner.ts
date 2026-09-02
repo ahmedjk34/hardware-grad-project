@@ -8,7 +8,18 @@
  * properties that Vitest can exhaust instead of promises hidden in callbacks.
  * Server guards remain authoritative. This layer only refuses to ask for an
  * unsafe thing in the first place.
+ *
+ * WHERE PROGRESS COMES FROM. Once a build is in flight this reducer learns
+ * nothing from its own clock. `build-step` events carry the phase the FIRMWARE
+ * announced, and they are the only thing that moves `phase`/`phaseStep`. The
+ * cursor still advances on nothing but a terminal `placed`, exactly as before —
+ * a phase is progress WITHIN one command, never a reason to send the next one.
+ *
+ * `runTiming` remains an estimate and is labelled as one wherever it is drawn.
+ * An estimate the operator can see is honest; an estimate dressed up as the
+ * machine's position is not.
  */
+import type { BuildPhaseAction } from "../types";
 import type { ModeName } from "./coords";
 import type { Op } from "./compile";
 
@@ -29,6 +40,28 @@ export interface RunLogEntry {
   reason?: string | null;
   thumbnail?: string;
   verification?: string;
+}
+
+/** The rig's own account of the phase in flight, or nulls when none is. */
+export interface RunProgress {
+  commandSeq: number | null;
+  step: number | null;
+  total: number | null;
+  /** The firmware's stable phase id, e.g. `move_to_target`. */
+  phaseId: string | null;
+  label: string | null;
+  action: BuildPhaseAction | null;
+  /** Phase 11 confirmed the jaws opened. Still not a placement. */
+  released: boolean;
+  /** The event id it came from, so a stale one cannot roll it backwards. */
+  eventId: number;
+}
+
+export function noProgress(): RunProgress {
+  return {
+    commandSeq: null, step: null, total: null, phaseId: null, label: null,
+    action: null, released: false, eventId: 0,
+  };
 }
 
 export interface RunState {
@@ -52,6 +85,8 @@ export interface RunState {
   opStartedAt: number | null;
   finishedAt: number | null;
   log: RunLogEntry[];
+  /** What the rig says it is doing right now. Never inferred, never timed. */
+  progress: RunProgress;
 }
 
 export type Effect =
@@ -67,6 +102,9 @@ export type RunEvent =
   | { type: "verified"; actual: string | null; now: number }
   | { type: "confirm"; now: number }
   | { type: "build-running"; now: number }
+  | { type: "build-step"; commandSeq: number | null; step: number; total: number;
+      phaseId: string; label: string; action: BuildPhaseAction;
+      status: "begin" | "done"; eventId: number; now: number }
   | { type: "build-settled"; result: "placed" | "rejected" | "aborted"; reason: string | null; now: number; thumbnail?: string; verification?: string }
   | { type: "mode-settled"; now: number }
   | { type: "stop-after"; now: number }
@@ -85,6 +123,7 @@ export function initialRun(): RunState {
     pendingConfirm: null, selectedCommand: null, stopAfterCurrent: false,
     pauseReason: null, mismatch: null, failure: null, readOnly: false,
     startedAt: null, opStartedAt: null, finishedAt: null, log: [],
+    progress: noProgress(),
   };
 }
 
@@ -137,6 +176,9 @@ function issueBuild(state: RunState, now: number): Turn {
     state: {
       ...state, phase: "building", pendingConfirm: null, inFlight: true,
       opStartedAt: now, buildState: state.style === "dry" ? "RUNNING" : state.buildState,
+      // The last block's phases describe the last block. Nothing is claimed
+      // about this one until the rig says something about it.
+      progress: noProgress(),
     },
     effects: [{ kind: "build", command: op.text, dry: state.style === "dry" }],
   };
@@ -249,12 +291,44 @@ export function step(state: RunState, event: RunEvent): Turn {
     return noEffects({ ...state, buildState: "RUNNING" });
   }
 
+  if (event.type === "build-step") {
+    // Progress WITHIN one command. It never advances the cursor, never
+    // completes an op and never issues an effect: only a terminal `placed`
+    // does that. All it does is say what the rig is doing.
+    if (!state.inFlight) return noEffects(state);
+    if (event.eventId <= state.progress.eventId) return noEffects(state);
+    if (event.status === "done") {
+      return noEffects({
+        ...state,
+        progress: { ...state.progress, released: true, eventId: event.eventId },
+      });
+    }
+    // A phase arriving means the socket is alive and the rig is working, so a
+    // run paused only because the socket went quiet may pick itself back up.
+    const resumed = state.phase === "paused" && state.pauseReason === "stale"
+      ? { phase: "building" as const, pauseReason: null } : {};
+    return noEffects({
+      ...state, ...resumed, connected: true,
+      progress: {
+        commandSeq: event.commandSeq, step: event.step, total: event.total,
+        phaseId: event.phaseId, label: event.label, action: event.action,
+        released: event.commandSeq !== null
+          && event.commandSeq !== state.progress.commandSeq
+          ? false : state.progress.released,
+        eventId: event.eventId,
+      },
+    });
+  }
+
   if (event.type === "build-settled") {
     const op = state.program[state.cursor];
     if (!state.inFlight || !op || op.op !== "build") return noEffects(state);
     const log = logResult(state, event.result, event.now, {
       reason: event.reason, thumbnail: event.thumbnail, verification: event.verification,
     });
+    // Keep the last phase on a failure — it is the last thing anyone knows
+    // about where the machine is — and clear it on success, where the command
+    // is over and the rig is parked.
     const base = { ...state, inFlight: false, buildState: "READY" as const, log };
     if (event.result === "rejected") {
       return noEffects({ ...base, phase: "rejected", failure: event.reason, pauseReason: null });
@@ -263,7 +337,8 @@ export function step(state: RunState, event: RunEvent): Turn {
       return noEffects({ ...base, phase: "locked", readOnly: true, failure: event.reason,
         finishedAt: event.now });
     }
-    const placed = { ...base, cursor: state.cursor + 1, failure: null };
+    const placed = { ...base, cursor: state.cursor + 1, failure: null,
+      progress: noProgress() };
     if (state.stopAfterCurrent) {
       return noEffects({ ...placed, phase: "paused", pauseReason: "operator-stop" });
     }
@@ -299,6 +374,18 @@ export function step(state: RunState, event: RunEvent): Turn {
   }
 
   return noEffects(state);
+}
+
+/**
+ * What to show as the current operation. The rig's words when it has any.
+ *
+ * `null` is not "nothing is happening": it is "the rig has not said". The
+ * caller draws that as a waiting state rather than as a guess.
+ */
+export function currentOperationText(state: RunState): string | null {
+  const { step, total, label } = state.progress;
+  if (label === null || step === null) return null;
+  return total === null ? label : `${step}/${total} · ${label}`;
 }
 
 export function currentOp(state: RunState): Op | null {

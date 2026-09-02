@@ -23,11 +23,9 @@
 import { memo, useLayoutEffect, useMemo, useRef } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Html, OrbitControls } from "@react-three/drei";
-import { Color, Mesh } from "three";
+import { Color, Mesh, MeshLambertMaterial } from "three";
 import { blockSceneSize, cellToScene, type ModeName } from "../coords";
-import {
-  DESATURATE_TOKEN, descentOffsetScene, type TwinBlock, type TwinScene,
-} from "../twin";
+import { DESATURATE_TOKEN, type TwinBlock, type TwinScene } from "../twin";
 import {
   FOV_DEG, MAX_POLAR_ANGLE, boxCentre, envelopeBoxScene, viewPose, workspaceBoxScene,
 } from "../view";
@@ -50,16 +48,29 @@ function appearanceColour(block: TwinBlock): Color {
   return block.mix > 0 ? colour.lerp(tokenColor(DESATURATE_TOKEN), block.mix) : colour;
 }
 
+/** How fast the activity pulse breathes, in milliseconds per cycle. */
+const PULSE_MS = 1400;
+/** How far the pulse dips the block's opacity. Visible, not distracting. */
+const PULSE_DEPTH = 0.35;
+
 /**
- * The one block in flight, descending. A single mesh rather than an instanced
- * batch: there is never more than one, and the machine builds one at a time.
+ * The one block in flight. A single mesh rather than an instanced batch:
+ * there is never more than one, and the machine builds one at a time.
  *
- * The descent is an ILLUSTRATION, not a telemetry read-out — the Arduino is
- * deaf while `buildBlock()` runs and reports nothing until it is done. See
- * `descentOffsetScene`.
+ * ITS HEIGHT IS NOT ANIMATED. `scene.blockOffset` is one of two values — at
+ * travel height while the rig carries it, in its cell once the release event
+ * has arrived — and both come from a phase the FIRMWARE reported. The old
+ * version of this component interpolated a looping 1.6-second descent off
+ * `performance.now()`, which drew the arm at heights nobody had measured.
+ *
+ * What DOES animate is opacity, and only while `indicator` is true. It says
+ * "this phase is in motion"; it deliberately says nothing about where.
  */
-function Building({ block, animating }: { block: TwinBlock; animating: boolean }) {
+function Building({ block, offset, indicator }: {
+  block: TwinBlock; offset: number; indicator: boolean;
+}) {
   const mesh = useRef<Mesh>(null);
+  const material = useRef<MeshLambertMaterial>(null);
   const started = useRef(performance.now());
   const { invalidate } = useThree();
   const size = useMemo(() => blockSceneSize(block.mode), [block.mode]);
@@ -70,20 +81,24 @@ function Building({ block, animating }: { block: TwinBlock; animating: boolean }
 
   useLayoutEffect(() => {
     started.current = performance.now();
-    if (mesh.current) mesh.current.position.set(rest.x, rest.y, rest.z);
+    if (mesh.current) mesh.current.position.set(rest.x, rest.y + offset, rest.z);
+    if (material.current) material.current.opacity = block.opacity;
     invalidate();
-  }, [rest, animating, invalidate]);
+  }, [rest, offset, indicator, block.opacity, invalidate]);
 
   useFrame(() => {
-    if (!animating || !mesh.current) return;
-    mesh.current.position.y = rest.y + descentOffsetScene(performance.now() - started.current, false);
+    if (!indicator || !material.current) return;
+    const t = ((performance.now() - started.current) % PULSE_MS) / PULSE_MS;
+    material.current.opacity =
+      block.opacity * (1 - PULSE_DEPTH * (0.5 - 0.5 * Math.cos(t * Math.PI * 2)));
     invalidate();
   });
 
   return (
-    <mesh ref={mesh} position={[rest.x, rest.y, rest.z]}>
+    <mesh ref={mesh} position={[rest.x, rest.y + offset, rest.z]}>
       <boxGeometry args={[size.x, size.y, size.z]} />
-      <meshLambertMaterial color={appearanceColour(block)} transparent opacity={block.opacity} />
+      <meshLambertMaterial ref={material} color={appearanceColour(block)}
+                           transparent opacity={block.opacity} />
     </mesh>
   );
 }
@@ -185,7 +200,8 @@ function TwinScene3D({ scene, synced, mode }: {
                       colourOf={appearanceColour} />
         );
       }))}
-      {building ? <Building block={building} animating={scene.animating} /> : null}
+      {building ? <Building block={building} offset={scene.blockOffset}
+                            indicator={scene.indicator} /> : null}
       {target ? <TargetLabel block={target} /> : null}
 
       <OrbitControls makeDefault enableDamping={false} enabled={!synced}

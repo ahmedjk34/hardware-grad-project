@@ -98,9 +98,25 @@ def test_events_send_initial_update_and_heartbeat(tmp_path):
     assert server.started
     try:
         with connect(f"ws://{host}:{port}/api/events", open_timeout=2.0) as events:
+            # A new socket is told the truth first, then what it missed.
             initial = json.loads(events.recv())
             assert initial["type"] == "state"
             assert initial["state"]["selected"] is None
+            # Every event carries an id and a timestamp, from one counter.
+            assert initial["event_id"] >= 1
+            assert initial["at"] > 0
+            # An idle console has no build to describe, and says so rather
+            # than leaving the fields absent.
+            assert initial["state"]["build_phase_status"] == "idle"
+            assert initial["state"]["build_step"] is None
+            assert initial["state"]["build_release_confirmed"] is False
+
+            replay = json.loads(events.recv())
+            assert replay["type"] == "replay"
+            # A first connection has no history to be missing, so no gap.
+            assert replay["gap"] is False
+            assert all(event["type"] in {"serial", "build_step", "build_result"}
+                       for event in replay["events"])
 
             app.state.controller.select((3, 5))
             app.state.signal_change()
@@ -108,9 +124,11 @@ def test_events_send_initial_update_and_heartbeat(tmp_path):
             assert updated["type"] == "state"
             assert updated["state"]["selected"] == [3, 5]
             assert updated["state"]["command"] == "B 3 5 0"
+            assert updated["event_id"] > initial["event_id"]
 
             heartbeat = json.loads(events.recv())
-            assert heartbeat == {"type": "heartbeat"}
+            assert heartbeat["type"] == "heartbeat"
+            assert heartbeat["event_id"] > updated["event_id"]
     finally:
         server.should_exit = True
         thread.join(timeout=5.0)

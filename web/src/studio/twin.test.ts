@@ -6,26 +6,29 @@
  */
 import { describe, expect, it } from "vitest";
 import {
-  BUILDING_OPACITY, DESATURATE_TOKEN, GHOST_OPACITY, LOCKED_MIX, TARGET_OPACITY,
-  descentOffsetScene, emptyTwinProgress, foldTwinProgress, loadTwinModel,
-  targetBlock, twinModelChoices, twinScene, twinSignature, type TwinProgress,
+  BUILDING_OPACITY, DESATURATE_TOKEN, GHOST_OPACITY, LOCKED_MIX, PHASE_BY_ID,
+  TARGET_OPACITY, TRAVEL_SCENE_Y, emptyTwinProgress, foldTwinProgress,
+  loadTwinModel, phaseOffsetScene, targetBlock, twinModelChoices, twinPhase,
+  twinScene, twinSignature, type TwinPhase, type TwinProgress,
 } from "./twin";
+import * as twinModule from "./twin";
+import { createConsoleStore, emptyProgress, type BuildProgress } from "../store";
+import type { ServerEvent } from "../types";
 import { EXAMPLES } from "./examples";
 import { structureOf } from "./rigmodel";
 import type { Model } from "./model";
 import type { StateModel } from "../types";
 import fixtures from "./twin.fixtures.json";
+import { testState } from "../test-state";
 
 const TOWER = EXAMPLES[0];
 const model: Model = structureOf(TOWER);
 /** TOWER is one vertical cell, five levels: t1 at level 0 … t5 at level 4. */
 const CELL: [number, number] = [TOWER.blocks[0].col, TOWER.blocks[0].row];
 
-const state = (overrides: Partial<StateModel> = {}): StateModel => ({
+const state = (overrides: Partial<StateModel> = {}): StateModel => testState({
   mode: "vertical", cols: 7, rows: 6, calibrated: true, selected: null,
-  command: null, level: 0, build_state: "READY", locked_reason: null,
-  camera: "LIVE", camera_age_ms: 40, last_result: null, last_result_reason: null,
-  views: {}, geometry: null, ...overrides,
+  ...overrides,
 });
 
 /** The server has selected TOWER's ground block and nothing has run yet. */
@@ -37,6 +40,12 @@ const progressWith = (overrides: Partial<TwinProgress> = {}): TwinProgress =>
   ({ ...emptyTwinProgress(), ...overrides });
 
 const byId = <T extends { id: string }>(blocks: T[], id: string) => blocks.find(block => block.id === id)!;
+
+/** A BuildProgress as the store would hold it after one `build_step`. */
+const at = (overrides: Partial<BuildProgress> = {}): BuildProgress =>
+  ({ ...emptyProgress(), status: "running", commandSeq: 1, step: 1, total: 14,
+     eventId: 10, ...overrides });
+
 
 describe("twinScene — Plan 4 §9.2, row by row", () => {
   it("a model is loaded: every remaining block is a ghost and nothing animates", () => {
@@ -64,14 +73,39 @@ describe("twinScene — Plan 4 §9.2, row by row", () => {
     expect(scene.animating).toBe(false);
   });
 
-  it("RUNNING: the target turns --motion, descends, and the banner names the build", () => {
-    const scene = twinScene(armed({ build_state: "RUNNING" }), model, emptyTwinProgress(), live);
+  it("RUNNING: the target turns --motion and the banner names the build", () => {
+    const scene = twinScene(armed({ build_state: "RUNNING" }), model,
+                            emptyTwinProgress(), live,
+                            at({ phase: "move_to_target", step: 8 }));
     const target = byId(scene.blocks, "t1");
     expect(target.appearance).toBe("building");
     expect(target.token).toBe("--motion");
     expect(target.opacity).toBe(BUILDING_OPACITY);
     expect(scene.banner).toBe("running");
     expect(scene.animating).toBe(true);
+    expect(scene.phase).toBe("moving-to-target");
+  });
+
+  it("RUNNING with no phase reported yet: building, but NOTHING moves", () => {
+    // The command is out and the board has not announced a phase. Animating
+    // here would be the twin inventing motion it has no evidence for.
+    const scene = twinScene(armed({ build_state: "RUNNING" }), model,
+                            emptyTwinProgress(), live);
+    expect(byId(scene.blocks, "t1").appearance).toBe("building");
+    expect(scene.animating).toBe(false);
+    expect(scene.indicator).toBe(false);
+    expect(scene.phaseLabel).toBeNull();
+  });
+
+  it("freezes on a dead socket rather than animating over one", () => {
+    const scene = twinScene(armed({ build_state: "RUNNING" }), model,
+                            emptyTwinProgress(), { connected: false },
+                            at({ phase: "move_to_target", step: 8 }));
+    // The last phase seen stays on screen — it is the last thing known — but
+    // the indicator stops, because "still going" is exactly what nobody knows.
+    expect(scene.phase).toBe("moving-to-target");
+    expect(scene.animating).toBe(false);
+    expect(scene.indicator).toBe(false);
   });
 
   it("RUNNING under reduced motion: still building, but nothing moves", () => {
@@ -264,18 +298,85 @@ describe("foldTwinProgress — confirmation comes from the server or not at all"
   });
 });
 
-describe("descentOffsetScene — an illustration, not a telemetry read-out", () => {
-  it("starts at travel height, arrives at the cell, and repeats", () => {
-    expect(descentOffsetScene(0, false)).toBeGreaterThan(0);
-    expect(descentOffsetScene(1e9, false)).toBeGreaterThanOrEqual(0);
-    const early = descentOffsetScene(100, false);
-    const later = descentOffsetScene(900, false);
-    expect(later).toBeLessThan(early);
+describe("the phase mapping — every id the firmware can send", () => {
+  // The keys of this table are the phase ids in `buildStep()`'s call sites in
+  // build_test_v1.ino. If the sketch grows a phase, this list fails first.
+  const EXPECTED: Record<string, TwinPhase> = {
+    raise_clear: "raising-clearance",
+    home_feeder: "homing-feeder",
+    neutralise_claw: "neutralising-claw",
+    open_claw: "opening-claw",
+    lower_to_ground: "lowering-to-ground",
+    grip: "gripping",
+    lift_block: "lifting",
+    move_to_target: "moving-to-target",
+    rotate_to_grid: "rotating",
+    lower_to_level: "lowering-to-level",
+    release: "releasing",
+    park_clear: "parking",
+    park_home: "parking",
+    park_rotation: "parking",
+  };
+
+  it("maps all fourteen firmware phases and invents none", () => {
+    expect(PHASE_BY_ID).toEqual(EXPECTED);
   });
 
-  it("is exactly zero under reduced motion", () => {
-    expect(descentOffsetScene(0, true)).toBe(0);
-    expect(descentOffsetScene(400, true)).toBe(0);
+  it.each(Object.entries(EXPECTED))("%s becomes %s", (id, expected) => {
+    expect(twinPhase(armed({ build_state: "RUNNING" }),
+                     at({ phase: id }), true)).toBe(expected);
+  });
+
+  it("shows the release as parking once phase 11 confirms it", () => {
+    // The phase id is still `release` until phase 12 begins, but the block has
+    // left the claw and the twin must stop showing it there.
+    expect(twinPhase(armed({ build_state: "RUNNING" }),
+                     at({ phase: "release", releaseConfirmed: true }), true))
+      .toBe("parking");
+  });
+
+  it("calls an unknown phase id motion, not idle", () => {
+    // Firmware newer than this browser. "Something is happening and I do not
+    // know what" beats "nothing is happening".
+    expect(twinPhase(armed({ build_state: "RUNNING" }),
+                     at({ phase: "polish_the_block" }), true))
+      .toBe("moving-to-target");
+  });
+
+  it("never shows a phase for a command that has not moved yet", () => {
+    for (const status of ["accepted", "validating"] as const) {
+      expect(twinPhase(armed(), at({ status, phase: null }), true)).toBe("target");
+    }
+  });
+
+  it("shows aborted over everything, whatever phase was last seen", () => {
+    expect(twinPhase(state({ build_state: "LOCKED" }),
+                     at({ phase: "move_to_target" }), true)).toBe("aborted");
+    expect(twinPhase(armed(), at({ status: "locked", phase: "grip" }), true))
+      .toBe("aborted");
+    expect(twinPhase(armed(), at({ status: "aborted", phase: "grip" }), true))
+      .toBe("aborted");
+  });
+});
+
+describe("the block's height — two values, both reported", () => {
+  it("carries at travel height and rests in the cell, and nothing between", () => {
+    const carried: TwinPhase[] = ["lifting", "moving-to-target", "rotating",
+                                  "lowering-to-level"];
+    for (const phase of carried) expect(phaseOffsetScene(phase)).toBe(TRAVEL_SCENE_Y);
+    const grounded: TwinPhase[] = ["idle", "target", "raising-clearance",
+                                   "homing-feeder", "gripping", "releasing",
+                                   "parking", "placed", "aborted"];
+    for (const phase of grounded) expect(phaseOffsetScene(phase)).toBe(0);
+  });
+
+  it("EXPORTS NO DESCENT TIMER — a browser clock is not telemetry", () => {
+    // The twin used to interpolate a looping 1.6-second descent off
+    // `performance.now()`, drawing the arm at heights nobody had measured.
+    // This assertion is here so it cannot come back by accident.
+    expect("descentOffsetScene" in twinModule).toBe(false);
+    expect("DESCENT_MS" in twinModule).toBe(false);
+    expect(Object.keys(twinModule).some(name => /descent/i.test(name))).toBe(false);
   });
 });
 
@@ -301,8 +402,33 @@ describe("choosing what the twin shows", () => {
 describe("against recorded /api/events sessions", () => {
   const session = (name: keyof typeof fixtures.sessions) =>
     fixtures.sessions[name].states as unknown as StateModel[];
+  const events = (name: keyof typeof fixtures.sessions) =>
+    fixtures.sessions[name].events as unknown as ServerEvent[];
   const play = (states: StateModel[], from = emptyTwinProgress()) =>
     states.reduce((progress, payload) => foldTwinProgress(progress, payload, model), from);
+
+  /**
+   * Replay a session's recorded events through the REAL store, stopping after
+   * the nth `build_step`. What comes back is exactly the `BuildProgress` a
+   * browser would be holding at that instant.
+   */
+  const replayTo = (name: keyof typeof fixtures.sessions, steps: number) => {
+    const store = createConsoleStore();
+    let seen = 0;
+    for (const event of events(name)) {
+      if (event.type === "build_step" && event.status === "begin") {
+        if (seen >= steps) break;
+        seen += 1;
+      }
+      store.applyEvent(event);
+    }
+    return store.snapshot;
+  };
+  const replayAll = (name: keyof typeof fixtures.sessions) => {
+    const store = createConsoleStore();
+    store.applyEvents(events(name));
+    return store.snapshot;
+  };
 
   it("the fixture cell is TOWER's, so levels 0 and 1 are t1 and t2", () => {
     expect(fixtures.cell).toEqual([...CELL]);
@@ -313,14 +439,80 @@ describe("against recorded /api/events sessions", () => {
     expect(play(session("placed")).confirmed).toEqual(["t1"]);
   });
 
-  it("mid-build, the recorded RUNNING states animate a descent and place nothing", () => {
+  it("the recorded stream is the firmware's fourteen phases, in order, once", () => {
+    const steps = events("placed").filter(event => event.type === "build_step");
+    expect(steps.map(event => (event as { step: number }).step))
+      .toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 11, 12, 13, 14]);
+    // Exactly one `done`, and it is the release.
+    const done = steps.filter(event => (event as { status: string }).status === "done");
+    expect(done).toHaveLength(1);
+    expect((done[0] as { phase: string }).phase).toBe("release");
+  });
+
+  it("walks the recorded phases and shows each one, carrying only when it is", () => {
     const states = session("placed");
     const running = states.find(payload => payload.build_state === "RUNNING")!;
-    const scene = twinScene(running, model, play(states.slice(0, states.indexOf(running) + 1)),
-                            live);
-    expect(scene.animating).toBe(true);
-    expect(byId(scene.blocks, "t1").appearance).toBe("building");
-    expect(scene.blocks.some(block => block.appearance === "placed")).toBe(false);
+    const progress = play(states.slice(0, states.indexOf(running) + 1));
+    const sceneAfter = (steps: number) =>
+      twinScene(running, model, progress, live, replayTo("placed", steps).progress);
+
+    // Fetching the block: nothing is in the claw and nothing is placed.
+    expect(sceneAfter(1).phase).toBe("raising-clearance");
+    expect(sceneAfter(1).carrying).toBe(false);
+    expect(sceneAfter(5).phase).toBe("lowering-to-ground");
+    expect(sceneAfter(5).carrying).toBe(false);
+
+    // The jaws close: from here the block is in the claw.
+    expect(sceneAfter(6).phase).toBe("gripping");
+    expect(sceneAfter(6).carrying).toBe(true);
+    expect(sceneAfter(8).phase).toBe("moving-to-target");
+    expect(sceneAfter(8).carrying).toBe(true);
+    expect(sceneAfter(8).blockOffset).toBe(TRAVEL_SCENE_Y);
+    expect(sceneAfter(9).phase).toBe("rotating");
+
+    // Nothing anywhere in the carry says the block has been placed.
+    for (let steps = 1; steps <= 11; steps += 1) {
+      expect(sceneAfter(steps).phase).not.toBe("placed");
+      expect(sceneAfter(steps).blocks.some(block => block.appearance === "placed"))
+        .toBe(false);
+    }
+    expect(byId(sceneAfter(8).blocks, "t1").appearance).toBe("building");
+    expect(sceneAfter(8).animating).toBe(true);
+  });
+
+  it("shows the release, then parking, and STILL does not say placed", () => {
+    const states = session("placed");
+    const running = states.find(payload => payload.build_state === "RUNNING")!;
+    const progress = play(states.slice(0, states.indexOf(running) + 1));
+
+    // Everything up to and including the release `done`.
+    const store = createConsoleStore();
+    for (const event of events("placed")) {
+      store.applyEvent(event);
+      if (event.type === "build_step" && event.status === "done") break;
+    }
+    const released = twinScene(running, model, progress, live, store.snapshot.progress);
+    expect(released.released).toBe(true);
+    expect(released.carrying).toBe(false);
+    expect(released.blockOffset).toBe(0);
+    expect(released.phase).toBe("parking");
+    expect(released.blocks.some(block => block.appearance === "placed")).toBe(false);
+
+    // Phases 12-14: still parking, still not placed.
+    const parking = twinScene(running, model, progress, live,
+                              replayTo("placed", 13).progress);
+    expect(parking.phase).toBe("parking");
+    expect(parking.blocks.some(block => block.appearance === "placed")).toBe(false);
+  });
+
+  it("only the terminal build_result turns the phase to placed", () => {
+    const snapshot = replayAll("placed");
+    expect(snapshot.lastResult?.result).toBe("placed");
+    expect(snapshot.progress.status).toBe("placed");
+    const final = session("placed").at(-1)!;
+    expect(twinScene(final, model, play(session("placed")), live, snapshot.progress)
+      .phase).toBe("placed");
+    expect(play(session("placed")).confirmed).toEqual(["t1"]);
   });
 
   it("a REJECTED session keeps the earlier block placed and marks only the new one", () => {
@@ -336,12 +528,18 @@ describe("against recorded /api/events sessions", () => {
     expect(progress.rejectedId).toBe("t2");
     expect(progress.rejectedReason).toBe("no block at the feeder");
 
-    const scene = twinScene(states.at(-1)!, model, progress, live);
+    const scene = twinScene(states.at(-1)!, model, progress, live,
+                            replayAll("rejected").progress);
     expect(byId(scene.blocks, "t1").appearance).toBe("placed");
     expect(byId(scene.blocks, "t2").appearance).toBe("rejected");
     expect(byId(scene.blocks, "t2").reason).toBe("no block at the feeder");
     expect(scene.banner).toBe("rejected");
     expect(scene.animating).toBe(false);
+    // A rejection announces NO phase: the firmware refuses it during
+    // validation, before anything moves. The absence is the evidence.
+    expect(events("rejected").filter(event => event.type === "build_step")).toEqual([]);
+    expect(scene.phase).toBe("rejected");
+    expect(scene.carrying).toBe(false);
   });
 
   it("an ABORTED session locks the twin, confirms nothing, and stops it dead", () => {
@@ -349,9 +547,21 @@ describe("against recorded /api/events sessions", () => {
     const progress = play(states);
     expect(progress.confirmed).toEqual([]);
 
-    const scene = twinScene(states.at(-1)!, model, progress, live);
+    // It died at phase 8 — MID-CARRY, with the block in the claw. The twin
+    // must stop, not carry on showing a block travelling to a cell it never
+    // reached, and must never place it.
+    const snapshot = replayAll("aborted");
+    expect(snapshot.progress.step).toBe(8);
+    expect(snapshot.progress.releaseConfirmed).toBe(false);
+    expect(snapshot.lastResult?.locked).toBe(true);
+
+    const scene = twinScene(states.at(-1)!, model, progress, live, snapshot.progress);
+    expect(scene.phase).toBe("aborted");
+    expect(scene.carrying).toBe(false);
+    expect(scene.indicator).toBe(false);
+    expect(scene.blockOffset).toBe(0);
     expect(scene.banner).toBe("locked");
-    expect(scene.bannerText).toBe("claw did not release");
+    expect(scene.bannerText).toBe("could not reach the target cell");
     expect(scene.animating).toBe(false);
     expect(scene.desaturate).toBe(true);
     expect(scene.targetId).toBeNull();

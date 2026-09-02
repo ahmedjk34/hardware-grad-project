@@ -10,16 +10,24 @@ from starlette.responses import StreamingResponse
 router = APIRouter(prefix="/api", tags=["stream"])
 
 
-async def publish_jpeg(app, frame) -> None:
-    """Encode once for all active viewers, never when nobody is watching."""
-    if app.state.stream_subscribers <= 0:
-        return
-    ok, encoded = cv2.imencode(
-        ".jpg", frame.view, [cv2.IMWRITE_JPEG_QUALITY, 75])
-    if not ok:
+def encode_jpeg(frame) -> bytes | None:
+    """The blocking half: one JPEG for all viewers, or None if it failed.
+
+    Split from the publish so the caller can run it on the pipeline worker
+    thread. Encoding a 1296x972 frame twenty times a second on the event
+    loop is enough to make a serial callback wait behind a picture, which is
+    the one thing `web/events.py` exists to prevent.
+    """
+    ok, encoded = cv2.imencode(".jpg", frame.view, [cv2.IMWRITE_JPEG_QUALITY, 75])
+    return encoded.tobytes() if ok else None
+
+
+async def publish_encoded(app, frame, jpeg: bytes | None) -> None:
+    """Hand an already-encoded frame to the waiting stream readers."""
+    if jpeg is None:
         return
     async with app.state.jpeg_condition:
-        app.state.latest_jpeg = (frame.sequence, encoded.tobytes())
+        app.state.latest_jpeg = (frame.sequence, jpeg)
         app.state.jpeg_revision += 1
         app.state.jpeg_encode_count += 1
         app.state.jpeg_condition.notify_all()

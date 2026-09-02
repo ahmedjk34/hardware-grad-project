@@ -3,12 +3,26 @@ import { describe, expect, it, vi } from "vitest";
 import type { StateModel } from "../types";
 import type { RunnerApi } from "../studio/runner-driver";
 import { RunnerPanel } from "./RunnerPanel";
+import { emptyProgress, type BuildProgress, type ConsoleSnapshot } from "../store";
 
-const readyState = (changes: Partial<StateModel> = {}): StateModel => ({
+/** The phase the rig has just announced, as the store would hold it. */
+const phaseAt = (step: number, phase: string, label: string,
+                 overrides: Partial<BuildProgress> = {}): BuildProgress => ({
+  ...emptyProgress(), status: "running", commandSeq: 1, step, total: 14,
+  phase, label, action: "move", eventId: 100 + step, ...overrides,
+});
+
+/** A settled build, as the server's `build_result` event reported it. */
+const settled = (result: "placed" | "rejected" | "aborted", reason: string | null,
+                 locked = false): ConsoleSnapshot["lastResult"] => ({
+  command_seq: 1, result, reason, locked, locked_reason: locked ? reason : null,
+  from_prose: false, eventId: 900,
+});
+import { testState } from "../test-state";
+
+const readyState = (changes: Partial<StateModel> = {}): StateModel => testState({
   mode: "vertical", cols: 7, rows: 6, calibrated: true, selected: null,
-  command: null, level: 0, build_state: "READY", locked_reason: null,
-  camera: "LIVE", camera_age_ms: 10, last_result: null,
-  last_result_reason: null, views: {}, geometry: {
+  geometry: {
     image_size: [640, 480], calibrated: true,
     grid: [{ col: 3, row: 2, polygon: [[300, 200], [340, 200], [340, 240], [300, 240]] }],
     selected: null, detections: [], paper: null,
@@ -74,7 +88,8 @@ describe("RunnerPanel", () => {
                           connected modelId="example-tower" api={api} />);
     rerender(<RunnerPanel state={readyState({ last_result: "rejected", last_result_reason: "feeder empty",
                           selected: [3, 2], command: "B 3 2 0" })}
-                          connected modelId="example-tower" api={api} />);
+                          connected modelId="example-tower" api={api}
+                          lastResult={settled("rejected", "feeder empty")} />);
     await waitFor(() => expect(screen.getByText("REJECTED — RUN PAUSED")).toBeInTheDocument());
     expect(screen.getByText("feeder empty")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "CONTINUE" })).toBeEnabled();
@@ -91,10 +106,86 @@ describe("RunnerPanel", () => {
                           connected modelId="example-tower" api={api} />);
     rerender(<RunnerPanel state={readyState({ build_state: "LOCKED", last_result: "aborted",
                           last_result_reason: "claw position unknown", locked_reason: "claw position unknown" })}
-                          connected modelId="example-tower" api={api} />);
+                          connected modelId="example-tower" api={api}
+                          lastResult={settled("aborted", "claw position unknown", true)} />);
     await waitFor(() => expect(screen.getByText("SESSION LOCKED")).toBeInTheDocument());
     expect(screen.getByText("stopped at step 1 of 5")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "CONTINUE" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /retry/i })).not.toBeInTheDocument();
+  });
+
+  it("shows the rig's own phase, and says so when the rig has said nothing", async () => {
+    const api = mockedApi();
+    const running = readyState({ build_state: "RUNNING", selected: [3, 2], command: "B 3 2 0" });
+    const { rerender } = render(<RunnerPanel state={readyState()} connected modelId="example-tower" api={api} />);
+    fireEvent.click(screen.getByRole("button", { name: "RUN" }));
+    fireEvent.click(screen.getByRole("button", { name: "START RUN" }));
+    await waitFor(() => expect(api.build).toHaveBeenCalledOnce());
+
+    // The command is out and the board has not announced a phase yet. The
+    // panel must say that, not invent a first step.
+    rerender(<RunnerPanel state={running} connected modelId="example-tower" api={api} />);
+    await waitFor(() => expect(screen.getByText("WAITING FOR THE RIG")).toBeInTheDocument());
+    expect(screen.getByText(/has not announced a phase yet/)).toBeInTheDocument();
+
+    rerender(<RunnerPanel state={running} connected modelId="example-tower" api={api}
+                          progress={phaseAt(8, "move_to_target", "Move XY to the target cell")} />);
+    await waitFor(() =>
+      expect(screen.getByText("8/14 · Move XY to the target cell")).toBeInTheDocument());
+    expect(screen.getByLabelText("Phase 8 of 14")).toHaveValue(8);
+  });
+
+  it("does not advance to the next block on a phase, only on the terminal OK", async () => {
+    const api = mockedApi();
+    const running = readyState({ build_state: "RUNNING", selected: [3, 2], command: "B 3 2 0" });
+    const { rerender } = render(<RunnerPanel state={readyState()} connected modelId="example-tower" api={api} />);
+    fireEvent.click(screen.getByRole("button", { name: "RUN" }));
+    fireEvent.click(screen.getByRole("button", { name: "START RUN" }));
+    await waitFor(() => expect(api.build).toHaveBeenCalledOnce());
+
+    // Every phase of the build, INCLUDING the confirmed release and parking.
+    for (const [step, phase, label] of [
+      [6, "grip", "Close the claw and grip"],
+      [11, "release", "Open the claw and release"],
+      [14, "park_rotation", "Return the claw to neutral"],
+    ] as const) {
+      rerender(<RunnerPanel state={running} connected modelId="example-tower" api={api}
+                            progress={phaseAt(step, phase, label,
+                              step >= 11 ? { releaseConfirmed: true } : {})} />);
+    }
+    await waitFor(() =>
+      expect(screen.getByText("14/14 · Return the claw to neutral")).toBeInTheDocument());
+    // Fourteen phases later, the runner has still sent exactly one command.
+    expect(api.build).toHaveBeenCalledOnce();
+    expect(api.select).toHaveBeenCalledOnce();
+    expect(screen.getByText("1 / 5")).toBeInTheDocument();
+  });
+
+  it("goes stale on a lost socket and assumes no progress from it", async () => {
+    const api = mockedApi();
+    const running = readyState({ build_state: "RUNNING", selected: [3, 2], command: "B 3 2 0" });
+    const progress = phaseAt(8, "move_to_target", "Move XY to the target cell");
+    const { rerender } = render(<RunnerPanel state={readyState()} connected modelId="example-tower" api={api} />);
+    fireEvent.click(screen.getByRole("button", { name: "RUN" }));
+    fireEvent.click(screen.getByRole("button", { name: "START RUN" }));
+    await waitFor(() => expect(api.build).toHaveBeenCalledOnce());
+    rerender(<RunnerPanel state={running} connected modelId="example-tower" api={api}
+                          progress={progress} />);
+    await waitFor(() => expect(screen.getByText(/reported by the rig/)).toBeInTheDocument());
+
+    rerender(<RunnerPanel state={running} connected={false} modelId="example-tower" api={api}
+                          progress={progress} />);
+    await waitFor(() => expect(screen.getByText("STALE — RUN PAUSED")).toBeInTheDocument());
+    // The last phase stays on screen, honestly labelled as the last one heard.
+    expect(screen.getByText("8/14 · Move XY to the target cell")).toBeInTheDocument();
+    expect(screen.getByText(/socket lost/)).toBeInTheDocument();
+    expect(api.build).toHaveBeenCalledOnce();
+
+    // A later phase proves the socket is back, and the run picks itself up.
+    rerender(<RunnerPanel state={running} connected modelId="example-tower" api={api}
+                          progress={phaseAt(10, "lower_to_level", "Lower Z to the target level")} />);
+    await waitFor(() =>
+      expect(screen.getByText("10/14 · Lower Z to the target level")).toBeInTheDocument());
+    expect(screen.queryByText("STALE — RUN PAUSED")).not.toBeInTheDocument();
   });
 });

@@ -119,14 +119,16 @@ export function App() {
             twin={
               <TwinPanel state={state} connected={snapshot.connected}
                          lastUpdateAt={snapshot.updatedAt}
+                         build={snapshot.progress}
                          modelId={runnerModelId ?? undefined}
                          onModelIdChange={setRunnerModelId}
                          modelSelectionDisabled={runnerActive} />
             }
           />
           <RunnerPanel state={state} connected={snapshot.connected}
-                       modelId={runnerModelId ?? ""} onActiveChange={setRunnerActive} />
-          <RigLog log={snapshot.log} defaultOpen={!phone} />
+                       modelId={runnerModelId ?? ""} onActiveChange={setRunnerActive}
+                       progress={snapshot.progress} lastResult={snapshot.lastResult} />
+          <RigLog log={snapshot.log} defaultOpen={!phone} gap={snapshot.gap} />
         </div>
 
         <div className="pane-rail">

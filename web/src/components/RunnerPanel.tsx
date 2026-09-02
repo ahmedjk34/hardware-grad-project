@@ -6,12 +6,14 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { StateModel } from "../types";
+import { emptyProgress, type BuildProgress, type ConsoleSnapshot } from "../store";
 import { compile, formatDuration } from "../studio/compile";
 import { fromFileRig, shiftsOf, structureOf } from "../studio/rigmodel";
 import { BLOCK_CYCLE_SECONDS, DEFAULT_STUDIO_SETTINGS, LATCH_HOMING_SECONDS } from "../studio/settings";
 import { loadTwinModel } from "../studio/twin";
 import {
-  buildPosition, currentOp, feederPrompt, initialRun, programRows, runTiming, step,
+  buildPosition, currentOp, currentOperationText, feederPrompt, initialRun,
+  programRows, runTiming, step,
   type RunEvent, type RunState, type RunStyle,
 } from "../studio/runner";
 import { captureCameraThumbnail, downloadMarkdown } from "../studio/run-report";
@@ -28,13 +30,18 @@ const STYLES: { style: RunStyle; label: string }[] = [
 const activePhase = (phase: RunState["phase"]) =>
   phase !== "idle" && phase !== "done";
 
-export function RunnerPanel({ state, connected, modelId, api, delay, onActiveChange }: {
+export function RunnerPanel({ state, connected, modelId, api, delay, onActiveChange,
+                              progress = emptyProgress(), lastResult = null }: {
   state: StateModel;
   connected: boolean;
   modelId: string;
   api?: RunnerApi;
   delay?: (milliseconds: number) => Promise<void>;
   onActiveChange?: (active: boolean) => void;
+  /** The rig's current phase, straight from the serial event stream. */
+  progress?: BuildProgress;
+  /** The last settled build, as the server's `build_result` event reported it. */
+  lastResult?: ConsoleSnapshot["lastResult"];
 }) {
   const [style, setStyle] = useState<RunStyle>("step");
   const [now, setNow] = useState(() => Date.now());
@@ -45,6 +52,7 @@ export function RunnerPanel({ state, connected, modelId, api, delay, onActiveCha
   const serverRef = useRef(state);
   const dispatchRef = useRef<(event: RunEvent) => void>(() => {});
   const observedRunning = useRef(false);
+  const settledResultId = useRef(0);
   serverRef.current = state;
 
   const modelDocument = useMemo(() => modelId ? loadTwinModel(modelId) : null, [modelId]);
@@ -78,24 +86,44 @@ export function RunnerPanel({ state, connected, modelId, api, delay, onActiveCha
     applyEvent({ type: "socket", connected, now: Date.now() });
   }, [connected, applyEvent]);
 
+  // Every real phase the rig announced, in order, exactly once. The reducer
+  // deduplicates by event id, so a replayed reconnect costs nothing.
+  useEffect(() => {
+    if (progress.phase === null || progress.step === null) return;
+    applyEvent({
+      type: "build-step", commandSeq: progress.commandSeq, step: progress.step,
+      total: progress.total ?? progress.step, phaseId: progress.phase,
+      label: progress.label ?? progress.phase,
+      action: progress.action ?? "move",
+      status: progress.releaseConfirmed && progress.phase === "release" ? "done" : "begin",
+      eventId: progress.eventId, now: Date.now(),
+    });
+  }, [progress, applyEvent]);
+
+  // The build settles on the SERVER'S `build_result` event and on nothing
+  // else. It used to be inferred from `build_state` leaving RUNNING with a
+  // `last_result` beside it, which could not tell one build's result from the
+  // next one's; the event carries the command it belongs to.
   useEffect(() => {
     const current = runRef.current;
     const observed = serverRef.current;
     if (observed.build_state === "RUNNING" && current.inFlight && currentOp(current)?.op === "build") {
       observedRunning.current = true;
     }
-    if (observedRunning.current && observed.build_state !== "RUNNING" && current.inFlight
-        && currentOp(current)?.op === "build" && observed.last_result) {
+    if (lastResult && lastResult.eventId !== settledResultId.current
+        && current.inFlight && currentOp(current)?.op === "build"
+        && lastResult.result !== null) {
+      settledResultId.current = lastResult.eventId;
       observedRunning.current = false;
       const verification = (observed as StateModel & { vision_verification?: string | null }).vision_verification ?? undefined;
       const thumbnail = captureCameraThumbnail(document.querySelector<HTMLImageElement>('img[alt="Live rig camera"]'));
       applyEvent({
-        type: "build-settled", result: observed.last_result, reason: observed.last_result_reason,
+        type: "build-settled", result: lastResult.result, reason: lastResult.reason,
         verification, thumbnail, now: Date.now(),
       });
     }
     applyEvent({ type: "server-build-state", buildState: observed.build_state, now: Date.now() });
-  }, [state.build_state, state.last_result, state.last_result_reason, applyEvent]);
+  }, [state.build_state, lastResult, applyEvent]);
 
   const isActive = activePhase(run.phase);
   useEffect(() => onActiveChange?.(isActive), [isActive, onActiveChange]);
@@ -125,6 +153,7 @@ export function RunnerPanel({ state, connected, modelId, api, delay, onActiveCha
   const position = buildPosition(run);
   const timing = runTiming(run, now, BLOCK_CYCLE_SECONDS, LATCH_HOMING_SECONDS);
   const op = currentOp(run);
+  const operation = currentOperationText(run);
   const canStart = !!modelDocument && !!compiled?.valid && connected && state.build_state === "READY";
 
   return (
@@ -135,7 +164,9 @@ export function RunnerPanel({ state, connected, modelId, api, delay, onActiveCha
         <span className="spacer" />
         <span className="runner-count">{position.current} / {position.total}</span>
         {!(["idle", "done", "locked", "stopped-mismatch"] as RunState["phase"][]).includes(run.phase) && (
-          <span className="runner-count">elapsed {formatDuration(timing.elapsedSeconds)} · ETA ~{formatDuration(timing.etaSeconds)}</span>
+          <span className="runner-count" title="An estimate from the average cycle time. The phase above is the rig's own report.">
+            elapsed {formatDuration(timing.elapsedSeconds)} · ETA ~{formatDuration(timing.etaSeconds)} (est.)
+          </span>
         )}
         {run.style === "dry" && run.phase !== "idle" && (
           <span className="chip is-motion">DRY RUN — no serial traffic</span>
@@ -187,6 +218,27 @@ export function RunnerPanel({ state, connected, modelId, api, delay, onActiveCha
       {run.phase === "awaiting-confirm" && run.pendingConfirm === "build" && (
         <BuildButton state={state} connected={connected}
                      onBuild={() => applyEvent({ type: "confirm", now: Date.now() })} />
+      )}
+
+      {run.inFlight && run.style !== "dry" && (
+        <div className="runner-operation" role="status" aria-live="polite"
+             aria-label="Current rig operation">
+          <strong>{operation ?? "WAITING FOR THE RIG"}</strong>
+          <span>
+            {!connected
+              ? "socket lost — the phase shown is the last one the rig reported"
+              : operation === null
+                ? "the command is out; the rig has not announced a phase yet"
+                : run.progress.released
+                  ? "block released — parking; not placed until the rig acknowledges"
+                  : "reported by the rig, phase by phase"}
+          </span>
+          {run.progress.total !== null && run.progress.step !== null && (
+            <progress className="runner-phase-bar" value={run.progress.step}
+                      max={run.progress.total}
+                      aria-label={`Phase ${run.progress.step} of ${run.progress.total}`} />
+          )}
+        </div>
       )}
 
       {run.style === "run" && run.phase !== "idle" && run.phase !== "done" && run.phase !== "locked" && (

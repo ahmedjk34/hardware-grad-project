@@ -15,6 +15,14 @@ class StateModel(BaseModel):
 
     Raw video never belongs here; Step 6 adds only lightweight drawing geometry
     for the browser-owned SVG overlay.
+
+    The `build_*` block is the serial-driven build progress. It is the SAME
+    facts the `build_step` events carry, folded into the snapshot so that a
+    client which has just connected, or which missed events while its socket
+    was down, starts from the truth rather than from blank. `serial_event_id`
+    says which event the block was folded from: a client compares it with the
+    progress it already has and keeps the newer of the two, so a state
+    snapshot that overtook a phase event on the wire cannot roll the UI back.
     """
 
     mode: str
@@ -30,6 +38,19 @@ class StateModel(BaseModel):
     camera_age_ms: int | None
     last_result: Literal["placed", "rejected", "aborted"] | None
     last_result_reason: str | None
+    build_command_seq: int | None
+    build_step: int | None
+    build_total_steps: int | None
+    build_phase: str | None
+    build_phase_label: str | None
+    build_phase_action: str | None
+    build_phase_started_at: int | None
+    build_phase_status: str
+    #: Phase 11's `status=done`: the jaws opened and the block is on the
+    #: stack. NOT the same as placed — the command is still running and the
+    #: rig still has to park. See `web/progress.py`.
+    build_release_confirmed: bool
+    serial_event_id: int
     views: dict[str, bool]
     geometry: dict[str, Any] | None
 
@@ -63,6 +84,7 @@ def build_state(app) -> StateModel:
         calibrated = frame.calibrated
 
     result = controller.last_result
+    progress = app.state.progress.progress
     return StateModel(
         mode=rig.grid.mode,
         cols=rig.grid.cols,
@@ -77,6 +99,7 @@ def build_state(app) -> StateModel:
         camera_age_ms=camera_age_ms,
         last_result=str(result) if result is not None else None,
         last_result_reason=result.reason if result is not None else None,
+        **progress.as_state_fields(),
         views=dict(app.state.views),
         geometry=build_geometry(frame, controller.selected) if frame is not None else None,
     )

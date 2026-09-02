@@ -5,6 +5,7 @@
 Flash `belt_v1/belt_v1.ino` for the container sequence. Its wiring is:
 
 - A4988 belt driver: `DIR = 2`, `STEP = 3`
+- A4988 `ENABLE` is not used; connect it to GND
 - HC-SR04 ultrasonic: `TRIG = 4`, `ECHO = 5`
 - Container servo signal: pin `6`
 
@@ -12,7 +13,9 @@ Commands are `O` to open the container to 0 degrees and arm detection, and
 `C` to close it to 20 degrees and stop the belt. The first ultrasonic reading
 strictly below 10 cm after opening runs the belt counter-clockwise for five
 seconds, then stops. If the belt turns the wrong physical direction, invert
-`BELT_CCW_DIRECTION_LEVEL` in the sketch.
+`BELT_CCW_DIRECTION_LEVEL` in the sketch. Manual commands are `ON`, `OFF`,
+`F`, `B`, and `T`; use `S <speed>` to set the belt speed in steps per second.
+The default speed is 200 steps per second. Use `P` for status.
 
 ## `build_test_v1/` is the sketch on the rig
 
@@ -43,6 +46,28 @@ The auxiliary 28BYJ-48 stepper uses these ULN2003 connections:
 
 The build cycle drives it: step 3 returns the claw to neutral before the pick,
 step 9 applies the placement rotation, step 14 returns to neutral.
+
+### The build talks while it moves
+
+`B` is about forty seconds during which the sketch never reads serial. It is
+not silent, though: `buildStep()` prints one machine line per phase, before
+that phase runs, beside the `[BUILD n/14]` text a human reads.
+
+```
+@12 RECV cmd=B col=3 row=5 level=0
+@12 STEP step=8 total=14 phase=move_to_target action=move text=Move_XY_to_the_target_cell status=begin
+[BUILD 8/14] Move X/Y to the target cell
+...
+@12 STEP step=11 total=14 phase=release action=release text=Open_the_claw_and_release status=done
+@12 OK col=3 row=5 level=0
+```
+
+Fourteen lines, not one per motor step — at 9600 baud that is about 0.3 s of
+airtime inside the build, where per-step telemetry would be minutes of it and
+would starve the terminal ack. `status=done` appears exactly once, at phase 11,
+and means the block has left the claw; it does **not** mean the build finished.
+Only the terminal `@n OK` does. `plans/ack-protocol.md` has the full field list
+and the fourteen phase identifiers.
 
 **`R` and `RR` no longer jog it.** They are the grid mode latch — `R` selects
 the vertical grid, `RR` the horizontal one — and neither moves anything. See

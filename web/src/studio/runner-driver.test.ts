@@ -2,12 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import type { StateModel } from "../types";
 import { executeEffect, type RunnerApi } from "./runner-driver";
 import type { Effect, RunEvent } from "./runner";
+import { testState } from "../test-state";
 
-const state = (changes: Partial<StateModel> = {}): StateModel => ({
+const state = (changes: Partial<StateModel> = {}): StateModel => testState({
   mode: "vertical", cols: 7, rows: 6, calibrated: true, selected: null,
-  command: null, level: 0, build_state: "READY", locked_reason: null,
-  camera: "LIVE", camera_age_ms: 10, last_result: null,
-  last_result_reason: null, views: {}, geometry: {
+  geometry: {
     image_size: [640, 480], calibrated: true,
     grid: [{ col: 3, row: 2, polygon: [[300, 200], [340, 200], [340, 240], [300, 240]] }],
     selected: null, detections: [], paper: null,

@@ -30,6 +30,16 @@ Only `B` is acked. `S`, `0`, `0+` and `G` predate the protocol and still print
 prose only, so those wait on prose plus a settle period instead — see
 `_send_and_settle`.
 
+Progress, in real time
+----------------------
+A build is ~40 seconds during which the board never reads serial, so `B` also
+prints one `@n STEP` line per PHASE — fourteen of them, not one per motor step,
+which at 9600 baud would be minutes of airtime and would starve the ack that
+matters. `parse_progress()` turns each into a `SerialProgress`, and the
+`on_progress` callback hands it straight to whoever is watching. Phase-level is
+all there is: the firmware does not report continuous motor position, so
+nothing above this module may claim to know where the arm is between phases.
+
 SAFE and HELD are NOT the same failure
 --------------------------------------
 `rejected` means nothing moved: a typo, retry freely. `aborted` means the run
@@ -87,11 +97,19 @@ from rig.grid import MachineGrid
 
 ACK_PREFIX = "@"
 
-# Kinds that END a command. Everything else (RECV, RUN, and the seq-0 events)
-# is progress or chatter. Only OK/ERR/SAFE/HELD are emitted by the firmware
-# today; BUSY is listed because the protocol reserves it and a Pi that ignored
-# it would hang instead of failing.
+# Kinds that END a command. Everything else (RECV, STEP, and the seq-0 events)
+# is progress or chatter. OK/ERR/SAFE/HELD/RECV/STEP are emitted by the
+# firmware today; BUSY is listed because the protocol reserves it and a Pi that
+# ignored it would hang instead of failing.
 TERMINAL_KINDS = frozenset({"OK", "ERR", "SAFE", "HELD", "BUSY"})
+
+# The non-terminal machine kinds. `RECV` says a command parsed and was
+# accepted; `STEP` is one build phase, announced before it runs. Neither ends
+# anything, and a waiter that treated either as an answer would return while
+# the rig was still moving — which is why they are named here rather than
+# left to "not in TERMINAL_KINDS".
+PROGRESS_KIND = "STEP"
+ACCEPTED_KIND = "RECV"
 
 # The three words a caller has to handle.
 PLACED = "placed"
@@ -162,6 +180,98 @@ def parse_ack(line: str) -> Ack | None:
             args.append(token)
 
     return Ack(seq=seq, kind=parts[1].upper(), args=tuple(args), fields=fields, raw=line)
+
+
+# ------------------------------------------------------------------
+# Build progress
+# ------------------------------------------------------------------
+
+# The firmware announces every phase before it runs, one line each:
+#
+#   @12 STEP step=8 total=14 phase=move_to_target action=move
+#       text=Move_XY_to_target status=begin
+#
+# `total` is on the wire so nothing here hard-codes 14. `phase` is the STABLE
+# identifier UIs switch on; `text` is the human label, underscored on the wire
+# so it survives as one token, and un-underscored here so nothing downstream
+# has to know that.
+#
+# `action` is deliberately coarse — a consumer needs to know whether a block is
+# being carried, not which motor is turning.
+PROGRESS_ACTIONS = frozenset({"move", "grip", "release", "rotate", "park"})
+
+# `begin` is announced before the phase runs. There is exactly one `done`:
+# phase 11, the instant the jaws open and the block is on the stack. It is NOT
+# a terminal result — the command is still running and the rig still has to
+# park — and `Rig.build()` still waits for the OK.
+PROGRESS_STATUSES = frozenset({"begin", "done"})
+
+
+@dataclass(frozen=True)
+class SerialProgress:
+    """One `@<seq> STEP ...` line: which phase of which command is starting.
+
+    This exists so that consumers never have to scrape prose. `[BUILD 8/14]`
+    is still printed for the human beside it, and is still in the raw log, but
+    nothing in this project is allowed to parse it.
+    """
+
+    seq: int
+    step: int
+    total: int
+    phase: str
+    label: str
+    action: str
+    status: str
+    fields: dict = field(default_factory=dict)
+    raw: str = ""
+
+    @property
+    def done(self) -> bool:
+        """True for the one `status=done`, the confirmed release at phase 11."""
+        return self.status == "done"
+
+    @property
+    def parking(self) -> bool:
+        """True once the block is down and the rig is only tidying up.
+
+        Parking failures are warnings, not aborts — see `buildPark()`. A UI
+        that shows 'placing' through phase 14 is claiming the block is still
+        in the air when it is not.
+        """
+        return self.action == "park"
+
+
+def parse_progress(ack: Ack | None) -> SerialProgress | None:
+    """Turn a parsed `STEP` ack into a SerialProgress, or None if it is not one.
+
+    A malformed STEP returns None rather than raising: the reader thread has
+    nobody to raise at, and a line it cannot read is still in the raw log.
+    """
+    if ack is None or ack.kind != PROGRESS_KIND:
+        return None
+    try:
+        step = int(ack.fields["step"])
+        total = int(ack.fields["total"])
+    except (KeyError, ValueError):
+        return None
+    if step < 1 or total < 1 or step > total:
+        return None
+    phase = ack.fields.get("phase", "")
+    if not phase:
+        return None
+    return SerialProgress(
+        seq=ack.seq,
+        step=step,
+        total=total,
+        phase=phase,
+        # Underscores are the wire's way of keeping the label one token.
+        label=ack.fields.get("text", "").replace("_", " "),
+        action=ack.fields.get("action", ""),
+        status=ack.fields.get("status", "begin"),
+        fields=dict(ack.fields),
+        raw=ack.raw,
+    )
 
 
 # ------------------------------------------------------------------
@@ -257,14 +367,30 @@ class Rig:
     raise `RigBusy` rather than queueing behind each other."""
 
     def __init__(self, cfg: dict | None = None, on_line=None, on_error=None,
-                 mode: str | None = None, serial_factory=None):
+                 mode: str | None = None, serial_factory=None,
+                 on_progress=None, on_ack=None):
         """`on_line` is called from the reader thread with every raw line the
         rig prints, acks included. That is how `rig_console.py` still shows
         everything while this class quietly parses the same stream.
 
         `on_error` is called from the same thread when the port dies under it.
         A waiting command finds out by getting `RigError` raised at it, but an
-        idle console has nobody waiting, so it needs telling."""
+        idle console has nobody waiting, so it needs telling.
+
+        `on_progress` is called with a :class:`SerialProgress` for every
+        `@n STEP` line, and `on_ack` with the :class:`Ack` for EVERY machine
+        line — RECV, STEP, the terminal kinds and the seq-0 events alike.
+        They exist so a UI can follow a build in real time WITHOUT scraping
+        the prose: the firmware provides structured events, so nothing above
+        this module is allowed to read `[BUILD 8/14]`.
+
+        All four run on the reader thread, in the order the lines arrived.
+        That ordering is the only thing that makes "the STEPs came before the
+        OK" true, so a consumer that hands them to another thread or event
+        loop must preserve it — see `web/app.py`, which forwards each one with
+        `loop.call_soon_threadsafe`. None of them may block: the reader is the
+        only thing draining the port.
+        """
         cfg = cfg if cfg is not None else load()
         self.port_name: str = cfg["serial"]["port"]
         self.baud: int = cfg["serial"]["baud"]
@@ -281,6 +407,8 @@ class Rig:
 
         self._on_line = on_line
         self._on_error = on_error
+        self._on_progress = on_progress
+        self._on_ack = on_ack
         # The default remains pyserial.  Tests and the web console's --mock
         # mode inject a pyserial-shaped transport without monkeypatching this
         # module or opening a real device.
@@ -458,6 +586,18 @@ class Rig:
                 # Absent on firmware predating the mode latch. None means
                 # "the board did not say", not "vertical".
                 self.ready_mode = ack.fields.get("mode")
+
+            # Notify BEFORE queueing. The queue is what a waiting `build()`
+            # drains, and the waiter may return the moment it sees a terminal
+            # ack; doing the callbacks first keeps them in wire order even
+            # when the caller's thread is faster than this one.
+            if self._on_progress is not None:
+                progress = parse_progress(ack)
+                if progress is not None:
+                    self._on_progress(progress)
+            if self._on_ack is not None:
+                self._on_ack(ack)
+
             self._put((_ACK, ack, time.monotonic()))
 
     def _put(self, event) -> None:

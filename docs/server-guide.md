@@ -146,13 +146,58 @@ these paths to the single backend process:
 | Browser path | Backend route |
 | --- | --- |
 | `/api/state` | REST state snapshot |
-| `/api/events` | WebSocket state/log stream |
+| `/api/events` | WebSocket event stream (state, build phases, serial, results) |
 | `/api/stream.mjpg` | shared MJPEG camera stream |
 | `/api/select`, `/api/build`, `/api/level`, etc. | guarded commands |
 | `/api/calibration/*` | guarded calibration routes |
 
 The frontend must not cache `/api/*`, `/api/events`, or the MJPEG stream. Only
 the app shell may be precached; stale rig state or camera imagery is unsafe.
+
+### The `/api/events` protocol
+
+Every frame carries `type`, a monotonic `event_id` and an `at` timestamp in
+epoch milliseconds. There are five fact types plus one envelope:
+
+| `type` | Carries |
+| --- | --- |
+| `state` | the whole `StateModel` snapshot, under `state` |
+| `build_step` | one firmware build phase: `command_seq`, `step`, `total`, `phase`, `label`, `action`, `status` |
+| `build_result` | one settled build: `command_seq`, `result`, `reason`, `locked`, `locked_reason`, `from_prose` |
+| `serial` | one raw line the rig printed, under `line`, with `stream` (`rig` / `error`) |
+| `heartbeat` | nothing but its id — proof the socket is alive |
+| `replay` | the envelope a reconnect's missed events arrive in: `events`, plus `gap` |
+
+**Priority.** `serial`, `build_step` and `build_result` are DURABLE: delivered
+exactly once each, in order, and kept in a bounded server-side replay buffer.
+`state` is COALESCED: each client holds only the newest pending snapshot,
+because a snapshot describes *now* and an older one has no value once a newer
+one exists. Durable events are always sent first, so a backlog of camera
+geometry can never delay a build phase.
+
+**Rate.** A state snapshot goes out immediately whenever something semantic
+changes — a selection, a phase, a result. A snapshot whose only change is
+camera geometry is throttled to `geometry_hz` (default 5) rather than the
+driver's 20 Hz.
+
+**Reconnecting.** Open with `?after=<the newest durable event_id you applied>`
+and the server replays everything after it, in one `replay` envelope. If that
+id predates the buffer, `gap` is true and the client says so rather than
+pretending its log is continuous. Deduplicate with `>` on the id — **never by
+comparing text**, because two identical serial lines are two real lines, and
+**never** by assuming `previous + 1`, because coalesced snapshots and
+heartbeats consume ids without being replayable.
+
+**What the build fields mean.** `build_phase_status` walks `idle → accepted →
+validating → running → parking → placed | rejected | aborted | locked`.
+`parking` is still a RUNNING command: the block is down and the rig is tidying
+up. `build_release_confirmed` is phase 11's `status=done` — the jaws opened —
+and is **not** a placement. Nothing says `placed` before the terminal `@n OK`
+arrives as a `build_result`.
+
+The firmware reports PHASES, not motor positions. There is no continuous
+position telemetry, so no client may claim to know where the arm is between
+phases.
 
 ## 6. Safety rules while operating
 

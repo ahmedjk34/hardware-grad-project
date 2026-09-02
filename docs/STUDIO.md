@@ -50,11 +50,13 @@ console this attaches to).
 | `studio/rigmodel.test.ts` | 19 | lossless round trip, eight named corrupt-file refusals, the migration hook, the library array file |
 | `studio/library.test.ts` | 20 | CRUD, index/body split, one corrupt body costing one card, unavailable and full storage, the budget refusal, export/import |
 | `studio/examples.test.ts` | 23 | the three examples as fixtures — round trip, no errors, compiled program, grid bounds, author order |
-| `studio/twin.test.ts` | 39 | every row of Plan 4 §9.2, LOCKED's explicit `animating === false`, the confirmation fold, and three **recorded** `/api/events` sessions (placed, rejected, aborted) |
-| `studio/runner.test.ts` | 15 | every named transition, feeder sequencing, abort program position, elapsed/ETA arithmetic, plus an exhaustive all-event walk proving no second build and no serial effect while RUNNING |
+| `studio/twin.test.ts` | 60 | every row of Plan 4 §9.2, LOCKED's explicit `animating === false`, the confirmation fold, all fourteen firmware phase ids, "exports no descent timer", and three **recorded** `/api/events` sessions (placed, rejected, aborted) replayed through the real store |
+| `studio/runner.test.ts` | 25 | every named transition, serial phases that never advance the cursor, socket-loss pause and phase-driven resume, HELD locks / SAFE does not, feeder sequencing, abort program position, elapsed/ETA arithmetic, plus an exhaustive all-event walk proving no second build and no serial effect while RUNNING |
 | `studio/runner-driver.test.ts` | 7 | the level/select/verify/build/mode request sequence against a mocked API, axis selection, zero-API dry transport and the defensive RUNNING refusal |
 | `studio/run-report.test.ts` | 2 | deterministic event-derived Markdown, verbatim failures, durations, verification and camera evidence |
-| `components/RunnerPanel.test.tsx` | 5 | full dry tower with no API traffic, mismatch stop, honest stop copy, rejected pause and abort lock |
+| `components/RunnerPanel.test.tsx` | 8 | full dry tower with no API traffic, mismatch stop, honest stop copy, rejected pause and abort lock, the rig's own phase readout, fourteen phases advancing nothing, stale-on-disconnect |
+| `store.test.ts` | 20 | `build_step` applied with no timer advanced, id deduplication, phase/snapshot tie-breaks, the reconnect cursor, terminal-only `placed` |
+| `ws.test.ts` | 7 | immediate delivery against a fake socket, the `?after=` cursor, replay envelope, backoff, unparseable frames |
 | `components/TwinPanel.test.tsx` | 7 | the read-only mode label, SYNC VIEW, locked/stale/rejected banners, controlled model picker, and desktop/phone instrument layout |
 | `studio/thumbnail.test.ts` | 5 | the bottom-up row flip, the 16:10 sizes, graceful absence of `OffscreenCanvas` |
 | `studio/panels/LibraryDrawer.test.tsx` | 18 | cards and meta line, inline rename, duplicate, delete with a real undo, the storage strip, the budget refusal, drop-import confirmation |
@@ -683,16 +685,50 @@ Two more deviations, both deliberate:
 **LOCKED beats a dropped socket on purpose:** a locked session that has also
 lost its socket is still a locked session, and that is the more expensive fact.
 
-`twinSignature(state, progress, options)` is the other rule in here. The pipeline
-driver notifies on every camera frame, so `/api/events` delivers ~20 states a
-second that differ only in `camera_age_ms`; the signature states exactly what the
-picture depends on, and `TwinPanel` recomputes the scene — and therefore redraws
-the canvas — only when it changes.
+`twinSignature(state, progress, options, build)` is the other rule in here. The
+server now publishes a state snapshot only when something semantic changes, and
+throttles camera-geometry-only snapshots to ~5 Hz, but the signature stays: it
+states exactly what the picture depends on — including the build phase — and
+`TwinPanel` recomputes the scene, and therefore redraws the canvas, only when it
+changes.
 
-`descentOffsetScene()` is **an illustration of a descent, not a telemetry
-read-out**: the Arduino is deaf while `buildBlock()` runs and reports nothing
-until it is done, so the loop is timed against nothing in particular. Reduced
-motion returns exactly 0.
+### The twin is phase-driven, and there is no descent timer
+
+`twinScene(..., build)` takes the `BuildProgress` the store folded out of
+`build_step` events, and `twinPhase()` maps the firmware's phase id to one of
+seventeen visual states. `PHASE_BY_ID` is the whole mapping and `twin.test.ts`
+asserts every row of it against the fourteen ids in `plans/ack-protocol.md`.
+
+`descentOffsetScene()` **is gone.** It interpolated a looping 1.6-second descent
+off `performance.now()` and returned a height nobody had measured — and it
+looped, so a forty-second build showed twenty-five descents that had never
+happened. It was honest about being an illustration in its own docstring, and it
+was still the thing on screen that an operator would read as position.
+
+What replaced it says only what the firmware said:
+
+- `blockOffset` is `phaseOffsetScene(phase)` and has **exactly two values**:
+  travel height while the rig is carrying (`lift_block`, `move_to_target`,
+  `rotate_to_grid`, `lower_to_level`), and zero otherwise. `lower_to_level` is
+  deliberately still at travel height: the phase has BEGUN, and that is all
+  anyone knows. It drops on the release event, which is a fact.
+- `indicator` says the phase is motion, and the component pulses OPACITY for
+  it. An opacity pulse cannot be misread as a position; an interpolated height
+  can.
+- `carrying` runs from `grip` to `release`, and drops the moment phase 11's
+  `status=done` arrives.
+- `released` is that same `done`. It is **not** `placed`: the block is on the
+  stack but the command is still running and the rig still has to park. Only
+  the terminal `build_result` sets `phase: "placed"`.
+- A dead socket freezes everything: the last phase stays on screen, because it
+  is the last thing known, and `animating`/`indicator` both go false, because
+  "still going" is exactly what nobody can tell.
+- `LOCKED`/aborted beats every phase, stops the animation dead, and never
+  places anything.
+
+If exact continuous motion is ever wanted it has to come from throttled
+firmware telemetry inside the movement loops — never from a clock in a browser,
+and never by raising the baud.
 
 `twin.fixtures.json` is dumped by `python/tools/dump_twin_states.py` from
 `web.app` running against `MockBoard`: three sessions — placed, rejected,
@@ -1154,6 +1190,56 @@ first in the diff.
 Newest first. One entry per landed change; note anything that contradicts the
 plan or that a future reader could not infer.
 
+### Serial-driven build progress — the firmware says what it is doing
+
+The console could not tell an operator anything about the forty seconds between
+"RUNNING" and "READY", so the twin illustrated a descent that had not happened
+and the runner had only coarse state to go on. The firmware now reports every
+phase and the whole stack carries it.
+
+- **Firmware** (`build_test_v1.ino`): `buildStep()` emits
+  `@n STEP step= total= phase= action= text= status=begin` before each of the
+  fourteen phases, plus one `status=done` at phase 11 (the confirmed release,
+  which nothing else can carry because `BUILD_PARK_AFTER_PLACE` may be false).
+  `handleBuildCommand()` emits `@n RECV` when the arguments parse. New
+  `ackWord()` — deliberately NOT an `ackField()` overload, because `0` is also
+  a null pointer constant and the overload would make every numeric call site
+  ambiguous. Baud is untouched: fourteen lines is ~0.3 s of 9600-baud airtime,
+  and per-step telemetry would be minutes of it. Verified byte-for-byte on a
+  host g++ stub build; **not flashed.**
+- **Pi** (`rig/link.py`): `SerialProgress`, `parse_progress()`, and
+  `on_progress` / `on_ack` constructor callbacks called on the reader thread in
+  wire order. `MockBoard` speaks the same stream so the console is testable
+  off-rig, with `fail_next_build(..., at_step=)` for a mid-carry abort.
+- **New `python/web/events.py`**: the durable/coalesced split. `serial`,
+  `build_step` and `build_result` are delivered once each in order and kept in a
+  replay buffer; `state` is coalesced to one pending snapshot per client.
+  Durable first, always — camera geometry can no longer delay a build phase.
+  Every event has a monotonic id and a timestamp.
+- **New `python/web/progress.py`**: the status machine, `idle → accepted →
+  validating → running → parking → placed | rejected | aborted | locked`. It is
+  the only route to a terminal status, and `placed` comes from the terminal OK
+  and from nothing before it.
+- **`web/app.py`**: `process_once` and `cv2.imencode` moved to ONE dedicated
+  worker thread (not the default pool — `AGENTS.md` §7's single-owner rule), so
+  the loop stays free for serial callbacks. State snapshots publish immediately
+  on a semantic change and at `geometry_hz` (5) otherwise, instead of 20 Hz
+  unconditionally. `/api/events` accepts `?after=<id>` and replays.
+- **Browser**: `store.ts` folds events into a `BuildProgress` and deduplicates
+  by ID — never by text overlap, which used to swallow a genuinely repeated
+  serial line. `ws.ts` lost its `setTimeout` batch entirely; a phase reaches
+  React on the turn it arrives. The runner shows the rig's own phase and
+  still advances only on a terminal `placed`; `runTiming` survives as an
+  estimate and is now labelled `(est.)`.
+- **The twin**: `descentOffsetScene()` deleted, phase mapping added — see §6
+  above. `twin.fixtures.json` regenerated and now carries the recorded EVENT
+  stream as well as the states, so the phase mapping is tested against what the
+  server actually sends. The recorded abort now dies at phase 8, mid-carry,
+  which is the case the twin has to get right.
+- **Still true and worth restating:** there is no continuous position telemetry.
+  The firmware reports phases. Nothing in this stack knows where the arm is
+  between them, and nothing in it is allowed to pretend otherwise.
+
 ### Horizontal grid error offset → +0.5 cm X / +0.3 cm Y
 
 - `config/rig.json` `grid.modes.horizontal`: `error_offset_x_cm` 0.0 → **0.5**,
@@ -1298,7 +1384,9 @@ plan or that a future reader could not infer.
 
 - Added `studio/twin.ts`: the whole of Plan 4 §9 as one pure mapping —
   `twinScene()`, the `foldTwinProgress()` confirmation fold, `twinSignature()`
-  and `descentOffsetScene()`. No React and no three.js in it; `scene/Twin.tsx`
+  and `descentOffsetScene()` (the last of these was deleted later — see the
+  serial-driven build progress entry at the top). No React and no three.js in
+  it; `scene/Twin.tsx`
   draws what it returns and decides nothing.
 - Added `python/tools/dump_twin_states.py` and `studio/twin.fixtures.json`:
   three real `/api/events` sessions (placed, rejected, aborted) recorded from

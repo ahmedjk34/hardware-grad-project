@@ -791,6 +791,15 @@ svg.grid-overlay.selectable { cursor: crosshair; }
 .log-line.ack    { color: var(--signal); }
 .log-line.error  { color: var(--danger); }
 .log-line.placed { color: var(--ready); }
+/* A structured `@n STEP` phase. The raw line is still printed verbatim; the
+   summary is the readable version drawn beside it. */
+.log-line.step { grid-template-columns: 68px auto minmax(0, 1fr); color: var(--motion); }
+.log-line.step .log-step {
+  font-weight: 600;
+  color: var(--motion);
+  white-space: nowrap;
+}
+.log-line.step > span:last-child { color: var(--text-faint); }
 .log-empty { padding: var(--s3); font-family: var(--font-mono); font-size: 12.5px; color: var(--text-faint); }
 
 .jump-latest {
@@ -1602,6 +1611,36 @@ svg.grid-overlay.selectable { cursor: crosshair; }
 .runner-program .is-future { opacity: .32; }
 .runner-stop { display: flex; }
 .runner-honest { color: var(--text-dim); }
+
+/* What the RIG says it is doing, phase by phase. Nothing here is timed in the
+   browser, so nothing here animates a position: the bar counts phases, which
+   is exactly what the firmware reports. */
+.runner-operation {
+  display: grid;
+  gap: var(--s1);
+  padding: var(--s3);
+  border: 1px solid var(--line);
+  border-radius: var(--r2);
+  background: var(--motion-deep, transparent);
+}
+.runner-operation strong {
+  font: var(--t-sm);
+  font-family: var(--font-mono);
+  color: var(--motion);
+  letter-spacing: .02em;
+}
+.runner-operation span { font: var(--t-xs); color: var(--text-dim); }
+.runner-phase-bar {
+  width: 100%;
+  height: 4px;
+  border: 0;
+  border-radius: 2px;
+  background: var(--line);
+  appearance: none;
+}
+.runner-phase-bar::-webkit-progress-bar { background: var(--line); border-radius: 2px; }
+.runner-phase-bar::-webkit-progress-value { background: var(--motion); border-radius: 2px; }
+.runner-phase-bar::-moz-progress-bar { background: var(--motion); border-radius: 2px; }
 
 .runner-report { display: grid; gap: var(--s2); min-width: 0; }
 .runner-report-head { display: flex; align-items: center; gap: var(--s2); font: var(--t-xs); color: var(--text-dim); }

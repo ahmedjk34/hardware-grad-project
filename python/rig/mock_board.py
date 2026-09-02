@@ -65,6 +65,28 @@ class FakeSerial:
 class MockBoard:
     """An in-memory serial transport that speaks the rig's current protocol."""
 
+    #: The build phases the firmware announces, in order:
+    #: ``(step, phase, action, wire label)``.  Copied from
+    #: ``buildStep()``/``buildPark()`` in ``build_test_v1.ino`` — when the two
+    #: disagree the sketch is right, and ``test_link.py`` says so.
+    BUILD_PHASES = (
+        (1, "raise_clear", "move", "Raise_Z_into_the_top_switch"),
+        (2, "home_feeder", "move", "Home_XY_to_the_feeder"),
+        (3, "neutralise_claw", "rotate", "Return_the_claw_to_neutral"),
+        (4, "open_claw", "release", "Open_the_claw"),
+        (5, "lower_to_ground", "move", "Lower_Z_to_the_ground_switch"),
+        (6, "grip", "grip", "Close_the_claw_and_grip"),
+        (7, "lift_block", "move", "Raise_Z_to_carry_height"),
+        (8, "move_to_target", "move", "Move_XY_to_the_target_cell"),
+        (9, "rotate_to_grid", "rotate", "Apply_the_grid_rotation"),
+        (10, "lower_to_level", "move", "Lower_Z_to_the_target_level"),
+        (11, "release", "release", "Open_the_claw_and_release"),
+        (12, "park_clear", "park", "Raise_Z_clear_of_the_stack"),
+        (13, "park_home", "park", "Return_XY_to_the_origin"),
+        (14, "park_rotation", "park", "Return_the_claw_to_neutral"),
+    )
+    BUILD_STEP_COUNT = len(BUILD_PHASES)
+
     def __init__(self, *, grid: str = "6x5", mode: str = "vertical",
                  build_seconds: float = 0.5):
         if mode not in {"vertical", "horizontal"}:
@@ -82,6 +104,12 @@ class MockBoard:
         self._lock = threading.Lock()
         self._next_build_failure: tuple[str, str] | None = None
         self._drop_next_build_ack = False
+        # The board assigns the sequence number, so the mock does too.  Seq 0
+        # is reserved for BOOT/READY, exactly as in the firmware.
+        self._seq = 0
+        #: Which phase a scripted failure should die at, so a test can watch
+        #: an abort land mid-carry rather than only at the end.
+        self._fail_at_step = 0
         self._emit((
             "@0 BOOT fw=mock-board",
             "=== GRID ===",
@@ -90,13 +118,25 @@ class MockBoard:
         ))
 
     def fail_next_build(self, kind: str = "ABORTED",
-                        reason: str = "simulated abort") -> None:
-        """Make the next build finish as a safe rejection or unknown abort."""
+                        reason: str = "simulated abort",
+                        at_step: int = 0) -> None:
+        """Make the next build finish as a safe rejection or unknown abort.
+
+        ``at_step`` is which phase an ABORTED/HELD build dies at, 1-based.  The
+        default 0 means "after the last phase", which is where a parking
+        failure lands.  A rejection never reaches a phase at all: the firmware
+        refuses it during validation, before anything moves, so a REJECTED
+        build emits no STEP lines whatever ``at_step`` says.
+        """
         kind = str(kind).upper()
         if kind not in {"ABORTED", "HELD", "REJECTED", "SAFE", "ERR"}:
             raise ValueError("kind must be ABORTED/HELD or REJECTED/SAFE/ERR")
+        at_step = int(at_step)
+        if not 0 <= at_step <= self.BUILD_STEP_COUNT:
+            raise ValueError(f"at_step must be 0..{self.BUILD_STEP_COUNT}")
         with self._lock:
             self._next_build_failure = kind, str(reason)
+            self._fail_at_step = at_step
 
     def drop_next_ack(self) -> None:
         """Suppress only the next build's terminal ``@`` line."""
@@ -185,38 +225,74 @@ class MockBoard:
             return
         self._emit((f"GRID MODE: {previous}  ->  {wanted}",))
 
+    def _step_line(self, seq: int, step: int, phase: str, action: str,
+                   label: str, status: str) -> str:
+        return (f"@{seq} STEP step={step} total={self.BUILD_STEP_COUNT} "
+                f"phase={phase} action={action} text={label} status={status}")
+
     def _handle_build(self, command: str) -> None:
         parts = command.split()
+        with self._lock:
+            self._seq += 1
+            seq = self._seq
         try:
             _, col, row, level = parts
             int(col), int(row), int(level)
         except ValueError:
-            self._emit(("BUILD REJECTED - bad arguments", "@3 ERR bad arguments"))
+            self._emit(("BUILD REJECTED - bad arguments", f"@{seq} ERR bad arguments"))
             return
 
         with self._lock:
             failure = self._next_build_failure
             self._next_build_failure = None
+            fail_at = self._fail_at_step
+            self._fail_at_step = 0
             drop_ack = self._drop_next_build_ack
             self._drop_next_build_ack = False
 
+        rejected = failure is not None and failure[0] not in {"ABORTED", "HELD"}
+        self._emit((f"@{seq} RECV cmd=B col={col} row={row} level={level}",))
+
         def finish():
-            if self._build_seconds:
-                time.sleep(self._build_seconds)
-            if failure is None:
-                lines = [f"BUILD COMPLETE - block placed at [{col},{row}] level {level}",
-                         "PARKED - Z at the top, X/Y at the origin."]
-                if not drop_ack:
-                    lines.append(f"@3 OK col={col} row={row} level={level}")
-            elif failure[0] in {"ABORTED", "HELD"}:
-                lines = [f"BUILD ABORTED - {failure[1]}"]
-                if not drop_ack:
-                    lines.append(f"@3 HELD {failure[1]}")
-            else:
+            if rejected:
+                # Refused during validation.  Nothing moved, so there is no
+                # phase to announce — that absence is itself information.
+                if self._build_seconds:
+                    time.sleep(self._build_seconds)
                 ack = "ERR" if failure[0] == "ERR" else "SAFE"
                 lines = [f"BUILD REJECTED - {failure[1]}", "Nothing moved."]
                 if not drop_ack:
-                    lines.append(f"@3 {ack} {failure[1]}")
+                    lines.append(f"@{seq} {ack} {failure[1]}")
+                self._emit(tuple(lines))
+                return
+
+            aborting = failure is not None
+            last = fail_at if (aborting and fail_at) else self.BUILD_STEP_COUNT
+            # Spread the phases across the whole build so a consumer sees them
+            # arrive one at a time, the way a 40-second build delivers them.
+            pause = (self._build_seconds / max(1, last)) if self._build_seconds else 0.0
+
+            for step, phase, action, label in self.BUILD_PHASES[:last]:
+                self._emit((self._step_line(seq, step, phase, action, label, "begin"),
+                            f"[BUILD {step}/{self.BUILD_STEP_COUNT}] {label}"))
+                if pause:
+                    time.sleep(pause)
+                # The one 'done': the block has left the claw.  Not emitted when
+                # the run dies before finishing the release.
+                if step == 11 and not (aborting and fail_at == 11):
+                    self._emit((self._step_line(seq, step, phase, action, label,
+                                                "done"),))
+
+            if aborting:
+                lines = [f"BUILD ABORTED - {failure[1]}",
+                         "*** The claw may still be holding a block. Check the rig."]
+                if not drop_ack:
+                    lines.append(f"@{seq} HELD {failure[1]}")
+            else:
+                lines = [f"BUILD COMPLETE - block placed at [{col},{row}] level {level}",
+                         "PARKED - Z at the top, X/Y at the origin."]
+                if not drop_ack:
+                    lines.append(f"@{seq} OK col={col} row={row} level={level}")
             self._emit(tuple(lines))
 
         threading.Thread(target=finish, name="mock-board-build", daemon=True).start()

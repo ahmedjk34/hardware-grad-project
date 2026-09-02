@@ -22,6 +22,7 @@ import {
   emptyTwinProgress, foldTwinProgress, loadTwinModel, twinModelChoices, twinModelOf, twinScene,
   twinSignature,
 } from "../studio/twin";
+import { emptyProgress, type BuildProgress } from "../store";
 import type { StateModel } from "../types";
 
 const Twin = lazy(preloadTwin);
@@ -60,9 +61,11 @@ function useStaleSeconds(connected: boolean, lastUpdateAt: number | null): numbe
 }
 
 export function TwinPanel({ state, connected, lastUpdateAt, modelId: controlledModelId,
-  onModelIdChange, modelSelectionDisabled = false }: {
+  onModelIdChange, modelSelectionDisabled = false, build = emptyProgress() }: {
   state: StateModel | null;
   connected: boolean;
+  /** The phase the RIG reported. What the twin animates, and the only thing. */
+  build?: BuildProgress;
   /** When the last state message arrived, for the STALE age. */
   lastUpdateAt: number | null;
   /** Controlled by App while a program is armed so the twin cannot diverge. */
@@ -95,9 +98,10 @@ export function TwinPanel({ state, connected, lastUpdateAt, modelId: controlledM
   // only in the camera's frame age. `twinSignature` is the pure statement of
   // what the twin actually depends on; re-rendering the canvas for anything
   // else would cost the video stream frames for no picture change at all.
-  const signature = twinSignature(state, progress, options);
+  const signature = twinSignature(state, progress, options, build);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const scene = useMemo(() => twinScene(state, model, progress, options), [signature, model]);
+  const scene = useMemo(() => twinScene(state, model, progress, options, build),
+                        [signature, model]);
 
   return (
     <div className={`twin${scene.desaturate ? " is-locked" : ""}${scene.banner === "stale" ? " is-stale" : ""}`}>
@@ -167,7 +171,15 @@ export function TwinPanel({ state, connected, lastUpdateAt, modelId: controlledM
           {model.blocks.length} blocks · {progress.confirmed.length} placed
         </span>
         {scene.banner === "running" && (
-          <span className="chip is-motion"><Icon name="stale" size={13} />{scene.bannerText}</span>
+          <span className="chip is-motion" aria-live="polite">
+            <Icon name="stale" size={13} />
+            {scene.phaseStep !== null && scene.phaseTotal !== null
+              ? `${scene.phaseStep}/${scene.phaseTotal} · `: ""}
+            {scene.phaseLabel ?? scene.bannerText ?? "waiting for the rig"}
+          </span>
+        )}
+        {scene.released && scene.banner === "running" && (
+          <span className="chip is-idle">RELEASED · parking — not placed yet</span>
         )}
         {scene.banner === "rejected" && (
           <span className="chip is-motion">
@@ -178,8 +190,10 @@ export function TwinPanel({ state, connected, lastUpdateAt, modelId: controlledM
 
       <p className="reason twin-readonly">
         <Icon name="waiting" size={14} />
-        Read-only mirror of the rig. Switching grid mode homes the rig — it is in
-        the Grid mode panel, never here.
+        Read-only mirror of the rig, phase by phase as the firmware reports them.
+        There is no continuous position telemetry, so nothing here claims to know
+        where the arm is between phases. Switching grid mode homes the rig — it is
+        in the Grid mode panel, never here.
       </p>
     </div>
   );

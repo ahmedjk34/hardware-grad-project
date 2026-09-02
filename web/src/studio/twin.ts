@@ -23,6 +23,20 @@
  * "Stops animating" is a FIELD here, asserted in `twin.test.ts`, rather than an
  * absence of a `useFrame` call in a component nobody can test.
  *
+ * WHAT THE TWIN NOW KNOWS. The firmware announces every build phase, so the
+ * twin no longer has to guess at a 40-second silence. `twinScene` takes the
+ * `BuildProgress` the store folded out of those events, and the visual state is
+ * a pure mapping of the phase id the RIG reported. There is no descent timer
+ * any more, and there must never be one again: a local clock that claims the
+ * arm is half way down is inventing telemetry the machine never sent.
+ *
+ * What phase-level truth cannot do is say WHERE the arm is between phases. The
+ * firmware reports "lowering to level", not a height, so the twin shows the
+ * block at the height the phase implies — carried at travel height, or resting
+ * in its cell — plus an activity indicator that says "this is in motion". The
+ * indicator is honest about being an indicator; an interpolated height would
+ * not be.
+ *
  * ONE DEVIATION from the milestone prompt, recorded in docs/STUDIO.md: the
  * signature is `twinScene(state, model, progress, options)` rather than
  * `(state, model, confirmed)`. `progress` IS the confirmed set — plus the
@@ -30,18 +44,84 @@
  * which the component would otherwise have to remember itself. Remembering is a
  * rule, and rules do not live in components.
  */
+import { emptyProgress, type BuildProgress } from "../store";
 import { commandText } from "./compile";
 import { MM_PER_CM, SCENE_UNITS_PER_MM, type ModeName } from "./coords";
 import { EXAMPLES, exampleById } from "./examples";
 import { listModels, readModel, type LibraryOptions } from "./library";
 import type { Model, ModelBlock } from "./model";
 import { structureOf, type StudioModel } from "./rigmodel";
-import { ENVELOPE_Z_CM, easeInOut } from "./view";
+import { ENVELOPE_Z_CM } from "./view";
 import type { StateModel } from "../types";
 
 /** The five appearances of Plan 4 §9.2, and nothing between them. */
 export type TwinAppearance = "ghost" | "target" | "building" | "placed" | "rejected";
 export type TwinBanner = "none" | "running" | "rejected" | "locked" | "stale";
+
+/**
+ * What the machine is doing, as one word the scene can be drawn from.
+ *
+ * Every one of these except `idle`, `target`, `placed`, `rejected` and
+ * `aborted` is a PHASE THE FIRMWARE REPORTED. The mapping is one-to-one with
+ * `buildStep()`'s phase ids in `build_test_v1.ino`; when the two disagree the
+ * sketch is right, and `twin.test.ts` checks every id in the table.
+ */
+export type TwinPhase =
+  | "idle" | "target"
+  | "raising-clearance" | "homing-feeder" | "neutralising-claw" | "opening-claw"
+  | "lowering-to-ground" | "gripping" | "lifting" | "moving-to-target"
+  | "rotating" | "lowering-to-level" | "releasing" | "parking"
+  | "placed" | "rejected" | "aborted";
+
+/** The firmware's phase id -> what the twin shows. The whole mapping. */
+export const PHASE_BY_ID: Record<string, TwinPhase> = {
+  raise_clear: "raising-clearance",
+  home_feeder: "homing-feeder",
+  neutralise_claw: "neutralising-claw",
+  open_claw: "opening-claw",
+  lower_to_ground: "lowering-to-ground",
+  grip: "gripping",
+  lift_block: "lifting",
+  move_to_target: "moving-to-target",
+  rotate_to_grid: "rotating",
+  lower_to_level: "lowering-to-level",
+  release: "releasing",
+  park_clear: "parking",
+  park_home: "parking",
+  park_rotation: "parking",
+};
+
+/**
+ * The phases during which a block is IN THE CLAW.
+ *
+ * It starts at `gripping` — the jaws closing on the block at the feeder — and
+ * ends at `releasing`, which is the phase in which it is let go. Everything
+ * before is an empty claw travelling to the feeder; everything after is the
+ * rig parking with nothing in it.
+ */
+const CARRYING: ReadonlySet<TwinPhase> = new Set<TwinPhase>([
+  "gripping", "lifting", "moving-to-target", "rotating", "lowering-to-level",
+  "releasing",
+]);
+
+/**
+ * The phases in which the block is above its cell rather than in it.
+ *
+ * `lowering-to-level` is in this set deliberately: the phase has BEGUN, and
+ * the only thing the machine has told us is that it began. Drawing the block
+ * part way down would be a claim about a height nobody measured. It drops when
+ * the release event arrives, which is a fact.
+ */
+const ALOFT: ReadonlySet<TwinPhase> = new Set<TwinPhase>([
+  "lifting", "moving-to-target", "rotating", "lowering-to-level",
+]);
+
+/** Phases that are motion, and so earn the activity indicator. */
+const IN_MOTION: ReadonlySet<TwinPhase> = new Set<TwinPhase>([
+  "raising-clearance", "homing-feeder", "neutralising-claw", "opening-claw",
+  "lowering-to-ground", "gripping", "lifting", "moving-to-target", "rotating",
+  "lowering-to-level", "releasing", "parking",
+]);
 
 /** Present, but clearly not real. Plan 4 §9.2's own number; the milestone
  *  prompt's 12% disappears completely against `--void` at twin scale. */
@@ -53,9 +133,6 @@ export const BUILDING_OPACITY = 0.85;
 export const DESATURATE_TOKEN = "--text-faint";
 /** How far. Not all the way: a completely flat twin reads as a broken canvas. */
 export const LOCKED_MIX = 0.85;
-
-/** One descent, start to finish. Illustrative — see `descentOffsetScene`. */
-export const DESCENT_MS = 1600;
 
 export interface TwinBlock {
   id: string;
@@ -85,6 +162,28 @@ export interface TwinScene {
   /** A READ-ONLY mirror of `state.mode`. The twin never latches anything. */
   mode: ModeName | null;
   targetId: string | null;
+
+  // ── What the rig said it is doing ───────────────────────────────────────
+  /** The visual state, mapped from the phase the FIRMWARE reported. */
+  phase: TwinPhase;
+  /** The rig's own words for it, e.g. "Move XY to the target cell". */
+  phaseLabel: string | null;
+  /** `8 / 14`, from the wire. Null when no command is in flight. */
+  phaseStep: number | null;
+  phaseTotal: number | null;
+  /** True while a block is in the claw. */
+  carrying: boolean;
+  /** True once phase 11 confirmed the release. Still not `placed`. */
+  released: boolean;
+  /** How far above its cell the block in flight sits. Two values only. */
+  blockOffset: number;
+  /**
+   * Draw the activity indicator: the phase is motion and the socket is live.
+   *
+   * It is an INDICATOR, not a position. The firmware reports phases, not motor
+   * counts, so this says "the rig is moving" and never "the rig is here".
+   */
+  indicator: boolean;
 }
 
 export interface TwinOptions {
@@ -178,7 +277,7 @@ function current(progress: TwinProgress, target: ModelBlock | null): TwinProgres
     ? { ...progress, rejectedId: null, rejectedReason: null } : progress;
 }
 
-// ── The descent ────────────────────────────────────────────────────────────
+// ── Where the block is ─────────────────────────────────────────────────────
 
 /** Travel height in scene units, from the firmware's own Z_TRAVEL_CM. */
 export const TRAVEL_SCENE_Y = ENVELOPE_Z_CM * MM_PER_CM * SCENE_UNITS_PER_MM;
@@ -186,15 +285,67 @@ export const TRAVEL_SCENE_Y = ENVELOPE_Z_CM * MM_PER_CM * SCENE_UNITS_PER_MM;
 /**
  * How far above its cell the block in flight is drawn, in scene units.
  *
- * This is an ILLUSTRATION OF A DESCENT, NOT A TELEMETRY READ-OUT. The firmware
- * reports nothing during a build — the Arduino is deaf until `buildBlock()`
- * returns — so nothing here is timed against the real cycle and nothing here
- * should ever be read as the arm's real height. It loops until the result lands.
+ * TWO VALUES, AND NOTHING BETWEEN THEM. The firmware knows two things about Z
+ * during a carry: it is at the top switch, or it has been commanded to a level.
+ * It reports neither as a number, so this reports neither as a number. A block
+ * being carried is drawn at travel height; a block that has been RELEASED —
+ * a fact, from phase 11's `status=done` — is drawn in its cell.
+ *
+ * The old version of this function interpolated a 1.6-second descent off
+ * `performance.now()`. It is gone on purpose: it drew the arm at a height
+ * nobody had measured, and it looped, so a build that took forty seconds
+ * showed twenty-five descents that had never happened. If exact continuous
+ * motion is ever wanted, it has to come from throttled firmware telemetry, not
+ * from a clock in a browser.
  */
-export function descentOffsetScene(elapsedMs: number, reducedMotion: boolean): number {
-  if (reducedMotion) return 0;
-  const t = Math.max(0, elapsedMs % DESCENT_MS) / DESCENT_MS;
-  return TRAVEL_SCENE_Y * (1 - easeInOut(t));
+export function phaseOffsetScene(phase: TwinPhase): number {
+  return ALOFT.has(phase) ? TRAVEL_SCENE_Y : 0;
+}
+
+/** Whether the machine is mid-motion in this phase, for the activity pulse. */
+export function phaseIsMoving(phase: TwinPhase): boolean {
+  return IN_MOTION.has(phase);
+}
+
+/** Whether a block is in the claw in this phase. */
+export function phaseIsCarrying(phase: TwinPhase): boolean {
+  return CARRYING.has(phase);
+}
+
+/**
+ * The one function that decides what the machine is doing.
+ *
+ * Order matters and is the safety argument:
+ *
+ * 1. **locked/aborted first.** After an abort nothing else is known, so no
+ *    phase from before it may be shown as if it were still happening.
+ * 2. **the terminal result next**, because `placed` is earned by the OK and by
+ *    nothing before it, and `rejected` means nothing moved.
+ * 3. **the reported phase**, if there is one.
+ * 4. **target**, when the server has a selection but no command in flight.
+ * 5. **idle**.
+ *
+ * An unknown phase id — firmware newer than this browser — falls through to a
+ * generic `moving-to-target` rather than to `idle`: "something is happening and
+ * I do not know what" is closer to the truth than "nothing is happening".
+ */
+export function twinPhase(state: StateModel | null, progress: BuildProgress,
+                          hasTarget: boolean): TwinPhase {
+  if (state?.build_state === "LOCKED" || progress.status === "locked") return "aborted";
+  if (progress.status === "aborted") return "aborted";
+  if (progress.status === "placed") return "placed";
+  if (progress.status === "rejected") return "rejected";
+  if (progress.status === "running" || progress.status === "parking") {
+    if (progress.phase === null) return "moving-to-target";
+    // The release is confirmed the instant phase 11 says `done`, even though
+    // the phase id is still `release` until phase 12 begins.
+    if (progress.phase === "release" && progress.releaseConfirmed) return "parking";
+    return PHASE_BY_ID[progress.phase] ?? "moving-to-target";
+  }
+  // `accepted` and `validating`: the command is out but the rig has not moved.
+  // That is not a phase, and drawing one would be inventing motion.
+  if (hasTarget) return "target";
+  return "idle";
 }
 
 // ── The scene ──────────────────────────────────────────────────────────────
@@ -229,7 +380,8 @@ function bannerOf(state: StateModel | null, progress: TwinProgress,
 }
 
 export function twinScene(state: StateModel | null, model: Model, progress: TwinProgress,
-                          options: TwinOptions): TwinScene {
+                          options: TwinOptions,
+                          build: BuildProgress = emptyProgress()): TwinScene {
   const banner = bannerOf(state, progress, options);
   const locked = banner === "locked";
   const confirmed = new Set(progress.confirmed);
@@ -237,6 +389,12 @@ export function twinScene(state: StateModel | null, model: Model, progress: Twin
   // longer describes anything anybody knows.
   const target = locked ? null : targetBlock(state, model);
   const running = state?.build_state === "RUNNING";
+  const phase = twinPhase(state, build, target !== null);
+  // A dead socket freezes everything. The last phase seen stays on screen —
+  // it is the last thing anyone knows — but nothing moves, because a moving
+  // indicator over a dead socket says "still going" and nobody can tell.
+  const live = options.connected && !locked && phase !== "aborted";
+  const moving = live && phaseIsMoving(phase) && !options.reducedMotion;
 
   const blocks = model.blocks.map<TwinBlock>(block => {
     const appearance: TwinAppearance =
@@ -269,10 +427,20 @@ export function twinScene(state: StateModel | null, model: Model, progress: Twin
     blocks,
     banner,
     bannerText,
-    animating: banner === "running" && !options.reducedMotion,
+    // Kept as a field, and still false the instant a session locks: an abort
+    // must stop the picture, not merely change its colour.
+    animating: moving,
     desaturate: locked,
     mode: state?.mode ?? null,
     targetId: target?.id ?? null,
+    phase,
+    phaseLabel: phase === "idle" || phase === "target" ? null : build.label,
+    phaseStep: build.step,
+    phaseTotal: build.total,
+    carrying: live && phaseIsCarrying(phase) && !build.releaseConfirmed,
+    released: build.releaseConfirmed,
+    blockOffset: locked || phase === "aborted" ? 0 : phaseOffsetScene(phase),
+    indicator: moving,
   };
 }
 
@@ -288,7 +456,8 @@ export function twinScene(state: StateModel | null, model: Model, progress: Twin
  * it is here and tested rather than inside a `useMemo` nobody can point at.
  */
 export function twinSignature(state: StateModel | null, progress: TwinProgress,
-                              options: TwinOptions): string {
+                              options: TwinOptions,
+                              build: BuildProgress = emptyProgress()): string {
   const stale = !state || !options.connected;
   return [
     state?.mode, state?.build_state, state?.selected?.join(","), state?.level,
@@ -297,6 +466,11 @@ export function twinSignature(state: StateModel | null, progress: TwinProgress,
     // The age only shows while the socket is down, where it is the whole point.
     stale ? Math.round(options.staleSeconds ?? 0) : 0,
     progress.confirmed.join("|"), progress.rejectedId, progress.rejectedReason,
+    // The phase is now part of the picture, so it has to be part of what says
+    // the picture changed — otherwise the twin would sit on one frame for a
+    // whole build. `eventId` alone would do it, but naming the fields keeps
+    // this readable as a statement of what the twin depends on.
+    build.phase, build.step, build.status, build.releaseConfirmed, build.eventId,
   ].join("~");
 }
 

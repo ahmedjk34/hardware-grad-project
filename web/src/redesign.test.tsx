@@ -11,41 +11,76 @@ import { Shortcuts } from "./components/Shortcuts";
 import { createConsoleStore, LOG_CAP } from "./store";
 import * as api from "./api";
 import type { StateModel } from "./types";
+import { testState } from "./test-state";
 
-const state = (overrides: Partial<StateModel> = {}): StateModel => ({
+const state = (overrides: Partial<StateModel> = {}): StateModel => testState({
   mode: "vertical", cols: 6, rows: 5, calibrated: true, selected: [3, 5],
-  command: "B 3 5 0", level: 1, build_state: "READY", locked_reason: null,
-  camera: "LIVE", camera_age_ms: 42, last_result: null, last_result_reason: null,
+  command: "B 3 5 0", level: 1, camera_age_ms: 42,
   views: { grid: true, detect: true, paper: false, overlay: true },
   geometry: { image_size: [640, 480], calibrated: true, grid: [], selected: null, detections: [], paper: null },
   ...overrides,
 });
 
+const serial = (id: number, line: string, stream: "rig" | "error" = "rig") =>
+  ({ type: "serial" as const, event_id: id, at: id, line, stream });
+
 describe("rig log buffer", () => {
-  it("appends only the new tail of a replayed log window and caps the buffer", () => {
+  it("appends each line once and caps the buffer", () => {
     const store = createConsoleStore();
-    store.mergeLog(["@0 READY", "@1 PLACED 3 5 0"]);
-    store.mergeLog(["@0 READY", "@1 PLACED 3 5 0", "ERROR limit"]);
+    store.applyEvent(serial(1, "@0 READY"));
+    store.applyEvent(serial(2, "@1 PLACED 3 5 0"));
+    store.applyEvent(serial(3, "ERROR limit"));
     expect(store.snapshot.log.map(line => line.text))
       .toEqual(["@0 READY", "@1 PLACED 3 5 0", "ERROR limit"]);
-    store.mergeLog(Array.from({ length: LOG_CAP + 50 }, (_, index) => `line ${index}`));
+    store.applyEvents(Array.from({ length: LOG_CAP + 50 },
+      (_, index) => serial(index + 4, `line ${index}`)));
     expect(store.snapshot.log).toHaveLength(LOG_CAP);
     expect(store.snapshot.log.at(-1)?.text).toBe(`line ${LOG_CAP + 49}`);
   });
 
-  it("colours lines by prefix and can be collapsed", () => {
+  it("keeps two identical lines, because the rig printed two", () => {
+    // The old store deduplicated by text overlap and would have swallowed the
+    // second of these. Two ids is two lines, whatever they say.
+    const store = createConsoleStore();
+    store.applyEvent(serial(1, "  AT ORIGIN. Position = X 0 / Y 0"));
+    store.applyEvent(serial(2, "  AT ORIGIN. Position = X 0 / Y 0"));
+    expect(store.snapshot.log).toHaveLength(2);
+  });
+
+  it("drops a repeat of an id it has already applied", () => {
+    const store = createConsoleStore();
+    store.applyEvent(serial(7, "@0 READY"));
+    store.applyEvent(serial(7, "@0 READY"));
+    store.applyEvent(serial(6, "an older line the replay overlapped"));
+    expect(store.snapshot.log).toHaveLength(1);
+  });
+
+  it("colours lines by kind, marks phases, and can be collapsed", () => {
     const log = [
-      { id: 0, text: "@2 ok", at: 0 },
-      { id: 1, text: "ERROR limit hit", at: 0 },
-      { id: 2, text: "PLACED 3 5 0", at: 0 },
-      { id: 3, text: "misc", at: 0 },
+      { id: 0, text: "@2 ok", at: 0, kind: "ack" as const },
+      { id: 1, text: "ERROR limit hit", at: 0, kind: "prose" as const },
+      { id: 2, text: "PLACED 3 5 0", at: 0, kind: "prose" as const },
+      { id: 3, text: "misc", at: 0, kind: "prose" as const },
+      {
+        id: 4, kind: "step" as const, at: 0,
+        text: "@12 STEP step=8 total=14 phase=move_to_target action=move"
+          + " text=Move_XY_to_the_target_cell status=begin",
+      },
     ];
     render(<RigLog log={log} defaultOpen />);
     expect(screen.getByText("@2 ok").parentElement).toHaveClass("ack");
     expect(screen.getByText("ERROR limit hit").parentElement).toHaveClass("error");
     expect(screen.getByText("PLACED 3 5 0").parentElement).toHaveClass("placed");
+    // The raw line survives verbatim; the summary is drawn beside it.
+    expect(screen.getByText(/@12 STEP step=8/).parentElement).toHaveClass("step");
+    expect(screen.getByText("8/14 Move XY to the target cell")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Collapse" }));
     expect(screen.queryByText("misc")).toBeNull();
+  });
+
+  it("says so when a reconnect could not be filled from the replay buffer", () => {
+    render(<RigLog log={[]} defaultOpen gap />);
+    expect(screen.getByText(/lines were missed/)).toBeInTheDocument();
   });
 });
 

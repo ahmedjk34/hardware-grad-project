@@ -100,6 +100,40 @@ BUILD_OK = [
     "@3 OK col=3 row=5 level=0",
 ]
 
+# The same build with the machine channel the firmware now prints: RECV, one
+# STEP per phase, the phase-11 'done' that confirms the release, then the OK.
+# Copied from the host-stub transcript in plans/ack-protocol.md.
+BUILD_WITH_STEPS = [
+    "@12 RECV cmd=B col=3 row=4 level=0",
+    "@12 STEP step=1 total=14 phase=raise_clear action=move"
+    " text=Raise_Z_into_the_top_switch status=begin",
+    "[BUILD 1/14] Raise Z into the top switch (clearance)",
+    "@12 STEP step=6 total=14 phase=grip action=grip"
+    " text=Close_the_claw_and_grip status=begin",
+    "@12 STEP step=8 total=14 phase=move_to_target action=move"
+    " text=Move_XY_to_the_target_cell status=begin",
+    "@12 STEP step=11 total=14 phase=release action=release"
+    " text=Open_the_claw_and_release status=begin",
+    "@12 STEP step=11 total=14 phase=release action=release"
+    " text=Open_the_claw_and_release status=done",
+    "@12 STEP step=14 total=14 phase=park_rotation action=park"
+    " text=Return_the_claw_to_neutral status=begin",
+    "BUILD COMPLETE - block placed at [3,4] level 0 (0.00 cm)",
+    "@12 OK col=3 row=4 level=0",
+]
+
+# The abort that matters: it dies while CARRYING, so the last thing anyone
+# knows is phase 8 and the claw still has the block.
+BUILD_ABORTED_MID_CARRY = [
+    "@13 RECV cmd=B col=3 row=4 level=0",
+    "@13 STEP step=7 total=14 phase=lift_block action=move"
+    " text=Raise_Z_to_carry_height status=begin",
+    "@13 STEP step=8 total=14 phase=move_to_target action=move"
+    " text=Move_XY_to_the_target_cell status=begin",
+    "*** BUILD ABORTED - could not reach the target cell",
+    "@13 HELD could not reach the target cell",
+]
+
 BUILD_REJECTED = [
     "  BUILD REJECTED - cell out of range",
     "  Nothing moved.",
@@ -209,12 +243,17 @@ DEFAULT_REPLIES = {"S": GRID_RESIZED, "B": BUILD_OK, "0+": HOME_OK, "G": GOTO_OK
 
 
 def fake_rig(replies=None, acks=True, timeout=10, cfg=None, banner=None,
-             mode=None, **kwargs):
-    """A connected Rig talking to a FakeSerial. Returns (rig, fake)."""
+             mode=None, on_progress=None, on_ack=None, **kwargs):
+    """A connected Rig talking to a FakeSerial. Returns (rig, fake).
+
+    `on_progress` / `on_ack` are the Rig's own constructor callbacks, not
+    connect() arguments; every other keyword still goes to connect().
+    """
     script = {"banner": banner or BANNER, "replies": replies or DEFAULT_REPLIES}
     fake = FakeSerial(script, acks=acks)
     link.serial.Serial = lambda *a, **k: fake  # the whole point of the fake
-    rig = link.Rig(cfg=cfg or CFG, mode=mode)
+    rig = link.Rig(cfg=cfg or CFG, mode=mode, on_progress=on_progress,
+                   on_ack=on_ack)
     rig.connect(timeout=timeout, **kwargs)
     return rig, fake
 
@@ -549,6 +588,118 @@ rig.close()
 outcome, reason = link._prose_outcome("  ERROR - B takes exactly three numbers.")
 check("the firmware's new B error reads as a rejection",
       outcome == link.REJECTED and reason == "bad arguments", f"{outcome} {reason}")
+
+
+# ------------------------------------------------------------------
+# Structured build progress - @n STEP
+# ------------------------------------------------------------------
+
+progress = link.parse_progress(link.parse_ack(
+    "@12 STEP step=8 total=14 phase=move_to_target action=move"
+    " text=Move_XY_to_the_target_cell status=begin"))
+check("STEP parses to a SerialProgress", progress is not None)
+check("STEP carries the command sequence", progress.seq == 12, str(progress.seq))
+check("STEP carries step and total",
+      (progress.step, progress.total) == (8, 14), f"{progress.step}/{progress.total}")
+check("STEP carries the stable phase id", progress.phase == "move_to_target",
+      progress.phase)
+check("STEP un-underscores the human label",
+      progress.label == "Move XY to the target cell", progress.label)
+check("STEP carries the coarse action", progress.action == "move", progress.action)
+check("a begin STEP is not a release", not progress.done)
+check("a moving phase is not parking", not progress.parking)
+check("STEP keeps the raw line", progress.raw.startswith("@12 STEP"), progress.raw)
+
+done = link.parse_progress(link.parse_ack(
+    "@12 STEP step=11 total=14 phase=release action=release"
+    " text=Open_the_claw_and_release status=done"))
+check("the phase-11 done is the confirmed release", done.done and done.step == 11)
+
+parking = link.parse_progress(link.parse_ack(
+    "@12 STEP step=13 total=14 phase=park_home action=park"
+    " text=Return_XY_to_the_origin status=begin"))
+check("a park action reads as parking", parking.parking)
+
+# STEP is progress, never an answer. A waiter that returned on one would let
+# the next command out while the rig was still moving.
+step_ack = link.parse_ack("@12 STEP step=8 total=14 phase=move_to_target")
+check("STEP is not terminal", not step_ack.terminal)
+check("RECV is not terminal", not link.parse_ack("@12 RECV cmd=B col=3").terminal)
+
+# Malformed STEPs are dropped rather than raised: the reader thread has nobody
+# to raise at, and the raw line is still in the log either way.
+for bad in ("@12 STEP total=14 phase=x",          # no step
+            "@12 STEP step=0 total=14 phase=x",   # steps are 1-based
+            "@12 STEP step=20 total=14 phase=x",  # past the end
+            "@12 STEP step=1 total=14",           # no phase id
+            "@12 STEP step=a total=14 phase=x"):  # not a number
+    check(f"malformed STEP is dropped: {bad[10:24]}",
+          link.parse_progress(link.parse_ack(bad)) is None)
+check("a terminal ack is not progress",
+      link.parse_progress(link.parse_ack("@12 OK col=3 row=5 level=0")) is None)
+
+
+# ------------------------------------------------------------------
+# The progress callback: order, attribution, and the terminal answer
+# ------------------------------------------------------------------
+
+seen = []
+rig, fake = fake_rig(
+    replies={"S": GRID_RESIZED, "B": BUILD_WITH_STEPS},
+    on_progress=lambda item: seen.append(("step", item)),
+    on_ack=lambda ack: seen.append(("ack", ack)),
+)
+result = rig.build(3, 4, 0, timeout=20)
+rig.close()
+
+steps = [item for kind, item in seen if kind == "step"]
+acks = [item for kind, item in seen if kind == "ack"]
+check("every STEP reached the progress callback", len(steps) == 6, str(len(steps)))
+check("the callback sees them in wire order",
+      [item.step for item in steps] == [1, 6, 8, 11, 11, 14],
+      str([item.step for item in steps]))
+check("every phase is attributed to the same command",
+      {item.seq for item in steps} == {12}, str({item.seq for item in steps}))
+check("the release is confirmed exactly once",
+      sum(1 for item in steps if item.done) == 1)
+# on_ack is the WHOLE machine channel, boot banner included - a console that
+# wants to show every ack should not have to subscribe to four callbacks.
+check("the on_ack callback sees every machine line, in order",
+      [ack.kind for ack in acks] == ["BOOT", "READY", "RECV", "STEP", "STEP",
+                                     "STEP", "STEP", "STEP", "STEP", "OK"],
+      str([ack.kind for ack in acks]))
+# The whole point of ordering: the phases are facts about a build that had not
+# finished, so every one of them must precede the answer.
+last_step = max(i for i, (kind, _) in enumerate(seen) if kind == "step")
+terminal = max(i for i, (kind, item) in enumerate(seen)
+               if kind == "ack" and item.terminal)
+check("progress precedes the terminal acknowledgement", last_step < terminal,
+      f"{last_step} < {terminal}")
+check("STEPs did not change the outcome", str(result) == link.PLACED, str(result))
+check("STEPs did not trigger the prose fallback", rig.prose_fallbacks == 0)
+
+# An abort mid-carry: the last phase anyone saw is the last thing known.
+seen = []
+rig, fake = fake_rig(
+    replies={"S": GRID_RESIZED, "B": BUILD_ABORTED_MID_CARRY},
+    on_progress=lambda item: seen.append(item),
+)
+result = rig.build(3, 4, 0, timeout=20)
+rig.close()
+check("an abort mid-carry still reports its phases",
+      [item.step for item in seen] == [7, 8], str([item.step for item in seen]))
+check("nothing confirmed a release", not any(item.done for item in seen))
+check("HELD is still aborted", str(result) == link.ABORTED, str(result))
+
+# A rejection never reaches a phase: the firmware refuses it before anything
+# moves, and that absence is how the Pi can tell SAFE from HELD by shape.
+seen = []
+rig, fake = fake_rig(replies={"S": GRID_RESIZED, "B": BUILD_REJECTED},
+                     on_progress=lambda item: seen.append(item))
+result = rig.build(3, 4, 0, timeout=20)
+rig.close()
+check("a SAFE rejection announces no phase at all", seen == [], str(seen))
+check("SAFE is still rejected", str(result) == link.REJECTED, str(result))
 
 print(f"\n{len(PASSED)} passed, {len(FAILED)} failed")
 if FAILED:

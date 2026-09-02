@@ -11,6 +11,20 @@ export interface Geometry {
   paper: unknown | null;
 }
 
+/**
+ * Where a command is, as the SERVER says it. Mirrors `web/progress.py`.
+ *
+ * `parking` is still a running command: the block is down, the rig is tidying
+ * up, and `placed` has not been earned yet. `placed` means the terminal `@n OK`
+ * and nothing else.
+ */
+export type BuildPhaseStatus =
+  | "idle" | "accepted" | "validating" | "running" | "parking"
+  | "placed" | "rejected" | "aborted" | "locked";
+
+/** What one phase is expected to do. Coarse on purpose — see the firmware. */
+export type BuildPhaseAction = "move" | "grip" | "release" | "rotate" | "park";
+
 export interface StateModel {
   mode: "vertical" | "horizontal";
   cols: number;
@@ -25,9 +39,62 @@ export interface StateModel {
   camera_age_ms: number | null;
   last_result: "placed" | "rejected" | "aborted" | null;
   last_result_reason: string | null;
+  build_command_seq: number | null;
+  build_step: number | null;
+  build_total_steps: number | null;
+  build_phase: string | null;
+  build_phase_label: string | null;
+  build_phase_action: BuildPhaseAction | null;
+  build_phase_started_at: number | null;
+  build_phase_status: BuildPhaseStatus;
+  /** Phase 11's `status=done`: the jaws opened. NOT the same as placed. */
+  build_release_confirmed: boolean;
+  /** The event this progress was folded from. Used to break ties — see store. */
+  serial_event_id: number;
   views: Record<string, boolean>;
   geometry: Geometry | null;
 }
 
 /** One serial line, timestamped on arrival because the rig sends no clock. */
-export interface LogLine { id: number; text: string; at: number }
+export interface LogLine { id: number; text: string; at: number; kind: LogKind }
+
+/** How a log line is drawn: prose, an `@` machine line, a phase, or an error. */
+export type LogKind = "prose" | "ack" | "step" | "error";
+
+// ── The `/api/events` wire protocol ────────────────────────────────────────
+//
+// Every frame carries `event_id` and `at`. Ids are monotonic but MAY HAVE GAPS
+// for any one client: coalesced state snapshots and heartbeats consume ids
+// without being replayable. So deduplicate with `>`, never `previous + 1`.
+
+interface EventEnvelope { event_id: number; at: number }
+
+export type ServerEvent =
+  | (EventEnvelope & { type: "state"; state: StateModel })
+  | (EventEnvelope & { type: "build_step" } & BuildStepEvent)
+  | (EventEnvelope & { type: "serial"; line: string; stream: "rig" | "error" })
+  | (EventEnvelope & { type: "build_result" } & BuildResultEvent)
+  | (EventEnvelope & { type: "heartbeat" })
+  /** Not a fact type: the envelope a reconnect's missed events arrive in. */
+  | (EventEnvelope & { type: "replay"; events: ServerEvent[]; gap: boolean });
+
+export interface BuildStepEvent {
+  command_seq: number | null;
+  step: number;
+  total: number;
+  phase: string;
+  label: string;
+  action: BuildPhaseAction;
+  /** `begin` before the phase runs; the single `done` is the release. */
+  status: "begin" | "done";
+}
+
+export interface BuildResultEvent {
+  command_seq: number | null;
+  result: "placed" | "rejected" | "aborted" | null;
+  reason: string | null;
+  locked: boolean;
+  locked_reason: string | null;
+  /** True when the rig had to read the prose because no ack arrived. */
+  from_prose: boolean;
+}

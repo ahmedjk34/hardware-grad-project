@@ -6,8 +6,9 @@ import { ResultToast } from "./components/ResultToast";
 import { ControlPanel } from "./components/ControlPanel";
 import * as api from "./api";
 import type { StateModel } from "./types";
+import { testState } from "./test-state";
 
-const state = (overrides: Partial<StateModel> = {}): StateModel => ({ mode: "vertical", cols: 6, rows: 5, calibrated: false, selected: [3, 5], command: "B 3 5 0", level: 0, build_state: "READY", locked_reason: null, camera: "LIVE", camera_age_ms: 1, last_result: null, last_result_reason: null, views: {}, geometry: null, ...overrides });
+const state = (overrides: Partial<StateModel> = {}): StateModel => testState({ cols: 6, rows: 5, calibrated: false, selected: [3, 5], command: "B 3 5 0", ...overrides });
 
 describe("Step 9 confirmed build safety UI", () => {
   it("requires a second tap with the exact displayed command", () => { const build = vi.spyOn(api, "build").mockResolvedValue(state()); render(<BuildButton state={state()} connected />); fireEvent.click(screen.getByRole("button", { name: "BUILD" })); expect(screen.getByRole("button", { name: "CONFIRM B 3 5 0" })).toBeEnabled(); fireEvent.click(screen.getByRole("button", { name: "CONFIRM B 3 5 0" })); expect(build).toHaveBeenCalledWith("B 3 5 0"); });

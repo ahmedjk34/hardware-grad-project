@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { Op } from "./compile";
 import {
   initialRun,
+  currentOperationText,
   feederPrompt,
+  noProgress,
   runTiming,
   programRows,
   step,
@@ -249,4 +251,168 @@ describe("runner safety walk", () => {
     expect(walked).toBeGreaterThan(20);
     expect(queue).toHaveLength(0);
   }, 15_000);
+});
+
+/**
+ * The reducer learns where a build has got to from the SERIAL STREAM. These
+ * are the rules that separate "showing progress" from "assuming progress".
+ */
+describe("build-step: progress within one command, never past it", () => {
+  const phase = (stepNumber: number, phaseId: string, label: string, eventId: number,
+                 extra: Partial<Extract<RunEvent, { type: "build-step" }>> = {}) =>
+    ({ type: "build-step" as const, commandSeq: 1, step: stepNumber, total: 14,
+       phaseId, label, action: "move" as const, status: "begin" as const, eventId,
+       now: 1000 + eventId, ...extra });
+
+  /** A run with one build in flight, the way `issueBuild` leaves it. */
+  function inFlight() {
+    let turn = start([build("a", 3, 2, 0), build("b", 3, 2, 1)]);
+    turn = dispatch(turn.state, { type: "selected", command: "B 3 2 0", now: 200 });
+    turn = dispatch(turn.state, { type: "verified", actual: "B 3 2 0", now: 300 });
+    expect(turn.state.inFlight).toBe(true);
+    return dispatch(turn.state, { type: "build-running", now: 350 });
+  }
+
+  it("shows the rig's phase and issues nothing at all", () => {
+    let turn = inFlight();
+    const before = turn.state.cursor;
+    for (const event of [
+      phase(1, "raise_clear", "Raise Z into the top switch", 11),
+      phase(6, "grip", "Close the claw and grip", 12),
+      phase(8, "move_to_target", "Move XY to the target cell", 13),
+    ]) {
+      turn = dispatch(turn.state, event);
+      expect(turn.effects).toEqual([]);
+    }
+    expect(turn.state.progress).toMatchObject({
+      step: 8, total: 14, phaseId: "move_to_target",
+      label: "Move XY to the target cell", commandSeq: 1,
+    });
+    expect(currentOperationText(turn.state)).toBe("8/14 · Move XY to the target cell");
+    // Eight phases in, and the program has not moved on by one row.
+    expect(turn.state.cursor).toBe(before);
+    expect(turn.state.inFlight).toBe(true);
+  });
+
+  it("does not advance the cursor for the release, or for parking", () => {
+    let turn = inFlight();
+    turn = dispatch(turn.state, phase(11, "release", "Open the claw and release", 20,
+                                      { action: "release" }));
+    turn = dispatch(turn.state, phase(11, "release", "Open the claw and release", 21,
+                                      { action: "release", status: "done" }));
+    expect(turn.state.progress.released).toBe(true);
+    expect(turn.state.cursor).toBe(0);
+
+    turn = dispatch(turn.state, phase(14, "park_rotation", "Return the claw to neutral",
+                                      22, { action: "park" }));
+    expect(turn.state.cursor).toBe(0);
+    expect(turn.state.inFlight).toBe(true);
+
+    // ONLY the terminal placed moves it on.
+    turn = dispatch(turn.state, { type: "build-settled", result: "placed", reason: null, now: 500 });
+    expect(turn.state.cursor).toBe(1);
+    expect(turn.state.progress).toEqual(noProgress());
+  });
+
+  it("ignores a phase that is older than one already applied", () => {
+    let turn = inFlight();
+    turn = dispatch(turn.state, phase(9, "rotate_to_grid", "Apply the grid rotation", 30));
+    turn = dispatch(turn.state, phase(8, "move_to_target", "Move XY to the target cell", 25));
+    expect(turn.state.progress.step).toBe(9);
+    // And a repeat of the same id changes nothing.
+    turn = dispatch(turn.state, phase(9, "rotate_to_grid", "Apply the grid rotation", 30));
+    expect(turn.state.progress.step).toBe(9);
+  });
+
+  it("ignores phases when nothing is in flight — they belong to nobody here", () => {
+    const turn = dispatch(initialRun(), phase(8, "move_to_target", "Move", 10));
+    expect(turn.state.progress).toEqual(noProgress());
+  });
+
+  it("says nothing rather than guessing when the rig has not spoken", () => {
+    expect(currentOperationText(inFlight().state)).toBeNull();
+  });
+});
+
+describe("a lost socket pauses, and a later phase resumes", () => {
+  function running() {
+    let turn = start([build("a", 3, 2, 0)]);
+    turn = dispatch(turn.state, { type: "selected", command: "B 3 2 0", now: 200 });
+    turn = dispatch(turn.state, { type: "verified", actual: "B 3 2 0", now: 300 });
+    turn = dispatch(turn.state, { type: "build-running", now: 350 });
+    return dispatch(turn.state, {
+      type: "build-step", commandSeq: 1, step: 8, total: 14, phaseId: "move_to_target",
+      label: "Move XY to the target cell", action: "move", status: "begin",
+      eventId: 40, now: 400,
+    });
+  }
+
+  it("pauses stale and keeps the last phase as the last thing known", () => {
+    const turn = dispatch(running().state, { type: "socket", connected: false, now: 500 });
+    expect(turn.state.phase).toBe("paused");
+    expect(turn.state.pauseReason).toBe("stale");
+    expect(turn.effects).toEqual([]);
+    // The phase is NOT cleared: it is the last thing anyone knows, and
+    // blanking it would look like the build had finished.
+    expect(turn.state.progress.step).toBe(8);
+    expect(turn.state.cursor).toBe(0);
+  });
+
+  it("assumes nothing while it is down, however long that is", () => {
+    let turn = dispatch(running().state, { type: "socket", connected: false, now: 500 });
+    for (let tick = 0; tick < 20; tick += 1) {
+      turn = dispatch(turn.state, { type: "socket", connected: false, now: 500 + tick });
+      expect(turn.state.progress.step).toBe(8);
+      expect(turn.state.cursor).toBe(0);
+    }
+  });
+
+  it("picks itself up from a later phase, because a phase proves the rig is talking", () => {
+    let turn = dispatch(running().state, { type: "socket", connected: false, now: 500 });
+    turn = dispatch(turn.state, {
+      type: "build-step", commandSeq: 1, step: 10, total: 14, phaseId: "lower_to_level",
+      label: "Lower Z to the target level", action: "move", status: "begin",
+      eventId: 41, now: 600,
+    });
+    expect(turn.state.phase).toBe("building");
+    expect(turn.state.pauseReason).toBeNull();
+    expect(turn.state.progress.step).toBe(10);
+  });
+
+  it("locks on HELD and stops there, phase and all", () => {
+    let turn = running();
+    turn = dispatch(turn.state, {
+      type: "build-settled", result: "aborted", reason: "could not reach the target cell",
+      now: 700,
+    });
+    expect(turn.state.phase).toBe("locked");
+    expect(turn.state.readOnly).toBe(true);
+    expect(turn.state.inFlight).toBe(false);
+    expect(turn.state.cursor).toBe(0);
+    expect(turn.effects).toEqual([]);
+    // The phase it died at survives — that IS the information.
+    expect(turn.state.progress.step).toBe(8);
+    // And nothing gets it going again.
+    for (const event of [
+      { type: "continue" as const, now: 800 },
+      { type: "confirm" as const, now: 800 },
+      { type: "socket" as const, connected: true, now: 800 },
+    ]) {
+      const after = dispatch(turn.state, event);
+      expect(after.effects).toEqual([]);
+      expect(after.state.phase).toBe("locked");
+    }
+  });
+
+  it("does NOT lock on a SAFE rejection — nothing moved, and it can continue", () => {
+    let turn = running();
+    turn = dispatch(turn.state, {
+      type: "build-settled", result: "rejected", reason: "no block at the feeder", now: 700,
+    });
+    expect(turn.state.phase).toBe("rejected");
+    expect(turn.state.readOnly).toBe(false);
+    expect(turn.state.cursor).toBe(0);
+    expect(dispatch(turn.state, { type: "continue", now: 800 }).state.phase)
+      .not.toBe("locked");
+  });
 });

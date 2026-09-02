@@ -11,7 +11,7 @@
 #include <Arduino.h>
 #include <Servo.h>
 
-// Change these pin variables if the wiring changes.
+// A4988 wiring: STEP = 3, DIR = 2. ENABLE is not used; tie it to GND.
 uint8_t stepPin = 3;
 uint8_t dirPin = 2;
 uint8_t trigPin1 = 4;
@@ -27,7 +27,8 @@ const uint8_t BELT_CCW_DIRECTION_LEVEL = LOW;
 Servo containerServo;
 
 // Runtime settings.
-unsigned long stepDelayUs = 2000;  // delay between motor steps
+int motorSpeed = 200;  // default speed in steps per second
+unsigned long stepIntervalUs = 5000;
 const float detectDistanceCm = 10.0; // block is detected strictly below this
 unsigned long sensorIntervalMs = 100;
 
@@ -64,6 +65,15 @@ void stopBelt() {
   digitalWrite(stepPin, LOW);
 }
 
+void setMotorSpeed(int speed) {
+  motorSpeed = constrain(speed, 10, 3000);
+  stepIntervalUs = 1000000UL / motorSpeed;
+
+  Serial.print(F("Speed: "));
+  Serial.print(motorSpeed);
+  Serial.println(F(" steps/second"));
+}
+
 void runBeltCounterClockwiseForFiveSeconds() {
   Serial.println(F("BLOCK detected (<10 cm) -> BELT CCW for 5 seconds"));
   beltRunning = true;
@@ -74,7 +84,7 @@ void runBeltCounterClockwiseForFiveSeconds() {
     digitalWrite(stepPin, HIGH);
     delayMicroseconds(5);
     digitalWrite(stepPin, LOW);
-    delayMicroseconds(stepDelayUs);
+    delayMicroseconds(stepIntervalUs);
   }
 
   stopBelt();
@@ -118,21 +128,24 @@ void printStatus() {
   Serial.println(containerOpen ? F("OPEN (0 deg)") : F("CLOSED (20 deg)"));
   Serial.print(F("Ultrasonic armed: "));
   Serial.println(sensorArmed ? F("YES") : F("NO"));
-  Serial.print(F("Step delay: "));
-  Serial.print(stepDelayUs);
-  Serial.println(F(" us"));
+  Serial.print(F("Speed: "));
+  Serial.print(motorSpeed);
+  Serial.println(F(" steps/second"));
   printDistance("US1", distance1Cm, sensor1Detected);
 }
 
 void printHelp() {
-  Serial.println(F("D <us>       change step delay; example: D 2000"));
+  Serial.println(F("S <speed>    change speed; example: S 500"));
   Serial.println(F("I <ms>       change ultrasonic read interval"));
   Serial.println(F("O            open container (0 deg) and arm ultrasonic"));
   Serial.println(F("C            close container (20 deg) and stop belt"));
-  Serial.println(F("F            manual belt direction test"));
-  Serial.println(F("R            manual belt CCW test"));
-  Serial.println(F("X            stop belt"));
-  Serial.println(F("S            print status and distances"));
+  Serial.println(F("ON           start belt"));
+  Serial.println(F("OFF          stop belt"));
+  Serial.println(F("F            run belt forward"));
+  Serial.println(F("B            run belt backward"));
+  Serial.println(F("T            toggle direction and run"));
+  Serial.println(F("X            stop belt (alias for OFF)"));
+  Serial.println(F("P            print status and distances"));
   Serial.println(F("H            print this help"));
 }
 
@@ -141,36 +154,37 @@ void readSerialCommand() {
     return;
   }
 
-  char command = Serial.read();
+  String command = Serial.readStringUntil('\n');
+  command.trim();
+  command.toUpperCase();
 
-  if (command == 'D' || command == 'd') {
-    delay(5);
-    unsigned long value = Serial.parseInt();
-    if (value >= 20 && value <= 1000000) {
-      stepDelayUs = value;
-      Serial.print(F("Step delay: "));
-      Serial.print(stepDelayUs);
-      Serial.println(F(" us"));
-    }
-  } else if (command == 'I' || command == 'i') {
-    delay(5);
-    unsigned long value = Serial.parseInt();
+  if (command.startsWith("S ")) {
+    setMotorSpeed(command.substring(2).toInt());
+  } else if (command.startsWith("I ")) {
+    unsigned long value = command.substring(2).toInt();
     if (value >= 20 && value <= 60000) {
       sensorIntervalMs = value;
       Serial.println(F("Sensor interval updated."));
     }
-  } else if (command == 'F' || command == 'f') {
-    digitalWrite(dirPin, HIGH);
+  } else if (command == "ON") {
     beltRunning = true;
-    Serial.println(F("BELT RUNNING (manual direction HIGH)"));
-  } else if (command == 'R' || command == 'r') {
-    digitalWrite(dirPin, BELT_CCW_DIRECTION_LEVEL);
-    beltRunning = true;
-    Serial.println(F("BELT RUNNING CCW (manual)"));
-  } else if (command == 'X' || command == 'x') {
+    Serial.println(F("BELT RUNNING"));
+  } else if (command == "OFF" || command == "X") {
     stopBelt();
     Serial.println(F("BELT STOPPED"));
-  } else if (command == 'O' || command == 'o') {
+  } else if (command == "F") {
+    digitalWrite(dirPin, HIGH);
+    beltRunning = true;
+    Serial.println(F("BELT RUNNING FORWARD"));
+  } else if (command == "B" || command == "R") {
+    digitalWrite(dirPin, BELT_CCW_DIRECTION_LEVEL);
+    beltRunning = true;
+    Serial.println(F("BELT RUNNING BACKWARD"));
+  } else if (command == "T") {
+    digitalWrite(dirPin, digitalRead(dirPin) == HIGH ? BELT_CCW_DIRECTION_LEVEL : HIGH);
+    beltRunning = true;
+    Serial.println(F("BELT DIRECTION TOGGLED"));
+  } else if (command == "O") {
     stopBelt();
     containerServo.write(SERVO_OPEN_ANGLE);
     containerOpen = true;
@@ -178,7 +192,7 @@ void readSerialCommand() {
     blockTriggered = false;
     sensor1Detected = false;
     Serial.println(F("CONTAINER OPEN (0 deg); ultrasonic armed"));
-  } else if (command == 'C' || command == 'c') {
+  } else if (command == "C") {
     stopBelt();
     containerServo.write(SERVO_CLOSE_ANGLE);
     containerOpen = false;
@@ -186,9 +200,9 @@ void readSerialCommand() {
     blockTriggered = false;
     sensor1Detected = false;
     Serial.println(F("CONTAINER CLOSED (20 deg)"));
-  } else if (command == 'S' || command == 's') {
+  } else if (command == "P") {
     printStatus();
-  } else if (command == 'H' || command == 'h' || command == '?') {
+  } else if (command == "H" || command == "?") {
     printHelp();
   }
 }
@@ -218,6 +232,6 @@ void loop() {
     digitalWrite(stepPin, HIGH);
     delayMicroseconds(5);
     digitalWrite(stepPin, LOW);
-    delayMicroseconds(stepDelayUs);
+    delayMicroseconds(stepIntervalUs);
   }
 }

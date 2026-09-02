@@ -180,5 +180,9 @@ async def build(request: BuildRequest, http: Request) -> StateModel:
         app.state.job.start()
     except BuildStateError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    # The console's own half of the progress story: the command is ACCEPTED.
+    # Nothing has moved and nothing may be claimed yet - the board has not even
+    # said RECV. Everything after this comes off the wire.
+    app.state.progress.command_accepted(app.state.hub.last_event_id)
     _signal(app)
     return _state(app)

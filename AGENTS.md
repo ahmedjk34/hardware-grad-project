@@ -486,16 +486,56 @@ the machine envelope in `workspace`.
 | Where | What |
 | --- | --- |
 | `build_test_v1.ino` SECTION 7C | emits `@<seq> <KIND> ...` |
-| `python/rig/link.py` | parses them — `parse_ack()`, and `_KIND_TO_OUTCOME` |
-| `plans/ack-protocol.md` | the kind list, and the reasoning |
+| `python/rig/link.py` | parses them — `parse_ack()`, `parse_progress()`, `_KIND_TO_OUTCOME` |
+| `python/rig/mock_board.py` | a fake board that must speak the same protocol |
+| `plans/ack-protocol.md` | the kind list, the phase table, and the reasoning |
 
-`OK`, `ERR`, `SAFE`, `HELD`, `BOOT`, `READY`. **`SAFE` and `HELD` are not
-interchangeable**: `SAFE` means nothing moved, `HELD` means the claw may still
-be gripping a block at an unknown position. Never collapse them into one
-"failed" branch on the Pi.
+`OK`, `ERR`, `SAFE`, `HELD`, `BOOT`, `READY`, `RECV`, `STEP`. **`SAFE` and
+`HELD` are not interchangeable**: `SAFE` means nothing moved, `HELD` means the
+claw may still be gripping a block at an unknown position. Never collapse them
+into one "failed" branch on the Pi.
+
+`RECV` and `STEP` are NOT terminal. A waiter that returned on either would hand
+back an answer while the rig was still moving.
 
 Adding a kind means updating the firmware, the Pi parser and that document
 together. Every ack literal is `F()`, like everything else the sketch prints.
+
+**Do not add an `ackField()` overload taking a flash string.** An integer
+literal `0` is also a null pointer constant, so `ackField(F("level"), 0)` would
+become ambiguous and every existing numeric call site is one edit away from a
+compile error. The word form is separately named `ackWord()`.
+
+### 5a. The fourteen build PHASE identifiers
+
+| Where | What |
+| --- | --- |
+| `build_test_v1.ino` `buildStep()` call sites | the authoritative fourteen `phase=` ids |
+| `python/rig/mock_board.py` `MockBoard.BUILD_PHASES` | the off-rig copy that lets the whole console be tested |
+| `web/src/studio/twin.ts` `PHASE_BY_ID` | what the 3D twin draws for each one |
+| `plans/ack-protocol.md` | the table, with what each phase physically does |
+
+`B` prints one `@n STEP step= total= phase= action= text= status=` line per
+phase, **before that phase runs**. `phase` is a stable machine identifier that
+UIs switch on, so **renaming one is a protocol change, not a wording change** —
+and a silent one, because a browser that does not recognise an id falls back to
+a generic "moving" rather than crashing. Change all three places together;
+`twin.test.ts` asserts the browser's table matches the documented fourteen.
+
+One phase is announced twice: **phase 11 gets a second line with
+`status=done`**, the instant the jaws open and the block is on the stack. It is
+the only `done` in the protocol and it exists because nothing else can carry
+that fact — `BUILD_PARK_AFTER_PLACE` can be false, so there may be no phase 12
+to imply it. **It is not a terminal ack.** The command is still running, the
+rig still has to park, and a parking failure downgrades the build to `HELD`.
+Only `@n OK` means the block is placed. `python/web/progress.py` is where that
+distinction is enforced on the Pi.
+
+**One line per phase, never one per motor step.** Fourteen lines is ~0.3 s of
+9600-baud airtime inside a 40-second build; per-step telemetry would be minutes
+of it and would starve the terminal ack. If continuous position is ever wanted,
+throttle it hard inside the movement loops — and it is still not a reason to
+change the baud.
 
 ### 6. Firmware command vocabulary
 
