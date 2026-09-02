@@ -8,7 +8,7 @@ Flash `belt_v1/belt_v1.ino` for the container sequence. Its wiring is:
 - HC-SR04 ultrasonic: `TRIG = 4`, `ECHO = 5`
 - Container servo signal: pin `6`
 
-Commands are `O` to open the container to 140 degrees and arm detection, and
+Commands are `O` to open the container to 0 degrees and arm detection, and
 `C` to close it to 20 degrees and stop the belt. The first ultrasonic reading
 strictly below 10 cm after opening runs the belt counter-clockwise for five
 seconds, then stops. If the belt turns the wrong physical direction, invert
@@ -31,8 +31,7 @@ The script reads the port, the board FQBN and the sketch path out of
 Board is an Arduino MEGA 2560. Serial is **9600 baud**. Multi-character
 commands need a newline; single digits do not. `V <angle>` sets the gripper
 servo to an arbitrary angle from 0 to 180 degrees. The `O` command checks the
-X/Y home switches: when both are active at the feeder it opens to **0 degrees**;
-otherwise it opens to the wider **30-degree** position. `C` closes it at
+X/Y home switches and opens to **0 degrees**. `C` closes it at
 50 degrees.
 
 The auxiliary 28BYJ-48 stepper uses these ULN2003 connections:

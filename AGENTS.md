@@ -271,11 +271,10 @@ home/feeder reference; negative trim moves it toward that reference. The
 shipped vertical trims are `0.0` on both axes; horizontal `trim_x` and `trim_y`
 are both `+1.9 cm` for the pickup-cell-to-horizontal-grid registration
 described above.
-The shipped error offsets are `0.0` on both axes of both modes: the earlier
-`+0.15 / +0.05` corrections were measured against the previous CENTRED
-allocation and mean nothing against the centre-anchored one, so they were reset
-when the grid was re-anchored on the printed sheet. Start any new error
-calibration from zero.
+The shipped vertical error offsets are `-0.3 cm` on X and `-0.4 cm` on Y,
+moving placements toward the home switches to correct the measured error.
+Horizontal remains at `0.0` on both axes until it is measured. Start any new
+error calibration from these current values.
 For any user-marked **error offsetting**, use `error_offset_x_cm` and
 `error_offset_y_cm` (and the paired firmware variables) as an additional
 signed shift exactly like the grid trim.

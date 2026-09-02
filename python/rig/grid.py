@@ -230,8 +230,12 @@ class MachineGrid:
         that has to be a valid grid regardless of what shift is applied.
         """
         sx, sy = self.shift_x_cm, self.shift_y_cm
+        ex, ey = self.error_offset_x_cm, self.error_offset_y_cm
         if ignore_shift:
             self.shift_x_cm = self.shift_y_cm = 0.0
+            # Calibration corrections change placement targets, not the
+            # requested grid's dimensions or its fit envelope.
+            self.error_offset_x_cm = self.error_offset_y_cm = 0.0
         try:
             if self.x_first_center_cm < 0 or self.y_first_center_cm < 0 \
                     or self.x_last_center_cm > self.workspace_width_cm \
@@ -244,6 +248,7 @@ class MachineGrid:
             self._check_block_edges()
         finally:
             self.shift_x_cm, self.shift_y_cm = sx, sy
+            self.error_offset_x_cm, self.error_offset_y_cm = ex, ey
 
     def _axis_fits(self, axis: str) -> bool:
         """Whether one axis' centres and block edges fit WITH the live shift.

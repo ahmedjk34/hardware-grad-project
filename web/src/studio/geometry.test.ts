@@ -1,6 +1,9 @@
 import { describe, expect, it, afterEach } from "vitest";
 import { rigConfig, setRigConfig, type Block } from "./coords";
-import { aabbOf, clippedCells, footprintOverlapArea, intersects, topFaceZ } from "./geometry";
+import {
+  aabbOf, clippedCells, convexHull, footprintOverlapArea, intersects,
+  supportPolygonContains, topFaceZ, type AABB,
+} from "./geometry";
 
 const shipped = rigConfig();
 afterEach(() => setRigConfig(shipped));
@@ -49,6 +52,45 @@ describe("machine-space geometry", () => {
     const stacked = aabbOf(block("vertical", 1, 1, 1));
     expect(stacked.min.z).toBe(topFaceZ(block("vertical", 1, 1, 0)));
     expect(intersects(aabbOf(block("vertical", 1, 1, 0)), stacked)).toBe(false);
+  });
+});
+
+describe("the support polygon — the toppling test", () => {
+  const flat = (minX: number, maxX: number, minY: number, maxY: number): AABB =>
+    ({ min: { x: minX, y: minY, z: 0 }, max: { x: maxX, y: maxY, z: 1 } });
+
+  it("hulls a set of points and drops the collinear and interior ones", () => {
+    const hull = convexHull([
+      { x: 0, y: 0 }, { x: 2, y: 0 }, { x: 4, y: 0 }, // 2,0 is collinear
+      { x: 4, y: 4 }, { x: 0, y: 4 }, { x: 2, y: 2 }, // 2,2 is interior
+    ]);
+    expect(hull).toHaveLength(4);
+    expect(new Set(hull.map(p => `${p.x},${p.y}`)))
+      .toEqual(new Set(["0,0", "4,0", "4,4", "0,4"]));
+  });
+
+  it("reduces to a plain footprint test for a single support", () => {
+    const clip = flat(0, 10, 0, 10);
+    expect(supportPolygonContains([flat(0, 10, 0, 10)], clip, 5, 5)).toBe(true);
+    expect(supportPolygonContains([flat(0, 4, 0, 10)], clip, 5, 5)).toBe(false);
+  });
+
+  it("carries a span whose centre is over the gap between two supports", () => {
+    const clip = flat(0, 30, 0, 10);
+    const supports = [flat(0, 12, 0, 10), flat(18, 30, 0, 10)];
+    // Centre of mass at x = 15 is over the 12..18 gap — no single footprint holds
+    // it — but it is inside the hull that spans both supports.
+    expect(supportPolygonContains(supports, clip, 15, 5)).toBe(true);
+  });
+
+  it("rejects a centre of mass that hangs past every support", () => {
+    const clip = flat(0, 30, 0, 10);
+    const supports = [flat(0, 8, 0, 10), flat(9, 12, 0, 10)];
+    expect(supportPolygonContains(supports, clip, 15, 5)).toBe(false);
+  });
+
+  it("is unsupported when nothing is beneath", () => {
+    expect(supportPolygonContains([], flat(0, 10, 0, 10), 5, 5)).toBe(false);
   });
 });
 

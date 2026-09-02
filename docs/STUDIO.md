@@ -42,10 +42,10 @@ console this attaches to).
 | file | tests | what it holds |
 | --- | --- | --- |
 | `studio/coords.test.ts` | 41 | the port of `python/rig/grid.py`, against dumped fixtures at 1e-6 |
-| `studio/geometry.test.ts` | 12 | AABBs, overlap, the firmware's clipping |
+| `studio/geometry.test.ts` | 17 | AABBs, overlap, the firmware's clipping, the convex-hull support polygon |
 | `studio/lattice.test.ts` | 14 | which cells are drawn, and in what state |
 | `studio/view.test.ts` | 30 | envelope/block framing, the four snaps, the orbit floor, the opening move |
-| `studio/validate.test.ts` | 27 | every §6.4 rule, modified configs, bridge scan, centroid and build order |
+| `studio/validate.test.ts` | 28 | every §6.4 rule, modified configs, bridge scan, the centre-of-mass toppling test |
 | `studio/compile.test.ts` | 25 | the four steps in isolation, one red-when-removed test per ordering constraint, the latch state machine, twenty-compile determinism |
 | `studio/rigmodel.test.ts` | 19 | lossless round trip, eight named corrupt-file refusals, the migration hook, the library array file |
 | `studio/library.test.ts` | 20 | CRUD, index/body split, one corrupt body costing one card, unavailable and full storage, the budget refusal, export/import |
@@ -254,7 +254,16 @@ Constants: `MM_PER_CM`, `BLOCK_HEIGHT_CM = 1.5`, `BLOCK_HEIGHT_MM`,
 
 `aabbOf(block)`, `topFaceZ`, `intersects` (touching faces are **not** a
 collision — a stack is legal), `footprintOverlapArea`, `footprintArea`,
-`latticeFootprint`, and:
+`footprintContains`, `latticeFootprint`, `EPS_MM` (the one millimetre-slack
+constant every "touching" comparison here and in `validate.ts` shares), and:
+
+`convexHull(points)` → the counter-clockwise hull by Andrew's monotone chain,
+collinear points dropped. `supportPolygonContains(boxes, clip, x, y)` clips each
+box to `clip`, hulls the corners and asks whether `(x, y)` is inside — the
+toppling test: a rigid block stays put only while its centre of mass projects
+into the convex hull of everything it rests on, which is why a span across a gap
+is supported with nothing under its middle and a one-sided overhang is not. One
+support reduces it to "the centre sits on that footprint".
 
 `clippedCells(mode, shift?)` → `{ requested, reachable, cells, refused }` —
 which cells a shift pushes past the travel cap, exactly as the firmware reports
@@ -366,12 +375,18 @@ the placement gate answers whether a proposed edit is locally legal. M2 checks
 only `[0,0]`, the active mode's requested bounds and an occupied same-mode slot.
 Support, collision, edge and shift validation remain M3.
 
-`validate.ts` measures support as the union of all beneath footprints clipped
-to the candidate. The configured `supportRatio` remains the minimum. Below 70%
-contact, the candidate's exact footprint centre must also sit on support; at
-**70% contact or more**, `CENTROID_BYPASS_RATIO` makes the union-area majority
-authoritative and a narrow gap through the centre no longer rejects the block.
-This deliberately supersedes Plan 4 §6.5's unconditional centroid clause.
+`validate.ts` reports two independent things about a placement. `ratio` is the
+union of all beneath footprints clipped to the candidate, over the candidate
+area, and the configured `supportRatio` (default 0.55) is its minimum — a
+friction / claw-release proxy. `centreStable` is the physics: the candidate's
+centre of mass (its footprint centroid) must project into the **convex hull of
+its contact patches** (`geometry.supportPolygonContains`). `UNSUPPORTED` fires
+unless **both** hold. A span carried on two towers with nothing under its middle
+is stable; a block with plenty of contact but its centre of mass out past the
+last support edge is not. This is a truer reading of Plan 4 §6.5's centroid
+clause than the old fixed 70% contact bypass, which was both too strict (it
+rejected a stable low-contact bridge) and too loose (it passed a high-contact
+overhang).
 
 `interaction.ts` owns the 4 px click slop and keyboard mapping. Undo is
 Ctrl/Cmd-Z; redo is Ctrl/Cmd-Shift-Z or Ctrl/Cmd-Y. Inputs and editable elements
@@ -596,8 +611,9 @@ presentation. They are listed in the drawer above the saved models and are
 
 **The bridge needs no operator shift.** With the shipped `rig.json`
 (horizontal registered +1.9 cm on both axes), the span sits over the 1.6 cm gap
-between two vertical stacks with **73.3% union contact**. That clears the 70%
-centroid bypass, so the built-in bridge opens with no `UNSUPPORTED` or
+between two vertical stacks with **73.3% union contact**, and its centre of mass
+rides between the two towers — inside the convex hull of the two contact patches.
+Both support tests pass, so the built-in bridge opens with no `UNSUPPORTED` or
 `GEOMETRY_DRIFT` diagnostic and `BRIDGE_SHIFT_CM` is pinned to zero.
 
 The pyramid opens with `ISLAND` warnings, and they are also correct: inside one
@@ -1137,6 +1153,33 @@ first in the diff.
 
 Newest first. One entry per landed change; note anything that contradicts the
 plan or that a future reader could not infer.
+
+### Support is a centre-of-mass toppling test, not a contact-ratio bypass
+
+- `supportMetrics` now reports `centreStable` (was `centroidSupported`): the
+  block's centre of mass projects into the **convex hull of its contact
+  patches**, via new `geometry.convexHull` / `geometry.supportPolygonContains`.
+  `unsupported` fires unless contact clears the operator's `supportRatio`
+  **and** `centreStable` holds. `CENTROID_BYPASS_RATIO` is deleted.
+- This replaces both failure modes of the fixed 70% bypass. A symmetric bridge
+  **below** 70% contact whose centre of mass sits between its supports is now
+  legal; a **high**-contact block cantilevered past its supports is now
+  rejected. The old code did the opposite on both. The built-in two-tower
+  bridge stays legal at `BRIDGE_SHIFT_CM = 0` — now because its centre of mass
+  lies inside the two-tower hull, not because 73.3% ≥ 70%. This supersedes the
+  "Support centroid bypass at 70% contact" entry below.
+- `geometry.EPS_MM` (1e-3 mm) is now the one shared millimetre-slack constant:
+  it replaces the 1e-6 mm "resting on" Z tolerance in `supportMetrics` (a
+  nanometre test that could silently drop a real support) and the inline
+  `edgeOverhang` epsilon. Footprint overlaps under 0.01 mm² no longer count as
+  support (`supportIds`).
+- `supportMetrics` still counts **every** block beneath, in any author order:
+  `validateModel` answers "is this structure buildable", and `compile.ts`'s
+  support graph + Kahn walk own the build sequence. Restricting support to
+  earlier-in-order blocks was tried and reverted — it broke the compiler's
+  documented ability to repair an illegal author order.
+- Settings copy, `validate.test.ts`, `geometry.test.ts` and `examples.test.ts`
+  updated to match.
 
 ### Support centroid bypass at 70% contact
 

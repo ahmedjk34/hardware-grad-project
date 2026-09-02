@@ -12,6 +12,9 @@ import {
 
 export interface AABB { min: Vec3; max: Vec3 }
 
+/** Millimetre slack for every "touching" comparison in this module. */
+export const EPS_MM = 1e-3;
+
 /** The block's axis-aligned box in machine space, in millimetres. */
 export function aabbOf(block: Block, shift?: Shift): AABB {
   const centre = cellToMachine(block.mode, block.col, block.row, block.level, shift);
@@ -46,6 +49,54 @@ export function footprintArea(box: AABB): number {
 /** Does an XY footprint contain a point? Edges count as supported contact. */
 export function footprintContains(box: AABB, x: number, y: number): boolean {
   return x >= box.min.x && x <= box.max.x && y >= box.min.y && y <= box.max.y;
+}
+
+type Pt = { x: number; y: number };
+
+const cross = (o: Pt, a: Pt, b: Pt): number =>
+  (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+
+/**
+ * Convex hull (counter-clockwise) by Andrew's monotone chain. Fewer than three
+ * distinct points come back unchanged; collinear points are dropped.
+ */
+export function convexHull(points: Pt[]): Pt[] {
+  const sorted = [...points]
+    .sort((a, b) => a.x - b.x || a.y - b.y)
+    .filter((p, i, all) => i === 0 || p.x !== all[i - 1].x || p.y !== all[i - 1].y);
+  if (sorted.length < 3) return sorted;
+  const chain = (pts: Pt[]): Pt[] => {
+    const out: Pt[] = [];
+    for (const p of pts) {
+      while (out.length >= 2 && cross(out[out.length - 2], out[out.length - 1], p) <= 0) out.pop();
+      out.push(p);
+    }
+    out.pop();
+    return out;
+  };
+  return [...chain(sorted), ...chain([...sorted].reverse())];
+}
+
+/**
+ * Is (x, y) inside the convex hull of the support boxes, each first clipped to
+ * `clip`? This is the toppling test: a rigid block stays put only while its
+ * centre of mass projects into the convex hull of everything it rests on, which
+ * is exactly why a span across a gap is supported with nothing under its middle.
+ * A single support reduces this to "the centre sits on that footprint".
+ */
+export function supportPolygonContains(boxes: AABB[], clip: AABB, x: number, y: number): boolean {
+  const corners = boxes.flatMap(box => {
+    const minX = Math.max(box.min.x, clip.min.x);
+    const maxX = Math.min(box.max.x, clip.max.x);
+    const minY = Math.max(box.min.y, clip.min.y);
+    const maxY = Math.min(box.max.y, clip.max.y);
+    return minX < maxX && minY < maxY
+      ? [{ x: minX, y: minY }, { x: maxX, y: minY }, { x: maxX, y: maxY }, { x: minX, y: maxY }]
+      : [];
+  });
+  const hull = convexHull(corners);
+  if (hull.length < 3) return false;
+  return hull.every((p, i) => cross(p, hull[(i + 1) % hull.length], { x, y }) >= -EPS_MM);
 }
 
 /**

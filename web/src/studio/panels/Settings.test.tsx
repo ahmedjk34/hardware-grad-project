@@ -15,7 +15,7 @@ describe("estimated validation settings", () => {
     expect(screen.getByLabelText("Block cycle in seconds")).toHaveValue(2.115);
     expect(screen.getByLabelText("Latch homing in seconds")).toHaveValue(16);
     expect(screen.getByText(/Nobody has measured this rig/)).toBeInTheDocument();
-    expect(screen.getByText(/70% contact bypasses the centre check/)).toBeInTheDocument();
+    expect(screen.getByText(/centre of mass falls outside its supports/)).toBeInTheDocument();
     expect(screen.getByText(/Measure the claw and change this/)).toBeInTheDocument();
     expect(screen.getByText(/operator limit, not a physical one/)).toBeInTheDocument();
     expect(screen.getByText(/measured across five mock builds/)).toBeInTheDocument();

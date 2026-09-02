@@ -91,7 +91,7 @@ describe("Two towers, one span — the cross-mode bridge", () => {
     ]);
   });
 
-  it("needs no operator shift because its 73% contact clears the centroid bypass", () => {
+  it("needs no operator shift because its centre of mass rides inside the two-tower hull", () => {
     expect(bridge().rig.shift_cm.horizontal).toEqual([BRIDGE_SHIFT_CM, 0]);
     expect(BRIDGE_SHIFT_CM).toBe(0);
   });

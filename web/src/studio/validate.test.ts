@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { rigConfig, setRigConfig, type RigConfig, type Shift } from "./coords";
-import { aabbOf, intersects } from "./geometry";
+import { aabbOf, footprintContains, intersects } from "./geometry";
 import { type Model, type ModelBlock } from "./model";
 import { DEFAULT_STUDIO_SETTINGS } from "./settings";
 import {
@@ -159,7 +159,7 @@ describe("footprint-area support", () => {
             const ctx = context({ mode: "horizontal", shifts: { horizontal: shift } });
             const metrics = supportMetrics(modelOf(...supports, candidate), candidate, ctx);
             const candidateBox = aabbOf(candidate, shift);
-            if (metrics.ratio >= ctx.settings.supportRatio && metrics.centroidSupported
+            if (metrics.ratio >= ctx.settings.supportRatio && metrics.centreStable
                 && supports.every(item => !intersects(aabbOf(item), candidateBox))) {
               found = { supports, candidate, shift };
             }
@@ -179,7 +179,7 @@ describe("footprint-area support", () => {
     expect(unsupported(model, found!.candidate, ctx)).toEqual([]);
   });
 
-  it("accepts contact over 70% even when the footprint centroid sits in a narrow gap", () => {
+  it("supports a span whose centre of mass sits over a gap but inside the two-tower hull", () => {
     const supports = [
       block("v1", "vertical", 1, 1, 0),
       block("v2", "vertical", 2, 1, 0),
@@ -191,11 +191,31 @@ describe("footprint-area support", () => {
     const gapCentre = (a.max.x + b.min.x) / 2;
     const shift = { x_cm: (gapCentre - candidateCentre) / 10, y_cm: 0 };
     const ctx = context({ mode: "horizontal", shifts: { horizontal: shift } });
-    const metrics = supportMetrics(modelOf(...supports, candidate), candidate, ctx);
+    const model = modelOf(...supports, candidate);
+    const metrics = supportMetrics(model, candidate, ctx);
 
-    expect(metrics.ratio).toBeGreaterThan(0.7);
-    expect(metrics.centroidSupported).toBe(false);
-    expect(unsupported(modelOf(...supports, candidate), candidate, ctx)).toEqual([]);
+    // Nothing is under the exact centre — a single-footprint centroid test fails
+    // here — but the centre of mass still projects between the two towers.
+    expect(footprintContains(aabbOf(supports[0], shift), gapCentre, candidateCentre)).toBe(false);
+    expect(footprintContains(aabbOf(supports[1], shift), gapCentre, candidateCentre)).toBe(false);
+    expect(metrics.centreStable).toBe(true);
+    expect(unsupported(model, candidate, ctx)).toEqual([]);
+  });
+
+  it("rejects a span whose centre of mass hangs past its only support", () => {
+    const support = block("v1", "vertical", 1, 1, 0);
+    const candidate = block("h1", "horizontal", 1, 2, 1);
+    const s = aabbOf(support);
+    const candidateCentre = (aabbOf(candidate).min.x + aabbOf(candidate).max.x) / 2;
+    // Slide the span so a strip of its left side still rests on the tower while
+    // the centre of mass sits 1 mm beyond the tower's right edge.
+    const shift = { x_cm: (s.max.x + 1 - candidateCentre) / 10, y_cm: 0 };
+    const ctx = context({ mode: "horizontal", shifts: { horizontal: shift } });
+    const model = modelOf(support, candidate);
+    const metrics = supportMetrics(model, candidate, ctx);
+
+    expect(metrics.centreStable).toBe(false);
+    expect(unsupported(model, candidate, ctx).map(item => item.code)).toEqual(["UNSUPPORTED"]);
   });
 });
 

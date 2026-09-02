@@ -10,9 +10,9 @@
  *
  * THE BRIDGE NEEDS NO OPERATOR SHIFT. Horizontal's +1.9 cm registration lands
  * the span over the 1.6 cm gap between two vertical stacks with 73.3% union
- * contact. M3 accepts contact at or above 70% without requiring the exact
- * footprint centroid to touch, so this is intentionally a legal bridge at the
- * rig's shipped registration.
+ * contact. M3 accepts a placement whose centre of mass projects into the convex
+ * hull of everything it rests on, so a span carried on both towers is legal at
+ * the rig's shipped registration with nothing under its middle.
  */
 import type { ModelBlock } from "./model";
 import { documentOf, snapshotFileRig, type StudioModel } from "./rigmodel";
@@ -53,7 +53,7 @@ const TOWER = example(
 const BRIDGE = example(
   "example-bridge",
   "Two towers, one span",
-  "Two vertical stacks two blocks high, with a horizontal block laid across both of them. The two grids are different lattices in the same physical space, so a 6.0 cm horizontal block can bridge a gap no vertical block can. Its 73% contact is legal at the shipped registration with no operator shift.",
+  "Two vertical stacks two blocks high, with a horizontal block laid across both of them. The two grids are different lattices in the same physical space, so a 6.0 cm horizontal block can bridge a gap no vertical block can. Its centre of mass rides between the two towers, so it is legal at the shipped registration with no operator shift.",
   [
     block("l1", "vertical", 2, 2, 0, "blue"),
     block("r1", "vertical", 3, 2, 0, "blue"),

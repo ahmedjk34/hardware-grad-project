@@ -11,8 +11,8 @@ import {
   type RigConfig, type Shift,
 } from "./coords";
 import {
-  aabbOf, clippedCells, contacts, descentPrism, footprintArea,
-  footprintContains, footprintUnionArea, intersects,
+  EPS_MM, aabbOf, clippedCells, contacts, descentPrism, footprintArea,
+  footprintOverlapArea, footprintUnionArea, intersects, supportPolygonContains,
 } from "./geometry";
 import type { Model, ModelBlock } from "./model";
 import type { StudioSettings } from "./settings";
@@ -145,9 +145,9 @@ export const edgeOverhang = defineRule("EDGE_OVERHANG", (_model, block, ctx) => 
   const budgetX = geometry.max_edge_overhang_x_cm;
   const budgetY = geometry.max_edge_overhang_y_cm;
   const xBad = budgetX !== undefined
-    && (box.min.x < -budgetX * MM_PER_CM - 1e-3 || box.max.x > travelX + budgetX * MM_PER_CM + 1e-3);
+    && (box.min.x < -budgetX * MM_PER_CM - EPS_MM || box.max.x > travelX + budgetX * MM_PER_CM + EPS_MM);
   const yBad = budgetY !== undefined
-    && (box.min.y < -budgetY * MM_PER_CM - 1e-3 || box.max.y > travelY + budgetY * MM_PER_CM + 1e-3);
+    && (box.min.y < -budgetY * MM_PER_CM - EPS_MM || box.max.y > travelY + budgetY * MM_PER_CM + EPS_MM);
   if (!xBad && !yBad) return [];
   const edge = xBad ? "X" : "Y";
   return [{
@@ -191,32 +191,32 @@ export const collision = defineRule("COLLISION", (model, block, ctx) => {
 });
 
 export interface SupportMetrics {
+  /** Union of the beneath footprints clipped to the target, over the target area. */
   ratio: number;
-  centroidSupported: boolean;
+  /** Centre of mass projects into the convex hull of the contact patches. */
+  centreStable: boolean;
   supportIds: string[];
 }
 
-/**
- * Above this much union contact, a narrow unsupported line through the exact
- * footprint centre is not enough to reject the placement. The centroid check
- * remains useful for marginal bridges, but at 70% the majority support is the
- * stronger signal. The operator's configured supportRatio still applies.
- */
-export const CENTROID_BYPASS_RATIO = 0.7;
+/** Below this much footprint overlap (mm²) a "support" is rounding noise. */
+const SLIVER_MM2 = 1e-2;
 
 export function supportMetrics(model: Model, block: ModelBlock, ctx: ValidationContext): SupportMetrics {
-  if (block.level <= 0) return { ratio: 1, centroidSupported: true, supportIds: [] };
+  if (block.level <= 0) return { ratio: 1, centreStable: true, supportIds: [] };
   const target = boxOf(block, ctx);
   const base = target.min.z;
+  // Every block beneath counts, in any author order: a finished structure is
+  // finished, and compile.ts's support graph + Kahn walk own the build sequence.
   const beneath = model.blocks.filter(other => other.id !== block.id
-    && Math.abs(boxOf(other, ctx).max.z - base) <= 1e-6);
+    && Math.abs(boxOf(other, ctx).max.z - base) <= EPS_MM);
   const boxes = beneath.map(other => boxOf(other, ctx));
-  const area = footprintUnionArea(boxes, target);
-  const centroid = { x: (target.min.x + target.max.x) / 2, y: (target.min.y + target.max.y) / 2 };
+  const centre = { x: (target.min.x + target.max.x) / 2, y: (target.min.y + target.max.y) / 2 };
   return {
-    ratio: footprintArea(target) === 0 ? 0 : area / footprintArea(target),
-    centroidSupported: boxes.some(box => footprintContains(box, centroid.x, centroid.y)),
-    supportIds: beneath.filter((_, index) => footprintUnionArea([boxes[index]], target) > 0).map(item => item.id),
+    ratio: footprintArea(target) === 0 ? 0 : footprintUnionArea(boxes, target) / footprintArea(target),
+    centreStable: supportPolygonContains(boxes, target, centre.x, centre.y),
+    supportIds: beneath
+      .filter((_, index) => footprintOverlapArea(boxes[index], target) > SLIVER_MM2)
+      .map(item => item.id),
   };
 }
 
@@ -224,12 +224,11 @@ export const unsupported = defineRule("UNSUPPORTED", (model, block, ctx) => {
   if (!block || block.level <= 0) return [];
   const support = supportMetrics(model, block, ctx);
   const enoughContact = support.ratio >= ctx.settings.supportRatio;
-  const stableCentre = support.centroidSupported || support.ratio >= CENTROID_BYPASS_RATIO;
-  if (enoughContact && stableCentre) return [];
+  if (enoughContact && support.centreStable) return [];
   const percent = Math.round(support.ratio * 100);
   const needed = Math.round(ctx.settings.supportRatio * 100);
-  const message = support.ratio >= ctx.settings.supportRatio
-    ? `${block.id} has ${percent}% contact, but its centre is over unsupported space`
+  const message = enoughContact
+    ? `${block.id} has ${percent}% contact, but its centre of mass hangs past the supports — it would topple`
     : `${block.id} rests on ${percent}% of its footprint — it needs ${needed}%`;
   return [{
     severity: "error", code: "UNSUPPORTED", blockId: block.id, message,

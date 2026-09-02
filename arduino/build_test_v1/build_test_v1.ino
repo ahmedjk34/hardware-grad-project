@@ -236,10 +236,10 @@ const bool EN_INACTIVE_LEVEL = HIGH;
 const int SERVO_PIN = 6;
 
 // The feeder is calibrated for a tighter opening when both X/Y home switches
-// are physically active. Everywhere else, keep the wider pickup/release
-// margin. The home-switch check is made at the instant O/openServo() runs.
+// are physically active. The home-switch check is made at the instant
+// O/openServo() runs.
 const int SERVO_HOME_OPEN_ANGLE = 0;
-const int SERVO_OPEN_ANGLE = 30;
+const int SERVO_OPEN_ANGLE = 0;
 const int SERVO_CLOSE_ANGLE = 50;
 
 // The servo is commanded and then forgotten - nothing reports back
@@ -2602,7 +2602,7 @@ float gridAllocationStartCmOf(uint8_t axis, long count)
 }
 
 // `count` is the HIGHEST INDEX the grid uses, so 0 is a legal one-slot axis.
-bool gridGeometryFits(uint8_t axis, long count)
+bool gridGeometryFitsRaw(uint8_t axis, long count)
 {
   if (count < 0 || xyStepsPerCmOf(axis) <= 0.0
       || gridBlockCmOf(axis) <= 0.0 || gridGapCmOf(axis) < 0.0)
@@ -2635,6 +2635,20 @@ bool gridGeometryFits(uint8_t axis, long count)
   float nearEdge = gridBlockStartCmOf(axis, count);
   float farEdge = gridBlockEndCmOf(axis, count);
   return nearEdge >= -overhang - slack && farEdge <= travelCm + overhang + slack;
+}
+
+// Error offsets correct placement, but must not resize or reject the grid.
+// Check the requested lattice against its physical geometry without the
+// calibration nudge; cellTargetPosition() still applies the nudge to B/G.
+bool gridGeometryFits(uint8_t axis, long count)
+{
+  float *error = (axis == AXIS_X) ? &GRID_ERROR_OFFSET_X_CM[gridMode]
+                                  : &GRID_ERROR_OFFSET_Y_CM[gridMode];
+  float saved = *error;
+  *error = 0.0;
+  bool result = gridGeometryFitsRaw(axis, count);
+  *error = saved;
+  return result;
 }
 
 // The highest INDEX this axis can carry. -1 means not even slot 0 fits.

@@ -19,7 +19,7 @@ uint8_t echoPin1 = 5;
 uint8_t servoPin = 6;
 
 const uint8_t SERVO_CLOSE_ANGLE = 20;
-const uint8_t SERVO_OPEN_ANGLE = 140;
+const uint8_t SERVO_OPEN_ANGLE = 0;
 const unsigned long BELT_RUN_TIME_MS = 5000;
 // Flip this if the installed belt turns clockwise with LOW.
 const uint8_t BELT_CCW_DIRECTION_LEVEL = LOW;
@@ -115,7 +115,7 @@ void printStatus() {
   Serial.print(F("Belt: "));
   Serial.println(beltRunning ? F("RUNNING") : F("STOPPED"));
   Serial.print(F("Container: "));
-  Serial.println(containerOpen ? F("OPEN (140 deg)") : F("CLOSED (20 deg)"));
+  Serial.println(containerOpen ? F("OPEN (0 deg)") : F("CLOSED (20 deg)"));
   Serial.print(F("Ultrasonic armed: "));
   Serial.println(sensorArmed ? F("YES") : F("NO"));
   Serial.print(F("Step delay: "));
@@ -127,7 +127,7 @@ void printStatus() {
 void printHelp() {
   Serial.println(F("D <us>       change step delay; example: D 2000"));
   Serial.println(F("I <ms>       change ultrasonic read interval"));
-  Serial.println(F("O            open container (140 deg) and arm ultrasonic"));
+  Serial.println(F("O            open container (0 deg) and arm ultrasonic"));
   Serial.println(F("C            close container (20 deg) and stop belt"));
   Serial.println(F("F            manual belt direction test"));
   Serial.println(F("R            manual belt CCW test"));
@@ -177,7 +177,7 @@ void readSerialCommand() {
     sensorArmed = true;
     blockTriggered = false;
     sensor1Detected = false;
-    Serial.println(F("CONTAINER OPEN (140 deg); ultrasonic armed"));
+    Serial.println(F("CONTAINER OPEN (0 deg); ultrasonic armed"));
   } else if (command == 'C' || command == 'c') {
     stopBelt();
     containerServo.write(SERVO_CLOSE_ANGLE);
