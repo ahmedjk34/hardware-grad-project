@@ -169,23 +169,27 @@ check("that overhang is exactly each axis' budget, both ends",
 # recomputed: a test that redoes the arithmetic would agree with a bug.
 #
 #  Vertical is at the shipped trim of 0.0 on both axes; horizontal carries its
-#  +1.9 cm pickup-cell registration on both axes. The lattice is CENTRE-ANCHORED:
-#  the centre of cell 0 sits on the home corner (plus the trim), so the last
-#  vertical centre lands exactly on the software cap and cell 0's block hangs
-#  half a block back past the switches. Gaps are a uniform 1.6 cm on every axis
-#  of both modes.
+#  +1.9 cm pickup-cell registration on both axes PLUS a measured error offset of
+#  +0.5 cm X / +0.3 cm Y (rotation slop from the 90-degree CCW pickup-rotate -
+#  blocks were landing that far toward home). The centres below are the sum:
+#  origin_x = 1.9 + 0.5 = 2.4, origin_y = 1.9 + 0.3 = 2.2. The lattice is
+#  CENTRE-ANCHORED: the centre of cell 0 sits on the home corner (plus the trim
+#  and error offset), so the last vertical centre lands exactly on the software
+#  cap and cell 0's block hangs half a block back past the switches. Gaps are a
+#  uniform 1.6 cm on every axis of both modes.
 #
 #  mode        axis  block  gap  pitch  n   centres          block edges
 #  vertical    X     2.2    1.6  3.8    7   0.0  -> 22.8     -1.1 -> 23.9
 #  vertical    Y     6.0    1.6  7.6    6   0.0  -> 38.0     -3.0 -> 41.0
-#  horizontal  X     6.0    1.6  7.6    3   1.9  -> 17.1     -1.1 -> 20.1
-#  horizontal  Y     2.2    1.6  3.8   10   1.9  -> 36.1      0.8 -> 37.2
+#  horizontal  X     6.0    1.6  7.6    3   2.4  -> 17.6     -0.6 -> 20.6
+#  horizontal  Y     2.2    1.6  3.8   10   2.2  -> 36.4      1.1 -> 37.5
 #
 #  Vertical fills its travel exactly: 6 * 3.8 = 22.8 and 5 * 7.6 = 38.0. That
 #  is what "the build area IS the travel area" means, and it is why vertical X
 #  has seven columns rather than six. Horizontal is registered +1.9 cm on BOTH
 #  axes (the rotated 6.0 cm face overhangs the 2.2 cm vertical footprint by
-#  6.0/2 - 2.2/2 = 1.9 cm per side); a 4th X column is still refused.
+#  6.0/2 - 2.2/2 = 1.9 cm per side) and then nudged by its error offset; a 4th X
+#  column is still refused.
 
 SECTION_3 = {
     "vertical": {
@@ -206,10 +210,10 @@ SECTION_3 = {
         "gap": (1.6, 1.6),
         "pitch": (7.6, 3.8),
         "footprint": (21.20, 36.40),
-        "first_centre": (1.90, 1.90),
-        "last_centre": (17.10, 36.10),
-        "first_edge": (-1.10, 0.80),
-        "last_edge": (20.10, 37.20),
+        "first_centre": (2.40, 2.20),
+        "last_centre": (17.60, 36.40),
+        "first_edge": (-0.60, 1.10),
+        "last_edge": (20.60, 37.50),
         "cells": 30,
     },
 }

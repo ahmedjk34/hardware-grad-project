@@ -190,7 +190,7 @@
         SRAM   9443 bytes (115%)   ->   2099 bytes (26%)
         flash 39158 bytes  (15%)   ->  40590 bytes (15%)
 
-  So: any new Serial.print of a fixed string MUST be F("..."), e.g.
+  So: any new Serial.print of a fixed string MUST B be F("..."), e.g.
         Serial.println(F("--- MY NEW SECTION ---"));
   Variables print normally - F() is only for literals.
 
@@ -718,11 +718,16 @@ float GRID_TRIM_Y_CM[GRID_MODE_COUNT] = {0.0, 1.9};
 // They apply exactly like GRID_TRIM_* and shift every grid centre from home.
 // Keep these paired with config/rig.json and start new error calibration at 0.
 //
-// RESET TO ZERO when the grid was re-anchored on the printed sheet. The old
-// 0.15 / 0.05 were measured against the previous CENTRED allocation and mean
-// nothing against this one.
-float GRID_ERROR_OFFSET_X_CM[GRID_MODE_COUNT] = {0.0, 0.0};
-float GRID_ERROR_OFFSET_Y_CM[GRID_MODE_COUNT] = {0.0, 0.0};
+// VERTICAL stays 0.0 / 0.0 - the grid was re-anchored on the printed sheet and
+// the old 0.15 / 0.05 were measured against the previous CENTRED allocation.
+//
+// HORIZONTAL carries +0.5 cm X / +0.3 cm Y, measured on the rig: placed blocks
+// were landing that far TOWARD the home switches on each axis, so the centres
+// are nudged the same amount AWAY from home. This is rotation slop from the
+// 90-degree CCW pickup-rotate not pivoting on the exact block centre; it is a
+// constant per-mode error, NOT part of the +1.9 cm GRID_TRIM registration.
+float GRID_ERROR_OFFSET_X_CM[GRID_MODE_COUNT] = {0.0, 0.5};
+float GRID_ERROR_OFFSET_Y_CM[GRID_MODE_COUNT] = {0.0, 0.3};
 
 // The live GRID SHIFT, per mode. Set by the shiftX / shiftY serial commands,
 // cleared to 0 by shiftX 0 / shiftY 0 and by every board reset. It is folded
