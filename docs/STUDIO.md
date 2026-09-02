@@ -154,7 +154,7 @@ web/src/
     run-report.ts        event-derived Markdown and camera evidence capture
     compile.ts           model → ordered B/R/RR program; support graph, Kahn order, latch state machine
     settings.ts          versioned physical estimates + the two estimate-timing constants, guarded localStorage I/O
-    coords.fixtures.json 17 cases / 980 cells dumped from Python
+    coords.fixtures.json 17 cases / 1040 cells dumped from Python
     scene/
       theme.ts           DESIGN.md tokens read off the document, as three colours
       Viewport.tsx       <Canvas>, camera rig, lights, contact shadows
@@ -225,7 +225,7 @@ group. `SCENE_ROTATION_X` is still exported for anyone who needs the number.
 ### 5.1 `studio/coords.ts` — the port of `python/rig/grid.py`
 
 Held to Python at 1e-6 by `coords.test.ts` against `coords.fixtures.json`, dumped
-by `python/tools/dump_grid_fixtures.py` (17 cases, 980 cells: both modes, shipped
+by `python/tools/dump_grid_fixtures.py` (17 cases, 1040 cells: both modes, shipped
 and clipped and refused shifts, plus trims and error offsets on a synthetic
 envelope). **When the two disagree, Python is right.**
 
@@ -1153,6 +1153,33 @@ first in the diff.
 
 Newest first. One entry per landed change; note anything that contradicts the
 plan or that a future reader could not infer.
+
+### Horizontal grid error offset → +0.5 cm X / +0.3 cm Y
+
+- `config/rig.json` `grid.modes.horizontal`: `error_offset_x_cm` 0.0 → **0.5**,
+  `error_offset_y_cm` 0.0 → **0.3**, with the firmware's
+  `GRID_ERROR_OFFSET_{X,Y}_CM` horizontal slots moved to match (they are a
+  paired value, `test_grid.py` asserts it). Measured on the rig: placed blocks
+  were landing 0.5 cm (X) / 0.3 cm (Y) toward the home switches, so every
+  horizontal centre is nudged that far away from home. This is rotation slop
+  from the 90° CCW pickup-rotate not pivoting on the exact block centre — a
+  constant per-mode error, **not** part of the +1.9 cm registration trim.
+- Studio consequence: every horizontal cell centre moves `+5 mm` X / `+3 mm` Y.
+  `coords.ts` already folds `error_offset` into the origin, so `cellToMachine`,
+  the twin and the lattice picked it up for free. `coords.fixtures.json`
+  regenerated from Python; the `horizontal shift y -2.0 refused` fixture is now
+  **accepted** (the +0.3 cm Y headroom keeps cell 0 on the machine), so the
+  dumped cell total rose 980 → 1040.
+- `axisFits` / `reachableCells` (the shift-clip count) include `error_offset`,
+  matching Python's `MachineGrid._axis_fits`; only the *requested-grid*
+  geometry check strips it (Python `_assert_fits(ignore_shift=True)`, firmware
+  `gridGeometryFits`). So horizontal's last-column clip boundary tightened by
+  0.5 cm — `geometry.test.ts` block-edge test moved 5.7/5.8 → 5.2/5.3 — and the
+  cross-mode overlap test now reads vertical column 3 rather than 2.
+- `coords.test.ts` cell-0 assertion updated to 24 mm / 22 mm (`trim + error
+  offset`). `test_grid.py` `SECTION_3` horizontal table recomputed. No plan
+  §1 decision changed; `dual-orientation-grid.md` §3's calibration note carries
+  the number.
 
 ### Support is a centre-of-mass toppling test, not a contact-ratio bypass
 

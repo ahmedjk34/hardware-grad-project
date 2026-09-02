@@ -134,7 +134,10 @@ else, that is a signal to stop and re-read the plan.
 > Vertical trims remain zero; horizontal ships at `trim_x = trim_y = +1.9 cm`
 > for the pickup-cell registration described in D14 (later revised from the
 > single-axis `trim_y = +1.6` this note originally quoted; `config/rig.json` and
-> `python/tests/test_grid.py` `SECTION_3` are authoritative). Vertical error
+> `python/tests/test_grid.py` `SECTION_3` are authoritative). Horizontal also
+> now ships a measured `error_offset_x = +0.5`, `error_offset_y = +0.3` cm
+> (blocks were landing that far toward home; rotation slop from the 90° CCW
+> pickup-rotate, kept out of the +1.9 trim per D14). Vertical error
 > offsets ship at
 > `(+0.15, +0.05) cm` for X/Y after incremental correction: the prior
 > `(+0.15, -0.45) cm` was increased by the newly measured `0.5 cm`
@@ -220,10 +223,11 @@ does not physically test this reference. A future rig measurement may refine
 the magnitude per axis; keep any such correction in `horizontal.trim_{x,y}_cm`
 and never hide it inside the rotation/tool offset.
 
-**Tolerance note.** The +1.9 cm registration leaves horizontal ~1.9 cm of
-far-end slack on each axis (X last centre 17.1 into 22.8, Y 36.1 into 38.0) and
-a −1.1 cm X near edge, inside its `max_edge_overhang_x_cm = 3.0` budget. Measure
-a real stack before trusting the last row of horizontal's 10.
+**Tolerance note.** The +1.9 cm registration plus the shipped `+0.5 / +0.3 cm`
+error offset leaves horizontal far-end slack on each axis (X last centre 17.6
+into 22.8, Y 36.4 into 38.0) and a −0.6 cm X near edge, inside its
+`max_edge_overhang_x_cm = 3.0` budget. Measure a real stack before trusting the
+last row of horizontal's 10.
 
 ---
 

@@ -166,8 +166,16 @@ Worked out for both at the shipped calibration:
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | vertical | X | 2.2 | 1.6 | 3.8 | **7** | 25.00 | 0.00 → 22.80 | −1.10 → 23.90 |
 | vertical | Y | 6.0 | 1.6 | 7.6 | **6** | 44.00 | 0.00 → 38.00 | −3.00 → 41.00 |
-| horizontal | X | 6.0 | 1.6 | 7.6 | **3** | 21.20 | 1.90 → 17.10 | −1.10 → 20.10 |
-| horizontal | Y | 2.2 | 1.6 | 3.8 | **10** | 36.40 | 1.90 → 36.10 | 0.80 → 37.20 |
+| horizontal | X | 6.0 | 1.6 | 7.6 | **3** | 21.20 | 2.40 → 17.60 | −0.60 → 20.60 |
+| horizontal | Y | 2.2 | 1.6 | 3.8 | **10** | 36.40 | 2.20 → 36.40 | 1.10 → 37.50 |
+
+Horizontal's centres above are `trim (+1.9 / +1.9)` **plus its shipped
+`error_offset` of `+0.5 cm` X / `+0.3 cm` Y** — a measured constant per-mode
+placement error (blocks were landing that far toward home; rotation slop from
+the 90° CCW pickup-rotate). The registration trim alone would put the centres
+at `1.90 → 17.10` (X) and `1.90 → 36.10` (Y). The error offset corrects
+placement but never resizes the grid: `gridGeometryFits` / `_assert_fits`
+strip it.
 
 `count` is a COUNT; the firmware's `S` and `GRID_COLS` / `GRID_ROWS` speak in
 highest indices, one less. `python/rig/grid.py` is the authoritative statement
@@ -240,8 +248,10 @@ gap_x_cm                    = repeated spacing between cells
 ```
 
 The same separation applies on Y (`horizontal.trim_y_cm` carries the identical
-+1.9 cm). A future rig measurement may refine the magnitude per axis; keep any
-such correction in `horizontal.trim_{x,y}_cm` and do not silently move it into
++1.9 cm). A future rig measurement may refine the registration magnitude per
+axis (`horizontal.trim_{x,y}_cm`) or, for a measured constant placement error on
+top of it, `horizontal.error_offset_{x,y}_cm` (shipped at `+0.5` / `+0.3 cm` —
+see the table note above); either way do not silently move it into
 `tool_offsets`.
 
 Each mode also declares `max_edge_overhang_x_cm` / `_y_cm`: the budget the
@@ -254,9 +264,10 @@ moves nothing.
   half-block figures; horizontal's are `max_edge_overhang_x_cm = 3.0`,
   `_y_cm = 1.1`), which the +1.9 cm registration's `−1.1 cm` X near edge needs.
 
-**Vertical sits exactly on its cap; horizontal has ~1.9 cm of far-end slack on
-each axis after the +1.9 cm registration** (X last centre 17.1 into 22.8, Y
-36.1 into 38.0). Measure a real stack before trusting horizontal's last row.
+**Vertical sits exactly on its cap; horizontal keeps far-end slack after the
++1.9 cm registration and its `+0.5` / `+0.3 cm` error offset** (X last centre
+17.6 into 22.8, Y 36.4 into 38.0). Measure a real stack before trusting
+horizontal's last row.
 
 The firmware owns the step counts and derives both steps/cm ratios at runtime;
 never hard-code either ratio and do not copy the `4750 × 8250` safety envelope
