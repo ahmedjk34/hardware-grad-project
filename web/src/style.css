@@ -68,9 +68,8 @@
 
   /* shell metrics */
   --bar-h: 48px;
-  --rail-w: clamp(19rem, 23vw, 22rem);
+  --rail-w: clamp(20rem, 25vw, 24rem);
   --log-h: 172px;
-  --chrome-h: calc(var(--bar-h) + var(--log-h) + 156px);
 
   color-scheme: dark;
   font: var(--t-md);
@@ -141,13 +140,22 @@ button:disabled { cursor: not-allowed; }
   overflow: hidden;
 }
 
+/* A flex column, not a two-row grid: the hero (instrument) takes the space the
+   runner and log leave, and the column CLIPS so a tall camera frame can never
+   paint over the panels below it. Each of runner/log carries its own cap and
+   scrollbar. */
 .pane-camera {
   min-width: 0;
   min-height: 0;
-  display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
+  display: flex;
+  flex-direction: column;
   gap: var(--s3);
+  overflow: hidden;
 }
+
+.pane-camera > .instrument { flex: 1 1 auto; min-height: 240px; }
+.pane-camera > .runner,
+.pane-camera > .log { flex: 0 0 auto; }
 
 .pane-rail {
   min-width: 0;
@@ -158,6 +166,18 @@ button:disabled { cursor: not-allowed; }
   overflow-y: auto;
   overscroll-behavior: contain;
   padding-right: var(--s1);
+}
+
+/* The action cluster — TARGET readout, LEVEL, BUILD — is pinned to the top of
+   the rail so a long CALIBRATION section can never scroll BUILD out of reach. */
+.rail-primary {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
+  display: grid;
+  gap: var(--s3);
+  padding-bottom: var(--s2);
+  background: linear-gradient(var(--void) 84%, transparent);
 }
 
 .pane-rail::-webkit-scrollbar, .log-body::-webkit-scrollbar { width: 8px; }
@@ -324,10 +344,13 @@ button:disabled { cursor: not-allowed; }
    Desktop ≥900px only; below that they are a two-tab switcher. */
 .instrument {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  align-items: start;
+  /* The camera is the interface; the twin is the claim it checks. Weight the
+     hero heavier than an even split. */
+  grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
+  align-items: stretch;
   gap: var(--s4);
   min-height: 0;
+  overflow: hidden;
   padding: var(--s3);
   background: var(--sunken);
   border: 1px solid var(--line);
@@ -342,6 +365,8 @@ button:disabled { cursor: not-allowed; }
   gap: var(--s3);
   min-width: 0;
   min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 /* The pane borders would be a second frame inside the shared one. */
@@ -424,23 +449,27 @@ button:disabled { cursor: not-allowed; }
 .stage-area {
   display: grid;
   place-items: center;
+  flex: 1 1 auto;
   min-height: 0;
+  overflow: hidden;
   padding: var(--s3);
   background:
     repeating-linear-gradient(135deg, rgba(255,255,255,.012) 0 2px, transparent 2px 10px),
     var(--sunken);
   border: 1px solid var(--line);
   border-radius: var(--r-lg);
-  /* The stage is capped by the height left over after the chrome, so a portrait
-     frame shrinks instead of pushing the log and rail off the screen. */
-  --stage-h: calc(100dvh - var(--chrome-h));
 }
 
+/* Contain-fit: the stage is the largest box of aspect --ar that fits its cell
+   in BOTH axes. It is sized from the space it is actually given, never from the
+   viewport, so it cannot overflow onto the panels beneath it. */
 .stage {
   position: relative;
-  width: 100%;
-  max-width: calc(var(--stage-h, 60vh) * var(--ar, 1.33));
   aspect-ratio: var(--ar, 1.33);
+  block-size: 100%;
+  inline-size: auto;
+  max-block-size: 100%;
+  max-inline-size: 100%;
   background: var(--sunken);
   border: 1px solid var(--line);
   border-radius: var(--r-lg);
@@ -873,10 +902,15 @@ svg.grid-overlay.selectable { cursor: crosshair; }
     overflow: visible;
   }
 
-  .pane-camera { grid-template-rows: auto auto; }
-  .stage-area { --stage-h: 60vh; }
+  /* The page scrolls normally on a phone: nothing clips, the stage is sized by
+     its width, and the pinned rail cluster goes back to static flow. */
+  .pane-camera { overflow: visible; }
+  .pane-camera > .instrument { flex: none; min-height: 0; }
+  .instrument, .instrument-pane, .stage-area { overflow: visible; }
+  .stage-area { flex: none; }
+  .stage { block-size: auto; inline-size: 100%; max-block-size: none; }
+  .rail-primary { position: static; background: none; padding-bottom: 0; }
   .pane-rail { overflow: visible; padding-right: 0; }
-  .stage { max-width: 100%; }
   .stage-toolbar { overflow-x: auto; scrollbar-width: none; }
 
   .action-sheet {
@@ -895,6 +929,15 @@ svg.grid-overlay.selectable { cursor: crosshair; }
   .action-sheet .readout { min-height: 76px; }
   .btn, .stepper input { min-height: 48px; }
   .stepper { grid-template-columns: 48px minmax(0, 1fr) 48px; }
+}
+
+/* Laptop viewports (browser chrome + a bookmarks bar eat the height a big
+   monitor has). Give the log less room, cap the runner tighter, and let the
+   hero shrink a little further before the column clips. */
+@media (min-width: 900px) and (max-height: 880px) {
+  :root { --log-h: 124px; }
+  .pane-camera > .instrument { min-height: 190px; }
+  .runner { max-height: clamp(9rem, 40vh, 15rem); }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1630,7 +1673,7 @@ svg.grid-overlay.selectable { cursor: crosshair; }
   display: grid;
   gap: var(--s3);
   min-width: 0;
-  max-height: min(42vh, 30rem);
+  max-height: clamp(12rem, 34vh, 24rem);
   overflow-y: auto;
   overscroll-behavior: contain;
 }

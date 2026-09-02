@@ -46,6 +46,10 @@ export function App() {
   const [runnerModelId, setRunnerModelId] = useState<string | null>(null);
   const [runnerActive, setRunnerActive] = useState(false);
   const phone = usePhone();
+  // A laptop viewport can't show the camera, twin, runner AND an open log at a
+  // usable size at once. The log is the one that starts collapsed there.
+  const [shortViewport] = useState(
+    () => typeof window !== "undefined" && window.innerHeight < 900);
   const [cornerHandler, setCornerHandler] = useState<((point: [number, number], imageSize: [number, number]) => void) | null>(null);
   const changeHandler = useCallback((handler: ((point: [number, number], imageSize: [number, number]) => void) | null) => setCornerHandler(() => handler), []);
 
@@ -128,17 +132,19 @@ export function App() {
           <RunnerPanel state={state} connected={snapshot.connected}
                        modelId={runnerModelId ?? ""} onActiveChange={setRunnerActive}
                        progress={snapshot.progress} lastResult={snapshot.lastResult} />
-          <RigLog log={snapshot.log} defaultOpen={!phone} gap={snapshot.gap} />
+          <RigLog log={snapshot.log} defaultOpen={!phone && !shortViewport} gap={snapshot.gap} />
         </div>
 
         <div className="pane-rail">
-          <ResultToast state={state} />
-          <ControlPanel
-            state={state}
-            connected={snapshot.connected}
-            onBuild={() => {}}
-            primaryElsewhere={phone}
-          />
+          <div className="rail-primary">
+            <ResultToast state={state} />
+            <ControlPanel
+              state={state}
+              connected={snapshot.connected}
+              onBuild={() => {}}
+              primaryElsewhere={phone}
+            />
+          </div>
           <ModeSwitch state={state} disabled={!mutable} />
           <Calibrate
             ready={snapshot.connected && state.build_state === "READY" && !collecting}
