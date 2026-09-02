@@ -1,6 +1,6 @@
 {
   "_about": "Written by camera/camera_studio.py. 'derived' is output, not input \u2014 editing it does nothing.",
-  "saved_at": "2026-09-01T13:28:54",
+  "saved_at": "2026-09-02T16:59:30",
   "camera": "picamera2 @ 1296x972, sensor mode 1296x972",
   "capture": {
     "backend": "auto",
@@ -65,7 +65,7 @@
     "brightness": "auto",
     "contrast": "auto",
     "saturation": "auto",
-    "sharpness": "auto",
+    "sharpness": 16.0,
     "ev": "auto",
     "exposure": "auto",
     "gain": "auto",
