@@ -162,7 +162,7 @@ epoch milliseconds. There are five fact types plus one envelope:
 | `type` | Carries |
 | --- | --- |
 | `state` | the whole `StateModel` snapshot, under `state` |
-| `build_step` | one firmware build phase: `command_seq`, `step`, `total`, `phase`, `label`, `action`, `status` |
+| `build_step` | one firmware build phase: `command_seq`, `step`, `total`, `phase`, `label`, `action`, `status`, `eta_ms` |
 | `build_result` | one settled build: `command_seq`, `result`, `reason`, `locked`, `locked_reason`, `from_prose` |
 | `serial` | one raw line the rig printed, under `line`, with `stream` (`rig` / `error`) |
 | `heartbeat` | nothing but its id — proof the socket is alive |
@@ -195,9 +195,18 @@ up. `build_release_confirmed` is phase 11's `status=done` — the jaws opened �
 and is **not** a placement. Nothing says `placed` before the terminal `@n OK`
 arrives as a `build_result`.
 
+**`eta_ms`** is the firmware's own prediction of how long a phase will take,
+present on the Z moves only and `null` everywhere else. The board computes it
+(exact step count x its Z step period) because the constants it needs are
+firmware-owned and the Pi may not keep copies. It is a FLOOR — the real move can
+only take longer — so a client may animate from it but must never treat its
+expiry as the phase having finished.
+
 The firmware reports PHASES, not motor positions. There is no continuous
 position telemetry, so no client may claim to know where the arm is between
-phases.
+phases. The one animation driven by a clock is the placement descent, and it is
+clamped short of the cell so that only the real release event can land the
+block.
 
 ## 6. Safety rules while operating
 

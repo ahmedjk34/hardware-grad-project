@@ -46,6 +46,8 @@ export interface StateModel {
   build_phase_label: string | null;
   build_phase_action: BuildPhaseAction | null;
   build_phase_started_at: number | null;
+  /** The firmware's predicted duration for the phase in flight, in ms. */
+  build_phase_eta_ms: number | null;
   build_phase_status: BuildPhaseStatus;
   /** Phase 11's `status=done`: the jaws opened. NOT the same as placed. */
   build_release_confirmed: boolean;
@@ -87,6 +89,17 @@ export interface BuildStepEvent {
   action: BuildPhaseAction;
   /** `begin` before the phase runs; the single `done` is the release. */
   status: "begin" | "done";
+  /**
+   * The firmware's own prediction of how long this phase takes, in ms, or
+   * `null` when it did not say. Present on the Z moves only — they are the
+   * phases whose duration is computable, because the steppers have no
+   * acceleration ramp.
+   *
+   * IT IS A FLOOR. Nothing moves faster than its step rate, so the real phase
+   * can only take longer. Animate from it if you like; never let it assert
+   * that the phase finished.
+   */
+  eta_ms: number | null;
 }
 
 export interface BuildResultEvent {

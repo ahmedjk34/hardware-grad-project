@@ -31,6 +31,23 @@ export interface BuildProgress {
   releaseConfirmed: boolean;
   /** When this phase started, by the SERVER's clock. */
   startedAt: number | null;
+  /**
+   * When this browser was TOLD, by its own clock.
+   *
+   * Separate from `startedAt` because the two clocks are not the same one:
+   * `startedAt` is the server's epoch and may be seconds off this machine's.
+   * Anything that animates must count from a local anchor, so it counts
+   * from here.
+   */
+  receivedAt: number | null;
+  /**
+   * The firmware's predicted duration for this phase, in ms, or null.
+   *
+   * A FLOOR, not a schedule — the real phase can only take longer. See
+   * `plans/ack-protocol.md`. Its expiry means nothing; only the next event
+   * says a phase is over.
+   */
+  etaMs: number | null;
   eventId: number;
 }
 
@@ -38,7 +55,7 @@ export function emptyProgress(): BuildProgress {
   return {
     commandSeq: null, step: null, total: null, phase: null, label: null,
     action: null, status: "idle", releaseConfirmed: false, startedAt: null,
-    eventId: 0,
+    receivedAt: null, etaMs: null, eventId: 0,
   };
 }
 
@@ -109,6 +126,8 @@ function progressFromStep(
       event.command_seq !== null && event.command_seq !== previous.commandSeq
         ? false : previous.releaseConfirmed,
     startedAt: event.at,
+    receivedAt: Date.now(),
+    etaMs: event.eta_ms ?? null,
     eventId: event.event_id,
   };
 }
@@ -128,6 +147,13 @@ function progressFromState(previous: BuildProgress, state: StateModel): BuildPro
     status: state.build_phase_status,
     releaseConfirmed: state.build_release_confirmed,
     startedAt: state.build_phase_started_at,
+    // A snapshot says when the phase started on the SERVER's clock, and this
+    // client is learning it now — so the local anchor is only as good as how
+    // long the snapshot took to arrive. Good enough to resume an animation
+    // mid-phase; the clamp below is what stops that mattering.
+    receivedAt: previous.eventId === state.serial_event_id
+      ? previous.receivedAt : Date.now(),
+    etaMs: state.build_phase_eta_ms,
     eventId: state.serial_event_id,
   };
 }

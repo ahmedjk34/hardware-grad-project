@@ -189,7 +189,7 @@ def parse_ack(line: str) -> Ack | None:
 # The firmware announces every phase before it runs, one line each:
 #
 #   @12 STEP step=8 total=14 phase=move_to_target action=move
-#       text=Move_XY_to_target status=begin
+#       text=Move_XY_to_target status=begin ms=2570
 #
 # `total` is on the wire so nothing here hard-codes 14. `phase` is the STABLE
 # identifier UIs switch on; `text` is the human label, underscored on the wire
@@ -198,6 +198,21 @@ def parse_ack(line: str) -> Ack | None:
 #
 # `action` is deliberately coarse — a consumer needs to know whether a block is
 # being carried, not which motor is turning.
+#
+# `ms` is the firmware's own PREDICTION of how long the phase will take, and it
+# is present only on the Z moves, which are the only phases whose duration is
+# computable: the steppers have no acceleration ramp, so a move of N steps takes
+# N * stepPeriodMs. It exists because `Z_TRAVEL_STEPS`, `BLOCK_HEIGHT_CM` and
+# `STEP_DELAY_Z` are firmware-owned (AGENTS.md) and the Pi is forbidden a copy —
+# so the board works the answer out and says it, rather than being asked.
+#
+# It is a FLOOR, not a schedule. Nothing moves faster than its step rate, so the
+# real phase can only take longer: a stiff axis, a stall or an early limit all
+# add time. A consumer may use it to animate, but it must never let the estimate
+# stand in for the phase actually finishing — the next STEP, or the terminal
+# ack, is the only thing that says that.
+#
+# ABSENT means "no idea", which is not the same as zero. `ms=0` is never sent.
 PROGRESS_ACTIONS = frozenset({"move", "grip", "release", "rotate", "park"})
 
 # `begin` is announced before the phase runs. There is exactly one `done`:
@@ -223,6 +238,9 @@ class SerialProgress:
     label: str
     action: str
     status: str
+    #: The firmware's predicted duration for this phase, or None when it did
+    #: not say. A FLOOR — see the note above. Never zero.
+    eta_ms: int | None = None
     fields: dict = field(default_factory=dict)
     raw: str = ""
 
@@ -260,6 +278,15 @@ def parse_progress(ack: Ack | None) -> SerialProgress | None:
     phase = ack.fields.get("phase", "")
     if not phase:
         return None
+    try:
+        eta_ms = int(ack.fields["ms"])
+    except (KeyError, ValueError):
+        eta_ms = None
+    if eta_ms is not None and eta_ms <= 0:
+        # A non-positive prediction is not a prediction. Treat it as absent
+        # rather than as "instant", which is what a UI would draw it as.
+        eta_ms = None
+
     return SerialProgress(
         seq=ack.seq,
         step=step,
@@ -269,6 +296,7 @@ def parse_progress(ack: Ack | None) -> SerialProgress | None:
         label=ack.fields.get("text", "").replace("_", " "),
         action=ack.fields.get("action", ""),
         status=ack.fields.get("status", "begin"),
+        eta_ms=eta_ms,
         fields=dict(ack.fields),
         raw=ack.raw,
     )

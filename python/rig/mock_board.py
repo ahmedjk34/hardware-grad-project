@@ -225,10 +225,23 @@ class MockBoard:
             return
         self._emit((f"GRID MODE: {previous}  ->  {wanted}",))
 
+    #: Predicted durations the firmware sends as `ms=` on its Z moves, keyed by
+    #: phase.  The real numbers come from `zEtaMs()` in the sketch — step count
+    #: times `stepPeriodMs(AXIS_Z)` — and are level-dependent for
+    #: `lower_to_level`.  These are the full-travel figures for a stock rig
+    #: (1350 steps x 1.9 ms + DIR_SETTLE_MS); the mock does not model Z
+    #: position, so it sends the same number every time.  Phases the firmware
+    #: cannot predict send nothing at all, and that absence is deliberate.
+    PHASE_ETA_MS = {"raise_clear": 2570, "lower_to_ground": 2570,
+                    "lift_block": 2570, "lower_to_level": 2570,
+                    "park_clear": 2570}
+
     def _step_line(self, seq: int, step: int, phase: str, action: str,
                    label: str, status: str) -> str:
-        return (f"@{seq} STEP step={step} total={self.BUILD_STEP_COUNT} "
+        line = (f"@{seq} STEP step={step} total={self.BUILD_STEP_COUNT} "
                 f"phase={phase} action={action} text={label} status={status}")
+        eta = self.PHASE_ETA_MS.get(phase) if status == "begin" else None
+        return f"{line} ms={eta}" if eta else line
 
     def _handle_build(self, command: str) -> None:
         parts = command.split()

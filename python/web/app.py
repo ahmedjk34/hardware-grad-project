@@ -240,6 +240,7 @@ def create_app(options: ConsoleAppOptions | None = None) -> FastAPI:
                 "label": progress.label,
                 "action": progress.action,
                 "status": progress.status,
+                "eta_ms": progress.eta_ms,
             })
             app.state.progress.on_progress(progress, event.event_id)
             publish_state(app, force=True)

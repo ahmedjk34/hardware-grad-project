@@ -175,8 +175,16 @@ export interface TwinScene {
   carrying: boolean;
   /** True once phase 11 confirmed the release. Still not `placed`. */
   released: boolean;
-  /** How far above its cell the block in flight sits. Two values only. */
+  /** How far above its cell the block in flight sits, before any descent. */
   blockOffset: number;
+  /**
+   * The estimated descent to animate over `blockOffset`, or null for none.
+   *
+   * Present only during `lowering-to-level`, and only when the firmware sent a
+   * duration. `Twin.tsx` interpolates between them and clamps at
+   * `DESCENT_CLAMP`, so the block never lands on a timer's say-so.
+   */
+  descent: { etaMs: number; since: number } | null;
   /**
    * Draw the activity indicator: the phase is motion and the socket is live.
    *
@@ -285,22 +293,44 @@ export const TRAVEL_SCENE_Y = ENVELOPE_Z_CM * MM_PER_CM * SCENE_UNITS_PER_MM;
 /**
  * How far above its cell the block in flight is drawn, in scene units.
  *
- * TWO VALUES, AND NOTHING BETWEEN THEM. The firmware knows two things about Z
- * during a carry: it is at the top switch, or it has been commanded to a level.
- * It reports neither as a number, so this reports neither as a number. A block
- * being carried is drawn at travel height; a block that has been RELEASED —
- * a fact, from phase 11's `status=done` — is drawn in its cell.
- *
- * The old version of this function interpolated a 1.6-second descent off
- * `performance.now()`. It is gone on purpose: it drew the arm at a height
- * nobody had measured, and it looped, so a build that took forty seconds
- * showed twenty-five descents that had never happened. If exact continuous
- * motion is ever wanted, it has to come from throttled firmware telemetry, not
- * from a clock in a browser.
+ * The resting height for a phase, before any descent is applied: travel height
+ * while the rig is carrying, zero once the block is down.
  */
 export function phaseOffsetScene(phase: TwinPhase): number {
   return ALOFT.has(phase) ? TRAVEL_SCENE_Y : 0;
 }
+
+/**
+ * How far down the descent has got, 0..1, from the firmware's own estimate.
+ *
+ * THIS IS THE ONE PLACE A CLOCK IS ALLOWED TO SAY ANYTHING, and it is fenced
+ * on all four sides:
+ *
+ * 1. **It starts on a real event.** `elapsedMs` is measured from the moment
+ *    the `lower_to_level` phase event ARRIVED, not from a render or a mount.
+ * 2. **Its duration is the machine's own arithmetic.** `etaMs` comes down the
+ *    wire as `ms=` on the STEP line: the firmware multiplies the exact step
+ *    count for this level by its own `stepPeriodMs(AXIS_Z)`. The browser keeps
+ *    no copy of `Z_TRAVEL_STEPS` or `BLOCK_HEIGHT_CM` — AGENTS.md forbids one.
+ * 3. **It cannot finish.** The result is clamped to `DESCENT_CLAMP`, so the
+ *    block always stops fractionally short. The last sliver is closed only by
+ *    the real release event. A timer may illustrate a descent; it may never
+ *    assert an arrival.
+ * 4. **Without an estimate it does nothing.** No `etaMs` means no motion, not
+ *    a guessed duration.
+ *
+ * Because the estimate is a FLOOR — nothing moves faster than its step rate —
+ * running out of time means the rig is taking longer than predicted, and the
+ * honest thing to draw then is a block held just short of its cell. Which is
+ * exactly what the clamp already does.
+ */
+export function descentProgress(elapsedMs: number, etaMs: number | null): number {
+  if (etaMs === null || etaMs <= 0 || elapsedMs <= 0) return 0;
+  return Math.min(DESCENT_CLAMP, elapsedMs / etaMs);
+}
+
+/** How far a timed descent is allowed to get. The rest needs evidence. */
+export const DESCENT_CLAMP = 0.92;
 
 /** Whether the machine is mid-motion in this phase, for the activity pulse. */
 export function phaseIsMoving(phase: TwinPhase): boolean {
@@ -440,6 +470,11 @@ export function twinScene(state: StateModel | null, model: Model, progress: Twin
     carrying: live && phaseIsCarrying(phase) && !build.releaseConfirmed,
     released: build.releaseConfirmed,
     blockOffset: locked || phase === "aborted" ? 0 : phaseOffsetScene(phase),
+    // The placement descent, and only that one. The other Z moves carry no
+    // block, or carry it upward, and there is nothing there worth animating.
+    descent: live && phase === "lowering-to-level"
+      && build.etaMs !== null && build.receivedAt !== null
+      ? { etaMs: build.etaMs, since: build.receivedAt } : null,
     indicator: moving,
   };
 }
@@ -471,6 +506,7 @@ export function twinSignature(state: StateModel | null, progress: TwinProgress,
     // whole build. `eventId` alone would do it, but naming the fields keeps
     // this readable as a statement of what the twin depends on.
     build.phase, build.step, build.status, build.releaseConfirmed, build.eventId,
+    build.etaMs, build.receivedAt,
   ].join("~");
 }
 

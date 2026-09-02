@@ -192,10 +192,36 @@ def test_a_slow_client_records_dropped_events_rather_than_hiding_them():
 # ======================================================================
 
 
-def step_ack(seq, step, phase, action, label, status="begin", total=14):
+def step_ack(seq, step, phase, action, label, status="begin", total=14, ms=None):
+    tail = f" ms={ms}" if ms is not None else ""
     return parse_progress(parse_ack(
         f"@{seq} STEP step={step} total={total} phase={phase} action={action}"
-        f" text={label} status={status}"))
+        f" text={label} status={status}{tail}"))
+
+
+def test_the_firmwares_predicted_duration_is_carried_but_never_authoritative():
+    """`ms=` reaches the browser; nothing on the Pi acts on it.
+
+    It is the firmware's own arithmetic (exact step count x its Z step period),
+    on the wire because `Z_TRAVEL_STEPS` and `BLOCK_HEIGHT_CM` are firmware-
+    owned and the Pi is forbidden a copy — see AGENTS.md. It is a FLOOR: the
+    real move can only take longer, so nothing here may treat its expiry as
+    the phase finishing.
+    """
+    tracker = BuildProgressTracker()
+    tracker.command_accepted(1)
+    tracker.on_progress(step_ack(1, 10, "lower_to_level", "move", "Lower", ms=2570), 2)
+    assert tracker.progress.phase_eta_ms == 2570
+    assert tracker.progress.as_state_fields()["build_phase_eta_ms"] == 2570
+
+    # A phase the firmware cannot predict carries no duration, and the previous
+    # phase's must not linger under it.
+    tracker.on_progress(step_ack(1, 11, "release", "release", "Open"), 3)
+    assert tracker.progress.phase_eta_ms is None
+
+    # A settled build is not a phase and claims no duration either.
+    tracker.on_result("placed", 4)
+    assert tracker.progress.status == "placed"
 
 
 def test_progress_walks_accepted_validating_running_parking_and_only_then_placed():
@@ -331,6 +357,13 @@ def test_a_build_streams_its_phases_then_exactly_one_result(
         assert steps[0].payload["label"] == "Raise Z into the top switch"
         assert steps[0].payload["command_seq"] == results[0].payload["command_seq"]
         assert steps[0].payload["total"] == 14
+        # The Z moves carry the firmware's predicted duration; the phases whose
+        # length nothing can predict carry None rather than a made-up number.
+        by_phase = {event.payload["phase"]: event.payload["eta_ms"]
+                    for event in steps if event.payload["status"] == "begin"}
+        assert by_phase["lower_to_ground"] == 2570
+        assert by_phase.get("grip") is None
+        assert by_phase.get("move_to_target") is None
 
     if expected_result == "placed":
         assert steps[-1].payload["phase"] == "park_rotation"
@@ -387,6 +420,13 @@ def test_nothing_says_placed_before_the_terminal_acknowledgement(tmp_path):
                 if event.type == "build_step" and event.payload["status"] == "done"]
     assert len(released) == 1
     assert released[0].event_id < result.event_id
+
+    # The descent estimate reached the browser, and the release still arrived
+    # as its own separate event: the estimate illustrates, it never concludes.
+    lowering = [event for event in seen if event.type == "build_step"
+                and event.payload["phase"] == "lower_to_level"]
+    assert lowering and lowering[0].payload["eta_ms"] == 2570
+    assert lowering[0].event_id < released[0].event_id
     parking = [event for event in seen if event.type == "build_step"
                and event.payload["action"] == "park"]
     assert parking and all(event.event_id > released[0].event_id

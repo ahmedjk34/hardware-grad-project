@@ -713,9 +713,20 @@ What replaced it says only what the firmware said:
 
 - `blockOffset` is `phaseOffsetScene(phase)` and has **exactly two values**:
   travel height while the rig is carrying (`lift_block`, `move_to_target`,
-  `rotate_to_grid`, `lower_to_level`), and zero otherwise. `lower_to_level` is
-  deliberately still at travel height: the phase has BEGUN, and that is all
-  anyone knows. It drops on the release event, which is a fact.
+  `rotate_to_grid`, `lower_to_level`), and zero otherwise. It drops to zero on
+  the release event, which is a fact.
+- `descent` is the one animation a clock drives, and only during
+  `lowering-to-level`. `descentProgress(elapsed, etaMs)` interpolates
+  `blockOffset` down toward the cell over the duration the FIRMWARE sent as
+  `ms=` — for the shipped calibration, `2565 - 145*K` ms for level K, measured
+  on the rig at 2.6-2.8 s for a full travel against 2.57 s predicted. Four
+  fences make it a claim rather than a fiction: it starts from the moment the
+  phase event ARRIVED, its duration is the machine's own arithmetic (the
+  browser keeps no copy of `Z_TRAVEL_STEPS` or `BLOCK_HEIGHT_CM` — AGENTS.md
+  forbids one), it is clamped at `DESCENT_CLAMP = 0.92` so it **cannot reach
+  the cell**, and with no `etaMs` it does nothing at all rather than guessing a
+  duration. If Z jams, the block glides down, stops just short and sits there
+  visibly not landing — which is the truth.
 - `indicator` says the phase is motion, and the component pulses OPACITY for
   it. An opacity pulse cannot be misread as a position; an interpolated height
   can.
@@ -1291,8 +1302,11 @@ phase and the whole stack carries it.
   React on the turn it arrives. The runner shows the rig's own phase and
   still advances only on a terminal `placed`; `runTiming` survives as an
   estimate and is now labelled `(est.)`.
-- **The twin**: `descentOffsetScene()` deleted, phase mapping added — see §6
-  above. `twin.fixtures.json` regenerated and now carries the recorded EVENT
+- **The twin**: the looping invented `descentOffsetScene()` deleted, phase
+  mapping added, and a real placement descent put in its place — the firmware
+  sends `ms=` (its own step-count arithmetic) on the Z phases, and
+  `descentProgress()` animates it from the event's arrival, clamped at 0.92 so
+  only the release event can land the block. See §6 above. `twin.fixtures.json` regenerated and now carries the recorded EVENT
   stream as well as the states, so the phase mapping is tested against what the
   server actually sends. The recorded abort now dies at phase 8, mid-carry,
   which is the case the twin has to get right.

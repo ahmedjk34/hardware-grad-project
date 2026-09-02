@@ -71,6 +71,11 @@ class BuildProgress:
     phase_label: str | None = None
     phase_action: str | None = None
     phase_started_at: int | None = None
+    #: The firmware's predicted duration for this phase, in milliseconds, or
+    #: None when it did not say. Present on the Z moves only. It is a FLOOR:
+    #: the real phase can only take longer, never less. Nothing may treat its
+    #: expiry as the phase having finished — see `rig/link.py`.
+    phase_eta_ms: int | None = None
     status: str = "idle"
     release_confirmed: bool = False
     #: The id of the last event that moved any field above. A client compares
@@ -126,7 +131,8 @@ class BuildProgressTracker:
         return self._set(
             command_seq=None, step=None, total_steps=None, phase=None,
             phase_label=None, phase_action=None, phase_started_at=now_ms(),
-            status="accepted", release_confirmed=False, serial_event_id=event_id,
+            phase_eta_ms=None, status="accepted", release_confirmed=False,
+            serial_event_id=event_id,
         )
 
     # -- the serial stream ----------------------------------------
@@ -163,6 +169,7 @@ class BuildProgressTracker:
             phase_label=progress.label,
             phase_action=progress.action,
             phase_started_at=now_ms(),
+            phase_eta_ms=progress.eta_ms,
             status="parking" if progress.parking else "running",
             serial_event_id=event_id,
         )

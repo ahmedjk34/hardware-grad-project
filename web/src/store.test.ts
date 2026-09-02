@@ -21,10 +21,11 @@ const stateEvent = (id: number, overrides: Partial<StateModel> = {}): ServerEven
 
 const stepEvent = (id: number, step: number, phase: string, label: string,
                    extra: Partial<{ action: "move" | "grip" | "release" | "rotate" | "park";
-                                    status: "begin" | "done"; command_seq: number }> = {}):
+                                    status: "begin" | "done"; command_seq: number;
+                                    eta_ms: number | null }> = {}):
   ServerEvent => ({
     type: "build_step", event_id: id, at: id * 10, command_seq: 1, step, total: 14,
-    phase, label, action: "move", status: "begin", ...extra,
+    phase, label, action: "move", status: "begin", eta_ms: null, ...extra,
   });
 
 const resultEvent = (id: number, result: "placed" | "rejected" | "aborted",

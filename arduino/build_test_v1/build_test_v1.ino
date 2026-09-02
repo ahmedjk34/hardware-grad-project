@@ -1207,7 +1207,8 @@ void ackStep(uint8_t n,
              const __FlashStringHelper *phase,
              const __FlashStringHelper *action,
              const __FlashStringHelper *label,
-             const __FlashStringHelper *status)
+             const __FlashStringHelper *status,
+             long etaMs)
 {
   ackStart(F("STEP"));
   ackField(F("step"), (long)n);
@@ -1216,6 +1217,13 @@ void ackStep(uint8_t n,
   ackWord(F("action"), action);
   ackWord(F("text"), label);
   ackWord(F("status"), status);
+  // Omitted rather than sent as zero when this phase has no predictable
+  // duration. Absent means "no idea"; 0 would mean "instant", and a UI
+  // cannot tell those apart from a number alone.
+  if (etaMs > 0)
+  {
+    ackField(F("ms"), etaMs);
+  }
   Serial.println();
 }
 
@@ -3456,6 +3464,85 @@ long levelToZSteps(long level)
 // There is deliberately no zTopPosition() any more. The top of Z is
 // not a number to move to - it is the pin 29 switch. Use zGoTop().
 
+// ------------------------------------------------------------
+// How long a Z move is ABOUT to take, in milliseconds.
+// ------------------------------------------------------------
+//
+// The steppers run at a fixed rate with no acceleration ramp, so a move
+// of N steps takes N * stepPeriodMs() plus the one-off direction settle.
+// That makes the duration genuinely computable rather than guessed - and
+// computing it HERE is the point: Z_TRAVEL_STEPS, BLOCK_HEIGHT_CM and
+// STEP_DELAY_Z are firmware-owned (AGENTS.md), so the Pi must never keep
+// its own copy of them to work this out. It is told instead, on the STEP
+// line, once per phase.
+//
+// It is a PREDICTION, not a measurement. A stall, a stiff axis or an
+// early limit makes the real move longer - never shorter, since nothing
+// here goes faster than its step rate. Consumers must therefore treat it
+// as a floor, and must never let it stand in for the phase actually
+// finishing. See plans/ack-protocol.md.
+long zEtaMs(long steps)
+{
+  if (steps < 0)
+  {
+    steps = -steps;
+  }
+  if (steps <= 0)
+  {
+    return 0;
+  }
+  return lround((float)steps * stepPeriodMs(AXIS_Z)) + (long)DIR_SETTLE_MS;
+}
+
+// Where Z believes it is, in steps from the bottom switch. An unhomed Z
+// has no answer, and the callers below deliberately assume the worst
+// case (a full travel) rather than reporting a confident wrong number.
+long zStepsFromGround()
+{
+  long here = axisPos[AXIS_Z] * (long)travelEndOf(AXIS_Z);
+  if (here < 0)
+  {
+    here = 0;
+  }
+  return here;
+}
+
+// zGoTop(): a seek UP into the pin 29 switch.
+long zEtaToTopMs()
+{
+  if (!axisHomed[AXIS_Z])
+  {
+    return zEtaMs(Z_TRAVEL_STEPS);
+  }
+  return zEtaMs(Z_TRAVEL_STEPS - zStepsFromGround());
+}
+
+// zGoGround(): a seek DOWN into the pin 28 switch.
+long zEtaToGroundMs()
+{
+  if (!axisHomed[AXIS_Z])
+  {
+    return zEtaMs(Z_TRAVEL_STEPS);
+  }
+  return zEtaMs(zStepsFromGround());
+}
+
+// zGoLevel(): level 0 is a ground seek; every other level is an exact
+// step target, so its duration is exact too.
+long zEtaToLevelMs(long level)
+{
+  if (level <= 0)
+  {
+    return zEtaToGroundMs();
+  }
+  if (!axisHomed[AXIS_Z])
+  {
+    return zEtaMs(Z_TRAVEL_STEPS);
+  }
+  long target = levelToZSteps(level) * (long)travelEndOf(AXIS_Z);
+  return zEtaMs(zStepsFromGround() - target);
+}
+
 // ============================================================
 // Z MOVES USED BY THE BUILD                            <<< NEW
 // ============================================================
@@ -3660,9 +3747,10 @@ void buildStep(uint8_t n,
                const __FlashStringHelper *phase,
                const __FlashStringHelper *action,
                const __FlashStringHelper *label,
-               const char *what)
+               const char *what,
+               long etaMs)
 {
-  ackStep(n, phase, action, label, F("begin"));
+  ackStep(n, phase, action, label, F("begin"), etaMs);
 
   if (!BUILD_VERBOSE)
   {
@@ -3736,7 +3824,8 @@ bool buildPark()
 {
   buildStep(12, F("park_clear"), F("park"),
             F("Raise_Z_clear_of_the_stack"),
-            "Raise Z clear of the block just placed");
+            "Raise Z clear of the block just placed",
+            zEtaToTopMs());
   if (!zGoTop())
   {
     Serial.println(F("  !! could not raise Z - NOT parking X/Y."));
@@ -3747,7 +3836,8 @@ bool buildPark()
 
   buildStep(13, F("park_home"), F("park"),
             F("Return_XY_to_the_origin"),
-            "Return X/Y to the origin");
+            "Return X/Y to the origin",
+            0);
   if (!goToOrigin())
   {
     Serial.println(F("  !! X/Y did not reach the origin."));
@@ -3757,7 +3847,8 @@ bool buildPark()
 
   buildStep(14, F("park_rotation"), F("park"),
             F("Return_the_claw_to_neutral"),
-            "Return the claw to its original rotation");
+            "Return the claw to its original rotation",
+            0);
   rotateClawTo(ROT_NONE);
 
   return true;
@@ -3884,7 +3975,8 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
 
   buildStep(1, F("raise_clear"), F("move"),
             F("Raise_Z_into_the_top_switch"),
-            "Raise Z into the top switch (clearance)");
+            "Raise Z into the top switch (clearance)",
+            zEtaToTopMs());
   if (!zGoTop())
   {
     buildAbort("could not raise Z to the top switch");
@@ -3898,7 +3990,8 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
   // cell's outer corner. Same point in both modes: the feeder never rotates.
   buildStep(2, F("home_feeder"), F("move"),
             F("Home_XY_to_the_feeder"),
-            "Home X/Y to the feeder cell [0,0] (its centre IS home)");
+            "Home X/Y to the feeder cell [0,0] (its centre IS home)",
+            0);
   if (!goToFeeder())
   {
     buildAbort("could not reach the feeder cell");
@@ -3912,7 +4005,8 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
   // It also corrects a manually requested A angle before a new pickup.
   buildStep(3, F("neutralise_claw"), F("rotate"),
             F("Return_the_claw_to_neutral"),
-            "Return the claw to neutral before picking up");
+            "Return the claw to neutral before picking up",
+            0);
   rotateClawTo(ROT_NONE);
   buildPause();
 
@@ -3920,7 +4014,8 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
 
   buildStep(4, F("open_claw"), F("release"),
             F("Open_the_claw"),
-            "Open the claw");
+            "Open the claw",
+            0);
   openServoAndWait();
   buildPause();
 
@@ -3928,7 +4023,8 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
 
   buildStep(5, F("lower_to_ground"), F("move"),
             F("Lower_Z_to_the_ground_switch"),
-            "Lower Z to GROUND (bottom Z switch)");
+            "Lower Z to GROUND (bottom Z switch)",
+            zEtaToGroundMs());
   if (!zGoGround())
   {
     buildAbort("Z never reached the ground switch");
@@ -3940,7 +4036,8 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
 
   buildStep(6, F("grip"), F("grip"),
             F("Close_the_claw_and_grip"),
-            "Close the claw (grip the block)");
+            "Close the claw (grip the block)",
+            0);
   closeServoAndWait();
   buildPause();
 
@@ -3948,7 +4045,8 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
 
   buildStep(7, F("lift_block"), F("move"),
             F("Raise_Z_to_carry_height"),
-            "Raise Z into the top switch (carry height)");
+            "Raise Z into the top switch (carry height)",
+            zEtaToTopMs());
   if (!zGoTop())
   {
     buildAbort("could not lift the block to carry height");
@@ -3960,7 +4058,8 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
 
   buildStep(8, F("move_to_target"), F("move"),
             F("Move_XY_to_the_target_cell"),
-            "Move X/Y to the target cell");
+            "Move X/Y to the target cell",
+            0);
   if (!gotoBuildTarget(col, row, wantRot))
   {
     buildAbort("could not reach the target cell");
@@ -3972,7 +4071,8 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
 
   buildStep(9, F("rotate_to_grid"), F("rotate"),
             F("Apply_the_grid_rotation"),
-            "Apply the requested rotation");
+            "Apply the requested rotation",
+            0);
   rotateClawTo(wantRot);
   buildPause();
 
@@ -3980,7 +4080,8 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
 
   buildStep(10, F("lower_to_level"), F("move"),
             F("Lower_Z_to_the_target_level"),
-            "Lower Z to the target block level");
+            "Lower Z to the target block level",
+            zEtaToLevelMs(level));
   if (!zGoLevel(level))
   {
     buildAbort("Z did not reach the target level");
@@ -3992,7 +4093,8 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
 
   buildStep(11, F("release"), F("release"),
             F("Open_the_claw_and_release"),
-            "Open the claw (release the block)");
+            "Open the claw (release the block)",
+            0);
   openServoAndWait();
 
   // The ONE 'done' STEP in the protocol. Every other phase is announced
@@ -4002,7 +4104,7 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
   // NOT a terminal ack: the command is still running, the rig still has to
   // park, and only the OK below says the block is finally placed.
   ackStep(11, F("release"), F("release"),
-          F("Open_the_claw_and_release"), F("done"));
+          F("Open_the_claw_and_release"), F("done"), 0);
 
   // ---- the block is down: book it BEFORE parking ----
   //

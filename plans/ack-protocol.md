@@ -116,6 +116,7 @@ It now prints one machine line beside it, before the phase runs:
 | `action` | `move` / `grip` / `release` / `rotate` / `park` — coarse on purpose: a consumer needs to know whether a block is being carried, not which motor turns |
 | `text` | the human label, underscored so it survives as one whitespace-separated token. The Pi un-underscores it. |
 | `status` | `begin` before the phase runs; `done` exactly once — see below |
+| `ms` | how long the phase is predicted to take. **Z moves only**, and omitted when unknown — see below |
 
 ### The fourteen phases
 
@@ -154,6 +155,53 @@ has to park, and a parking failure downgrades the whole build to `HELD`. A UI
 may stop showing the block in the claw; it may not show the block as placed.
 Only `@n OK` says that. See `python/web/progress.py`.
 
+### `ms` — how long the descent will take
+
+The steppers have no acceleration ramp: `moveAxisSteps()` is a fixed-period
+pulse loop, so a move of N steps takes `N * stepPeriodMs(axis)` and that is
+genuinely computable rather than guessed. `zEtaMs()` does the arithmetic and
+`ms=` puts the answer on the four Z phases (1, 5, 7, 10).
+
+For the current calibration — `Z_TRAVEL_STEPS = 1350`, `STEP_DELAY_Z = 950 us`
+(so 1.9 ms/step), `Z_TRAVEL_CM = 26.5`, `BLOCK_HEIGHT_CM = 1.5` — that is:
+
+```
+full travel          1350 steps          = 2565 ms  (+ DIR_SETTLE_MS = 2570)
+one block height     76.4 steps          =  145 ms
+descent to level K   1350 - 76.4*K steps = 2565 - 145*K  ms
+```
+
+Measured on the rig with a stopwatch: **2.6-2.8 s** for a full top-to-bottom
+travel, against 2.57 s predicted. The 35-235 ms gap is the fixed overheads the
+model does not carry (`DIR_SETTLE_MS`, the limit-switch confirm), not an error
+in the rate.
+
+**Why the firmware sends it rather than the Pi computing it.** `Z_TRAVEL_STEPS`,
+`Z_TRAVEL_CM` and `BLOCK_HEIGHT_CM` are on AGENTS.md's "must NOT be copied into
+`config/rig.json`" list. A browser that worked the descent out for itself would
+need all three, and would silently drift the day someone retunes `STEP_DELAY_Z`.
+The board owns the numbers, so the board does the sum. One field on a line that
+was being sent anyway; no extra airtime worth measuring.
+
+**It is a FLOOR, not a schedule.** Nothing moves faster than its step rate, so
+the real phase can only take LONGER — a stiff axis, a stall, an early limit all
+add time. Two rules follow, and both are enforced downstream:
+
+* a consumer may animate from it, but **its expiry means nothing**. Only the
+  next `STEP`, or the terminal ack, says a phase is over.
+* `ms=0` is never sent. **Absent means "no idea", which is not "instant"** — a
+  UI cannot tell those apart from a number, and would draw the second one as an
+  arrival that never happened.
+
+The twin uses it for exactly one thing: animating the placement descent, from
+the moment the phase-10 event arrived, clamped short of the cell so the block
+can only actually land when the release event says it did. See
+`web/src/studio/twin.ts` `descentProgress()`.
+
+Phases 2, 3, 4, 6, 8, 9, 11, 13 and 14 send no `ms` at all. X/Y moves could in
+principle be predicted the same way, but they are not: the useful case is the
+one the eye follows, and adding fields nobody reads costs airtime for nothing.
+
 ### `RECV`
 
 `@n RECV cmd=B col=3 row=5 level=0` is printed the moment the arguments parse.
@@ -186,12 +234,12 @@ the phase announcements in order (the same technique as the transcript above):
 @12 STEP step=2 total=14 phase=home_feeder action=move text=Home_XY_to_the_feeder status=begin
 @12 STEP step=3 total=14 phase=neutralise_claw action=rotate text=Return_the_claw_to_neutral status=begin
 @12 STEP step=4 total=14 phase=open_claw action=release text=Open_the_claw status=begin
-@12 STEP step=5 total=14 phase=lower_to_ground action=move text=Lower_Z_to_the_ground_switch status=begin
+@12 STEP step=5 total=14 phase=lower_to_ground action=move text=Lower_Z_to_the_ground_switch status=begin ms=2570
 @12 STEP step=6 total=14 phase=grip action=grip text=Close_the_claw_and_grip status=begin
 @12 STEP step=7 total=14 phase=lift_block action=move text=Raise_Z_to_carry_height status=begin
 @12 STEP step=8 total=14 phase=move_to_target action=move text=Move_XY_to_the_target_cell status=begin
 @12 STEP step=9 total=14 phase=rotate_to_grid action=rotate text=Apply_the_grid_rotation status=begin
-@12 STEP step=10 total=14 phase=lower_to_level action=move text=Lower_Z_to_the_target_level status=begin
+@12 STEP step=10 total=14 phase=lower_to_level action=move text=Lower_Z_to_the_target_level status=begin ms=2570
 @12 STEP step=11 total=14 phase=release action=release text=Open_the_claw_and_release status=begin
 @12 STEP step=11 total=14 phase=release action=release text=Open_the_claw_and_release status=done
 @12 STEP step=12 total=14 phase=park_clear action=park text=Raise_Z_clear_of_the_stack status=begin
@@ -362,6 +410,7 @@ class SerialProgress:          # one STEP line, parsed
     label: str                 # `text`, un-underscored
     action: str                # move / grip / release / rotate / park
     status: str                # begin | done
+    eta_ms: int | None         # predicted duration; Z moves only, never 0
 ```
 
 `Rig` takes an `on_progress` callback (a `SerialProgress` per `STEP`) and an

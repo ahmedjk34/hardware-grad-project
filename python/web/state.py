@@ -45,6 +45,10 @@ class StateModel(BaseModel):
     build_phase_label: str | None
     build_phase_action: str | None
     build_phase_started_at: int | None
+    #: The firmware's predicted duration for the phase in flight, in ms, or
+    #: None when it did not say. A floor, not a schedule: a client may animate
+    #: from it but must never let it assert that the phase finished.
+    build_phase_eta_ms: int | None
     build_phase_status: str
     #: Phase 11's `status=done`: the jaws opened and the block is on the
     #: stack. NOT the same as placed — the command is still running and the

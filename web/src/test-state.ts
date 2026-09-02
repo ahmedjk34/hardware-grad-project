@@ -14,7 +14,8 @@ export const BASE_STATE: StateModel = {
   last_result_reason: null,
   build_command_seq: null, build_step: null, build_total_steps: null,
   build_phase: null, build_phase_label: null, build_phase_action: null,
-  build_phase_started_at: null, build_phase_status: "idle",
+  build_phase_started_at: null, build_phase_eta_ms: null,
+  build_phase_status: "idle",
   build_release_confirmed: false, serial_event_id: 0,
   views: {}, geometry: null,
 };

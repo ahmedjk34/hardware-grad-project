@@ -146,7 +146,9 @@ void runBeltCounterClockwiseForTenSeconds() {
 }
 
 void updateSensors() {
-  if (!containerOpen || !sensorArmed || blockTriggered ||
+  // Sensor-triggered belt movement is part of RUN only. Manual motor
+  // commands (ON/F/B) run continuously and are never changed by the sensor.
+  if (!fullRunMode || !containerOpen || !sensorArmed || blockTriggered ||
       millis() - lastSensorReadMs < sensorIntervalMs) {
     return;
   }
@@ -214,6 +216,7 @@ void printHelp() {
   Serial.println(F("  OFF              Stop motor             [X]"));
   Serial.println(F("  F                Forward"));
   Serial.println(F("  B                Backward               [R]"));
+  Serial.println(F("  REVERSE           Run backward           [B]"));
   Serial.println(F("  T                Toggle direction"));
   Serial.println(F("  S 200            Set speed in steps/sec"));
   Serial.println(F("                   Range: 10 to 3000"));
@@ -266,7 +269,7 @@ void readSerialCommand() {
     digitalWrite(dirPin, HIGH);
     beltRunning = true;
     Serial.println(F("BELT RUNNING FORWARD"));
-  } else if (command == "B" || command == "R") {
+  } else if (command == "B" || command == "R" || command == "REVERSE") {
     cancelFullRun();
     digitalWrite(dirPin, BELT_CCW_DIRECTION_LEVEL);
     beltRunning = true;

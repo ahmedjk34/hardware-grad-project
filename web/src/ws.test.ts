@@ -48,7 +48,7 @@ const latest = () => FakeSocket.opened.at(-1)!;
 const step = (id: number, stepNumber: number): ServerEvent => ({
   type: "build_step", event_id: id, at: id, command_seq: 1, step: stepNumber,
   total: 14, phase: "move_to_target", label: "Move XY to the target cell",
-  action: "move", status: "begin",
+  action: "move", status: "begin", eta_ms: null,
 });
 
 describe("connectEvents", () => {

@@ -531,6 +531,16 @@ rig still has to park, and a parking failure downgrades the build to `HELD`.
 Only `@n OK` means the block is placed. `python/web/progress.py` is where that
 distinction is enforced on the Pi.
 
+The Z phases also carry `ms=`, the firmware's own prediction of how long that
+move takes (`zEtaMs()`: exact step count x `stepPeriodMs(AXIS_Z)`). **It is on
+the wire precisely because `Z_TRAVEL_STEPS`, `Z_TRAVEL_CM` and
+`BLOCK_HEIGHT_CM` may not be copied into `config/rig.json`** — see the
+"must NOT be copied" list below. A UI that worked the descent out for itself
+would need all three and would drift the day `STEP_DELAY_Z` is retuned. It is a
+FLOOR, not a schedule: the real move can only take longer, so nothing may treat
+its expiry as the phase having finished. `ms=0` is never sent — absent means
+"no idea", which is not "instant".
+
 **One line per phase, never one per motor step.** Fourteen lines is ~0.3 s of
 9600-baud airtime inside a 40-second build; per-step telemetry would be minutes
 of it and would starve the terminal ack. If continuous position is ever wanted,

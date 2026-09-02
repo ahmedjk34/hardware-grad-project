@@ -609,6 +609,24 @@ check("STEP carries the coarse action", progress.action == "move", progress.acti
 check("a begin STEP is not a release", not progress.done)
 check("a moving phase is not parking", not progress.parking)
 check("STEP keeps the raw line", progress.raw.startswith("@12 STEP"), progress.raw)
+check("a phase with no predictable duration says nothing",
+      progress.eta_ms is None, str(progress.eta_ms))
+
+# `ms=` is the firmware's own arithmetic: the exact step count for this level
+# times its own Z step period. It is on the wire because Z_TRAVEL_STEPS and
+# BLOCK_HEIGHT_CM are firmware-owned and the Pi is forbidden a copy of them.
+timed = link.parse_progress(link.parse_ack(
+    "@12 STEP step=10 total=14 phase=lower_to_level action=move"
+    " text=Lower_Z_to_the_target_level status=begin ms=2570"))
+check("a Z move carries the predicted duration", timed.eta_ms == 2570,
+      str(timed.eta_ms))
+# Absent is not zero. A UI would draw ms=0 as "instant" and land the block
+# immediately, which is the exact failure the estimate is fenced against.
+for bad in ("ms=0", "ms=-5", "ms=soon"):
+    line = ("@12 STEP step=10 total=14 phase=lower_to_level action=move"
+            f" text=L status=begin {bad}")
+    check(f"a non-positive duration reads as absent: {bad}",
+          link.parse_progress(link.parse_ack(line)).eta_ms is None)
 
 done = link.parse_progress(link.parse_ack(
     "@12 STEP step=11 total=14 phase=release action=release"

@@ -25,7 +25,9 @@ import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Html, OrbitControls } from "@react-three/drei";
 import { Color, Mesh, MeshLambertMaterial } from "three";
 import { blockSceneSize, cellToScene, type ModeName } from "../coords";
-import { DESATURATE_TOKEN, type TwinBlock, type TwinScene } from "../twin";
+import {
+  DESATURATE_TOKEN, descentProgress, type TwinBlock, type TwinScene,
+} from "../twin";
 import {
   FOV_DEG, MAX_POLAR_ANGLE, boxCentre, envelopeBoxScene, viewPose, workspaceBoxScene,
 } from "../view";
@@ -57,17 +59,28 @@ const PULSE_DEPTH = 0.35;
  * The one block in flight. A single mesh rather than an instanced batch:
  * there is never more than one, and the machine builds one at a time.
  *
- * ITS HEIGHT IS NOT ANIMATED. `scene.blockOffset` is one of two values — at
- * travel height while the rig carries it, in its cell once the release event
- * has arrived — and both come from a phase the FIRMWARE reported. The old
- * version of this component interpolated a looping 1.6-second descent off
- * `performance.now()`, which drew the arm at heights nobody had measured.
+ * TWO THINGS MOVE HERE, AND NEITHER IS INVENTED.
  *
- * What DOES animate is opacity, and only while `indicator` is true. It says
- * "this phase is in motion"; it deliberately says nothing about where.
+ * **The descent.** During `lowering_to_level` the block travels from
+ * `offset` down toward its cell, over the duration the FIRMWARE predicted and
+ * sent as `ms=` on the STEP line. `descentProgress` clamps it short, so the
+ * block always stops fractionally above the cell and only settles when the
+ * real release event arrives and `offset` becomes 0. That clamp is the whole
+ * safety argument: if Z jams, the twin glides down, stops just short, and sits
+ * there visibly not landing — which is the truth, and the `HELD` ack is about
+ * to lock everything anyway.
+ *
+ * This is NOT the looping 1.6-second descent this component used to draw. That
+ * one had a made-up duration, ran on a loop, and completed on its own.
+ *
+ * **The pulse.** Opacity, while `indicator` is true. It says "this phase is in
+ * motion" and deliberately says nothing about where.
  */
-function Building({ block, offset, indicator }: {
-  block: TwinBlock; offset: number; indicator: boolean;
+function Building({ block, offset, indicator, descent }: {
+  block: TwinBlock;
+  offset: number;
+  indicator: boolean;
+  descent: TwinScene["descent"];
 }) {
   const mesh = useRef<Mesh>(null);
   const material = useRef<MeshLambertMaterial>(null);
@@ -79,14 +92,27 @@ function Building({ block, offset, indicator }: {
     [block.mode, block.col, block.row, block.level],
   );
 
+  /** The block's height right now: the phase's resting height, less however
+   *  much of the estimated descent has elapsed. */
+  const heightNow = () => {
+    if (!descent) return offset;
+    // `Date.now()` and not `performance.now()`: `descent.since` is when this
+    // browser was told about the phase, stamped on the same clock.
+    return offset * (1 - descentProgress(Date.now() - descent.since, descent.etaMs));
+  };
+
   useLayoutEffect(() => {
     started.current = performance.now();
-    if (mesh.current) mesh.current.position.set(rest.x, rest.y + offset, rest.z);
+    if (mesh.current) mesh.current.position.set(rest.x, rest.y + heightNow(), rest.z);
     if (material.current) material.current.opacity = block.opacity;
     invalidate();
-  }, [rest, offset, indicator, block.opacity, invalidate]);
+  });
 
   useFrame(() => {
+    if (mesh.current && descent) {
+      mesh.current.position.y = rest.y + heightNow();
+      invalidate();
+    }
     if (!indicator || !material.current) return;
     const t = ((performance.now() - started.current) % PULSE_MS) / PULSE_MS;
     material.current.opacity =
@@ -201,7 +227,7 @@ function TwinScene3D({ scene, synced, mode }: {
         );
       }))}
       {building ? <Building block={building} offset={scene.blockOffset}
-                            indicator={scene.indicator} /> : null}
+                            indicator={scene.indicator} descent={scene.descent} /> : null}
       {target ? <TargetLabel block={target} /> : null}
 
       <OrbitControls makeDefault enableDamping={false} enabled={!synced}

@@ -7,9 +7,10 @@
 import { describe, expect, it } from "vitest";
 import {
   BUILDING_OPACITY, DESATURATE_TOKEN, GHOST_OPACITY, LOCKED_MIX, PHASE_BY_ID,
-  TARGET_OPACITY, TRAVEL_SCENE_Y, emptyTwinProgress, foldTwinProgress,
-  loadTwinModel, phaseOffsetScene, targetBlock, twinModelChoices, twinPhase,
-  twinScene, twinSignature, type TwinPhase, type TwinProgress,
+  DESCENT_CLAMP, TARGET_OPACITY, TRAVEL_SCENE_Y, descentProgress,
+  emptyTwinProgress, foldTwinProgress, loadTwinModel, phaseOffsetScene,
+  targetBlock, twinModelChoices, twinPhase, twinScene, twinSignature,
+  type TwinPhase, type TwinProgress,
 } from "./twin";
 import * as twinModule from "./twin";
 import { createConsoleStore, emptyProgress, type BuildProgress } from "../store";
@@ -370,13 +371,76 @@ describe("the block's height — two values, both reported", () => {
     for (const phase of grounded) expect(phaseOffsetScene(phase)).toBe(0);
   });
 
-  it("EXPORTS NO DESCENT TIMER — a browser clock is not telemetry", () => {
-    // The twin used to interpolate a looping 1.6-second descent off
-    // `performance.now()`, drawing the arm at heights nobody had measured.
-    // This assertion is here so it cannot come back by accident.
+  it("no longer exports the invented descent it used to", () => {
+    // The looping 1.6-second `descentOffsetScene(elapsed, reducedMotion)` had a
+    // made-up duration and completed on its own. `descentProgress` replaced it
+    // and is a different thing — see the block below for what makes it one.
     expect("descentOffsetScene" in twinModule).toBe(false);
     expect("DESCENT_MS" in twinModule).toBe(false);
-    expect(Object.keys(twinModule).some(name => /descent/i.test(name))).toBe(false);
+  });
+});
+
+/**
+ * The descent is the ONE place a clock says anything, so it gets its own
+ * fence. The property that matters is not "it animates" — it is that it
+ * CANNOT FINISH. Only the real release event puts the block in its cell.
+ */
+describe("the estimated descent — anchored, sized and clamped", () => {
+  it("needs an estimate from the firmware, and does nothing without one", () => {
+    expect(descentProgress(1000, null)).toBe(0);
+    expect(descentProgress(1000, 0)).toBe(0);
+    expect(descentProgress(1000, -5)).toBe(0);
+  });
+
+  it("runs from 0 toward the clamp over the firmware's own duration", () => {
+    // 2570 ms is what the sketch computes for a full-travel Z descent:
+    // 1350 steps x 1.9 ms/step + DIR_SETTLE_MS.
+    expect(descentProgress(0, 2570)).toBe(0);
+    expect(descentProgress(642, 2570)).toBeCloseTo(0.25, 2);
+    expect(descentProgress(1285, 2570)).toBeCloseTo(0.5, 2);
+    expect(descentProgress(2313, 2570)).toBeCloseTo(0.9, 2);
+  });
+
+  it("NEVER reaches the cell, however long it is left running", () => {
+    // The estimate is a floor: the real move can only take longer. So running
+    // out of time means the rig is slower than predicted, not that it landed.
+    for (const elapsed of [2570, 3000, 10_000, 60_000, 1e9]) {
+      expect(descentProgress(elapsed, 2570)).toBe(DESCENT_CLAMP);
+      expect(descentProgress(elapsed, 2570)).toBeLessThan(1);
+    }
+    expect(DESCENT_CLAMP).toBeLessThan(1);
+  });
+
+  it("is offered only while lowering to the level, and only with an estimate", () => {
+    const lowering = (overrides = {}) => twinScene(
+      armed({ build_state: "RUNNING" }), model, emptyTwinProgress(), live,
+      at({ phase: "lower_to_level", step: 10, etaMs: 2570,
+           receivedAt: 1_000, ...overrides }));
+
+    expect(lowering().descent).toEqual({ etaMs: 2570, since: 1_000 });
+    // No estimate from the firmware: no animation, not a guessed duration.
+    expect(lowering({ etaMs: null }).descent).toBeNull();
+    // Every other phase carries no descent at all.
+    for (const phase of ["move_to_target", "grip", "release", "park_home"]) {
+      expect(lowering({ phase }).descent).toBeNull();
+    }
+  });
+
+  it("stops offering a descent the moment the socket dies or the rig aborts", () => {
+    const build = at({ phase: "lower_to_level", step: 10, etaMs: 2570,
+                       receivedAt: 1_000 });
+    expect(twinScene(armed({ build_state: "RUNNING" }), model, emptyTwinProgress(),
+                     { connected: false }, build).descent).toBeNull();
+    expect(twinScene(state({ build_state: "LOCKED" }), model, emptyTwinProgress(),
+                     live, build).descent).toBeNull();
+  });
+
+  it("redraws for a new descent, because the signature notices one", () => {
+    const sign = (build: Parameters<typeof twinSignature>[3]) =>
+      twinSignature(armed({ build_state: "RUNNING" }), emptyTwinProgress(), live, build);
+    const base = sign(at({ phase: "lower_to_level", step: 10 }));
+    expect(sign(at({ phase: "lower_to_level", step: 10, etaMs: 2570 })))
+      .not.toBe(base);
   });
 });
 
@@ -437,6 +501,26 @@ describe("against recorded /api/events sessions", () => {
 
   it("a PLACED session confirms exactly the block that was built", () => {
     expect(play(session("placed")).confirmed).toEqual(["t1"]);
+  });
+
+  it("the recorded descent carries the firmware's own predicted duration", () => {
+    const lowering = events("placed").find(
+      event => event.type === "build_step"
+        && (event as { phase: string }).phase === "lower_to_level")!;
+    // 1350 steps x 1.9 ms/step + DIR_SETTLE_MS, worked out by the board.
+    expect((lowering as { eta_ms: number }).eta_ms).toBe(2570);
+
+    // And it reaches the scene as a descent the component can animate.
+    const states = session("placed");
+    const running = states.find(payload => payload.build_state === "RUNNING")!;
+    const scene = twinScene(running, model,
+                            play(states.slice(0, states.indexOf(running) + 1)), live,
+                            replayTo("placed", 10).progress);
+    expect(scene.phase).toBe("lowering-to-level");
+    expect(scene.descent?.etaMs).toBe(2570);
+    // Still not placed, and it cannot become so on that timer.
+    expect(scene.blocks.some(block => block.appearance === "placed")).toBe(false);
+    expect(descentProgress(1e9, scene.descent!.etaMs)).toBeLessThan(1);
   });
 
   it("the recorded stream is the firmware's fourteen phases, in order, once", () => {
