@@ -83,6 +83,9 @@ export default function Studio() {
   const [naming, setNaming] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
   const [toast, setToast] = useState<{ kind: "ok" | "warn"; text: string } | null>(null);
+  /** Bumped on every successful write so the library drawer re-reads storage
+   *  even when the save came from the toolbar or Ctrl/⌘S rather than from it. */
+  const [savedTick, setSavedTick] = useState(0);
   const capture = useRef(null) as CaptureHandle;
   const nextId = useRef(1);
   const gesture = useRef<{
@@ -282,6 +285,7 @@ export default function Studio() {
     setModelDocument(document);
     setSavedId(document.id);
     setSavedSignature(signatureOf(document.blocks, document.order, document.name));
+    setSavedTick(tick => tick + 1);
     setToast({ kind: "ok", text: `Saved “${document.name}”` });
   }, [captureCurrent, savedId, settings]);
 
@@ -424,7 +428,7 @@ export default function Studio() {
         <LibraryDrawer open={libraryOpen} onClose={() => setLibraryOpen(false)}
                        currentId={savedId} onOpenModel={openDocument}
                        captureCurrent={captureCurrent}
-                       onSave={requestSave} dirty={dirty}
+                       onSave={requestSave} dirty={dirty} savedTick={savedTick}
                        onSaved={saved => setModelDocument(saved)}
                        settings={settings} />
 

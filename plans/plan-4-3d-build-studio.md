@@ -687,8 +687,9 @@ existing guard.
   matches the compiled `text` → `POST /api/build`. If they ever disagree,
   **stop**, and say why. A mismatch means the model and the rig disagree about
   the world.
-- A `mode` op calls `POST /api/mode`, which homes X and Y. Warn first, always —
-  the rig moves without a `B`.
+- A `mode` op calls `POST /api/mode`, which homes X and Y. In **RUN** and
+  **DRY RUN** it proceeds as part of the compiled program; **STEP** warns and
+  requires confirmation because the rig moves without a `B`.
 - Three run styles: **step** (confirm each block), **run** (continuous, with a
   prominent stop-after-this-block that is honest about not interrupting the
   block in flight), and **dry run** (no serial at all; the twin animates the

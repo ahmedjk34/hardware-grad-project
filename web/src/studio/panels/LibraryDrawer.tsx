@@ -55,6 +55,9 @@ export interface LibraryDrawerProps {
   onSave?: () => void;
   /** Whether the open build has unsaved edits — drives the dot on SAVE. */
   dirty?: boolean;
+  /** Bumped by the route on every successful save so the card list re-reads
+   *  storage even when the write happened outside the drawer (toolbar, Ctrl/⌘S). */
+  savedTick?: number;
   settings: StudioSettings;
   storage?: LibraryStorage;
 }
@@ -107,7 +110,7 @@ const safeFilename = (name: string) => name.replace(/[^\w. -]+/g, "_").trim() ||
 
 export function LibraryDrawer({
   open, onClose, currentId, onOpenModel, captureCurrent, onSaved, onSave, dirty,
-  settings, storage,
+  savedTick = 0, settings, storage,
 }: LibraryDrawerProps) {
   const options = { storage, settings };
   const [cards, setCards] = useState<ModelCard[]>([]);
@@ -125,7 +128,9 @@ export function LibraryDrawer({
     if (!listed.ok) setNotice(null);
   }, [storage, settings]);
 
-  useEffect(refresh, [refresh]);
+  // Re-read on mount, whenever the drawer opens, and after any save the route
+  // reports — a card the toolbar SAVE wrote must not wait for a remount to show.
+  useEffect(() => { refresh(); }, [refresh, open, savedTick]);
 
   const complain = (result: { ok: boolean; reason?: string }) => {
     if (!result.ok && result.reason) setNotice(result.reason);

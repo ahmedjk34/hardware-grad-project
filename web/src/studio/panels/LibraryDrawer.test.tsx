@@ -166,6 +166,41 @@ describe("LibraryDrawer — storage that cannot keep the work", () => {
   });
 });
 
+describe("LibraryDrawer — delegated save keeps the card list live", () => {
+  it("delegates SAVE to the route and re-reads storage when savedTick bumps", async () => {
+    const onSave = vi.fn();
+    const view = draw({ onSave });
+
+    await userEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    expect(onSave).toHaveBeenCalledTimes(1);
+    // The drawer wrote nothing itself; the route owns the write.
+    expect(screen.queryByRole("listitem", { name: /Live model/ })).not.toBeInTheDocument();
+
+    // The route writes and bumps the tick — the drawer must show it at once,
+    // without waiting for a remount.
+    writeModel(documentOf(tower(2), { id: "live", name: "Live model" }),
+               { storage, settings: DEFAULT_STUDIO_SETTINGS });
+    view.rerender(
+      <LibraryDrawer open onClose={onClose} currentId="live" onOpenModel={onOpenModel}
+                     settings={DEFAULT_STUDIO_SETTINGS} storage={storage}
+                     captureCurrent={captureCurrent} onSave={onSave} savedTick={1} />,
+    );
+    expect(await screen.findByRole("listitem", { name: /Live model/ })).toBeInTheDocument();
+  });
+
+  it("re-reads storage each time the drawer is reopened", async () => {
+    const view = draw({ open: false });
+    writeModel(documentOf(tower(3), { id: "m1", name: "Added while closed" }),
+               { storage, settings: DEFAULT_STUDIO_SETTINGS });
+    view.rerender(
+      <LibraryDrawer open onClose={onClose} currentId={null} onOpenModel={onOpenModel}
+                     settings={DEFAULT_STUDIO_SETTINGS} storage={storage}
+                     captureCurrent={captureCurrent} />,
+    );
+    expect(await screen.findByRole("listitem", { name: /Added while closed/ })).toBeInTheDocument();
+  });
+});
+
 describe("LibraryDrawer — import never lands silently", () => {
   const drop = async (name: string, text: string) => {
     const file = new File([text], name, { type: "application/json" });

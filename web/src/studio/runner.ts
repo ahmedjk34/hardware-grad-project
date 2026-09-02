@@ -151,6 +151,10 @@ function advance(state: RunState, now: number): Turn {
   }
   const op = state.program[state.cursor];
   if (op.op === "mode") {
+    // RUN and DRY RUN own the complete compiled program, including its mode
+    // latches. STEP remains deliberately hands-on because the latch homes X/Y
+    // and moves the physical rig without a B command.
+    if (state.style !== "step") return issueMode(state, now);
     const text = `Switching to ${op.mode.toUpperCase()} homes X and Y. The rig will move without a B.`;
     return {
       state: { ...state, phase: "awaiting-confirm", pendingConfirm: "mode", selectedCommand: null },

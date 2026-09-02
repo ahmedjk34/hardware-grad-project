@@ -92,8 +92,8 @@ describe("runner reducer", () => {
     expect(turn.effects).toEqual([]);
   });
 
-  it("warns before every mode op, then calls mode only after confirmation", () => {
-    let turn = start([mode("horizontal"), build("a", 1, 2, 0)]);
+  it("STEP warns before a mode op, then calls mode only after confirmation", () => {
+    let turn = start([mode("horizontal"), build("a", 1, 2, 0)], "step");
     expect(turn.state.phase).toBe("awaiting-confirm");
     expect(turn.effects).toEqual([{
       kind: "warn", text: "Switching to HORIZONTAL homes X and Y. The rig will move without a B.",
@@ -105,6 +105,12 @@ describe("runner reducer", () => {
     turn = dispatch(turn.state, { type: "mode-settled", now: 710 });
     expect(turn.state.cursor).toBe(1);
     expect(turn.effects).toEqual([{ kind: "select", col: 1, row: 2, level: 0 }]);
+  });
+
+  it("RUN switches mode automatically as part of its compiled program", () => {
+    const turn = start([mode("horizontal"), build("a", 1, 2, 0)], "run");
+    expect(turn.state.phase).toBe("building");
+    expect(turn.effects).toEqual([{ kind: "mode", mode: "horizontal", command: "RR", dry: false }]);
   });
 
   it("STEP waits for the shared build confirmation after verification", () => {
@@ -119,7 +125,6 @@ describe("runner reducer", () => {
 
   it("DRY RUN uses the same reducer but marks every transport effect dry", () => {
     let turn = start([mode("horizontal"), build("a", 1, 2, 0)], "dry");
-    turn = dispatch(turn.state, { type: "confirm", now: 110 });
     expect(turn.effects).toEqual([{ kind: "mode", mode: "horizontal", command: "RR", dry: true }]);
     turn = dispatch(turn.state, { type: "mode-settled", now: 710 });
     expect(turn.effects).toEqual([{ kind: "select", col: 1, row: 2, level: 0, dry: true }]);

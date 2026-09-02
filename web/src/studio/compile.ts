@@ -46,7 +46,7 @@ export interface BuildOp {
 export interface ModeOp {
   op: "mode";
   mode: ModeName;
-  /** Every latch homes X and Y — the runner warns before the rig moves. */
+  /** Every latch homes X and Y — STEP warns; RUN executes the compiled latch. */
   cost: "homes X and Y";
   text: string;
 }
