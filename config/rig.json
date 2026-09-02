@@ -4,7 +4,7 @@
     "sketch": "arduino/build_test_v1"
   },
   "serial": {
-    "port": "/dev/ttyACM0",
+    "port": "/dev/serial/by-id/usb-www.Arduino.cc_Arduino_14011-if00",
     "baud": 9600
   },
   "grid": {
