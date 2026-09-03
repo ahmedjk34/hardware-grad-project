@@ -139,8 +139,8 @@ at the active software cap. The live calibration is:
 Never hard-code those ratios; firmware derives them from the cap and measured
 displacement. A separate physical observation found a **24.3 × 43 cm build
 footprint**; it does not change the 24.3 × 40 cm holder-centre motion cap. The
-measured horizontal CCW tool offset is X `+3.75 cm`, Y `+1.40 cm`; neutral and
-CW remain zero.
+Horizontal builds use the CW tool-offset slot. All tool offsets currently
+remain zero; remeasure the CW offset before entering a non-zero value.
 
 A block is **2.2 × 6.0 × 1.5 cm**. Which of its two plan dimensions lies along
 X is what the mode decides. `[0,0]` is the feeder-block centre where the claw
@@ -228,7 +228,7 @@ The physical build sequence is:
 1. Home X/Y at the vertical feeder reference.
 2. Pick up the block while the claw is neutral.
 3. Move to the horizontal target using the horizontal grid coordinates.
-4. Rotate the claw 90 degrees CCW for RR mode.
+4. Rotate the claw 90 degrees CW for RR mode.
 5. Lower and release at the shifted horizontal grid location.
 ```
 
@@ -242,7 +242,7 @@ The correction categories must remain separate:
 
 ```text
 horizontal.trim_x_cm       = registration between feeder and RR grid
-tool_offsets.ccw.x_cm       = holder-to-block-centre geometry after rotation
+tool_offsets.cw.x_cm        = holder-to-block-centre geometry after rotation
 error_offset_x_cm           = measured whole-grid placement error
 gap_x_cm                    = repeated spacing between cells
 ```
@@ -332,24 +332,24 @@ The X/Y counters describe the gantry holder. Each offset is the signed vector
 **from holder reference to actual block-placement centre**, where positive is
 away from that axis's home switch. The Arduino subtracts that vector from the
 selected grid-cell centre before moving, so the tool — not its holder — reaches
-the requested cell. `neutral` is the vertical grid's placement orientation and `ccw` is the
+the requested cell. `neutral` is the vertical grid's placement orientation and `cw` is the
 horizontal grid's; a `G` command uses the claw's current orientation, a `B`
 command uses the active grid's.
 
-**`cw` is not a grid/build orientation and is kept anyway.** `B` has no
+**`ccw` is not a grid/build orientation and is kept anyway.** `B` has no
 rotation word, and the mode latch derives placement from the grid — vertical →
-none, horizontal → 90° CCW. There is no clockwise grid because that would be a
-second, separately calibrated layout that nobody has measured. An explicit
-manual `A 90` can put the claw in the CW state for a bench `G` test, but it
-does not create a CW placement mode and its offset is uncalibrated. The `cw`
+none, horizontal → 90° CW. There is no counter-clockwise grid because that
+would be a second, separately calibrated layout that nobody has measured. An
+explicit manual `A -90` can put the claw in the CCW state for a bench `G` test,
+but it does not create a CCW placement mode and its offset is uncalibrated. The `cw`
 entry stays in both JSON and firmware because `toolOffsetCmOf()` is written
 over the three rotation states; deleting one leg would make it no longer line
 up with `ROT_CW` / `ROT_NONE` / `ROT_CCW`. Leave it at zero unless it is
 measured; do not read it as a hint that a clockwise grid exists.
 
-`ccw` is calibrated for the current horizontal-grid trial at X `+3.75 cm`,
-Y `+1.40 cm`; this remains an on-hardware trial and must be remeasured if the
-holder/claw geometry changes.
+The CW tool-offset slot is used for horizontal builds. It remains zero until
+it is measured on hardware; do not move the existing grid error offsets into
+it.
 
 The neutral and CW offsets remain **zero** as intentional no-ops. The horizontal
 CCW values are an entered measured trial. Keep measured values paired in both

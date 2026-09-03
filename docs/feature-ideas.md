@@ -64,13 +64,19 @@ block glowing in the exact place it will physically land, and the rest of the
 design faintly behind it. Near-AR, on hardware you already own, with maths that
 is already written and tested.
 
-### 1.4 Vision-verified placement
+### 1.4 Placement supervision  ★ now has a full plan
 
-After each `PLACED`, compare `geometry.detections` against the cell the model
-expected to fill. Report `VERIFIED`, `NOT DETECTED` or `UNEXPECTED BLOCK AT
-[c,r]`. This closes the loop between the vision pipeline and the motion system —
-the most defensible engineering claim in the whole project, and it reuses
-`detect_blocks` and the existing cell geometry.
+After each `PLACED`, compare the detections against the cell the model expected
+to fill: `VERIFIED`, `NOT DETECTED`, `UNEXPECTED BLOCK AT [c,r]`. Run the same
+check continuously while the rig is idle and it also catches a **human moving
+or removing a block** — the board stops matching the plan, and the console says
+which cell.
+
+This closes the loop between the vision pipeline and the motion system, the most
+defensible engineering claim in the project, and it reuses the existing lattice
+labelling with no new detector and no extra frames.
+
+Full specification: [plans/placement-supervision.md](../plans/placement-supervision.md).
 
 ### 1.5 Colour-aware planning and feeder prompts
 

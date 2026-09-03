@@ -67,7 +67,7 @@ Build rotation is not per-block
 -------------------------------
 `build()` takes no rotation. Which way a block is laid is a property of the
 active GRID, not of the block: the vertical grid places blocks as the feeder
-presents them, the horizontal grid turns every one of them 90° CCW. Choose
+presents them, the horizontal grid turns every one of them 90° CW. Choose
 with `set_mode()`, which sends the firmware's `R` / `RR` latch. See
 plans/dual-orientation-grid.md D7 and D8.
 

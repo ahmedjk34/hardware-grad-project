@@ -69,7 +69,7 @@
       built on. Every other cell, row 0 and column 0 included, is a real
       placement.
       There is NO rotation word. The active grid decides how the block is
-      laid: vertical places it unrotated, horizontal turns it 90 CCW.
+      laid: vertical places it unrotated, horizontal turns it 90 CW.
     Z               = print the Z / build calibration table  <<< NEW
     ?               = reprint the help text
 
@@ -240,7 +240,7 @@ const int SERVO_PIN = 6;
 // O/openServo() runs.
 const int SERVO_HOME_OPEN_ANGLE = 0;
 const int SERVO_OPEN_ANGLE = 0;
-const int SERVO_CLOSE_ANGLE = 55;
+const int SERVO_CLOSE_ANGLE = 52;
 
 // The servo is commanded and then forgotten - nothing reports back
 // when it has actually arrived. The build sequence must not start
@@ -640,7 +640,7 @@ const bool SOFT_LIMIT_VERBOSE = true;
 //      v vertical [0,0] centre = 0 = the feeder / pick-up point
 //
 // So RR only latches the mode; the next B picks the block up standing at home,
-// moves +1.9 cm along BOTH X and Y, rotates 90 degrees CCW, then places.
+// moves +1.9 cm along BOTH X and Y, rotates 90 degrees CW, then places.
 // B 0 0 remains a no-op in both modes.
 //
 // Targets are computed as absolute physical cell centres and rounded only
@@ -995,18 +995,18 @@ const bool BUILD_VERBOSE = true;
 // The claw is assumed to START neutral. A manual `A <degrees>` jog is tracked
 // relative to that assumed position; there is no sensor that can prove it.
 //
-// A horizontal build turns its block 90 CCW. That leaves the claw turned too,
+// A horizontal build turns its block 90 CW. That leaves the claw turned too,
 // which would be wrong for the NEXT pick-up. So the build sequence always
 // returns to neutral while it is over the feeder at 0,0 - before it descends -
 // and only then applies THIS grid's placement rotation at the target.
 //
-//   last build did R   ->  next build rotates RR at home  (back to 0)
-//   last build did RR  ->  next build rotates R  at home  (back to 0)
+//   last build did CW  ->  next build rotates CCW at home (back to 0)
+//   last build did CCW ->  next build rotates CW at home  (back to 0)
 //   last build did NR  ->  nothing to undo
 
 const int8_t ROT_NONE = 0;
-const int8_t ROT_CW = +1;  // "R"
-const int8_t ROT_CCW = -1; // "RR"
+const int8_t ROT_CW = +1;
+const int8_t ROT_CCW = -1;
 
 // Where the claw is RIGHT NOW, relative to neutral. A manual angle that is
 // not exactly 0/+90/-90 has no calibrated tool offset, so it is marked
@@ -2215,11 +2215,11 @@ const char *rotationName(int8_t rot)
 {
   if (rot == ROT_CW)
   {
-    return "R (90 CW)";
+    return "CW (+90)";
   }
   if (rot == ROT_CCW)
   {
-    return "RR (90 CCW)";
+    return "CCW (-90)";
   }
   return "NR (neutral)";
 }
@@ -3724,7 +3724,7 @@ bool zGoLevel(long level)
 //
 // THERE IS NO ROTATION WORD ANY MORE. Rotation is a property of the GRID, not
 // of a block: the vertical grid places blocks unrotated, the horizontal grid
-// places every block turned 90 degrees CCW. Select the grid with R / RR.
+// places every block turned 90 degrees CW. Select the grid with R / RR.
 //
 // It was removed rather than kept as an override because a per-block rotation
 // could place a turned block inside a grid whose cells are not shaped for it -
@@ -3766,12 +3766,12 @@ void printBuildUsage()
 
 // D7: the placement rotation is derived from the ACTIVE GRID, never passed
 // per block. Vertical places a block the way the feeder presents it;
-// horizontal places it turned 90 degrees CCW. There is deliberately no way to
-// ask for CW: the horizontal grid is defined in terms of one 90-degree turn,
+// horizontal places it turned 90 degrees CW. There is deliberately no way to
+// ask for CCW: the horizontal grid is defined in terms of one 90-degree turn,
 // and a second direction would be a second, uncalibrated grid.
 int8_t buildRotationForMode()
 {
-  return (gridMode == GRID_MODE_HORIZONTAL) ? ROT_CCW : ROT_NONE;
+  return (gridMode == GRID_MODE_HORIZONTAL) ? ROT_CW : ROT_NONE;
 }
 
 // True when only separators are left. B takes exactly three numbers now, and
@@ -4997,12 +4997,12 @@ void printGridConfig()
   Serial.print(F(" cm / Y "));
   Serial.print(TOOL_OFFSET_NEUTRAL_Y_CM, 3);
   Serial.println(F(" cm"));
-  Serial.print(F("  R (CW) : X "));
+  Serial.print(F("  CW (+90): X "));
   Serial.print(TOOL_OFFSET_CW_X_CM, 3);
   Serial.print(F(" cm / Y "));
   Serial.print(TOOL_OFFSET_CW_Y_CM, 3);
   Serial.println(F(" cm"));
-  Serial.print(F("  RR(CCW): X "));
+  Serial.print(F("  CCW(-90): X "));
   Serial.print(TOOL_OFFSET_CCW_X_CM, 3);
   Serial.print(F(" cm / Y "));
   Serial.print(TOOL_OFFSET_CCW_Y_CM, 3);

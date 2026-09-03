@@ -30,7 +30,7 @@ quietly working around it.
 | D4 | `RR` is rejected when already horizontal; `R` is rejected when already vertical. | No free-running jog. The command is a latch, not a motion. |
 | D5 | **`R`/`RR` never move the aux stepper.** They set grid layout only. | The claw must return to neutral to grip from the feeder anyway (D6), so any turn at latch time is undone by the next build's step 3. A motion here would be purely cosmetic and would read as a bug. |
 | D6 | The build cycle's rotation handling is **unchanged**. Step 3 goes neutral to pick, step 9 rotates to place, step 14 returns to neutral. | The feeder presents blocks in one fixed orientation. The claw physically cannot hold a rotation across a pickup. |
-| D7 | `wantRot` is **derived from the active mode**, not passed per block. Vertical → `ROT_NONE`, horizontal → `ROT_CCW`. | Follows from D5 + D6. |
+| D7 | `wantRot` is **derived from the active mode**, not passed per block. Vertical → `ROT_NONE`, horizontal → `ROT_CW`. | Follows from D5 + D6. |
 | D8 | The rotation word is **removed** from `B <col> <row> <level>`. | Rotation is now a property of the grid, not of a block. A per-block rotation could place a block rotated inside a grid whose cell geometry does not match it — the exact failure this plan exists to prevent. |
 | D9 | Mode switching is **refused unless X/Y are homed**. | A mode switch redefines what every coordinate means. `curCol`/`curRow` become meaningless mid-travel; homing makes the reindex unambiguous. |
 | D10 | The operator is trusted to start with the claw physically vertical. **Document this loudly.** | Nothing senses claw angle. There is no way to verify it in software. |
@@ -218,7 +218,7 @@ That whole-layout relationship is represented by
 `horizontal.trim_x_cm = horizontal.trim_y_cm = +1.9`, not by `gap_*_cm` and not
 by `tool_offsets.ccw`. `RR` only latches the mode. A build homes at the feeder,
 picks up neutral, travels using the shifted horizontal centres, rotates 90°
-CCW at the target, and releases. `B 0 0 <level>` remains an inert sentinel and
+CW at the target, and releases. `B 0 0 <level>` remains an inert sentinel and
 does not physically test this reference. A future rig measurement may refine
 the magnitude per axis; keep any such correction in `horizontal.trim_{x,y}_cm`
 and never hide it inside the rotation/tool offset.
@@ -471,7 +471,7 @@ drift here is not cosmetic — it is how the two machines stop agreeing.
   `curCol`/`curRow` and moves nothing. `S` is scoped per mode. `@0 READY` now
   carries `mode=`.
 - **Step 5** — the rotation word is gone from `B`; `buildRotationForMode()`
-  derives `wantRot` (vertical → `ROT_NONE`, horizontal → `ROT_CCW`); build
+  derives `wantRot` (vertical → `ROT_NONE`, horizontal → `ROT_CW`); build
   steps 3/9/14 are untouched. `link.build()` lost its rotation argument and
   gained `set_mode()` / `sync_mode()`; `BuildController`'s rotation state
   became mode selection; `rig_build_v1.py`'s `o` key latches the grid.
