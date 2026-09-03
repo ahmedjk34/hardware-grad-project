@@ -816,6 +816,78 @@ else:
           str(board_map.corners))
 
 
+
+
+# --------------------------------------------------------------------------- #
+# 11. a saved map has to be one the consumers will actually adopt
+# --------------------------------------------------------------------------- #
+#
+# Writing workspace_map.json is not the same as calibrating anything. Every
+# consumer re-derives its own `projection` - the lens, orientation and framing
+# a map is only valid under - and refuses a map whose projection does not
+# match. A map saved WITHOUT one is written successfully and then silently
+# ignored by everything, which is the worst possible outcome: it looks like it
+# worked. That is a real bug this suite exists to keep fixed.
+
+import tempfile                                                     # noqa: E402
+from camera.gridded_camera_feed import (                            # noqa: E402
+    load_workspace,
+    projection_metadata,
+)
+from camera.camera_feed import (                                    # noqa: E402
+    SETTINGS_PATH,
+    framing_roi,
+    load_settings,
+    profile_from_settings,
+)
+from vision.block_grid import workspace_map_error                   # noqa: E402
+
+if board.exists():
+    settings = load_settings(SETTINGS_PATH)
+    projection = projection_metadata(
+        profile_from_settings(settings), settings.get("capture") or {},
+        True, framing_roi(settings))
+    board_size = board_image.shape[1::-1]
+
+    scratch = Path(tempfile.mkdtemp())
+    without = block_workspace_map(board_cal, VERTICAL, board_size)
+    without.save(scratch / "without.json")
+    loaded, reason = load_workspace(scratch / "without.json", VERTICAL, projection)
+    check("a map saved with no projection is refused by its consumers",
+          loaded is None and "camera" in (reason or ""), str(reason))
+
+    withp = block_workspace_map(board_cal, VERTICAL, board_size,
+                                projection=projection)
+    withp.save(scratch / "with.json")
+    adopted, reason = load_workspace(scratch / "with.json", VERTICAL, projection)
+    check("a map saved with the projection IS adopted",
+          adopted is not None, str(reason))
+    check("the adopted map carries the right grid and mode",
+          adopted is not None and adopted.matches_grid(VERTICAL)
+          and adopted.mode == "vertical")
+
+    # WorkspaceMap stores four corners plus the grid geometry, not a per-cell
+    # table, so a consumer spaces cells evenly between those corners and any
+    # curvature the fit bought is flattened on the way out. That loss is real
+    # and bounded; the point of measuring it is that a caller can report it
+    # instead of implying a save is lossless.
+    mean_px, max_px, worst = workspace_map_error(
+        board_cal, withp, VERTICAL, board_size)
+    check("the round trip through a saved map stays inside a third of a block",
+          max_px < 0.33 * board_cal.block_report.dense.pitch_x.px_per_cm
+          * VERTICAL.block_x_cm,
+          f"{mean_px:.2f} px mean / {max_px:.2f} px max at "
+          f"[{worst[0]},{worst[1]}]")
+    # The corners are pinned by construction, so the flattening shows up in the
+    # middle. Asserting that is what would catch the error moving somewhere
+    # a four-corner map cannot explain.
+    check("the round-trip error peaks away from the pinned corners",
+          worst not in {(0, 0), (VERTICAL.cols - 1, 0),
+                        (0, VERTICAL.rows - 1),
+                        (VERTICAL.cols - 1, VERTICAL.rows - 1)},
+          f"worst at [{worst[0]},{worst[1]}]")
+
+
 print()
 if failures:
     print(f"{len(failures)} failing check(s): {', '.join(failures)}")

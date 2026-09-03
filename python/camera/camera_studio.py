@@ -89,6 +89,32 @@ Colour commands: `colour` on/off, `wb`, `colourcal`, `tunetoraw`, `colourmode`,
 `rgain`, `ggain`, `bgain`, `roff`, `goff`, `boff`, `gamma`, `csat`, `nomix`,
 `colourinfo`, `colourreset`. See "Fixing the colour" below.
 
+Reading the machine grid off the board
+--------------------------------------
+`blockcal` (the BLOCK CALIBRATION button) finds the wooden blocks currently on
+the board, works out the lattice they sit on, and draws the WHOLE machine grid
+over the corrected view: the cells a block is actually on are tinted, and every
+cell the block supply did not reach is outlined from the same fitted lattice.
+`vision/block_grid.py` does the work and AGENTS.md 3d-bis explains the method
+and its limits.
+
+Three things worth knowing before trusting what it draws:
+
+  * The blocks alone cannot say where cell [0,0] is - a regular lattice looks
+    identical shifted by one cell - so the anchor corner is an assertion, not a
+    measurement. It defaults to `bottom-left`; `blockcal top-right` and friends
+    pick another. A wrong anchor renumbers the whole board and nothing here
+    can tell.
+  * Wooden things that are not blocks (the holder's offcuts beside [0,0]) are
+    discarded for not landing on the lattice, not for looking wrong.
+  * Nothing is written. `blockcalsave` writes `config/workspace_map.json`;
+    `blockcaloff` clears the overlay. Calibrating is a deliberate act, and this
+    window is the camera-settings editor rather than the runtime pipeline.
+
+Prefer `camera/block_grid_calibrate.py` when the rig is available: there the
+machine places each block on a cell it was TOLD, so the labelling is recorded
+rather than inferred and the anchor problem does not arise.
+
 While an entry or dropdown has focus it takes the keyboard instead. That focus
 guard is load-bearing: without it, digits typed into a field would also fire the
 numeric lens shortcuts.
@@ -224,12 +250,14 @@ from vision.color_correction import (
 from rig.config import load as load_rig_config
 from rig.grid import MachineGrid
 from rig.workspace import WORKSPACE_MAP_PATH
+from camera.gridded_camera_feed import projection_metadata
 from vision.block_grid import (
     DEFAULT_LATTICE_ANCHOR,
     LATTICE_ANCHORS,
     BlockGridError,
     block_workspace_map,
     detect_block_lattice,
+    workspace_map_error,
 )
 from vision.color_grid import ColorGridError, sample_ink_colors
 from vision.color_grid_overlay import draw_color_grid
@@ -1237,21 +1265,61 @@ class Studio:
         self.block_lattice_note = note
         return f"block calibration ({anchor}): {note}"
 
+    def projection(self):
+        """The geometry identity a saved workspace map is only valid under.
+
+        Every consumer of ``workspace_map.json`` compares this against its own
+        and refuses a map whose lens, orientation or framing does not match -
+        see ``gridded_camera_feed.load_workspace``. A map saved without it is
+        written successfully and then silently ignored by everything, which is
+        the least useful possible outcome, so this is not optional.
+        """
+        return projection_metadata(self.profile, {"flip": self.flip,
+                                                  "rotate": self.rotate},
+                                   self.correct, self.roi())
+
     def _cmd_blockcalsave(self, args):
-        """Write the last block calibration to config/workspace_map.json."""
+        """Write the last block calibration to config/workspace_map.json.
+
+        Reports how far the saved map's cells land from the ones that were
+        actually measured. ``WorkspaceMap`` carries four envelope corners and
+        the grid geometry, not a per-cell table, so a consumer spaces cells
+        evenly between those corners - and any curvature the fit bought is
+        flattened on the way out. The corners themselves stay exact; the error
+        peaks in the middle of the grid, which is the signature of exactly
+        that. Saying the number is better than pretending it is zero.
+        """
         if self.block_lattice is None:
             raise CommandError("run blockcal first")
         frame = self.last_corrected
         if frame is None:
             raise CommandError("no corrected frame yet")
+        size = frame.shape[1::-1]
         try:
             grid = MachineGrid.from_config(load_rig_config(reload=True))
             workspace = block_workspace_map(
-                self.block_lattice, grid, frame.shape[1::-1])
+                self.block_lattice, grid, size, projection=self.projection())
             workspace.save(WORKSPACE_MAP_PATH)
         except (BlockGridError, OSError, ValueError) as exc:
             raise CommandError(str(exc))
-        return f"wrote {WORKSPACE_MAP_PATH.name}"
+
+        note = f"wrote {WORKSPACE_MAP_PATH.name}"
+        try:
+            mean_px, max_px, worst = workspace_map_error(
+                self.block_lattice, workspace, grid, size)
+        except (BlockGridError, ValueError):
+            return note
+        pitch = self.block_lattice.block_report.dense
+        per_cm = pitch.pitch_x.px_per_cm if pitch and pitch.pitch_x else 0.0
+        detail = (f"; saved cells land {mean_px:.2f} px mean / {max_px:.2f} px "
+                  f"max from the measured ones, worst at "
+                  f"[{worst[0]},{worst[1]}]")
+        if per_cm:
+            detail += f" ({max_px / per_cm:.2f} cm)"
+        if max_px > 4.0:
+            self.log.add(False, "the four-corner map cannot reproduce this "
+                                "lattice closely" + detail)
+        return note + detail
 
     def _cmd_blockcaloff(self, args):
         self.block_lattice = None

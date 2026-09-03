@@ -59,6 +59,7 @@ have drifted behind the total as unrelated console work landed.)
 | `components/RunnerPanel.test.tsx` | 8 | full dry tower with no API traffic, mismatch stop, honest stop copy, rejected pause and abort lock, the rig's own phase readout, fourteen phases advancing nothing, stale-on-disconnect |
 | `store.test.ts` | 20 | `build_step` applied with no timer advanced, id deduplication, phase/snapshot tie-breaks, the reconnect cursor, terminal-only `placed` |
 | `ws.test.ts` | 7 | immediate delivery against a fake socket, the `?after=` cursor, replay envelope, backoff, unparseable frames |
+| `blockCalibration.test.tsx` | 4 | the placed-block calibration panel — the plan walked cell by cell, SAVE disabled until the backend calls the fit ready, a refused step kept retryable, an abort disabling further steps, and a refusal to start leaving the other two routes reachable |
 | `components/TwinPanel.test.tsx` | 7 | the read-only mode label, SYNC VIEW, locked/stale/rejected banners, controlled model picker, and desktop/phone instrument layout |
 | `studio/thumbnail.test.ts` | 5 | the bottom-up row flip, the 16:10 sizes, graceful absence of `OffscreenCanvas` |
 | `studio/panels/LibraryDrawer.test.tsx` | 21 | cards and meta line, inline rename, duplicate, delete with a real undo, the storage strip, the budget refusal, drop-import confirmation, delegated-save re-list, no-`storage`-prop lists real `localStorage` |
@@ -1247,6 +1248,42 @@ first in the diff.
 
 Newest first. One entry per landed change; note anything that contradicts the
 plan or that a future reader could not infer.
+
+### Placed-block calibration is now the console's first calibration route
+
+`Calibrate.tsx` used to offer two ways to make a workspace map: click four
+corners, or detect the printed sheet. Both measure the camera against something
+a human positioned, and the sheet route then has to *assume* the paper sits
+where the firmware's cells are — which is what `HOME_CONVENTIONS` in
+`python/vision/color_grid.py` exists to paper over.
+
+The new first choice, **Calibrate with blocks**, has the rig place a block on a
+cell it was told and measures where it landed. The correspondence is labelled
+at the source, so there is no lattice to infer and no paper to disagree with,
+and it measures the real pick-and-place chain rather than a printed
+approximation of it. The other two routes are unchanged and still offered.
+
+UI-side notes for a future reader:
+
+- Each step is **one full pick-and-place**, minutes of machine motion, so the
+  panel names the cell the rig is about to place on (an operator watching the
+  machine needs to know where to look), keeps its button busy for the duration,
+  and the backend refuses a second step while one is in flight.
+- **SAVE stays disabled until the backend says `ready`,** never on a count. Four
+  placements fit a homography exactly and prove nothing, so the floor is five —
+  but that rule lives in `vision/block_grid.py`, and duplicating it here would
+  be a second place to get it wrong.
+- A **refused step is not a lost run**: the error shows, the placements already
+  made are kept, and the same cell can be retried. An **abort** is different —
+  the claw may still be holding a block, so `finished_reason` is set and every
+  step button is disabled with no retry offered.
+- `api.calibration.block.*` mirrors the `/api/calibration/block/*` routes; the
+  server is authoritative for all of it, including the residual readout.
+
+`AGENTS.md` §3d-bis documents the mechanism, its gates and its one structural
+limitation. Python side: `vision/block_grid.py`, `rig/block_calibration.py`,
+`camera/block_grid_calibrate.py`, and BLOCK CALIBRATION buttons in Camera
+Studio. `blockCalibration.test.tsx` +4; no change to any existing test.
 
 ### Building mode pass 2 — the twin mirrors the rig, not just the model
 

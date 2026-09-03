@@ -432,69 +432,190 @@ positive cells. `"printed"` takes the paper at face value and lands every
 positive cell one `block/2 − (pitch − grid.x_start)` further from home on each
 axis. Do not add a third convention without a row here and a note in the plan.
 
-#### 3d-bis. Placed-block calibration — the primary route, and why it beats a sheet
+#### 3d-bis. Placed-block calibration — the primary route
 
 | Where | What |
 | --- | --- |
-| `python/vision/block_grid.py` | the geometry: labelled cell -> pixel correspondences, the fit, and every gate |
+| `python/vision/block_grid.py` | all the geometry: the fit, the lattice metrology, the model choice, the virtual fill, every gate |
 | `python/rig/block_calibration.py` | drives the machine: one `B <col> <row> 0` per step, parks, captures, observes |
-| `python/vision/block_detector.py` | the front end, with `balance` / `flatten` / `expected_size` turned on for this path only |
-| `python/camera/block_grid_calibrate.py` | the terminal driver; `--mock` is a full hardware-free dry run |
+| `python/vision/block_detector.py` | the front end; `flatten` / `expected_size` are turned on for this path only |
+| `python/camera/block_grid_calibrate.py` | the terminal driver; `--mock` is a hardware-free dry run |
+| `camera_studio.py` `blockcal` / `blockcalsave` | the BLOCK CALIBRATION buttons — read the grid off the board as it stands |
 | `POST /api/calibration/block/{start,step,undo,cancel,save}` | the console routes |
 | `web/src/components/Calibrate.tsx` | the operator UI; placed blocks is the first choice offered |
+| `python/captures/IMAGE_TO_TEST_BLOCK_CALIBRATION.png` | the reference board: 29 blocks, 13 cells filled, asserted in `tests/test_block_grid.py` |
 
-Every sheet route measures the **camera against a piece of paper** and then
-assumes the paper sits where the firmware's cells are. That assumption is the
-entire reason §3d needs `HOME_CONVENTIONS` and a geometry cross-check. This
-route has the rig place a block on a cell it was told, so the correspondence
-`[3,2] -> (px, py)` is **labelled at the source**. There is no lattice walk, no
-colour-parity gate, no window search, and no paper to disagree with. It also
-measures the real pick-and-place chain — backlash, tool offsets, each mode's
-`error_offset_*_cm` — instead of a printed approximation of it.
+Every sheet route (§3d) measures the **camera against a piece of paper** and
+then assumes the paper sits where the firmware's cells are. That assumption is
+the entire reason §3d needs `HOME_CONVENTIONS` and a geometry cross-check.
+This route uses the blocks themselves, so the thing being measured *is* the
+thing being calibrated — and it measures the real pick-and-place chain
+(backlash, tool offsets, each mode's `error_offset_*_cm`) instead of a printed
+approximation of it.
 
-Rules that must survive an edit:
+##### The two ways in, and why one is safer
+
+**Labelled — the rig places them.** `BlockCalibrationRun` issues one `B` per
+cell and records the sighting against the cell it *commanded*. The
+correspondence is labelled at the source: there is nothing to infer, no origin
+to guess, and no way for the board to be renumbered.
+
+**Unlabelled — the board is already full.** `detect_block_lattice` takes one
+frame of blocks somebody else placed, recovers the two lattice step vectors
+from the blocks' own neighbours, and snaps everything onto integer sites. It
+cannot recover the ORIGIN: a regular lattice is identical under a whole-cell
+shift. `LATTICE_ANCHORS` supplies it, defaulting to `bottom-left`, and **a
+wrong anchor is not detectable from the picture** — on the reference board,
+`top-right` relabels `[0,0]` as `[6,4]` and every gate still passes. The test
+suite asserts this failure rather than pretending otherwise. Prefer the
+labelled route whenever the rig is available.
+
+##### Rules that must survive an edit
 
 - **Five placements minimum, six planned.** Four correspondences fit a
   homography exactly, so every residual is zero by construction and the
   calibration carries no evidence it is right. `MIN_OBSERVATIONS = 5` exists
-  for that reason alone; do not lower it to "get a quicker run".
+  for that reason alone; do not lower it to get a quicker run.
 - **The residual is not an optical number.** It includes where the machine
   physically put the block, which is why the gates are looser than
-  `MAX_MEAN_RESIDUAL_SHORT_SIDE`. A large residual here means the rig or the
-  map is off, not that the camera is blurry.
-- **Two checks replace the chessboard parity gate.** Identical wooden blocks
-  offer no colour signal, so `fit_block_grid` instead requires the observed
-  block's short side to match the footprint the homography predicts at that
-  cell (`SIZE_AGREEMENT_RANGE`) and its long axis to point along the mode's
-  own axis (`MAX_ANGLE_DISAGREEMENT_DEG`). Between them they catch "a cable was
-  detected instead of the block" and "the block landed on the wrong cell".
+  `MAX_MEAN_RESIDUAL_SHORT_SIDE`. A large residual means the rig or the map is
+  off, not that the camera is blurry.
+- **Two checks replace the printed chessboard's parity gate.** Identical wooden
+  blocks carry no colour signal, so `fit_block_grid` instead requires each
+  observed block's short side to match the footprint the homography predicts at
+  that cell (`SIZE_AGREEMENT_RANGE`) and its long axis to point along the
+  mode's own axis (`MAX_ANGLE_DISAGREEMENT_DEG`). Between them they catch "a
+  cable was detected instead of the block" and "the block landed on the wrong
+  cell". A uniformly wrong block scale leaves *every* residual at zero and is
+  caught only by the footprint check — do not drop it as redundant.
+- **Conditioning is checked numerically, not by counting cells.** Spread and
+  hull area are necessary and not sufficient: a dense plan fills row-major, so
+  after seven placements the set is six points along row 0 plus one in row 1 —
+  spread 6x1, hull 2.5 cells, and completely degenerate, because every
+  four-point subset has three collinear. `dlt_conditioning()` returns the DLT
+  design matrix's second-smallest singular value over its largest.
+  Degenerate configurations score 1e-17 and below; usable ones score above
+  1e-2. `MIN_DLT_CONDITIONING = 1e-5` sits in a thirty-order-of-magnitude gap
+  and is not a tuned number.
 - **A clipped block is refused, never measured.** A block the frame cuts off
   still segments cleanly; its centroid is simply dragged inwards by whatever
-  was lost — 21 px on a 40 px block at the mock camera's framing. Use
-  `--inset 1` (or the route's `inset`) when the camera cannot see the outermost
-  ring whole, rather than relaxing `EDGE_MARGIN_FRACTION`.
+  was lost — 21 px on a 40 px block at MockCamera's framing. Use `--inset 1`
+  (or the route's `inset`) when the camera cannot see the outermost ring whole,
+  rather than relaxing `EDGE_MARGIN_FRACTION`.
 - **The rig's mode must match the grid being calibrated.** The machine lays a
   block along whichever axis its active mode says, and nothing downstream can
   tell a correct vertical block from a horizontal one in the right spot — the
-  bearing check cannot catch it, because the blocks would agree with each
+  bearing check cannot catch it, because the blocks would all agree with each
   other. `BlockCalibrationRun` refuses the mismatch up front.
 - **`aborted` ends the run.** The claw may still be holding a block, so
   `BlockCalibrationAborted` is a distinct type, the console locks, and there is
-  no retry and no automatic home. `rejected` moved nothing and stays retryable —
-  it usually means the feeder at `[0,0]` is empty.
+  no retry and no automatic home. `rejected` moved nothing and stays
+  retryable — it usually means the feeder at `[0,0]` is empty.
 - **The build area must be clear at `start()`.** The first frame is the
   baseline every later capture is differenced against; a block already on the
-  table is invisible to that difference and can only be found by shape, which
-  is the weaker path.
+  table is invisible to that difference and can only be found by shape.
 - Calibration always builds at **level 0**. Nothing here ever stacks.
 
-The route emits an ordinary `ColorGridCalibration`, so the overlays, the
-`workspace_corners()` convention and `WorkspaceMap.from_grid` are shared with
-§3d unchanged. `block_workspace_map` deliberately reuses `workspace_corners`
-rather than recomputing the envelope: sheet centimetres and machine centimetres
-put the envelope's home corner at the same lattice coordinate,
-`-cell_center_x_cm(0) / pitch_x_cm`, so there is no second implementation to
-keep in step.
+##### Dense mode: measuring the lattice instead of assuming it
+
+Once `MIN_DENSE_OBSERVATIONS = 25` cells of a `DENSE_MODES` grid are occupied,
+`analyse_dense_lattice()` stops trusting a homography and starts testing it.
+Horizontal is excluded: it is three columns wide, so curvature along X would be
+fitted from three points, which is an interpolation with nothing left over to
+check it.
+
+* **The pitch is measured, not derived.** `measure_pitch()` uses only
+  lattice-ADJACENT pairs, so every sample is exactly one pitch and no average
+  has to guess how many it just crossed. It is reported pooled *and* per row
+  (for X) and per column (for Y), because "is the gap a static number or does
+  it depend where you are" is exactly the question a single average hides. On
+  the reference board: X 29.38 px (sd 1.24, 1.4% spread across rows), Y 69.14 px
+  (sd 1.08, 2.0% across columns) — static to within 2%, so on this rig the
+  answer is "one number per axis".
+* **Four models compete on held-out error.** `similarity` (4 dof), `affine`
+  (6), `homography` (8) and `homography+curvature` (10), ranked by
+  leave-one-out prediction, ties going to the simpler one. Training error would
+  only ever pick the richest model — the point of the fit is to place cells no
+  block was ever put on, so predicting an unseen point is the question that
+  matters. Fitted by plain least squares, never `cv2.estimateAffine*`'s robust
+  methods: those resample, which would make leave-one-out non-deterministic,
+  and there are no outliers to be robust against once labels are known.
+* **Curvature models the machine, not the camera.** A homography already
+  absorbs perspective and any uniform scale error. What it cannot absorb is an
+  advance-per-cell that drifts along the travel, which is nonlinear in lattice
+  coordinates — so the correction is applied *in lattice space*
+  (`c + a·c²`, `r + b·r²`) before projection, and cannot be folded into the
+  3x3. `BlockGridCalibration` carries it and applies it inside `point_at()` and
+  `grid_at()`, the two doors every other method goes through, so `cell_quad`,
+  `outline`, `cell_at` and `workspace_corners` are all correct without knowing
+  it exists. The coefficient is recovered only approximately — a quadratic bend
+  is partly degenerate with a homography's own perspective terms, so the two
+  share the work — which is why the tests assert *prediction*, not the
+  parameter. **The warning it emits must not blame the belts:** a drifting
+  machine and a lens whose correction left distortion behind produce the same
+  curve, and one frame cannot separate them.
+* **The one non-circular geometry check.** `px_per_cm` is *defined* as
+  measured/expected, so comparing the pitch ratio against the printed ratio
+  after correcting by it is circular and always returns exactly 2.000. The real
+  check is `anisotropy_agreement`: the optical stretch measured from cell
+  PITCHES against the stretch measured from block FOOTPRINTS — different
+  quantities through one lens, which agree only if the gaps in `config/rig.json`
+  describe this board. The reference board's view is genuinely 17.7%
+  anisotropic and the two estimates agree to 4%.
+
+##### Virtual cells — a grid bigger than the block supply
+
+The block supply is smaller than the grid, so the cells nobody could reach must
+still be drawn. `fit_block_grid(..., fill=True)` adds every unplaced cell from
+the fitted lattice, marked `full=False` with `area=0` and `fill=0`.
+
+`BlockGridCalibration` overrides `found_cells` to return **only** what was
+measured, because everything consuming it — `grid_evidence`'s coverage gates,
+`color_grid_check`'s "physically found" count — is asking what was observed and
+must never be handed a synthesised cell as if it were one. `virtual_cells` is
+the other half. The overlay tints measured cells and outlines virtual ones,
+reusing the same treatment `color_grid_overlay` already gives a projected-but-
+unseen cell.
+
+`plan_dense_cells()` fills row-major from the home corner rather than spreading,
+which is the opposite of `plan_calibration_cells()`. A spread set conditions a
+homography well but measures pitch badly — every `measure_pitch` sample needs a
+lattice-ADJACENT pair, and a thin spread has almost none. With 25+ of 41 cells
+the dense region still spans most of the grid, so conditioning survives, and
+the unplaced cells end up as the tail of the build order: the far rows, toward
+y+.
+
+##### Detection settings, and one that is deliberately backwards
+
+`_colour_sightings` runs `flatten_illumination` but **not** `white_balance`,
+which is the opposite of what the sheet detectors do. `white_balance` is a
+white-PATCH estimator and its own docstring says why that is safe there: the
+sheet's white paper is the brightest large thing in a frame that is mostly
+sheet. A board covered in wooden blocks breaks that assumption — the bright
+quantile lands partly on wood, and the correction then pulls the blocks toward
+the surface it was supposed to separate them from. Measured on the reference
+board: balance on finds 28 of 29, off finds all 29, and off stays at 29 across
+every colour threshold from 4 to 8 where on collapses at 4.
+`flatten_illumination` removes the same cast without needing a white reference.
+
+Two things on a real board are not blocks and must not be treated as such.
+Overlapping detections (block_detector's compound decomposition proposes
+overlapping ideal rectangles inside one colour component) are collapsed by IoU
+in `_deduplicate`. Objects that are wooden and roughly block-shaped but **not
+on the lattice** — the holder's two small offcuts beside `[0,0]` on the
+reference board — are discarded by `MAX_INDEX_SNAP` rather than raising, since
+an untidy board is normal. If more than `MIN_ON_LATTICE_FRACTION` of detections
+fail to snap, the lattice vectors themselves are wrong and that *is* an error:
+keeping the minority that happened to fit would renumber the whole grid.
+
+##### What the reference board proves
+
+`tests/test_block_grid.py` §10 runs the whole unlabelled path on
+`captures/IMAGE_TO_TEST_BLOCK_CALIBRATION.png` and asserts the exact cell sets:
+29 physical (columns 0-6 of rows 0-3, plus `[0,4]`) and 13 virtual (the rest of
+rows 4 and 5), max snap 0.08 cells, mean residual 0.85 px. Keep it exact — a
+count-only assertion would pass on a board shifted by one cell.
+
 
 ### 3e. Camera colour correction — one transform, applied in four places
 

@@ -1051,6 +1051,37 @@ def block_workspace_map(calibration: ColorGridCalibration, grid: MachineGrid,
     return WorkspaceMap.from_grid(grid, corners, image_size, projection)
 
 
+def workspace_map_error(calibration, workspace, grid: MachineGrid, image_size):
+    """How far a saved map puts each cell from where it was measured.
+
+    ``WorkspaceMap`` stores four envelope corners plus the grid geometry - not
+    a per-cell table - so whoever loads it spaces cells evenly between those
+    corners. Anything the fit learned that an even lattice cannot express is
+    therefore lost on the way to disk. In practice that is the curvature term:
+    the corners come back exact, and the error peaks in the middle of the grid.
+
+    Returns ``(mean_px, max_px, worst_cell)``. Callers should report it rather
+    than assume a save is lossless - on the reference board it is 1.25 px mean,
+    2.07 px max, which is 0.27 cm on a 2.2 cm block.
+    """
+    mapped = workspace.mapped_grid
+    width = mapped.workspace_width_cm
+    height = mapped.workspace_height_cm
+    if not width or not height:
+        raise BlockGridError("the saved map has no physical scale", stage="fit")
+    worst_cell, worst, total, count = None, 0.0, 0.0, 0
+    for row in range(calibration.spec.rows):
+        for col in range(calibration.spec.cols):
+            x_cm, y_cm = mapped.cell_center_cm(col, row)
+            through = workspace.pixel_at(x_cm / width, y_cm / height, image_size)
+            error = math.dist(calibration.cell_center(col, row), through)
+            total += error
+            count += 1
+            if error > worst:
+                worst, worst_cell = error, (col, row)
+    return (total / count if count else 0.0), worst, worst_cell
+
+
 # --------------------------------------------------------------------------- #
 # the run
 # --------------------------------------------------------------------------- #
