@@ -1797,7 +1797,7 @@ svg.grid-overlay.selectable { cursor: crosshair; }
 .buildmode {
   height: 100%;
   display: grid;
-  grid-template-rows: var(--bar-h) minmax(0, 1fr) auto;
+  grid-template-rows: var(--bar-h) minmax(0, 1fr);
   overflow: hidden;
   background:
     radial-gradient(120% 80% at 50% -20%, #0E1319 0%, transparent 60%),
@@ -1863,7 +1863,7 @@ svg.grid-overlay.selectable { cursor: crosshair; }
 
 .bm-split {
   display: grid;
-  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: var(--s4);
   padding: var(--s4);
   min-height: 0;
@@ -1885,15 +1885,53 @@ svg.grid-overlay.selectable { cursor: crosshair; }
 /* One frame per pane is enough; the camera/twin stages drop their own. */
 .bm-pane .stage-area { border: none; border-radius: 0; padding: 0; background: none; }
 
-.bm-dock {
-  border-top: 1px solid var(--line);
-  background: var(--surface);
-  padding: var(--s3) var(--s4);
-  max-height: 38vh;
+/* ── floating controls, bottom-right over the twin's dead space ──────────── */
+
+.bm-controls {
+  position: fixed;
+  right: var(--s4);
+  bottom: var(--s4);
+  z-index: var(--z-sticky);
+  width: min(21rem, 42vw);
+  display: grid;
+  gap: var(--s2);
+  padding: var(--s3);
+  background: var(--plate);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-lg);
+  box-shadow: 0 16px 44px rgba(0, 0, 0, .55);
+  backdrop-filter: blur(8px);
+}
+.bm-controls.is-collapsed {
+  width: auto;
+  padding: var(--s1);
+}
+.bm-controls-toggle {
+  justify-self: start;
+  padding: 2px var(--s2);
+  font: var(--t-xs);
+  font-family: var(--font-mono);
+  letter-spacing: .12em;
+  color: var(--text-dim);
+  background: none;
+  border: 0;
+}
+.bm-controls-toggle:hover { color: var(--text); }
+.bm-controls .runner.panel {
+  border: 0;
+  background: none;
+  padding: 0;
+  gap: var(--s2);
+  max-height: min(58vh, 30rem);
   overflow-y: auto;
 }
-.bm-dock .runner { border: 0; background: none; padding: 0; max-height: none; }
-.bm-dock .runner.is-dry { border: 0; }
+.bm-controls .runner.panel.is-dry { border: 0; }
+.runner.is-compact .runner-head h2 { font: var(--t-xs); font-family: var(--font-mono); letter-spacing: .1em; color: var(--text-dim); }
+.runner.is-compact .runner-idle { grid-template-columns: minmax(0, 1fr); }
+.runner.is-compact .runner-idle .runner-model { font: var(--t-md); }
+.runner.is-compact .runner-idle .btn-build,
+.runner.is-compact .btn-build { width: 100%; grid-column: 1; grid-row: auto; min-width: 0; }
+.runner.is-compact .runner-stop .btn { width: 100%; }
 
 /* ── toasts ──────────────────────────────────────────────────────────────── */
 
@@ -2033,6 +2071,9 @@ svg.grid-overlay.selectable { cursor: crosshair; }
 
 /* ── the console's entry point ───────────────────────────────────────────── */
 
+.rail-links { display: grid; gap: var(--s2); }
+.rail-links .reason { margin: 0; }
+
 .buildmode-enter {
   display: flex;
   align-items: center;
@@ -2057,7 +2098,8 @@ svg.grid-overlay.selectable { cursor: crosshair; }
   .bm-split { grid-template-columns: minmax(0, 1fr); overflow-y: auto; }
   .bm-pane { min-height: 46vh; }
   .bm-toasts { left: var(--s3); right: var(--s3); width: auto; }
-  .bm-dock { max-height: 46vh; }
+  .bm-controls { left: var(--s3); right: var(--s3); bottom: var(--s3); width: auto; }
+  .bm-controls.is-collapsed { width: auto; }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -51,7 +51,8 @@ const PHASE_TOAST: Partial<Record<RunState["phase"], Omit<RunnerToast, "key">>> 
 };
 
 export function RunnerPanel({ state, connected, modelId, api, delay, onActiveChange,
-                              onToast, progress = emptyProgress(), lastResult = null }: {
+                              onToast, compact = false,
+                              progress = emptyProgress(), lastResult = null }: {
   state: StateModel;
   connected: boolean;
   modelId: string;
@@ -60,6 +61,14 @@ export function RunnerPanel({ state, connected, modelId, api, delay, onActiveCha
   onActiveChange?: (active: boolean) => void;
   /** Building mode listens; the console does not pass this. */
   onToast?: (toast: RunnerToast) => void;
+  /**
+   * Building mode's floating control cluster. Drops everything now carried by
+   * the toasts — the phase readout, the feeder card, the elapsed/ETA line, the
+   * run-report table, the read-only program dump — and keeps only the controls
+   * an operator presses. The state machine and every guarded route are
+   * untouched; the console renders this panel without the flag.
+   */
+  compact?: boolean;
   /** The rig's current phase, straight from the serial event stream. */
   progress?: BuildProgress;
   /** The last settled build, as the server's `build_result` event reported it. */
@@ -233,19 +242,21 @@ export function RunnerPanel({ state, connected, modelId, api, delay, onActiveCha
   }, [onToast, run.phase, run.pendingConfirm]);
 
   return (
-    <section className={`runner panel${run.style === "dry" && run.phase !== "idle" ? " is-dry" : ""}`}
+    <section className={`runner panel${run.style === "dry" && run.phase !== "idle" ? " is-dry" : ""}${compact ? " is-compact" : ""}`}
              aria-label="Program runner">
       <header className="runner-head">
-        <h2><Icon name="power" size={13} />Program runner</h2>
+        {compact
+          ? <h2><Icon name="power" size={13} />{position.current} / {position.total}</h2>
+          : <h2><Icon name="power" size={13} />Program runner</h2>}
         <span className="spacer" />
-        <span className="runner-count">{position.current} / {position.total}</span>
-        {!(["idle", "done", "locked", "stopped-mismatch"] as RunState["phase"][]).includes(run.phase) && (
+        {!compact && <span className="runner-count">{position.current} / {position.total}</span>}
+        {!compact && !(["idle", "done", "locked", "stopped-mismatch"] as RunState["phase"][]).includes(run.phase) && (
           <span className="runner-count" title="An estimate from the average cycle time. The phase above is the rig's own report.">
             elapsed {formatDuration(timing.elapsedSeconds)} · ETA ~{formatDuration(timing.etaSeconds)} (est.)
           </span>
         )}
         {run.style === "dry" && run.phase !== "idle" && (
-          <span className="chip is-motion">DRY RUN — no serial traffic</span>
+          <span className="chip is-motion">DRY RUN{compact ? "" : " — no serial traffic"}</span>
         )}
       </header>
 
@@ -271,7 +282,7 @@ export function RunnerPanel({ state, connected, modelId, api, delay, onActiveCha
         </div>
       )}
 
-      {prompt && run.phase !== "done" && run.phase !== "locked" && run.phase !== "stopped-mismatch" && (
+      {!compact && prompt && run.phase !== "done" && run.phase !== "locked" && run.phase !== "stopped-mismatch" && (
         <div className="feeder" aria-live="polite">
           <strong className={prompt.same ? "is-same" : ""}>
             {!prompt.same && <span className="feeder-swatch" data-colour={prompt.colour.toLowerCase()} aria-hidden="true" />}
@@ -296,7 +307,7 @@ export function RunnerPanel({ state, connected, modelId, api, delay, onActiveCha
                      onBuild={() => applyEvent({ type: "confirm", now: Date.now() })} />
       )}
 
-      {run.inFlight && run.style !== "dry" && (
+      {!compact && run.inFlight && run.style !== "dry" && (
         <div className="runner-operation" role="status" aria-live="polite"
              aria-label="Current rig operation">
           <strong>{operation ?? "WAITING FOR THE RIG"}</strong>
@@ -326,7 +337,9 @@ export function RunnerPanel({ state, connected, modelId, api, delay, onActiveCha
           </button>
         </div>
       )}
-      <p className="reason runner-honest">the block in flight will finish — the rig cannot be interrupted</p>
+      {!compact && (
+        <p className="reason runner-honest">the block in flight will finish — the rig cannot be interrupted</p>
+      )}
 
       {run.phase === "rejected" && (
         <div className="runner-result is-rejected" role="alert">
@@ -365,19 +378,21 @@ export function RunnerPanel({ state, connected, modelId, api, delay, onActiveCha
           <strong>SESSION LOCKED</strong><span>{run.failure}</span>
           <span>stopped at step {position.current} of {position.total}</span>
           <span>Program state is read-only. Inspect the rig and restart the service.</span>
-          <ol className="runner-program" aria-label="Read-only program position">
-            {programRows(run).map(row => (
-              <li key={row.index} className={`is-${row.status}`}>
-                <span>{String(row.index + 1).padStart(2, "0")}</span><code>{row.text}</code>
-              </li>
-            ))}
-          </ol>
+          {!compact && (
+            <ol className="runner-program" aria-label="Read-only program position">
+              {programRows(run).map(row => (
+                <li key={row.index} className={`is-${row.status}`}>
+                  <span>{String(row.index + 1).padStart(2, "0")}</span><code>{row.text}</code>
+                </li>
+              ))}
+            </ol>
+          )}
         </div>
       )}
 
       {run.phase === "done" && <div className="runner-result is-done" role="status"><strong>RUN COMPLETE</strong></div>}
 
-      {run.log.length > 0 && (
+      {!compact && run.log.length > 0 && (
         <div className="runner-report">
           <div className="runner-report-head"><strong>RUN REPORT</strong><span className="spacer" />
             <button type="button" className="btn btn-ghost" onClick={() => downloadMarkdown(run)}>EXPORT MARKDOWN</button>

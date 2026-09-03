@@ -294,6 +294,70 @@ def _angle_gap(first: float, second: float) -> float:
     return abs(_normalise_angle(first - second))
 
 
+def dlt_conditioning(source: np.ndarray, target: np.ndarray) -> float:
+    """How well determined the homography through these correspondences is.
+
+    Spread and hull area are necessary but not sufficient. A dense plan fills
+    row-major, so after seven placements the set is six points along row 0 and
+    a single one in row 1: the spread is 6x1 and the hull is 2.5 cells, both
+    comfortably past their floors, yet every four-point subset contains three
+    collinear points. The fit does not fail - it quietly collapses, projecting
+    every cell to a point, and the zero-sized footprint that comes back then
+    refuses every later sighting for being the wrong size.
+
+    The textbook test is the right one: a homography is the null vector of the
+    DLT design matrix, so a configuration that determines it has exactly ONE
+    small singular value. Returned as the ratio of the second-smallest to the
+    largest, scale-normalised so it means the same thing at any resolution.
+    Measured on this grid: six-collinear-plus-one scores 2e-17 and a single
+    row 4e-33, while six-collinear-plus-TWO already scores 2e-2 and the four
+    corners plus two interior cells 3e-1. The two populations are thirty orders
+    of magnitude apart, so the threshold below is not a tuned number.
+    """
+    if len(source) < 4:
+        return 0.0
+    # Hartley normalisation: without it the ratio below is dominated by the
+    # pixel magnitudes rather than by the geometry it is supposed to measure.
+    def normalise(points):
+        centre = points.mean(axis=0)
+        shifted = points - centre
+        scale = np.sqrt(2.0) / max(float(np.sqrt((shifted ** 2).sum(axis=1)).mean()),
+                                   1e-12)
+        return shifted * scale
+
+    src, dst = normalise(np.asarray(source, float)), normalise(np.asarray(target, float))
+    rows = []
+    for (x, y), (u, v) in zip(src, dst):
+        rows.append([-x, -y, -1, 0, 0, 0, u * x, u * y, u])
+        rows.append([0, 0, 0, -x, -y, -1, v * x, v * y, v])
+    singular = np.linalg.svd(np.asarray(rows), compute_uv=False)
+    if singular[0] <= 0:
+        return 0.0
+    return float(singular[-2] / singular[0])
+
+
+# Below this the correspondences do not determine a homography, whatever their
+# spread and hull say. Sits in the enormous empty gap between the two
+# populations described above; nothing observed lands anywhere near it.
+MIN_DLT_CONDITIONING = 1e-5
+
+
+def _usable_scale(matrix: np.ndarray, spec: ColorGridSpec, cell,
+                  curvature=(0.0, 0.0)) -> bool:
+    """Does this fit predict a real cell here, or has it collapsed?
+
+    The numeric backstop behind :func:`_well_conditioned`. A near-degenerate
+    homography does not raise - it quietly projects every cell onto a point or
+    to infinity, and the zero-sized footprint that comes back would then refuse
+    every subsequent sighting for being the wrong size. Cheaper to ask.
+    """
+    try:
+        scales = _local_scale(matrix, spec, cell, curvature=curvature)
+    except (BlockGridError, np.linalg.LinAlgError):
+        return False
+    return all(math.isfinite(value) and value > 1e-6 for value in scales)
+
+
 def _hull_area(points) -> float:
     pts = np.asarray(points, dtype=np.float32).reshape(-1, 1, 2)
     if len(pts) < 3:
@@ -304,6 +368,41 @@ def _hull_area(points) -> float:
 # --------------------------------------------------------------------------- #
 # planning which cells to place on
 # --------------------------------------------------------------------------- #
+
+def plan_dense_cells(grid: MachineGrid, supply: int, *, inset: int = 0) -> tuple:
+    """Fill the grid from the home corner with ``supply`` blocks, in build order.
+
+    Deliberately NOT the spread that :func:`plan_calibration_cells` produces.
+    A spread set conditions a homography well but measures pitch badly: every
+    :func:`measure_pitch` sample comes from a pair of *lattice-adjacent*
+    blocks, and a thin spread has almost no adjacent pairs. A dense fill from
+    one corner gives complete rows and columns, so the per-row and per-column
+    tables have real content - and with 25+ of 41 cells the occupied region
+    still spans most of the grid, so the fit stays well conditioned anyway.
+
+    Row-major from ``[0,0]``, skipping the feeder, so the cells left unplaced
+    are the tail of the build order: the far rows first, which is where a
+    supply smaller than the grid runs out.
+    """
+    supply = int(supply)
+    if supply < MIN_OBSERVATIONS:
+        raise BlockGridError(
+            f"a placed-block calibration needs at least {MIN_OBSERVATIONS} "
+            f"blocks to be checkable, not {supply}", stage="plan")
+    inset = max(0, int(inset))
+    inset_col = min(inset, max(0, (grid.cols - 2) // 2))
+    inset_row = min(inset, max(0, (grid.rows - 2) // 2))
+    cells = [(col, row)
+             for row in range(inset_row, grid.rows - inset_row)
+             for col in range(inset_col, grid.cols - inset_col)
+             if grid.contains_build_target(col, row)]
+    if len(cells) < supply:
+        raise BlockGridError(
+            f"the {grid.mode} grid has only {len(cells)} buildable cells at "
+            f"inset {inset_col}x{inset_row}; a supply of {supply} blocks "
+            f"cannot all be placed", stage="plan")
+    return tuple(cells[:supply])
+
 
 def plan_calibration_cells(grid: MachineGrid,
                            count: int = DEFAULT_OBSERVATIONS,
@@ -449,13 +548,25 @@ def _colour_sightings(frame: np.ndarray, expected_size, min_area: float,
                       **detector_kwargs) -> list[BlockSighting]:
     """Rotated rectangles from the warm-colour detector, at full resolution.
 
-    ``balance`` and ``flatten`` are on here where the live feed leaves them off:
-    a calibration is fitted once and then lived with, so the extra passes over
-    the frame cost nothing worth counting and they are what make the mask stop
-    changing its mind between processing widths.
+    ``flatten`` is on where the live feed leaves it off: a calibration is
+    fitted once and then lived with, so the extra pass over the frame costs
+    nothing worth counting and it is what makes the mask stop changing its mind
+    between processing widths.
+
+    ``balance`` is deliberately OFF, which is the opposite of what the printed
+    sheet does. :func:`color_grid.white_balance` is a white-PATCH estimator,
+    and its own docstring says why that is safe there: the sheet's white paper
+    is the brightest large thing in a frame that is mostly sheet. A board
+    covered in wooden blocks breaks that assumption - the bright quantile lands
+    partly on wood - and the correction then pulls the blocks toward the
+    surface it was supposed to separate them from. Measured on the 29-block
+    board: balance on finds 28 of 29, off finds all 29, and off stays at 29
+    across every colour threshold from 4 to 8 where on collapses at 4.
+    ``flatten_illumination`` removes the same cast without needing a white
+    reference, so nothing is lost by dropping it.
     """
     kwargs = {
-        "balance": True,
+        "balance": False,
         "flatten": True,
         "expected_size": expected_size,
         "min_area": max(int(min_area), 1),
@@ -773,6 +884,13 @@ def fit_block_grid(observations, spec: ColorGridSpec, *,
                 f"the placed cells enclose only {hull:.1f} square cells and are "
                 f"nearly collinear; spread them across the envelope",
                 stage="fit")
+        conditioning = dlt_conditioning(source, target)
+        if conditioning < MIN_DLT_CONDITIONING:
+            raise BlockGridError(
+                f"the placed cells do not determine a mapping (conditioning "
+                f"{conditioning:.1e}): they lie almost entirely along one line, "
+                f"with too few off it to pin the other axis down",
+                stage="fit")
 
     dense_report = None
     curvature = (0.0, 0.0)
@@ -967,11 +1085,16 @@ class BlockGridSession:
 
     def __init__(self, grid: MachineGrid, *, cells=None,
                  count: int = DEFAULT_OBSERVATIONS, inset: int = 0,
-                 baseline=None):
+                 supply: int | None = None, baseline=None):
         self.grid = grid
         self.spec = spec_for_grid(grid)
         self.inset = int(inset)
-        if cells is None:
+        if cells is None and supply is not None:
+            # "Use every block you have, then fill the rest in": a dense fill
+            # from the home corner, so the pitch between neighbours is
+            # measurable and the cells nobody could reach are the tail.
+            self.planned = plan_dense_cells(grid, supply, inset=inset)
+        elif cells is None:
             self.planned = plan_calibration_cells(grid, count, inset=inset)
         else:
             planned = tuple((int(col), int(row)) for col, row in cells)
@@ -1002,16 +1125,45 @@ class BlockGridSession:
     def _provisional(self):
         """The best fit available from what has been observed so far, or None.
 
-        Gates off: this is used to *aim* the next search, and refusing to aim
-        because the fit is not yet good enough would be backwards.
+        Quality gates off - this is used to *aim* the next search, and refusing
+        to aim because the fit is not yet good enough would be backwards. The
+        CONDITIONING gates stay on, though, and that is not the same thing: a
+        dense plan fills row-major, so the first several placements are all in
+        row 0. A homography through collinear points is degenerate, and the
+        garbage it predicts would refuse every subsequent sighting. Aiming with
+        nothing is strictly better than aiming with that.
+
+        Dense analysis and cell filling are off here too: this runs on every
+        observation and the leave-one-out sweep over four models is far too
+        expensive to repeat per placement, on top of being pointless for a
+        prediction that only needs to be within half a pitch.
         """
         if len(self.observations) < MIN_OBSERVATIONS:
             return None
+        source = np.array([[float(c), float(r)] for c, r in self.observations],
+                          dtype=np.float64)
+        spread = source.max(axis=0) - source.min(axis=0)
+        if (spread[0] < MIN_AXIS_SPREAD_CELLS or spread[1] < MIN_AXIS_SPREAD_CELLS
+                or _hull_area(source) < MIN_HULL_AREA_CELLS):
+            return None
+        centres = np.array([item.center for item in self.observations.values()],
+                           dtype=np.float64)
+        if dlt_conditioning(source, centres) < MIN_DLT_CONDITIONING:
+            return None
         try:
-            return fit_block_grid(self.observations.values(), self.spec,
-                                  image_size=self.image_size, strict=False)
+            provisional = fit_block_grid(self.observations.values(), self.spec,
+                                         image_size=self.image_size, strict=False,
+                                         dense=False, fill=False)
         except BlockGridError:
             return None
+        # Numeric backstop: a fit can still collapse in a way the conditioning
+        # ratio did not predict, and a zero-sized predicted footprint would
+        # then refuse every later sighting for being the wrong size.
+        mid = (float(source[:, 0].mean()), float(source[:, 1].mean()))
+        if not _usable_scale(provisional.homography, self.spec, mid,
+                             provisional.curvature):
+            return None
+        return provisional
 
     def expected_size_px(self, cell=None):
         """The block's predicted ``(long, short)`` pixel size, if it is knowable."""
@@ -1217,7 +1369,21 @@ class DenseLatticeReport:
     candidates: tuple = ()
     curvature: tuple = (0.0, 0.0)
     virtual_cells: int = 0
+    #: How much more px/cm this view gives along Y than along X, measured two
+    #: independent ways: from the cell pitches and from the block footprints.
+    #: Comparing them is the one non-circular check that the gaps in
+    #: config/rig.json match the board - px_per_cm is *defined* as
+    #: measured/expected, so pitch alone can only ever agree with itself.
+    anisotropy_pitch: float = 0.0
+    anisotropy_block: float = 0.0
     warnings: tuple = ()
+
+    @property
+    def anisotropy_agreement(self) -> float:
+        """Ratio of the two independent anisotropy estimates. 1.0 is perfect."""
+        if not self.anisotropy_block:
+            return 0.0
+        return self.anisotropy_pitch / self.anisotropy_block
 
     def describe(self) -> str:
         lines = [f"dense lattice from {self.observations} placements, "
@@ -1225,6 +1391,11 @@ class DenseLatticeReport:
         for pitch in (self.pitch_x, self.pitch_y):
             if pitch is not None:
                 lines.append("  " + pitch.describe())
+        if self.anisotropy_block:
+            lines.append(
+                f"  view anisotropy y/x {self.anisotropy_pitch:.3f} from pitches "
+                f"vs {self.anisotropy_block:.3f} from block footprints "
+                f"(agreement {self.anisotropy_agreement:.3f})")
         for candidate in self.candidates:
             lines.append("  " + candidate.describe()
                          + ("   <- chosen" if candidate.name == self.chosen else ""))
@@ -1438,12 +1609,43 @@ def analyse_dense_lattice(observations, spec: ColorGridSpec, *,
             f"placements; {len(items)} were recorded", stage="fit")
 
     best, candidates = choose_lattice_model(items, models=models)
+    pitch_x = measure_pitch(items, spec, "x")
+    pitch_y = measure_pitch(items, spec, "y")
+
+    # Two independent readings of the same optical stretch. The pitch one comes
+    # from centre-to-centre distances, the block one from the blocks' own
+    # printed proportions - different measurements of different things through
+    # the same lens. They agree when the geometry in config/rig.json describes
+    # this board, and diverge when a gap is wrong, which is the only way to
+    # tell the two apart from a single frame.
+    anisotropy_pitch = anisotropy_block = 0.0
+    if pitch_x and pitch_y and pitch_x.median_px > 0:
+        anisotropy_pitch = ((pitch_y.median_px / pitch_x.median_px)
+                            / (spec.pitch_y_cm / spec.pitch_x_cm))
+    long_med = float(np.median([item.sighting.long_len for item in items]))
+    short_med = float(np.median([item.sighting.short_len for item in items]))
+    if short_med > 0:
+        printed = (max(spec.block_x_cm, spec.block_y_cm)
+                   / min(spec.block_x_cm, spec.block_y_cm))
+        observed = long_med / short_med
+        anisotropy_block = observed / printed
+        if not spec.short_is_x:
+            # In horizontal mode the long block side lies along X, so the same
+            # stretch shows up the other way up.
+            anisotropy_block = 1.0 / anisotropy_block if anisotropy_block else 0.0
+
     report = DenseLatticeReport(
         observations=len(items),
-        pitch_x=measure_pitch(items, spec, "x"),
-        pitch_y=measure_pitch(items, spec, "y"),
+        pitch_x=pitch_x, pitch_y=pitch_y,
         chosen=best.name, candidates=candidates, curvature=best.curvature,
+        anisotropy_pitch=anisotropy_pitch, anisotropy_block=anisotropy_block,
     )
+    if anisotropy_block and not (0.88 <= report.anisotropy_agreement <= 1.14):
+        report.warnings = report.warnings + (
+            f"the stretch measured from cell pitches ({anisotropy_pitch:.3f}) "
+            f"disagrees with the stretch measured from the blocks themselves "
+            f"({anisotropy_block:.3f}). Those should match through one lens, so "
+            f"a gap in config/rig.json probably does not match this board",)
     warnings = []
     for pitch in (report.pitch_x, report.pitch_y):
         if pitch is not None and pitch.spread > PITCH_SPREAD_WARNING:
@@ -1454,8 +1656,280 @@ def analyse_dense_lattice(observations, spec: ColorGridSpec, *,
                 f"than a camera angle")
     if best.name == "homography+curvature":
         warnings.append(
-            f"travel curvature was worth fitting (a={best.curvature[0]:+.5f}, "
-            f"b={best.curvature[1]:+.5f}): the machine's advance per cell is "
-            f"not constant along its travel")
+            f"a curvature term was worth fitting (a={best.curvature[0]:+.5f}, "
+            f"b={best.curvature[1]:+.5f}): cell centres do not advance at a "
+            f"constant rate along either axis. This measurement cannot say "
+            f"WHY - a machine whose real travel per cell drifts and a lens "
+            f"whose correction left some distortion behind produce the same "
+            f"curve. Check the lens correction before touching a belt")
     report.warnings = tuple(warnings)
     return best, report
+
+
+# --------------------------------------------------------------------------- #
+# Reading a lattice out of one frame of already-placed blocks
+# --------------------------------------------------------------------------- #
+#
+# Everything above assumes the rig placed each block while somebody wrote down
+# which cell it was told - the correspondence arrives labelled. That is the
+# better way to calibrate and it stays the primary route.
+#
+# This is the other situation: a board that is already full, one capture, and
+# no record of what went where. The labels have to be recovered before any of
+# the machinery above applies. With most of the grid occupied that is very
+# doable, because the blocks themselves carry the two things needed - their
+# printed size gives the pixel scale, and their neighbours give the two lattice
+# vectors. What they cannot give is the ORIGIN: a regular lattice looks the
+# same shifted by a whole cell. That single fact has to come from outside, and
+# :data:`LATTICE_ANCHORS` is where it comes from.
+
+# Which corner of the machine grid the occupied region is known to start at.
+# "bottom-left" means the block nearest image-bottom-left is [0,0] and the
+# unoccupied cells are the far ones - which is what a build order that starts
+# at home and works outward produces.
+LATTICE_ANCHORS = ("bottom-left", "bottom-right", "top-left", "top-right")
+DEFAULT_LATTICE_ANCHOR = "bottom-left"
+
+# Two detections whose boxes overlap by more than this are the same block seen
+# twice. block_detector's compound decomposition proposes overlapping ideal
+# rectangles inside one colour component, and on a real board two neighbouring
+# blocks joined by a shadow produce a third, spurious rectangle straddling the
+# seam. Keeping the better-scoring one is enough; no change to the detector.
+DUPLICATE_IOU = 0.30
+
+# How close a displacement must be to a predicted pitch to count as a
+# neighbour step. Wide, because the pixel scale is itself estimated from the
+# blocks and residual lens distortion moves both.
+NEIGHBOUR_PITCH_RANGE = (0.62, 1.42)
+
+# A neighbour step must also point roughly along its axis rather than
+# diagonally, or a diagonal pair at the right distance would vote in the wrong
+# direction and drag the basis.
+MAX_STEP_SKEW_DEG = 30.0
+
+# How far a sighting may sit from an integer lattice site and still be taken
+# for a block ON that site, in cells. Anything further is not refused outright
+# but DISCARDED: a real board has things on it that are not blocks - the
+# holder's two small wooden offcuts beside [0,0] are the reason this is a
+# filter rather than an error - and they are best defined as "wooden, roughly
+# block-shaped, not on the lattice".
+MAX_INDEX_SNAP = 0.34
+
+# ...but if most of what was detected fails to snap, the lattice vectors
+# themselves are wrong rather than the board being untidy, and quietly keeping
+# the minority that happened to fit would renumber the whole grid.
+MIN_ON_LATTICE_FRACTION = 0.70
+
+
+def _deduplicate(sightings, iou: float = DUPLICATE_IOU) -> list:
+    """Drop sightings that are the same block twice, keeping the better one."""
+    def area(box):
+        return float(abs(cv2.contourArea(np.asarray(box, np.float32))))
+
+    ordered = sorted(sightings,
+                     key=lambda item: (item.rectangularity, item.area),
+                     reverse=True)
+    kept = []
+    for candidate in ordered:
+        duplicate = False
+        for keeper in kept:
+            overlap, _ = cv2.intersectConvexConvex(
+                np.asarray(candidate.quad, np.float32),
+                np.asarray(keeper.quad, np.float32))
+            union = area(candidate.quad) + area(keeper.quad) - overlap
+            if union > 0 and overlap / union > iou:
+                duplicate = True
+                break
+        if not duplicate:
+            kept.append(candidate)
+    return kept
+
+
+def _lattice_vectors(sightings, spec: ColorGridSpec):
+    """Recover the two lattice step vectors from the blocks' own neighbours.
+
+    The pixel scale comes from the blocks themselves - a block is a known
+    ``block_x_cm`` by ``block_y_cm`` - so the search windows below are in
+    physical units and nothing has to be told how far away the camera is. Each
+    axis is estimated independently, because the two are measured against
+    different sides of the block and a real frame is rarely isotropic.
+    """
+    if len(sightings) < 4:
+        raise BlockGridError(
+            "too few blocks in view to recover a lattice", stage="lattice")
+    long_med = float(np.median([item.long_len for item in sightings]))
+    short_med = float(np.median([item.short_len for item in sightings]))
+    long_cm = max(spec.block_x_cm, spec.block_y_cm)
+    short_cm = min(spec.block_x_cm, spec.block_y_cm)
+    # Two independent px/cm estimates, one per block side.
+    across = short_med / short_cm          # px/cm measured across the block
+    along = long_med / long_cm             # px/cm measured along it
+    if spec.short_is_x:
+        expect_x, expect_y = spec.pitch_x_cm * across, spec.pitch_y_cm * along
+    else:
+        expect_x, expect_y = spec.pitch_x_cm * along, spec.pitch_y_cm * across
+
+    centres = np.array([item.center for item in sightings], dtype=np.float64)
+    low, high = NEIGHBOUR_PITCH_RANGE
+    skew = math.radians(MAX_STEP_SKEW_DEG)
+    steps = {"x": [], "y": []}
+    for first in range(len(centres)):
+        for second in range(len(centres)):
+            if first == second:
+                continue
+            delta = centres[second] - centres[first]
+            length = float(np.hypot(*delta))
+            if length <= 0:
+                continue
+            for axis, expected in (("x", expect_x), ("y", expect_y)):
+                if not (low * expected <= length <= high * expected):
+                    continue
+                # Orient every sample the same way before averaging: +image-x
+                # for the column step, -image-y for the row step, because
+                # machine rows increase UP the picture while pixel rows
+                # increase down it.
+                oriented = delta if (delta[0] > 0 if axis == "x"
+                                     else delta[1] < 0) else -delta
+                reference = np.array([1.0, 0.0]) if axis == "x" else np.array([0.0, -1.0])
+                cosine = float(oriented @ reference) / length
+                if math.acos(max(-1.0, min(1.0, cosine))) > skew:
+                    continue
+                steps[axis].append(oriented)
+    vectors = {}
+    for axis in ("x", "y"):
+        if len(steps[axis]) < 2:
+            raise BlockGridError(
+                f"no consistent {axis} spacing could be measured between the "
+                f"blocks in view; are they on a grid, and is the whole board "
+                f"visible?", stage="lattice")
+        vectors[axis] = np.median(np.asarray(steps[axis]), axis=0)
+    return vectors["x"], vectors["y"], (len(steps["x"]), len(steps["y"]))
+
+
+def _anchor_indices(indices: np.ndarray, anchor: str) -> np.ndarray:
+    """Slide raw indices so the anchor corner of the occupied region is [0,0].
+
+    A regular lattice is identical under a whole-cell shift, so nothing in the
+    picture can decide this - it is an assertion about which corner of the
+    machine grid the blocks were laid from, and it is the one input the caller
+    must get right.
+    """
+    if anchor not in LATTICE_ANCHORS:
+        raise BlockGridError(
+            f"anchor must be one of {', '.join(LATTICE_ANCHORS)}, not {anchor!r}",
+            stage="lattice")
+    shifted = indices.copy()
+    shifted[:, 0] -= (shifted[:, 0].min() if "left" in anchor
+                      else shifted[:, 0].max())
+    shifted[:, 1] -= (shifted[:, 1].min() if "bottom" in anchor
+                      else shifted[:, 1].max())
+    if "right" in anchor:
+        shifted[:, 0] = -shifted[:, 0]
+    if "top" in anchor:
+        shifted[:, 1] = -shifted[:, 1]
+    return shifted
+
+
+def assign_lattice(sightings, spec: ColorGridSpec, *,
+                   anchor: str = DEFAULT_LATTICE_ANCHOR):
+    """Turn unlabelled sightings into labelled :class:`BlockObservation` s.
+
+    Returns ``(observations, diagnostics)``. Raises rather than guessing when
+    the blocks do not snap cleanly onto one lattice: a renumbered board looks
+    completely normal and would be saved as a calibration.
+    """
+    kept = _deduplicate(sightings)
+    step_x, step_y, sample_counts = _lattice_vectors(kept, spec)
+    basis = np.column_stack([step_x, step_y])
+    if abs(float(np.linalg.det(basis))) < 1e-6:
+        raise BlockGridError(
+            "the two measured lattice directions are parallel; the blocks do "
+            "not form a grid", stage="lattice")
+
+    centres = np.array([item.center for item in kept], dtype=np.float64)
+    origin = centres[int(np.argmin(centres[:, 0] + -centres[:, 1]))]
+    raw = np.linalg.solve(basis, (centres - origin).T).T
+    snapped = np.round(raw)
+    error = np.abs(raw - snapped).max(axis=1)
+    shorter = min(float(np.hypot(*step_x)), float(np.hypot(*step_y)))
+
+    on_lattice = error <= MAX_INDEX_SNAP
+    if on_lattice.sum() < MIN_ON_LATTICE_FRACTION * len(kept):
+        raise BlockGridError(
+            f"only {int(on_lattice.sum())} of {len(kept)} detected blocks land "
+            f"on any regular lattice; the measured spacing does not describe "
+            f"this board", stage="lattice")
+    rejected = [tuple(round(float(value)) for value in centres[index])
+                for index in range(len(kept)) if not on_lattice[index]]
+    kept = [item for index, item in enumerate(kept) if on_lattice[index]]
+    snapped = snapped[on_lattice]
+    error = error[on_lattice]
+
+    indices = _anchor_indices(snapped.astype(int), anchor)
+    seen, collisions = {}, []
+    for position, cell in enumerate(map(tuple, indices)):
+        cell = (int(cell[0]), int(cell[1]))
+        if cell in seen:
+            # Two things on one site is never a board state - a cell holds one
+            # block. Keep whichever sits closest to the site itself, since the
+            # intruder is by definition the one that fits the lattice worse.
+            collisions.append(cell)
+            incumbent = seen[cell]
+            better = (error[position], -kept[position].rectangularity) < \
+                     (error[incumbent], -kept[incumbent].rectangularity)
+            if not better:
+                continue
+        seen[cell] = position
+    observations = [BlockObservation(cell=cell, sighting=kept[position])
+                    for cell, position in seen.items()]
+
+    diagnostics = {
+        "detected": len(sightings),
+        "deduplicated": len(kept) + len(rejected),
+        "off_lattice": tuple(rejected),
+        "assigned": len(observations),
+        "collisions": tuple(sorted(set(collisions))),
+        "step_x_px": tuple(float(value) for value in step_x),
+        "step_y_px": tuple(float(value) for value in step_y),
+        "step_samples": sample_counts,
+        "max_snap_cells": float(error.max()),
+        "shorter_pitch_px": shorter,
+        "anchor": anchor,
+    }
+    return observations, diagnostics
+
+
+def detect_block_lattice(frame: np.ndarray, grid: MachineGrid, *,
+                         anchor: str = DEFAULT_LATTICE_ANCHOR,
+                         min_area: int = 250, strict: bool = True,
+                         **detector_kwargs):
+    """Read a whole board of already-placed blocks out of one frame.
+
+    The end-to-end unlabelled path: detect, deduplicate, recover the lattice,
+    label every block, fit, and fill in every cell no block was placed on.
+    Returns ``(calibration, diagnostics)``.
+
+    Both halves of the answer come back on the calibration:
+    ``found_cells`` is what was physically measured and ``virtual_cells`` is
+    what was inferred, so a caller can always tell them apart.
+    """
+    spec = spec_for_grid(grid)
+    sightings = _colour_sightings(frame, None, min_area, **detector_kwargs)
+    if not sightings:
+        raise BlockGridError(
+            "no blocks found in the frame", stage="segment")
+    observations, diagnostics = assign_lattice(sightings, spec, anchor=anchor)
+    outside = [item.cell for item in observations
+               if not (0 <= item.cell[0] < spec.cols
+                       and 0 <= item.cell[1] < spec.rows)]
+    if outside:
+        raise BlockGridError(
+            f"{len(outside)} block(s) landed outside the {spec.cols}x{spec.rows} "
+            f"{spec.mode} grid, at {outside[:4]}; either the anchor corner is "
+            f"wrong or more blocks are in view than the grid holds",
+            stage="lattice")
+    calibration = fit_block_grid(
+        observations, spec, image_size=frame.shape[1::-1], strict=strict)
+    diagnostics["virtual"] = len(calibration.virtual_cells)
+    diagnostics["physical"] = len(calibration.found_cells)
+    return calibration, diagnostics

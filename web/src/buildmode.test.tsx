@@ -171,9 +171,9 @@ describe("BuildMode", () => {
   });
   afterEach(() => { window.location.hash = ""; });
 
-  it("draws the camera, the twin and the runner dock, and opens the library", () => {
+  it("draws the camera, the twin and the floating controls, and opens the library", () => {
     render(<BuildMode />);
-    expect(screen.getByText("BUILDING MODE")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Leave building mode/ })).toBeInTheDocument();
     expect(screen.getByLabelText("Camera stage")).toBeInTheDocument();
     expect(screen.getByLabelText("Program runner")).toBeInTheDocument();
 
@@ -182,6 +182,17 @@ describe("BuildMode", () => {
     fireEvent.click(screen.getByRole("button", { name: /Single tower/ }));
     // Selecting a build names it in the bar.
     expect(screen.getByText("Single tower", { selector: ".bm-model" })).toBeInTheDocument();
+  });
+
+  it("runs the runner compact — no report table, no honest-stop paragraph — and collapses the cluster", () => {
+    render(<BuildMode />);
+    expect(screen.queryByText(/the rig cannot be interrupted/)).not.toBeInTheDocument();
+    expect(document.querySelector(".runner.is-compact")).toBeInTheDocument();
+    // The dock element from the old layout is gone.
+    expect(document.querySelector(".bm-dock")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /CONTROLS/ }));
+    expect(screen.queryByLabelText("Program runner")).not.toBeInTheDocument();
   });
 
   it("raises a sticky toast when the socket drops and clears it when it returns", async () => {

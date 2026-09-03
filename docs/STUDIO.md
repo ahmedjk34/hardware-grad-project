@@ -37,7 +37,7 @@ console this attaches to).
 | M7 — The runner | ✅ delivered | pure exhaustive runner reducer, guarded effect driver, STEP/RUN/DRY RUN, feeder guidance, failure lock/pause, Markdown evidence report |
 | M8 — Wow pass | not started | shift gizmo, x-ray by level, cross-mode bridging |
 
-**Test suite.** `cd web && npm test` — **482 tests across 38 files**, all green.
+**Test suite.** `cd web && npm test` — **489 tests across 38 files**, all green.
 (The per-file table below is maintained for the Studio's own files; a few rows
 have drifted behind the total as unrelated console work landed.)
 
@@ -1247,6 +1247,37 @@ first in the diff.
 
 Newest first. One entry per landed change; note anything that contradicts the
 plan or that a future reader could not infer.
+
+### Building mode pass 2 — the twin mirrors the rig, not just the model
+
+Two changes, both aimed at "the twin is a picture of the machine first".
+
+**The twin always draws its workspace.** `TwinPanel` used to replace the whole
+canvas with a `NO MODEL LOADED` plate. It now always mounts `<Twin>`; the
+envelope, the lattice and the feeder are the Studio's own, model or not.
+
+**The twin now shows blocks the rig placed that no model describes.**
+`twin.ts` gained `TwinProgress.pendingCell` (the in-flight `B c r l`, parsed
+from `state.command` and kept across the state where the server clears the
+selection — exactly how `pendingId` already works) and `TwinProgress.placements`
+(every confirmed placement no model block covers). `twinScene` appends a solid
+`--block-white` block for each `placements` cell, and — while such a build is in
+flight — a synthetic `building` block so the descent animation (`scene.descent`,
+the firmware's `ms=`) runs through the **same** `Building` component and the
+same path as a model target. Model placements are unchanged: they still light up
+by id via `confirmed`, and a placement a model block already owns is not
+double-drawn. New helpers: `parseBuildCommand`, `samePlacedCell`, `PlacedCell`.
+
+### Building mode pass 2 — the `#/build` layout
+
+The route is now camera + twin (an **equal** 1 / 1 split), a collapsible
+library, toasts, and a floating control cluster bottom-right over the twin's
+dead space. The bottom dock is gone. `RunnerPanel` gained an optional
+`compact` prop: it drops the phase readout, the feeder card, the elapsed/ETA
+line, the run-report table and the read-only program dump (all now toasts) and
+keeps only the buttons an operator presses. The state machine and every guarded
+route are untouched; the console renders the panel without the flag and looks
+exactly as before.
 
 ### Building mode — the `#/build` fullscreen route
 

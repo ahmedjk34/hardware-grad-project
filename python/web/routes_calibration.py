@@ -109,6 +109,11 @@ class BlockStartRequest(BaseModel):
     #: frame edge - locate_block refuses those, correctly, because a clipped
     #: block's centroid is not its centre.
     inset: int = Field(0, ge=0, le=3)
+    #: How many blocks are physically available. Setting it plans a dense fill
+    #: of that many cells from the home corner instead of a spread of `count`,
+    #: which is what makes the per-row/per-column pitch measurable and lets
+    #: every unreachable cell be filled in from the lattice the blocks measured.
+    supply: int | None = Field(None, ge=MIN_OBSERVATIONS, le=200)
     cells: list[tuple[int, int]] | None = None
 
 
@@ -147,6 +152,25 @@ def _block_reply(app, run):
             "max_bearing_error_deg": round(report.max_bearing_error_deg, 2),
             "residuals": {f"{col},{row}": round(value, 3)
                           for (col, row), value in report.residuals.items()},
+            "dense": None if report.dense is None else {
+                "model": report.dense.chosen,
+                "virtual_cells": report.dense.virtual_cells,
+                "warnings": list(report.dense.warnings),
+                "summary": report.dense.describe(),
+                "pitch": {
+                    axis.axis: {
+                        "median_px": round(axis.median_px, 2),
+                        "std_px": round(axis.std_px, 3),
+                        "px_per_cm": round(axis.px_per_cm, 3),
+                        "spread": round(axis.spread, 4),
+                        "pairs": axis.pairs,
+                        "by_index": {str(k): round(v, 2)
+                                     for k, v in sorted(axis.by_index.items())},
+                    }
+                    for axis in (report.dense.pitch_x, report.dense.pitch_y)
+                    if axis is not None
+                },
+            },
         },
         "state": build_state(app).dict(),
     }
@@ -174,6 +198,7 @@ def block_start(request: BlockStartRequest, http: Request):
             cells=[tuple(cell) for cell in request.cells] if request.cells else None,
             count=request.count,
             inset=request.inset,
+            supply=request.supply,
         )
         run.start()
     except (BlockGridError, BlockCalibrationError, ValueError) as exc:

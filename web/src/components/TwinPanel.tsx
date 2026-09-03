@@ -133,19 +133,13 @@ export function TwinPanel({ state, connected, lastUpdateAt, modelId: controlledM
 
       <div className="stage-area twin-stage">
         <div className="stage twin-canvas">
-          {model.blocks.length === 0 ? (
-            <div className="stage-plate waiting">
-              NO MODEL LOADED
-              <span className="sub">
-                Choose a model above, or design one in the 3D Build Studio.
-              </span>
-            </div>
-          ) : (
-            <Suspense fallback={<div className="stage-plate waiting">LOADING THE TWIN…</div>}>
-              <Twin scene={scene} synced={synced} active={visible}
-                    mode={scene.mode ?? "vertical"} />
-            </Suspense>
-          )}
+          {/* The envelope, the lattice and the feeder are always drawn — the
+              twin is a picture of the machine's workspace whether or not a
+              model is loaded. Blocks the rig places appear on it regardless. */}
+          <Suspense fallback={<div className="stage-plate waiting">LOADING THE TWIN…</div>}>
+            <Twin scene={scene} synced={synced} active={visible}
+                  mode={scene.mode ?? "vertical"} />
+          </Suspense>
 
           {scene.banner === "locked" && (
             <div className="stage-plate locked" role="alert">
@@ -170,7 +164,11 @@ export function TwinPanel({ state, connected, lastUpdateAt, modelId: controlledM
 
       <p className="twin-meta">
         <span className="twin-count">
-          {model.blocks.length} blocks · {progress.confirmed.length} placed
+          {model.blocks.length > 0
+            ? `${model.blocks.length} blocks · ${progress.confirmed.length + progress.placements.length} placed`
+            : progress.placements.length > 0
+              ? `${progress.placements.length} placed by the rig`
+              : "No model — mirroring the rig"}
         </span>
         {scene.banner === "running" && (
           <span className="chip is-motion" aria-live="polite">

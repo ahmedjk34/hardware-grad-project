@@ -221,7 +221,18 @@ from vision.color_correction import (
     pair_samples,
     solve_matrix,
 )
+from rig.config import load as load_rig_config
+from rig.grid import MachineGrid
+from rig.workspace import WORKSPACE_MAP_PATH
+from vision.block_grid import (
+    DEFAULT_LATTICE_ANCHOR,
+    LATTICE_ANCHORS,
+    BlockGridError,
+    block_workspace_map,
+    detect_block_lattice,
+)
 from vision.color_grid import ColorGridError, sample_ink_colors
+from vision.color_grid_overlay import draw_color_grid
 from vision.latest_worker import LatestValueWorker
 from vision.performance import RateMeter
 from vision.commands import (
@@ -350,6 +361,12 @@ class Studio:
 
         self.view = "corrected"
         self.show_grid = False
+        # The last placed-block calibration, or None. Held here rather than
+        # written straight out: the Studio edits camera settings, and turning a
+        # workspace map into a saved file is a separate, deliberate act.
+        self.block_lattice = None
+        self.block_lattice_note = ""
+        self.block_anchor = DEFAULT_LATTICE_ANCHOR
         self.show_keys = False
         self.autosave = bool(args.autosave)
         self.settings_path = args.settings
@@ -1027,6 +1044,14 @@ class Studio:
                  "fix inverted red/blue channels")
         cmds.add("grid", self._cmd_grid, "[on|off]",
                  "8x8 overlay — the ruler you judge straightness against")
+        cmds.add("blockcal", self._cmd_blockcal, "[anchor]",
+                 "read the machine grid off the blocks on the board: measure "
+                 "the ones that are there, fill in the ones that are not",
+                 aliases=("blocks",))
+        cmds.add("blockcalsave", self._cmd_blockcalsave, "",
+                 "write the last blockcal result to config/workspace_map.json")
+        cmds.add("blockcaloff", self._cmd_blockcaloff, "",
+                 "clear the block-calibration overlay")
 
         # --- colour: the software correction, separate from the sensor's own ---
         cmds.add("colour", self._cmd_colour, "[on|off]",
@@ -1163,6 +1188,75 @@ class Studio:
     def _cmd_grid(self, args):
         self.show_grid = self._flag(args, self.show_grid)
         return f"grid {'on' if self.show_grid else 'off'}"
+
+    def _cmd_blockcal(self, args):
+        """Read the grid off the blocks currently on the board.
+
+        Physical blocks are measured; every cell the block supply did not reach
+        is filled in from the lattice they define, so the overlay always shows
+        the whole grid. Nothing is written - ``blockcalsave`` does that.
+        """
+        anchor = self.block_anchor
+        if args:
+            wanted = str(args[0]).lower()
+            matches = [name for name in LATTICE_ANCHORS if name.startswith(wanted)]
+            if len(matches) != 1:
+                raise CommandError(
+                    f"anchor must be one of {', '.join(LATTICE_ANCHORS)}")
+            anchor = matches[0]
+        frame = self.last_corrected
+        if frame is None:
+            raise CommandError("no corrected frame yet")
+        try:
+            grid = MachineGrid.from_config(load_rig_config(reload=True))
+        except (OSError, ValueError, KeyError) as exc:
+            raise CommandError(f"cannot read the rig grid: {exc}")
+        try:
+            calibration, diagnostics = detect_block_lattice(
+                frame, grid, anchor=anchor,
+                max_processing_width=frame.shape[1])
+        except BlockGridError as exc:
+            self.block_lattice = None
+            self.block_lattice_note = str(exc)
+            raise CommandError(str(exc))
+
+        self.block_anchor = anchor
+        self.block_lattice = calibration
+        physical = len(calibration.found_cells)
+        virtual = len(calibration.virtual_cells)
+        report = calibration.block_report
+        note = (f"{physical} blocks measured, {virtual} cells filled in, "
+                f"residual {report.mean_residual_px:.2f} px")
+        if report.dense is not None:
+            note += f", {report.dense.chosen}"
+            for warning in report.dense.warnings:
+                self.log.add(True, warning)
+        if diagnostics["off_lattice"]:
+            note += (f", {len(diagnostics['off_lattice'])} off-lattice object(s) "
+                     f"ignored")
+        self.block_lattice_note = note
+        return f"block calibration ({anchor}): {note}"
+
+    def _cmd_blockcalsave(self, args):
+        """Write the last block calibration to config/workspace_map.json."""
+        if self.block_lattice is None:
+            raise CommandError("run blockcal first")
+        frame = self.last_corrected
+        if frame is None:
+            raise CommandError("no corrected frame yet")
+        try:
+            grid = MachineGrid.from_config(load_rig_config(reload=True))
+            workspace = block_workspace_map(
+                self.block_lattice, grid, frame.shape[1::-1])
+            workspace.save(WORKSPACE_MAP_PATH)
+        except (BlockGridError, OSError, ValueError) as exc:
+            raise CommandError(str(exc))
+        return f"wrote {WORKSPACE_MAP_PATH.name}"
+
+    def _cmd_blockcaloff(self, args):
+        self.block_lattice = None
+        self.block_lattice_note = ""
+        return "block calibration overlay cleared"
 
     def _cmd_swaprb(self, args):
         self.swap_rb = self._flag(args, self.swap_rb)
@@ -1583,6 +1677,9 @@ BUTTONS = [
     ("REFIT", "refit"),
     ("RAW/CORR", "view"),
     ("GRID", "grid"),
+    ("BLOCK CALIBRATION", "blockcal"),
+    ("BLOCK CAL SAVE", "blockcalsave"),
+    ("BLOCK CAL OFF", "blockcaloff"),
     ("TUNE VIEW", "tuneview"),
     ("TUNE RESET", "tunereset"),
     ("TUNE GUIDE", "straight"),
@@ -2561,6 +2658,15 @@ class StudioWindow:
                     image = corrected.copy()
                     if self.studio.show_grid:
                         draw_grid(image, 8, 8)
+                    # Only on the corrected single view: the lattice was fitted
+                    # to corrected pixels, so drawing it over a raw or
+                    # side-by-side frame would put it in the wrong place.
+                    if self.studio.block_lattice is not None:
+                        try:
+                            draw_color_grid(image, self.studio.block_lattice,
+                                            labels=True, shade=0.28)
+                        except (ColorGridError, ValueError):
+                            self.studio.block_lattice = None
                 draw_drag(image, self.studio)
                 self._push_image(image)
                 self._preview_rate.tick()

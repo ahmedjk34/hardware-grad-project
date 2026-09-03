@@ -686,3 +686,65 @@ describe("twinSignature — what the twin is actually allowed to redraw for", ()
       .not.toBe(sign(armed(), emptyTwinProgress(), { connected: false, staleSeconds: 19 }));
   });
 });
+
+describe("the rig's own placements — no model, or off the loaded one", () => {
+  const EMPTY: Model = { blocks: [], order: [] };
+  /** A free cell the loaded TOWER model does not describe. */
+  const FREE: [number, number] = [4, 3];
+  const freeArmed = (overrides: Partial<StateModel> = {}) =>
+    state({ selected: FREE, level: 0, command: `B ${FREE[0]} ${FREE[1]} 0`, ...overrides });
+
+  it("parses a B command into the cell it addresses", () => {
+    expect(twinModule.parseBuildCommand("B 4 3 2", "vertical"))
+      .toEqual({ mode: "vertical", col: 4, row: 3, level: 2 });
+    expect(twinModule.parseBuildCommand(null, "vertical")).toBeNull();
+    expect(twinModule.parseBuildCommand("RR", "vertical")).toBeNull();
+  });
+
+  it("keeps the in-flight cell across the state where the server clears it", () => {
+    let progress = foldTwinProgress(emptyTwinProgress(), freeArmed(), EMPTY);
+    progress = foldTwinProgress(progress, freeArmed({ build_state: "RUNNING" }), EMPTY);
+    expect(progress.pendingCell).toEqual({ mode: "vertical", col: 4, row: 3, level: 0 });
+    // Selection cleared, result in: the placement is recorded, pendingCell drops.
+    progress = foldTwinProgress(progress,
+      state({ last_result: "placed", selected: null, command: null }), EMPTY);
+    expect(progress.placements).toEqual([{ mode: "vertical", col: 4, row: 3, level: 0 }]);
+    expect(progress.pendingCell).toBeNull();
+  });
+
+  it("draws a solid white block for a recorded placement, with no model at all", () => {
+    const progress = progressWith({ placements: [{ mode: "vertical", col: 4, row: 3, level: 0 }] });
+    const scene = twinScene(state(), EMPTY, progress, live);
+    expect(scene.blocks).toHaveLength(1);
+    expect(scene.blocks[0]).toMatchObject({ appearance: "placed", token: "--block-white", col: 4, row: 3 });
+  });
+
+  it("shows an off-model block in flight as `building`, on the same descent path", () => {
+    const scene = twinScene(
+      freeArmed({ build_state: "RUNNING" }), EMPTY,
+      progressWith({ pendingCell: { mode: "vertical", col: 4, row: 3, level: 0 } }),
+      live,
+      at({ phase: "lower_to_level", label: "Lower Z to the target level", etaMs: 900, receivedAt: 1000 }),
+    );
+    const building = scene.blocks.find(block => block.appearance === "building");
+    expect(building).toMatchObject({ col: 4, row: 3, mode: "vertical" });
+    expect(scene.descent).toEqual({ etaMs: 900, since: 1000 });
+  });
+
+  it("does not double-draw a placement the loaded model already owns", () => {
+    // t1 is TOWER's ground block at CELL. A placement at the same cell must not
+    // add a second white box beside the model's own solid one.
+    const cell = { mode: "vertical" as const, col: CELL[0], row: CELL[1], level: 0 };
+    const scene = twinScene(state(), model,
+      progressWith({ confirmed: ["t1"], placements: [cell] }), live);
+    expect(scene.blocks.filter(block => block.col === CELL[0] && block.row === CELL[1] && block.level === 0))
+      .toHaveLength(1);
+  });
+
+  it("still ghosts a loaded model's blocks and turns the built one solid", () => {
+    // Regression guard: the model path is unchanged by the off-model additions.
+    const scene = twinScene(armed(), model, progressWith({ confirmed: ["t1"] }), live);
+    expect(byId(scene.blocks, "t1").appearance).toBe("placed");
+    expect(byId(scene.blocks, "t3").appearance).toBe("ghost");
+  });
+});

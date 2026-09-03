@@ -24,6 +24,7 @@ from vision.color_grid import ColorGridError                        # noqa: E402
 from vision.color_grid import ColorGridError                        # noqa: E402
 from vision.block_grid import (                                     # noqa: E402
     DEFAULT_OBSERVATIONS,
+    block_workspace_map,
     MIN_OBSERVATIONS,
     BlockGridError,
     BlockGridSession,
@@ -620,6 +621,199 @@ check("but the horizontal grid is still filled",
 
 check("fill can be turned off",
       not fit_block_grid(flat, spec, fill=False).virtual_cells)
+
+
+
+
+# --------------------------------------------------------------------------- #
+# 9. a whole dense run, through the real detector rather than injected sightings
+# --------------------------------------------------------------------------- #
+#
+# Sections above feed fit_block_grid synthetic sightings, which proves the
+# maths but not that a run actually produces them. This places 25 rendered
+# blocks one at a time exactly as the rig would, detects each, and then asks
+# the fitted lattice where the 17 cells nobody could reach are.
+
+dense_session = BlockGridSession(VERTICAL, supply=25)
+check("a supply-sized plan is dense, not spread",
+      len(dense_session.planned) == 25
+      and dense_session.planned[:3] == ((1, 0), (2, 0), (3, 0)),
+      str(dense_session.planned[:4]))
+check("the unplaced cells are the far rows",
+      {cell[1] for cell in
+       ((c, r) for r in range(VERTICAL.rows) for c in range(VERTICAL.cols))
+       if cell not in dense_session.planned} >= {4, 5},
+      "")
+
+dense_matrix, dense_render_scale = truth_homography(VERTICAL)
+dense_session.set_baseline(render(VERTICAL, dense_matrix, dense_render_scale, []))
+laid = []
+for cell in dense_session.planned:
+    laid.append(cell)
+    dense_session.observe(
+        cell, render(VERTICAL, dense_matrix, dense_render_scale, laid))
+check("all 25 rendered blocks were detected and labelled",
+      len(dense_session.observations) == 25,
+      str(len(dense_session.observations)))
+
+run_fit = dense_session.calibration()
+run_report = run_fit.block_report.dense
+check("a 25-block run triggers the dense analysis", run_report is not None)
+check("the run measured both pitches",
+      run_report.pitch_x is not None and run_report.pitch_y is not None)
+check("the measured pitch matches the rendered scale",
+      abs(run_report.pitch_x.px_per_cm - dense_render_scale)
+      / dense_render_scale < 0.03,
+      f"{run_report.pitch_x.px_per_cm:.2f} vs {dense_render_scale:.2f}")
+check("the run filled every cell it could not place on",
+      run_report.virtual_cells == VERTICAL.cols * VERTICAL.rows - 25,
+      f"{run_report.virtual_cells}")
+worst_run = max(
+    math.dist(run_fit.cell_center(col, row), project(dense_matrix, (col, row)))
+    for col, row in run_fit.virtual_cells)
+check("cells extrapolated past the block supply land within 3 px",
+      worst_run < 3.0, f"{worst_run:.2f} px over "
+                       f"{len(run_fit.virtual_cells)} cells")
+# Extrapolation is the risky half: rows 4 and 5 sit beyond every block placed.
+beyond = [(col, row) for col, row in run_fit.virtual_cells if row >= 4]
+worst_beyond = max(
+    math.dist(run_fit.cell_center(col, row), project(dense_matrix, (col, row)))
+    for col, row in beyond)
+check("including the rows beyond every block that was placed",
+      worst_beyond < 3.0, f"{worst_beyond:.2f} px over {len(beyond)} cells")
+check("the run still saves a workspace map",
+      dense_session.workspace_map(SIZE) is not None)
+
+
+
+
+# --------------------------------------------------------------------------- #
+# 10. the real board: unlabelled blocks in one frame, anchored at [0,0]
+# --------------------------------------------------------------------------- #
+#
+# captures/IMAGE_TO_TEST_BLOCK_CALIBRATION.png is a rig photograph of 29 blocks
+# on the vertical grid, laid from the home corner, with the holder's two small
+# wooden offcuts sitting beside [0,0]. Nothing in it is labelled, so this
+# exercises the whole unlabelled path - detect, reject what is not on the
+# lattice, recover the two step vectors, anchor, fit, and fill the 13 cells the
+# block supply never reached.
+
+from vision.block_grid import detect_block_lattice                  # noqa: E402
+
+board = Path(__file__).resolve().parents[1] / "captures" / \
+    "IMAGE_TO_TEST_BLOCK_CALIBRATION.png"
+if not board.exists():
+    check("the block-calibration board capture is present", False, str(board))
+else:
+    board_image = cv2.imread(str(board))
+    board_cal, board_diag = detect_block_lattice(
+        board_image, VERTICAL, anchor="bottom-left",
+        max_processing_width=board_image.shape[1])
+
+    physical = set(board_cal.found_cells)
+    virtual = set(board_cal.virtual_cells)
+    # Laid from home: columns 0-6 for rows 0-3, plus the single block on [0,4].
+    expected_physical = {(col, row) for row in range(4) for col in range(7)}
+    expected_physical.add((0, 4))
+
+    check("every block on the board is found and labelled",
+          physical == expected_physical,
+          f"missing {sorted(expected_physical - physical)}, "
+          f"extra {sorted(physical - expected_physical)}")
+    check("29 physical blocks", len(physical) == 29, str(len(physical)))
+    check("13 cells filled virtually", len(virtual) == 13, str(len(virtual)))
+    check("physical and virtual together are the whole 7x6 grid",
+          physical | virtual == {(c, r) for r in range(VERTICAL.rows)
+                                 for c in range(VERTICAL.cols)}
+          and not (physical & virtual))
+    # The unplaced cells are the far rows, which is what laying from home does.
+    check("the filled cells are the far rows, toward y+",
+          all(row >= 4 for _col, row in virtual), str(sorted(virtual)))
+
+    # The holder's offcuts sit right beside [0,0] and are the thing most likely
+    # to be taken for a block. Nothing may be assigned to a cell because of them.
+    check("the holder offcuts beside [0,0] are not mistaken for blocks",
+          len(board_cal.found_cells) == board_diag["assigned"] == 29,
+          f"assigned {board_diag['assigned']}, "
+          f"off-lattice {board_diag['off_lattice']}, "
+          f"collisions {board_diag['collisions']}")
+
+    # Every block snapped cleanly onto its site: this is what says the lattice
+    # is the board's own and not one that happens to fit a subset.
+    check("every block snaps well inside half a cell",
+          board_diag["max_snap_cells"] < 0.20,
+          f"{board_diag['max_snap_cells']:.3f} cells")
+    report = board_cal.block_report
+    check("the fitted residual is sub-pixel on the real board",
+          report.mean_residual_px < 1.5, f"{report.mean_residual_px:.2f} px")
+    check("the measured footprint matches the fitted lattice",
+          0.85 <= report.size_agreement <= 1.25, f"{report.size_agreement:.2f}")
+    check("the dense analysis ran on the real board",
+          report.dense is not None and report.dense.observations == 29)
+
+    # The measured pitch is the number the request was really about. The two
+    # axes are measured against different block sides, so they are allowed to
+    # disagree - but each must be self-consistent across the board.
+    pitch_x, pitch_y = report.dense.pitch_x, report.dense.pitch_y
+    check("the X pitch is consistent across every row",
+          pitch_x.spread < 0.05, pitch_x.describe())
+    check("the Y pitch is consistent across every column",
+          pitch_y.spread < 0.05, pitch_y.describe())
+    # This view is genuinely anisotropic - 2.35 px of Y pitch per px of X where
+    # the print says 2.00 - so the raw ratio cannot be asserted against the
+    # printed one. Nor is "correct it by px_per_cm" a check: px_per_cm is
+    # defined as measured/expected, so that only ever agrees with itself. The
+    # real test is that the stretch measured from the PITCHES matches the
+    # stretch measured from the BLOCK FOOTPRINTS - two different quantities
+    # through one lens, which agree only if the gaps in config/rig.json
+    # describe this board.
+    dense = report.dense
+    check("the view is measurably anisotropic, and that is reported",
+          dense.anisotropy_pitch > 1.05,
+          f"{dense.anisotropy_pitch:.3f}")
+    check("pitch-measured and block-measured stretch agree, so the config "
+          "gaps match the board",
+          0.90 <= dense.anisotropy_agreement <= 1.10,
+          f"pitches {dense.anisotropy_pitch:.3f} vs blocks "
+          f"{dense.anisotropy_block:.3f} = {dense.anisotropy_agreement:.3f}")
+
+    # The anchor is an assertion, not a measurement, and this is the honest
+    # test of that: the occupied 7x5 region fits a 7x6 grid from either end, so
+    # "top-right" is refused by nothing - it simply renumbers the whole board.
+    # Any bound that DID catch it here would only be catching this particular
+    # board's shape. This is the structural weakness of reading a lattice out
+    # of one frame, and the reason the rig-placed route stays primary.
+    flipped, _ = detect_block_lattice(
+        board_image, VERTICAL, anchor="top-right",
+        max_processing_width=board_image.shape[1])
+    check("a wrong anchor is not detectable, it just renumbers the board",
+          set(flipped.found_cells) != physical
+          and len(flipped.found_cells) == 29,
+          f"{len(flipped.found_cells)} cells")
+    # Concretely: the block the correct anchor calls [0,0] is relabelled
+    # [6,4] - the diagonally opposite corner of the occupied region - and the
+    # picture gives no way to know which of the two readings is the real one.
+    check("the wrong anchor relabels [0,0] as the opposite corner",
+          math.dist(flipped.cell_center(6, 4),
+                    board_cal.cell_center(0, 0)) < 6.0,
+          f"{flipped.cell_center(6, 4)} vs {board_cal.cell_center(0, 0)}")
+    # Asking the wrong GRID, on the other hand, is caught: the horizontal grid
+    # expects a 7.6 cm pitch across and 3.8 along, and no such spacing exists
+    # on this board. Which mode is being calibrated is checkable; which corner
+    # the blocks were laid from is not.
+    expect_error("this board is refused as a horizontal grid",
+                 lambda: detect_block_lattice(
+                     board_image, HORIZONTAL, anchor="bottom-left",
+                     max_processing_width=board_image.shape[1]))
+
+    # And the calibration is saveable: this is a real workspace map, not a
+    # diagnostic picture.
+    board_map = block_workspace_map(board_cal, VERTICAL,
+                                    board_image.shape[1::-1])
+    check("the real board yields a saveable workspace map",
+          board_map.mode == "vertical"
+          and all(0.0 <= v <= 1.0 for p in board_map.corners for v in p),
+          str(board_map.corners))
 
 
 print()

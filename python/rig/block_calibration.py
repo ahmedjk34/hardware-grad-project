@@ -93,10 +93,17 @@ class BlockCalibrationRun:
     ``capture`` is any zero-argument callable returning the current corrected
     BGR frame - the console pipeline's latest view, a camera grab, or a canned
     frame in a test. It is called only when the rig is parked.
+
+    ``supply`` is how many blocks are physically available. Passing it switches
+    the plan from a spread of :data:`DEFAULT_OBSERVATIONS` cells to a dense
+    fill of that many, which is what enables the measured-lattice analysis in
+    :func:`vision.block_grid.analyse_dense_lattice` and lets every cell the
+    supply could not reach be filled in from what the placed blocks measured.
     """
 
     def __init__(self, rig, capture, *, grid=None, cells=None,
                  count: int = DEFAULT_OBSERVATIONS, inset: int = 0,
+                 supply: int | None = None,
                  settle: float = SETTLE_SECONDS,
                  build_timeout: float = 300.0,
                  sleep=time.sleep):
@@ -117,7 +124,7 @@ class BlockCalibrationRun:
                 f"{self.grid.mode} grid; switch the rig's mode first, or the "
                 f"blocks will be laid along the wrong axis")
         self.session = BlockGridSession(self.grid, cells=cells, count=count,
-                                        inset=inset)
+                                        inset=inset, supply=supply)
         self.settle = float(settle)
         self.build_timeout = float(build_timeout)
         self._sleep = sleep

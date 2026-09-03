@@ -65,6 +65,12 @@ def parse_args(argv=None):
     parser.add_argument("--count", type=int, default=DEFAULT_OBSERVATIONS,
                         help=f"cells to place on (minimum {MIN_OBSERVATIONS}, "
                              f"default {DEFAULT_OBSERVATIONS})")
+    parser.add_argument("--supply", type=int, default=None,
+                        help="how many blocks you physically have; fills the "
+                             "grid densely from the home corner with that many "
+                             "and synthesises every cell they cannot reach. "
+                             "25+ on the vertical grid also measures the real "
+                             "pitch and picks a lattice model")
     parser.add_argument("--inset", type=int, default=0,
                         help="drop this many outermost rings of cells; use 1 "
                              "when the camera cuts off the outer row of blocks")
@@ -242,7 +248,8 @@ def main(argv=None) -> int:
         kwargs = {} if args.settle is None else {"settle": args.settle}
         run = BlockCalibrationRun(rig, capture, grid=grid,
                                   cells=parse_cells(args.cells),
-                                  count=args.count, inset=args.inset, **kwargs)
+                                  count=args.count, inset=args.inset,
+                                  supply=args.supply, **kwargs)
         print(f"plan: {' '.join(f'[{c},{r}]' for c, r in run.session.planned)}")
         prompt("clear the build area and load the feeder at [0,0], "
                "then press Enter")

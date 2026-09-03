@@ -144,15 +144,6 @@ export function App() {
               primaryElsewhere={phone}
             />
           </div>
-          <a className="buildmode-enter" href="#/build"
-             onPointerEnter={() => { void preloadTwin(); }}
-             onFocus={() => { void preloadTwin(); }}>
-            <Icon name="power" size={16} />
-            <span>
-              Building mode
-              <small>Full-screen camera + twin, one build at a time</small>
-            </span>
-          </a>
           <ModeSwitch state={state} disabled={!mutable} />
           <Calibrate
             ready={snapshot.connected && state.build_state === "READY" && !collecting}
@@ -162,14 +153,25 @@ export function App() {
           <p className="reason">
             <Icon name="waiting" size={14} />Press ? for keyboard shortcuts
           </p>
-          <p className="reason">
-            <a className="studio-link" href="#/studio"
-               onPointerEnter={() => { void preloadStudio(); }}
-               onFocus={() => { void preloadStudio(); }}
-               onPointerDown={() => { void preloadStudio(); }}>
-              Open the 3D Build Studio
+          <div className="rail-links">
+            <p className="reason">
+              <a className="studio-link" href="#/studio"
+                 onPointerEnter={() => { void preloadStudio(); }}
+                 onFocus={() => { void preloadStudio(); }}
+                 onPointerDown={() => { void preloadStudio(); }}>
+                Open the 3D Build Studio
+              </a>
+            </p>
+            <a className="buildmode-enter" href="#/build"
+               onPointerEnter={() => { void preloadTwin(); }}
+               onFocus={() => { void preloadTwin(); }}>
+              <Icon name="power" size={16} />
+              <span>
+                Enter building mode
+                <small>Full-screen camera + twin, one build at a time</small>
+              </span>
             </a>
-          </p>
+          </div>
         </div>
       </div>
 

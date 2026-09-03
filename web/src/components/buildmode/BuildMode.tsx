@@ -30,6 +30,7 @@ export function BuildMode() {
   const snapshot = useSyncExternalStore(store.subscribe, () => store.snapshot);
   const [modelId, setModelId] = useState(storedModelId);
   const [libraryOpen, setLibraryOpen] = useState(false);
+  const [controlsOpen, setControlsOpen] = useState(true);
   const [runnerActive, setRunnerActive] = useState(false);
   const { toasts, push, dismiss } = useBuildToasts();
 
@@ -121,11 +122,13 @@ export function BuildMode() {
 
   return (
     <div className="buildmode">
+      {/* A deliberately thin bar: a way out, the library toggle, the loaded
+          build's name, and a minimal safety strip. Everything else is a toast
+          or the floating controls. */}
       <header className="bm-bar">
         <a className="bm-exit" href="#/" aria-label="Leave building mode">
           <span aria-hidden="true">‹</span> CONSOLE
         </a>
-        <span className="bm-title"><Icon name="power" size={14} />BUILDING MODE</span>
         <button type="button" className="bm-librarybtn" aria-expanded={libraryOpen}
                 onClick={() => setLibraryOpen(open => !open)}>
           <Icon name="layers" size={14} />LIBRARY
@@ -142,8 +145,9 @@ export function BuildMode() {
           {buildState}
         </span>
         <CameraChip state={state} />
-        <span className={`chip ${snapshot.connected ? "is-ready" : "is-danger"}`}>
-          <Icon name={snapshot.connected ? "link" : "unlink"} size={13} />Socket
+        <span className={`chip ${snapshot.connected ? "is-ready" : "is-danger"}`}
+              aria-label="Socket">
+          <Icon name={snapshot.connected ? "link" : "unlink"} size={13} />
         </span>
       </header>
 
@@ -161,14 +165,23 @@ export function BuildMode() {
         </section>
       </div>
 
-      <footer className="bm-dock">
-        <RunnerPanel state={state} connected={snapshot.connected}
-                     modelId={modelId}
-                     onActiveChange={setRunnerActive}
-                     onToast={push}
-                     progress={snapshot.progress}
-                     lastResult={snapshot.lastResult} />
-      </footer>
+      {/* The controls float over the twin's dead space, bottom-right, and
+          collapse to a tab when they are in the way. */}
+      <div className={`bm-controls${controlsOpen ? "" : " is-collapsed"}`}>
+        <button type="button" className="bm-controls-toggle"
+                aria-expanded={controlsOpen}
+                onClick={() => setControlsOpen(open => !open)}>
+          {controlsOpen ? "▾ CONTROLS" : "▸ CONTROLS"}
+        </button>
+        {controlsOpen && (
+          <RunnerPanel state={state} connected={snapshot.connected}
+                       modelId={modelId} compact
+                       onActiveChange={setRunnerActive}
+                       onToast={push}
+                       progress={snapshot.progress}
+                       lastResult={snapshot.lastResult} />
+        )}
+      </div>
 
       <ToastStack toasts={toasts} onDismiss={dismiss} />
       <BuildLibrary open={libraryOpen} mode={state.mode} currentId={modelId}

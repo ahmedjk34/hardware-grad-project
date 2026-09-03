@@ -218,6 +218,9 @@ export interface TwinOptions {
  * subsequent state message. RUNNING re-arms it, so two identical results from
  * two different builds are both seen.
  */
+/** A physical cell the rig has built on, with no reference to any model. */
+export interface PlacedCell { mode: ModeName; col: number; row: number; level: number }
+
 export interface TwinProgress {
   /** Block ids the SERVER said were placed, in the order it said them. */
   confirmed: string[];
@@ -226,10 +229,42 @@ export interface TwinProgress {
   consumed: string | null;
   rejectedId: string | null;
   rejectedReason: string | null;
+  /**
+   * The cell of the `B` command currently in flight, parsed from
+   * `state.command` and kept across the state where the server clears the
+   * selection — the same trick `pendingId` uses. It is what lets the twin
+   * show a block being placed, and then a solid block left behind, for a
+   * build the loaded model does not describe (or when no model is loaded).
+   */
+  pendingCell: PlacedCell | null;
+  /** Every cell the rig has CONFIRMED a placement on that no model block
+   *  covers. Model placements stay in `confirmed`; this is the rest. */
+  placements: PlacedCell[];
 }
 
 export function emptyTwinProgress(): TwinProgress {
-  return { confirmed: [], pendingId: null, consumed: null, rejectedId: null, rejectedReason: null };
+  return {
+    confirmed: [], pendingId: null, consumed: null, rejectedId: null,
+    rejectedReason: null, pendingCell: null, placements: [],
+  };
+}
+
+/** `B 3 5 0` → the cell it addresses, in the rig's current mode. */
+export function parseBuildCommand(command: string | null, mode: ModeName): PlacedCell | null {
+  if (!command) return null;
+  const match = /^\s*B\s+(-?\d+)\s+(-?\d+)\s+(-?\d+)\s*$/.exec(command);
+  if (!match) return null;
+  return { mode, col: Number(match[1]), row: Number(match[2]), level: Number(match[3]) };
+}
+
+export function samePlacedCell(a: PlacedCell, b: PlacedCell): boolean {
+  return a.mode === b.mode && a.col === b.col && a.row === b.row && a.level === b.level;
+}
+
+function modelCovers(model: Model, cell: PlacedCell): boolean {
+  return model.blocks.some(block =>
+    block.mode === cell.mode && block.col === cell.col
+    && block.row === cell.row && block.level === cell.level);
 }
 
 /** The model block the server's selection, level and mode all point at. */
@@ -249,25 +284,39 @@ export function foldTwinProgress(progress: TwinProgress, state: StateModel | nul
   if (!state) return progress;
   const target = targetBlock(state, model);
   const pendingId = target?.id ?? progress.pendingId;
+  // Same idea as `pendingId`, one level lower: the raw cell, so an off-model
+  // (or no-model) build is still mirrored. Kept across the cleared selection.
+  const pendingCell = parseBuildCommand(state.command, state.mode) ?? progress.pendingCell;
 
   if (state.build_state === "RUNNING") {
     // A build is in flight: arm for its result and drop the previous one.
-    return { ...progress, pendingId, consumed: null, rejectedId: null, rejectedReason: null };
+    return {
+      ...progress, pendingId, pendingCell,
+      consumed: null, rejectedId: null, rejectedReason: null,
+    };
   }
 
   const key = resultKey(state);
-  if (key === progress.consumed) return current({ ...progress, pendingId }, target);
+  if (key === progress.consumed) return current({ ...progress, pendingId, pendingCell }, target);
 
-  const settled = { ...progress, pendingId, consumed: key };
+  const settled = { ...progress, pendingId, pendingCell, consumed: key };
   if (state.last_result === "placed") {
     // The server clears the selection on PLACED; a selection that survived
     // means this result belongs to some earlier build we cannot attribute.
-    if (state.selected !== null || pendingId === null) return current(settled, target);
+    if (state.selected !== null || pendingId === null) {
+      // No model block owns it — but the rig DID leave a block on a cell.
+      // Record it once so the twin can draw a solid block there.
+      const cell = pendingId === null && state.selected === null ? pendingCell : null;
+      const placements = cell && !modelCovers(model, cell)
+          && !settled.placements.some(item => samePlacedCell(item, cell))
+        ? [...settled.placements, cell] : settled.placements;
+      return current({ ...settled, placements, pendingCell: null }, target);
+    }
     return {
       ...settled,
       confirmed: settled.confirmed.includes(pendingId)
         ? settled.confirmed : [...settled.confirmed, pendingId],
-      pendingId: null, rejectedId: null, rejectedReason: null,
+      pendingId: null, pendingCell: null, rejectedId: null, rejectedReason: null,
     };
   }
   if (state.last_result === "rejected") {
@@ -419,7 +468,11 @@ export function twinScene(state: StateModel | null, model: Model, progress: Twin
   // longer describes anything anybody knows.
   const target = locked ? null : targetBlock(state, model);
   const running = state?.build_state === "RUNNING";
-  const phase = twinPhase(state, build, target !== null);
+  // The block in flight when the loaded model — if any — does not describe it.
+  const offModelBuilding: PlacedCell | null =
+    !target && running && !locked && progress.pendingCell
+      && !modelCovers(model, progress.pendingCell) ? progress.pendingCell : null;
+  const phase = twinPhase(state, build, target !== null || offModelBuilding !== null);
   // A dead socket freezes everything. The last phase seen stays on screen —
   // it is the last thing anyone knows — but nothing moves, because a moving
   // indicator over a dead socket says "still going" and nobody can tell.
@@ -445,6 +498,37 @@ export function twinScene(state: StateModel | null, model: Model, progress: Twin
       reason: appearance === "rejected" ? progress.rejectedReason : null,
     };
   });
+
+  // Blocks the rig has CONFIRMED that no model block covers — solid, plain
+  // white, the same rounded box as every other block. Present with no model
+  // loaded at all: the twin is a mirror of the rig first, the model second.
+  for (const cell of progress.placements) {
+    if (modelCovers(model, cell)) continue;
+    // LOCKED drags every block toward `--text-faint` and into the ghost batch,
+    // exactly as it does a model's blocks — an abort must freeze the picture.
+    const appearance: TwinAppearance = locked ? "ghost" : "placed";
+    blocks.push({
+      id: `rig:${cell.mode}:${cell.col}:${cell.row}:${cell.level}`,
+      mode: cell.mode, col: cell.col, row: cell.row, level: cell.level,
+      appearance, token: locked ? DESATURATE_TOKEN : "--block-white",
+      mix: locked ? LOCKED_MIX : 0, opacity: OPACITY[appearance], label: null, reason: null,
+    });
+  }
+  // The off-model block in flight: same `building` appearance and the same
+  // descent path as a model target, so the placing animation is identical.
+  if (offModelBuilding) {
+    blocks.push({
+      id: "rig:building",
+      mode: offModelBuilding.mode, col: offModelBuilding.col,
+      row: offModelBuilding.row, level: offModelBuilding.level,
+      appearance: "building", token: TOKEN.building, mix: 0, opacity: OPACITY.building,
+      label: commandText({
+        op: "build", id: "rig:building", col: offModelBuilding.col,
+        row: offModelBuilding.row, level: offModelBuilding.level,
+      }),
+      reason: null,
+    });
+  }
 
   const bannerText =
     banner === "locked" ? state?.locked_reason ?? null
@@ -501,6 +585,10 @@ export function twinSignature(state: StateModel | null, progress: TwinProgress,
     // The age only shows while the socket is down, where it is the whole point.
     stale ? Math.round(options.staleSeconds ?? 0) : 0,
     progress.confirmed.join("|"), progress.rejectedId, progress.rejectedReason,
+    progress.placements.map(c => `${c.mode}${c.col},${c.row},${c.level}`).join("~"),
+    progress.pendingCell
+      ? `${progress.pendingCell.mode}${progress.pendingCell.col},${progress.pendingCell.row},${progress.pendingCell.level}`
+      : "",
     // The phase is now part of the picture, so it has to be part of what says
     // the picture changed — otherwise the twin would sit on one frame for a
     // whole build. `eventId` alone would do it, but naming the fields keeps
