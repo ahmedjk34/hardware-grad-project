@@ -411,7 +411,7 @@ def main():
     # rectangle on one shared bearing. The lambda re-reads `grid`, which
     # the mode switch rebinds, so no worker restart is needed.
     analysis = AnalysisWorker(
-        lambda frame: detect_aligned_blocks(frame, grid=grid),
+        lambda frame, **kwargs: detect_aligned_blocks(frame, grid=grid, **kwargs),
         max_hz=args.analysis_hz)
     snapshots = SnapshotWorker(save_detection_snapshot)
     analysis.start()

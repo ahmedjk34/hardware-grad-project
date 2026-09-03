@@ -136,6 +136,9 @@ export function BlockBatch<T extends BatchBlock>({
     });
     settled.count = settledIndex;
     settled.instanceMatrix.needsUpdate = true;
+    // InstancedMesh caches this after its first render; refresh it whenever
+    // matrices move so frustum culling remains correct without being disabled.
+    settled.computeBoundingSphere();
     if (settled.instanceColor) settled.instanceColor.needsUpdate = true;
     if (!settledHadColour && settled.instanceColor && !Array.isArray(settled.material)) {
       settled.material.needsUpdate = true;
@@ -143,6 +146,7 @@ export function BlockBatch<T extends BatchBlock>({
     if (arriving) {
       arriving.count = arrivingIndex;
       arriving.instanceMatrix.needsUpdate = true;
+      arriving.computeBoundingSphere();
       if (arriving.instanceColor) arriving.instanceColor.needsUpdate = true;
       if (!arrivingHadColour && arriving.instanceColor && !Array.isArray(arriving.material)) {
         arriving.material.needsUpdate = true;
@@ -217,11 +221,11 @@ export function BlockBatch<T extends BatchBlock>({
       >
         {cheap
           ? <meshLambertMaterial vertexColors
-              emissive={tokenColor("--block-wood")} emissiveIntensity={0.06}
+              emissive={tokenColor("--block-wood")} emissiveIntensity={0.16}
               transparent={opacity < 1} opacity={opacity} depthWrite={opacity >= 1} />
           : <meshStandardMaterial
               vertexColors roughness={0.72} metalness={0}
-              emissive={tokenColor("--block-wood")} emissiveIntensity={0.1}
+              emissive={tokenColor("--block-wood")} emissiveIntensity={0.13}
               transparent={opacity < 1} opacity={opacity} depthWrite={opacity >= 1}
             />}
       </instancedMesh>
@@ -235,7 +239,7 @@ export function BlockBatch<T extends BatchBlock>({
         onPointerOut={handlers.onSurfaceLeave}
       >
         <meshStandardMaterial vertexColors roughness={0.72} metalness={0}
-                              emissive={tokenColor("--block-wood")} emissiveIntensity={0.1}
+                              emissive={tokenColor("--block-wood")} emissiveIntensity={0.13}
                               transparent opacity={opacity} depthWrite={false}
                               onBeforeCompile={configureArrivalShader}
                               customProgramCacheKey={arrivalShaderKey} />
@@ -280,7 +284,7 @@ export const Blocks = memo(function Blocks({ blocks, activeMode, shift, heldLeve
           activeMode={activeMode} shift={shift} opacity={1} reduced={reduced} handlers={surfaceHandlers}
           colourOf={authoredColour} />,
         <BlockBatch key={`${mode}-xray`} blocks={groups[mode].xray} animateIds={animateIds} mode={mode}
-          activeMode={activeMode} shift={shift} opacity={0.3} reduced={reduced} handlers={surfaceHandlers}
+          activeMode={activeMode} shift={shift} opacity={0.42} reduced={reduced} handlers={surfaceHandlers}
           colourOf={authoredColour} />,
       ])}
     </>

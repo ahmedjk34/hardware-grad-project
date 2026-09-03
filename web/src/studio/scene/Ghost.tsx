@@ -33,7 +33,7 @@ export function Ghost({ mode, shift, target, status }: {
       raycast={() => null}
     >
       <meshStandardMaterial
-        color={tokenColor(token)} transparent opacity={status.legal ? 0.5 : 0.42}
+        color={tokenColor(token)} transparent opacity={status.legal ? 0.62 : 0.5}
         depthWrite={false} roughness={0.55} metalness={0}
       />
       <Edges color={tokenColor(token)} threshold={20} />

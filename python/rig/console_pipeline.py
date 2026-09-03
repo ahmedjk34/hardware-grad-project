@@ -141,8 +141,15 @@ class ConsolePipeline:
         # the holder's offcuts beside [0,0] - and draw every rectangle on the
         # lattice's own bearing. Read through a lambda so a mode switch is
         # picked up without rebuilding the worker.
+        #
+        # **kwargs is load-bearing: AnalysisWorker forwards whatever submit()
+        # was given (color_threshold, min_area) to the analyzer, and it turns
+        # any exception into "analysis failed" with zero detections. A wrapper
+        # that did not accept them would therefore show an EMPTY overlay
+        # forever, with the reason only in the worker's error field.
         self.analysis = AnalysisWorker(
-            lambda frame: detect_aligned_blocks(frame, grid=self.grid),
+            lambda frame, **kwargs: detect_aligned_blocks(
+                frame, grid=self.grid, **kwargs),
             max_hz=self.analysis_hz)
         self.camera = open_camera(self.camera_backend or backend, size, device)
         self.camera.apply(sensor)

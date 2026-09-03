@@ -77,6 +77,7 @@ function CellFills({ cells, token, opacity, mode, shift, handlers }: {
     });
     mesh.current.count = cells.length;
     mesh.current.instanceMatrix.needsUpdate = true;
+    mesh.current.computeBoundingSphere();
   }, [cells, matrix]);
 
   if (!size) return null;

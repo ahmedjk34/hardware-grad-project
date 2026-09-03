@@ -240,7 +240,7 @@ const int SERVO_PIN = 6;
 // O/openServo() runs.
 const int SERVO_HOME_OPEN_ANGLE = 0;
 const int SERVO_OPEN_ANGLE = 0;
-const int SERVO_CLOSE_ANGLE = 50;
+const int SERVO_CLOSE_ANGLE = 55;
 
 // The servo is commanded and then forgotten - nothing reports back
 // when it has actually arrived. The build sequence must not start
@@ -939,7 +939,7 @@ float BLOCK_HEIGHT_CM = 1.5;
 //   switch, not a computed number, so it cannot drift.
 
 float Z_MARGIN_PER_LEVEL_CM = 0.0; // cm added to EACH level (cumulative)
-float Z_MARGIN_FIXED_CM = 0.0;     // cm added ONCE to any level >= 1
+float Z_MARGIN_FIXED_CM = 0.10;    // cm added ONCE to any level >= 1
 long Z_MARGIN_FIXED_STEPS = 0;     // raw step trim, applied last
 
 // ------------------------------------------------------------

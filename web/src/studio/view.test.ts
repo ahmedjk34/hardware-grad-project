@@ -4,12 +4,25 @@ import {
   INTRO_MS, INTRO_START_DISTANCE_RATIO, MAX_POLAR_ANGLE, MIN_CAMERA_Y, TWEEN_MS,
   VIEWS, cameraTransitionMs, clampAboveGround, easeInOut, envelopeBoxScene,
   blockBoxScene, frameBox, frameDistance, introMs, introPose, modelBoxScene, screenAxes,
-  tweenMs, viewPose, workspaceBoxScene,
+  tweenMs, viewPose, wheelDollyScale, wheelZoomDirection, workspaceBoxScene,
   type CameraPose,
 } from "./view";
 
 const shipped = rigConfig();
 afterEach(() => setRigConfig(shipped));
+
+describe("mouse-wheel zoom", () => {
+  it("maps wheel down to dolly out and wheel up to dolly in", () => {
+    expect(wheelZoomDirection(120)).toBe("out");
+    expect(wheelZoomDirection(-120)).toBe("in");
+    expect(wheelZoomDirection(0)).toBeNull();
+  });
+
+  it("produces the sub-one scale OrbitControls requires for both dolly methods", () => {
+    expect(wheelDollyScale(1.25)).toBeGreaterThan(0);
+    expect(wheelDollyScale(1.25)).toBeLessThan(1);
+  });
+});
 
 const FOV = 35;
 const sub = (a: Vec3, b: Vec3): Vec3 => ({ x: a.x - b.x, y: a.y - b.y, z: a.z - b.z });

@@ -41,6 +41,17 @@ export const INTRO_SWEEP_RAD = 0.85;
 /** The start elevation, as a fraction of the final one: it rises as it pulls back. */
 export const INTRO_START_ELEVATION_RATIO = 0.45;
 
+/** Mouse-wheel direction in the physical convention browsers report: positive
+ *  delta is a wheel moving down, and must move the camera away from the rig. */
+export function wheelZoomDirection(deltaY: number): "in" | "out" | null {
+  return deltaY > 0 ? "out" : deltaY < 0 ? "in" : null;
+}
+
+/** The scale used by OrbitControls' public dolly methods for one wheel event. */
+export function wheelDollyScale(zoomSpeed: number): number {
+  return Math.pow(0.95, Math.max(0, zoomSpeed));
+}
+
 export interface Box { min: Vec3; max: Vec3 }
 export interface CameraPose { position: Vec3; target: Vec3; up: Vec3 }
 

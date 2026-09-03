@@ -22,20 +22,21 @@
  */
 import { memo, useLayoutEffect, useMemo, useRef } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { Html, OrbitControls } from "@react-three/drei";
+import { Html } from "@react-three/drei";
 import { Color, Mesh, MeshLambertMaterial } from "three";
 import { blockSceneSize, cellToScene, type ModeName } from "../coords";
 import {
   DESATURATE_TOKEN, descentProgress, type TwinBlock, type TwinScene,
 } from "../twin";
 import {
-  FOV_DEG, MAX_POLAR_ANGLE, boxCentre, envelopeBoxScene, viewPose, workspaceBoxScene,
+  FOV_DEG, boxCentre, envelopeBoxScene, viewPose, workspaceBoxScene,
 } from "../view";
 import { BlockBatch } from "./Blocks";
 import { BlockShadows } from "./BlockShadows";
 import { Envelope } from "./Envelope";
 import { Lattice } from "./Lattice";
 import { tokenColor } from "./theme";
+import { RigOrbitControls } from "./RigOrbitControls";
 
 const MODES: ModeName[] = ["vertical", "horizontal"];
 /** Batched separately because each carries its own material and opacity. */
@@ -209,9 +210,9 @@ function TwinScene3D({ scene, synced, mode }: {
   return (
     <>
       {/* No key light and no shadow map: two cheap lights and the tokens. */}
-      <hemisphereLight intensity={0.5} groundColor={tokenColor("--void")}
+      <hemisphereLight intensity={0.62} groundColor={tokenColor("--void")}
                        color={tokenColor("--line-strong")} />
-      <directionalLight intensity={1.1} position={[centre.x + 18, centre.y + 34, centre.z + 22]} />
+      <directionalLight intensity={1.4} position={[centre.x + 18, centre.y + 34, centre.z + 22]} />
 
       <Envelope box={box} />
       <Lattice mode={mode} />
@@ -230,10 +231,9 @@ function TwinScene3D({ scene, synced, mode }: {
                             indicator={scene.indicator} descent={scene.descent} /> : null}
       {target ? <TargetLabel block={target} /> : null}
 
-      <OrbitControls makeDefault enableDamping={false} enabled={!synced}
-                     maxPolarAngle={MAX_POLAR_ANGLE}
+      <RigOrbitControls enabled={!synced}
                      target={[centre.x, centre.y, centre.z]}
-                     minDistance={6} maxDistance={260} />
+                     minDistance={6} maxDistance={700} />
       <TwinCamera synced={synced} />
       <OnSceneChange scene={scene} />
     </>

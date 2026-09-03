@@ -34,6 +34,7 @@ function ShadowBatch({ blocks, mode }: { blocks: BatchBlock[]; mode: ModeName })
     });
     mesh.current.count = blocks.length;
     mesh.current.instanceMatrix.needsUpdate = true;
+    mesh.current.computeBoundingSphere();
   }, [blocks, matrix]);
 
   if (blocks.length === 0) return null;

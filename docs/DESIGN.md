@@ -92,9 +92,9 @@ component should contain a raw hex value.
   --block-yellow: #FFD84A;
   --block-green:  #5AE08B;
   --block-blue:   #5FA8FF;
-  --block-white:      #E9DFCD;  /* the default, unpainted block — pale birch */
-  --block-wood:       #C68A4E;  /* solid oak — Studio/twin placed emphasis + 3D undertone */
-  --block-wood-soft:  #DFB483;  /* light tan — translucent ghost / hover preview */
+  --block-white:      #F0E7D5;  /* the default, unpainted block — pale birch */
+  --block-wood:       #D49A5A;  /* solid oak — Studio/twin placed emphasis + 3D undertone */
+  --block-wood-soft:  #EFC48C;  /* luminous tan — translucent ghost / hover preview */
 }
 ```
 

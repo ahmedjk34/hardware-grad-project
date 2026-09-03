@@ -10,7 +10,6 @@
  */
 import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { OrbitControls } from "@react-three/drei";
 import { Vector3 } from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import type { ModeName, Shift } from "../coords";
@@ -18,7 +17,7 @@ import type { Model } from "../model";
 import type { CellTarget } from "../pick";
 import type { Diagnostic } from "../validate";
 import {
-  FOV_DEG, MAX_POLAR_ANGLE, boxCentre, clampAboveGround, envelopeBoxScene,
+  FOV_DEG, boxCentre, clampAboveGround, envelopeBoxScene,
   cameraTransitionMs, frameBox, introMs, introPose, viewPose,
   type Box, type CameraPose, type ViewName,
 } from "../view";
@@ -32,6 +31,7 @@ import { DiagnosticMarkers } from "./DiagnosticMarkers";
 import { tokenColor } from "./theme";
 import type { SurfaceHandlers } from "./surface";
 import { useReducedMotion } from "../../media";
+import { RigOrbitControls } from "./RigOrbitControls";
 
 const ease = (t: number) => 1 - Math.pow(1 - t, 3);
 
@@ -196,11 +196,9 @@ function Scene({ mode, shift, view, nonce, reduced, model, target, status, heldL
       <DiagnosticMarkers blocks={model.blocks} diagnostics={diagnostics} emphasizedId={emphasizedId} />
       <Ghost mode={mode} shift={shift} target={target} status={status} />
 
-      <OrbitControls
-        makeDefault enableDamping={false}
-        maxPolarAngle={MAX_POLAR_ANGLE}
+      <RigOrbitControls
         target={[centre.x, centre.y, centre.z]}
-        minDistance={4} maxDistance={260}
+        minDistance={4} maxDistance={700}
         zoomSpeed={1.25} rotateSpeed={0.9} panSpeed={0.9}
       />
       <CameraRig view={view} nonce={nonce} reduced={reduced} focusBox={focusBox} />

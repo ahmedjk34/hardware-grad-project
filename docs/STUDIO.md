@@ -671,11 +671,11 @@ misleading is most expensive.
 
 | appearance | token | opacity | when |
 | --- | --- | --- | --- |
-| `ghost` | `--block-wood-soft` | 0.4 | remaining work |
-| `target` | `--signal` | 0.55 | the server's current selection, labelled `B 3 2 0` |
+| `ghost` | `--block-wood-soft` | 0.6 | remaining work |
+| `target` | `--signal` | 0.62 | the server's current selection, labelled `B 3 2 0` |
 | `building` | `--motion` | 0.9 | that block while `build_state` is RUNNING |
 | `placed` | the block's own `--block-*` (default `--block-white`, pale birch) | 1 | the server said PLACED |
-| `rejected` | `--text-faint` | 0.22 | the server said REJECTED, with its reason |
+| `rejected` | `--text-faint` | 0.34 | the server said REJECTED, with its reason |
 
 Under LOCKED the mapping forces every token to `--text-faint` explicitly (not
 by relying on where each appearance's token points), so "an abort freezes the
@@ -683,14 +683,15 @@ picture" survives the appearance tokens changing.
 
 Two more deviations, both deliberate:
 
-- **Ghosts are woodish and 40%, not 12% or 20%.** Plan 4 §9.2's 12% and the
-  earlier 20% were both chosen against `--text-faint`; a grey ghost at either is
-  barely there at the twin's default framing. The remaining-work ghost now uses
-  `--block-wood-soft` (light tan) at 0.4 — it reads as an unbuilt block, still
-  plainly translucent, and legible against `--void`. `placed`, `target`,
-  `building` and `rejected` were bumped alongside it (see the table). `rejected`
-  is deliberately dimmer (0.22) than a live ghost and stays grey — it is inert,
-  not pending.
+- **Ghosts are woodish and 60%, not 12% / 20% / 40%.** Plan 4 §9.2's 12% and
+  the later 20% were chosen against `--text-faint`; even the first woodish pass
+  at 0.4 read as too faint on the rig display. A translucent block over `--void`
+  loses lightness *and* chroma to the black it composites over, so the ghost has
+  to start high: `--block-wood-soft` (luminous tan) at **0.6**, plus a warmer
+  `--block-wood` emissive on the material (0.16 twin / 0.13 solid) which lifts
+  the fragment before the alpha blend. It still sits visibly under the placed
+  block's 1.0 — a plan, not a placement. `target` 0.62, `rejected` 0.34 (dimmer
+  than a live ghost, still grey — inert, not pending).
 - **The `rejected` BANNER does not require the rejected cell to be in the
   model.** The rig refused; that is worth saying either way. Only the block-level
   `rejected` appearance needs an identified block.
@@ -912,9 +913,9 @@ in `style.css`).
 
 Placed geometry is rounded by 0.6 mm and instanced with 512 slots of headroom.
 There is a separate physical geometry for each mode; the held-level x-ray splits
-each into solid and 30%-opacity batches. Instance colour comes from the five
+each into solid and 42%-opacity batches. Instance colour comes from the five
 original `--block-*` tokens plus `--block-white`; new blocks default to white
-(now a warm `#E9DFCD` birch, not the old cold near-white).
+(now a warm `#F0E7D5` birch, not the old cold near-white).
 A new block fades over 130 ms while settling from +8 mm over 220 ms. Distinct
 rows in one run start 34 ms apart. Per-instance opacity keeps the whole gesture
 in one arriving draw, while the solid/x-ray split remains ordinary materials.
@@ -931,8 +932,8 @@ renders the missing vertex colour black. Every block carries a faint
 the lit-from-within plastic the old cold-white emissive at 0.22 gave.
 
 `Ghost.tsx` uses the active mode's same rounded dimensions. A clean preview is
-`--block-wood-soft` at 50% — the wood the block will actually be — while a
-warning stays `--motion` and an illegal placement `--danger` at 42%, each with a
+`--block-wood-soft` at 62% — the wood the block will actually be — while a
+warning stays `--motion` and an illegal placement `--danger` at 50%, each with a
 solid edge and one reason label. Severity keeps the reserved state colours; only
 the "this is fine" case went woodish. It has no raycast of its own and
 disappears when the surface target is null.
@@ -1268,35 +1269,87 @@ first in the diff.
 Newest first. One entry per landed change; note anything that contradicts the
 plan or that a future reader could not infer.
 
+### Stable instanced blocks and explicit wheel zoom
+
+The Studio and twin refresh Three.js's cached `InstancedMesh` bounding sphere
+whenever block, shadow or lattice instance matrices are rewritten. Previously
+the stale initial bound could hide a batch whose blocks were still visibly
+inside the view, depending on camera angle and distance. Correct bounds retain
+normal frustum culling, so a genuinely off-screen batch still costs no fragment
+work. Animated arrivals refresh only while their existing short animation loop
+is active; static scenes add no frame-loop work.
+
+`scene/RigOrbitControls.tsx` now owns the canvases' wheel contract. It handles
+the wheel at capture time and calls the controls' public dolly methods directly:
+wheel down (positive `deltaY`) always zooms out and wheel up always zooms in.
+The outward limit is 700 scene units instead of 260; the camera far plane
+remains 800. SYNC VIEW in the twin still disables orbit and zoom intentionally.
+
 ### Woodish blocks; ghosts you can actually see
 
 The blocks read as timber now, and the whole opacity ladder went up.
 
-- **New object tokens** in `style.css`: `--block-wood` (`#C68A4E`, solid oak)
-  and `--block-wood-soft` (`#DFB483`, light tan). `--block-white` was warmed
-  from the cold `#F4F7FA` to `#E9DFCD` birch — it is still the default block
+- **New object tokens** in `style.css`: `--block-wood` (`#D49A5A`, solid oak)
+  and `--block-wood-soft` (`#EFC48C`, luminous tan). `--block-white` was warmed
+  from the cold `#F4F7FA` to `#F0E7D5` birch — it is still the default block
   name and the feeder swatch. The five saturated `--block-*` hues are untouched:
   they still mirror `web/geometry.py` `_colour_name()` for the camera overlay,
   and `_colour_name()` never returns white, so warming it costs no parity. These
   are workpiece colours, in the same non-state family as the detection hues, so
   DESIGN.md §2's "saturated colour is reserved" still holds — the state colours
   `--ready` / `--motion` / `--danger` / `--signal` were not touched or reused.
-- **The 3D material** (`Blocks.tsx`) drops the cold-white emissive for a faint
-  `--block-wood` one at intensity 0.1 (0.06 twin) and raises `roughness` to
+- **The 3D material** (`Blocks.tsx`) drops the cold-white emissive for a
+  `--block-wood` one at intensity 0.13 (0.16 twin) and raises `roughness` to
   0.72. Placed blocks were already fully opaque (`opacity 1`, `depthWrite`
   true); the change is that they now look it — matte timber, not backlit
-  plastic.
-- **Opacities up** (`twin.ts`): remaining-work ghost `0.2 → 0.4` and recoloured
-  `--text-faint → --block-wood-soft`; `target` `0.45 → 0.55`; `building`
-  `0.85 → 0.9`; held-level x-ray batch `0.15 → 0.3`. `rejected` split off its
-  own `REJECTED_OPACITY = 0.22` and stays grey — inert, and now clearly dimmer
-  than a live ghost. New exported constants: `GHOST_TOKEN`, `REJECTED_OPACITY`.
+  plastic — and the warmer emissive lifts every block clear of `--void`.
+- **Opacities up** (`twin.ts`): remaining-work ghost `0.2 → 0.6` and recoloured
+  `--text-faint → --block-wood-soft` (a translucent block over `--void` bleeds
+  lightness and chroma into the black, so it has to start high); `target`
+  `0.45 → 0.62`; `building` `0.85 → 0.9`; held-level x-ray batch `0.15 → 0.42`.
+  `rejected` split off its own `REJECTED_OPACITY = 0.34` and stays grey — inert,
+  still dimmer than a live ghost. New exported constants: `GHOST_TOKEN`,
+  `REJECTED_OPACITY`.
+- **Twin lighting** (`scene/Twin.tsx`) up: hemisphere `0.5 → 0.62`, key
+  directional `1.1 → 1.4`, so blocks read against the dark stage without leaning
+  entirely on opacity.
 - **LOCKED** now forces every token to `--text-faint` explicitly in the mapping
   rather than leaning on `TOKEN.ghost` pointing there, so the freeze survives
   the ghost token changing.
 - **`Ghost.tsx`** clean-preview colour `--signal → --block-wood-soft` at
-  `0.35 → 0.5`; illegal `0.30 → 0.42`. Warning/error keep `--motion` / `--danger`.
+  `0.35 → 0.62`; illegal `0.30 → 0.5`. Warning/error keep `--motion` / `--danger`.
 - `twin.test.ts` tracks the two renamed constants; all 489 web tests stay green.
+
+### The live block overlay: one colour, one rectangle, one bearing
+
+The feeds drew `block_detector`'s raw segmentation contour, one of six cycling
+colours per block. On a full board both halves worked against the operator: a
+mask edge wanders a pixel or two all the way round, so twenty-nine outlines that
+should read as one grid read as twenty-nine wobbly shapes, and adjacent
+outlines in unrelated colours read as unrelated objects.
+
+`vision/block_outline.py` `detect_aligned_blocks()` is a drop-in replacement
+(same `BlockDetection` type, so the overlay, hover test and snapshot code are
+untouched). It drops IoU duplicates, anything running off the frame, and —
+given a `MachineGrid` — anything not on the lattice the other blocks describe,
+which is what removes the holder's two offcuts beside `[0,0]`. Survivors are
+redrawn as true rectangles carrying the population's median size and the
+lattice's bearing. Measured on both reference boards: **33 detections → 29**,
+every corner exactly square, ~50 ms.
+
+`camera_feed.BLOCK_COLOR` is now a single stroke, with the hovered block
+differing by brightness rather than hue.
+
+Two things a future reader will be tempted to change and should not. The
+centres are **never** snapped to the lattice — sharing size and bearing is what
+makes a board read as a grid, but snapping positions would hide a misplaced
+block, which is the one thing this overlay exists to show. And the calibrator's
+full-resolution flattened detection settings were tried and reverted: measured,
+they find not one extra block at any width and cost up to four seconds a frame.
+A timing guard in `test_block_outline.py` (25 checks) keeps that from returning.
+
+Full treatment in the new `docs/BLOCK-VISION.md`; `AGENTS.md` §3d-ter carries
+the rules.
 
 ### Fix: a saved calibration never reached a running console
 

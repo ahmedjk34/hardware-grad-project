@@ -125,17 +125,18 @@ const IN_MOTION: ReadonlySet<TwinPhase> = new Set<TwinPhase>([
 
 /**
  * The remaining-work ghost. Woodish so it reads as "an unbuilt block" rather
- * than debris, and at 0.4 — up from Plan 4 §9.2's 0.2 — because a ghost has to
- * be legible against `--void` at the twin's default framing, not merely
- * present. Still plainly translucent: it is a plan, not a placement.
+ * than debris, and at 0.6 — up from Plan 4 §9.2's 0.2 — because a ghost against
+ * `--void` at the twin's framing loses both lightness and chroma to the black
+ * it composites over, so it has to start high to land clearly. Still visibly
+ * below the placed block's 1.0: it is a plan, not a placement.
  */
-export const GHOST_OPACITY = 0.4;
-/** The remaining-work ghost's colour: light tan, survives alpha over `--void`. */
+export const GHOST_OPACITY = 0.6;
+/** The remaining-work ghost's colour: luminous tan, survives alpha over `--void`. */
 export const GHOST_TOKEN = "--block-wood-soft";
 /** A rejected block: inert grey, and dimmer than a live ghost on purpose. */
-export const REJECTED_OPACITY = 0.22;
+export const REJECTED_OPACITY = 0.34;
 /** The next block: `--signal`, with a full-opacity edge drawn by the component. */
-export const TARGET_OPACITY = 0.55;
+export const TARGET_OPACITY = 0.62;
 export const BUILDING_OPACITY = 0.9;
 /** Where LOCKED drags every colour. */
 export const DESATURATE_TOKEN = "--text-faint";

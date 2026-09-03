@@ -31,9 +31,9 @@
      _colour_name() exactly; the wood tones are the Studio/twin's own, for
      unpainted blocks and the 3D material's warm undertone. Object colour,
      never state colour. */
-  --block-white:      #E9DFCD;  /* the default, unpainted block — pale birch */
-  --block-wood:       #C68A4E;  /* solid oak — placed emphasis + material undertone */
-  --block-wood-soft:  #DFB483;  /* light tan — translucent ghosts and the hover preview */
+  --block-white:      #F0E7D5;  /* the default, unpainted block — pale birch */
+  --block-wood:       #D49A5A;  /* solid oak — placed emphasis + material undertone */
+  --block-wood-soft:  #EFC48C;  /* luminous tan — translucent ghosts and the hover preview */
   --block-red:    #FF6B6B;
   --block-orange: #FF9F4A;
   --block-yellow: #FFD84A;

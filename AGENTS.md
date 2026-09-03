@@ -687,6 +687,134 @@ rows 4 and 5), max snap 0.08 cells, mean residual 0.85 px. Keep it exact — a
 count-only assertion would pass on a board shifted by one cell.
 
 
+#### 3d-ter. Block detection — the three layers, and which to use
+
+There are now three things that find blocks, and they are easy to confuse. They
+share a segmentation front end and diverge completely after it.
+
+| Layer | Module | Answers | Runs |
+| --- | --- | --- | --- |
+| **segmentation** | `vision/block_detector.py` | "what warm block-shaped things are in this frame" | every analysed frame |
+| **live overlay** | `vision/block_outline.py` | "which of those are really blocks, and where do I draw them" | every analysed frame |
+| **calibration** | `vision/block_grid.py` | "where is the machine's grid, in pixels" | once, deliberately |
+
+**Never reach past a layer.** A feed that calls `detect_blocks` directly gets
+the frame-edge rails and the holder's offcuts; a caller that wants geometry and
+uses `block_outline` gets rectangles with no lattice behind them.
+
+##### Layer 1 — `block_detector.detect_blocks`
+
+Segments warm material by **red-minus-blue and red-minus-green**, not by
+brightness: the work surface is overexposed in the captures it was tuned on.
+Then morphology, contours, and three ways to turn a contour into blocks —
+straight through, `_split_touching` (cuts a two-block blob along its two
+deepest convexity defects), or `_decompose_compound` (fits ideal block-sized
+rectangles into a merged component, up to `MAX_RECTANGLE_HYPOTHESES`).
+
+Three opt-in arguments exist for the layers above, all defaulting OFF so the
+live feed keeps the behaviour it was tuned for:
+
+- `balance` — `color_grid.white_balance` before segmenting.
+- `flatten` — `color_grid.flatten_illumination` before segmenting.
+- `expected_size` — `(long_px, short_px)`, replacing the frame-width size
+  guess. That guess (`frame.shape[1] * 0.144`) assumes a block covers a fixed
+  share of the frame, which is true only of the captures it was fitted to, and
+  is the reason the detector changes its mind between processing widths.
+
+It knows nothing about grids, and it cannot: a rail and a block are the same
+shape. **What it returns is a hypothesis, not an answer.**
+
+##### Layer 2 — `block_outline.detect_aligned_blocks`
+
+A drop-in replacement returning the same `BlockDetection` type, so the overlay,
+hover test and snapshot code are unchanged. The feeds used to draw layer 1
+directly, each block in one of six cycling colours, outlined by its own raw
+segmentation contour. Both halves were wrong on a full board: a mask edge
+wanders a pixel or two all the way round, so twenty-nine outlines that should
+read as one grid read as twenty-nine wobbly shapes, and adjacent outlines in
+unrelated colours read as unrelated objects.
+
+It rejects, then rectifies:
+
+1. **IoU duplicates** (`DUPLICATE_IOU`, shared with `block_grid._deduplicate`).
+   `_decompose_compound` proposes overlapping ideal rectangles inside one
+   component, so a block joined to its neighbour by a shadow yields a third
+   rectangle straddling the seam.
+2. **Anything running off the frame** (`EDGE_TOLERANCE_PX`, a *hard* border
+   test). The purple rails at the left edge segment as three block-sized
+   rectangles whose boxes start outside the frame. Deliberately NOT the
+   calibrator's "keep a fifth of a block clear": the two want opposite things
+   from a clipped block — a calibration must refuse it because its centroid is
+   not its centre, a live overlay should still draw it, because hiding a real
+   block is the worse failure. A 20% margin here silently dropped blocks on the
+   mock camera's outermost row.
+3. **Anything off the lattice**, given a `MachineGrid`. This is what removes
+   the holder's two thin offcuts beside `[0,0]`. Nothing about their *shape*
+   says they are not blocks — `_decompose_compound` fits block-sized
+   rectangles into whatever it is given — only their position does.
+4. **Rectify**: every survivor becomes a true rectangle with the population's
+   median size and the lattice's bearing.
+
+Measured on both reference boards: **33 → 29**, every outline exactly square,
+one shared size, one shared bearing, ~50 ms.
+
+Rules that must survive an edit:
+
+- **The centre is never snapped to the lattice.** Sharing size and bearing is
+  what makes a board read as a grid; snapping positions too would draw a
+  prettier grid and hide a misplaced block, which is the one thing this overlay
+  exists to show. `tests/test_block_outline.py` asserts centres match a
+  same-settings `detect_blocks` run exactly.
+- **The lattice filter must not fire on a partial view.** Under
+  `MIN_LATTICE_BLOCKS`, or when the recovered lattice would reject more than
+  30% of what it saw, everything is kept. A lattice fitted to four blocks is
+  not the board's lattice.
+- **Do not borrow the calibrator's detection settings.** The obvious move is
+  full resolution + `flatten`. Measured, it finds not one extra block at any
+  width from 384 to 1024, and costs up to **four seconds a frame**:
+
+  | width | flatten | found | board | 1296 px frame |
+  | --- | --- | --- | --- | --- |
+  | 384 | off | 29/29 | 84 ms | 103 ms |
+  | 384 | on | 29/29 | 291 ms | 221 ms |
+  | 1024 | off | 29/29 | 60 ms | 574 ms |
+  | 1024 | on | 29/29 | 543 ms | **3894 ms** |
+
+  Same for `min_area`: 250 finds nothing extra and doubles the cost, because
+  every small contour it admits enters the rectangle search. The improvement is
+  the rejection steps, not the segmentation. A timing guard in
+  `test_block_outline.py` keeps this from coming back.
+- **The analyzer wrapper must accept `**kwargs`.** `AnalysisWorker` forwards
+  whatever `submit()` was given (`color_threshold`, `min_area`) and turns any
+  exception into "analysis failed" with **zero detections**. A wrapper missing
+  `**kwargs` therefore shows an empty overlay forever, with the reason visible
+  only in the worker's error field. This cost real debugging time; do not
+  simplify the lambdas.
+
+`camera_feed.py` passes no grid on purpose — it knows nothing about the rig, so
+it gets squared, uniformly-sized outlines without the lattice rejection. The
+grid-aware callers read `grid` through a lambda so a mode switch is picked up
+without rebuilding the worker.
+
+##### Layer 3 — `block_grid`, the calibration
+
+Documented in full at §3d-bis above. The one-line distinction: layer 2 asks
+"where are the blocks in this picture", layer 3 asks "where is the machine's
+grid", and only layer 3 is allowed to write `workspace_map.json`. Layer 2
+borrows layer 3's `_deduplicate` and `_lattice_vectors` so the two cannot
+drift apart, and nothing flows the other way.
+
+##### Drawing: one colour, and the box
+
+`camera_feed.BLOCK_COLOR` is a single stroke for every block, with
+`BLOCK_HOVER_COLOR` differing by **brightness rather than hue** so the hovered
+block reads as "this one" and not "a different kind of thing". The overlay
+draws `detection.box`, never `detection.contour`.
+
+**The full treatment — every constant, every measured number, both detectors
+end to end, and how to extend them — is `docs/BLOCK-VISION.md`.** This section
+and §3d-bis carry only the rules that must not be broken.
+
 ### 3e. Camera colour correction — one transform, applied in four places
 
 | Where | What |

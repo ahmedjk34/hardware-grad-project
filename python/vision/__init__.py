@@ -12,6 +12,8 @@ camera_source  one frame source: Picamera2 on the Pi, V4L2 elsewhere
 fisheye        the 160-degree fisheye -> rectilinear correction
 overlays       shared OpenCV drawing helpers (grids, info boxes)
 block_detector segment the work surface's blocks out of one frame
+block_outline  the same blocks, cleaned and squared into grid-aligned
+               rectangles - what the live feeds actually draw
 color_grid     find the printed two-colour calibration sheet and fit a grid
 combined_grid  detect the one-page target shared by both machine-grid modes
 cluster_grid   detect the black-bordered 3x3-cluster sheet by its printed lattice

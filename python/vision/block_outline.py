@@ -15,16 +15,21 @@ Meanwhile ``block_grid.py`` draws the same blocks beautifully, because it is not
 drawing the segmentation at all - it draws a lattice. This module gives the live
 feed the same advantage without making it a calibration:
 
-1. **Detect properly.** Full resolution, illumination flattened, and a size
-   prior once the population says what a block measures here. These are the
-   settings the calibrator uses and the live feed did not.
-2. **Throw out what is not a block.** Duplicates from the compound
+1. **Throw out what is not a block.** Duplicates from the compound
    decomposition, anything touching the frame border, and - the reason this
    module knows about lattices at all - objects that are wooden and
    block-shaped but do not sit where the grid says a block goes. The holder's
    two thin offcuts beside ``[0,0]`` are exactly that.
-3. **Draw a rectangle, not a contour.** Every surviving block is redrawn as a
+2. **Draw a rectangle, not a contour.** Every surviving block is redrawn as a
    true rectangle with the population's own size and the lattice's own bearing.
+
+Note what is NOT on that list: detecting harder. The obvious move was to borrow
+the calibrator's full-resolution, illumination-flattened settings, and measured
+against the reference boards it buys nothing at all - every processing width
+from 384 to 1024, flattened or not, finds all 29 blocks. It costs up to four
+seconds a frame. The 33 -> 29 improvement is entirely the rejection steps, so
+this runs the plain detector at its ordinary preview budget. See
+``detect_aligned_blocks`` for the numbers.
 
 What is deliberately NOT done
 -----------------------------
@@ -62,11 +67,19 @@ MIN_POPULATION = 4
 # this the holder-rejection step is skipped rather than guessed at.
 MIN_LATTICE_BLOCKS = 6
 
-# Clearance a detection must keep from the frame border, as a fraction of its
-# own short side. The live feed's 384 px working width turns the purple rails
-# at the left edge into three block-sized rectangles; they are not blocks, and
-# nothing about their shape says so - only their position does.
-EDGE_MARGIN = 0.20
+# How far a detection's box may reach past the frame border, in pixels, before
+# it is dropped. The purple rails at the left edge segment as three block-sized
+# rectangles whose boxes run off the frame entirely; nothing about their shape
+# says they are not blocks, only their position does.
+#
+# Deliberately a HARD border test rather than the calibrator's "keep a fifth of
+# a block clear". The two want opposite things from a clipped block: a
+# calibration must refuse it, because a cut-off block's centroid is not its
+# centre, while a live overlay should still draw it - the operator can see it
+# is at the edge, and hiding a real block is the worse failure. A 20% margin
+# here silently dropped blocks the mock camera legitimately places on the
+# outermost row.
+EDGE_TOLERANCE_PX = 1.0
 
 # How far a detection may sit from an integer lattice site and still be a block
 # on that site. Same threshold, and the same reasoning, as block_grid's.
@@ -87,16 +100,15 @@ def _sighting_view(detection: BlockDetection):
     })()
 
 
-def _clear_of_border(detection: BlockDetection, shape, margin: float) -> bool:
-    if margin <= 0:
+def _inside_frame(detection: BlockDetection, shape, tolerance: float) -> bool:
+    """Whether the box lies within the frame rather than running off it."""
+    if tolerance < 0:
         return True
     height, width = shape[:2]
-    _long, short = detection.size
-    clearance = margin * short
     box = np.asarray(detection.box, dtype=np.float64)
-    return bool(box[:, 0].min() >= clearance and box[:, 1].min() >= clearance
-                and box[:, 0].max() <= width - 1 - clearance
-                and box[:, 1].max() <= height - 1 - clearance)
+    return bool(box[:, 0].min() >= -tolerance and box[:, 1].min() >= -tolerance
+                and box[:, 0].max() <= width - 1 + tolerance
+                and box[:, 1].max() <= height - 1 + tolerance)
 
 
 def _drop_duplicates(detections):
@@ -201,9 +213,8 @@ def _rectify(detections, bearing):
 
 
 def detect_aligned_blocks(frame: np.ndarray, *, grid=None,
-                          edge_margin: float = EDGE_MARGIN,
+                          edge_tolerance: float = EDGE_TOLERANCE_PX,
                           rectify: bool = True,
-                          min_area: int = 250,
                           **detector_kwargs) -> list[BlockDetection]:
     """Detect blocks and return them as clean, grid-aligned rectangles.
 
@@ -219,15 +230,27 @@ def detect_aligned_blocks(frame: np.ndarray, *, grid=None,
     if frame is None or frame.ndim != 3 or frame.shape[2] != 3:
         raise ValueError("detect_aligned_blocks expects a BGR colour image")
 
-    kwargs = {
-        # The live feed's 384 px default is a preview budget that predates this
-        # overlay caring about precision, and at that width the frame edge
-        # produces block-sized false positives. Flattening is what the
-        # calibrator uses and is why it segments this board cleanly.
-        "max_processing_width": max(frame.shape[1], 1),
-        "flatten": True,
-        "min_area": int(min_area),
-    }
+    # Deliberately the plain detector's own working width and no illumination
+    # flattening - this runs on every analysed frame on a Pi, and both of those
+    # were measured to buy nothing here:
+    #
+    #   width  flatten   blocks found   board ms   1296px frame ms
+    #     384      off        29 / 29         84             103
+    #     384       on        29 / 29        291             221
+    #    1024      off        29 / 29         60             574
+    #    1024       on        29 / 29        543            3894
+    #
+    # Every setting finds all 29. The 33 -> 29 improvement comes entirely from
+    # the rejection steps below, not from resolution or preprocessing, and
+    # full-resolution flattening would have cost the live overlay four seconds
+    # a frame for exactly nothing. (The CALIBRATOR still flattens: it runs once
+    # and its frames are not always this cooperative.)
+    #
+    # min_area is left alone for the same reason. Lowering it to 250 finds no
+    # extra blocks and doubles the cost, because every small contour it admits
+    # goes through the compound decomposition's rectangle search: 45 ms at the
+    # default, 161 ms at 250.
+    kwargs = {}
     kwargs.update(detector_kwargs)
     detections = detect_blocks(frame, **kwargs)
     if not detections:
@@ -235,7 +258,7 @@ def detect_aligned_blocks(frame: np.ndarray, *, grid=None,
 
     detections = _drop_duplicates(detections)
     detections = [item for item in detections
-                  if _clear_of_border(item, frame.shape, edge_margin)]
+                  if _inside_frame(item, frame.shape, edge_tolerance)]
     if not detections:
         return []
 
