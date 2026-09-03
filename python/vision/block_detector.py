@@ -402,11 +402,12 @@ def _decompose_compound(frame: np.ndarray, hsv: np.ndarray, contour: np.ndarray,
     selected = []
     covered = np.zeros_like(component)
     standard_area = block_length * block_width
-    # Overlapping blocks share colour pixels, so raw union area underestimates
-    # their count. Use a generous ceiling and let edge score/new coverage decide
-    # whether the extra hypotheses actually exist.
+    # The ceiling already gives overlapping blocks one block of headroom: any
+    # positive remainder admits the next hypothesis. Dividing by 0.80 as well
+    # double-counted that allowance and let seam-straddling rectangles turn a
+    # two-block row into three detections (and a three-block U into four).
     estimated_count = max(2, min(12, int(math.ceil(
-        cv2.contourArea(contour) / max(standard_area * 0.80, 1.0)))))
+        cv2.contourArea(contour) / max(standard_area, 1.0)))))
     for candidate in candidates:
         if any(_box_iou(candidate, existing) > 0.45 for existing in selected):
             continue

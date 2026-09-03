@@ -5,9 +5,9 @@
     ../.venv/bin/python tests/test_block_detector.py
 
 These are image fixtures, not a substitute for checking the live Pi feed. They
-protect the useful baseline: the original views contain six blocks, V2's L and
-U unions decompose correctly, and synthetic end-to-end/side-by-side unions do
-not collapse into one detection.
+protect the useful baseline: every listed raw capture has its hand-counted
+number of blocks and synthetic touching-block unions do not collapse into one
+detection or grow an extra seam-straddling block.
 """
 
 from pathlib import Path
@@ -49,29 +49,17 @@ for path in paths:
           f"{len(detections)}/{expected} blocks")
     failed |= not ok
 
-
-# V2 are desktop screenshots of the live window, so recover the displayed
-# 384x440 feed first. Existing coloured overlays contaminate the isolated
-# blocks; the regions below deliberately test only the previously MISSED raw
-# compound shape in the middle: an L made of two blocks, then a U made of three.
-v2 = CAPTURES / "v2"
-v2_cases = (
-    (v2 / "20260820_13h14m38s_grim.png", (180, 200, 285, 295), 2, "V2 L pair"),
-    (v2 / "20260820_13h16m07s_grim.png", (160, 115, 270, 230), 3, "V2 U triple"),
-)
-for path, (x0, y0, x1, y1), expected, name in v2_cases:
-    screenshot = cv2.imread(str(path))
-    if screenshot is None:
-        print(f"FAIL  {name}: missing {path}")
-        failed = True
-        continue
-    feed = cv2.resize(screenshot[102:881, 380:1060], (384, 440),
-                      interpolation=cv2.INTER_AREA)
-    detections = detect_blocks(feed)
-    found = sum(x0 <= d.center[0] <= x1 and y0 <= d.center[1] <= y1
-                for d in detections)
-    ok = found == expected
-    print(f"{'ok  ' if ok else 'FAIL'}  {name}: {found}/{expected} blocks")
+# The loose-block source image is deliberately outside the corrected-image
+# glob. Its overlaid partner is not an input fixture: feeding annotations back
+# through colour segmentation tests the green ink, not the wooden blocks.
+for filename, expected in (
+        ("WITHOUT_BLOCK_DETECTOR_ON_EXAMPLE.png", 10),):
+    path = CAPTURES / filename
+    image = cv2.imread(str(path))
+    detections = [] if image is None else detect_blocks(image)
+    ok = len(detections) == expected
+    print(f"{'ok  ' if ok else 'FAIL'}  {filename}: "
+          f"{len(detections)}/{expected} blocks")
     failed |= not ok
 
 
@@ -113,7 +101,11 @@ paint_block(image, (190, 200), 90)
 synthetic_cases.append(("crossed pair", image, 2))
 
 for name, image, expected in synthetic_cases:
-    found = len(detect_blocks(image, min_area=400))
+    # The renderer knows the exact synthetic footprint. Supplying it avoids
+    # testing the capture-specific frame-width size fallback instead of the
+    # compound decomposition this section is about.
+    found = len(detect_blocks(
+        image, min_area=400, expected_size=(69, 20)))
     ok = found == expected
     print(f"{'ok  ' if ok else 'FAIL'}  {name}: {found}/{expected} blocks")
     failed |= not ok

@@ -6,7 +6,8 @@ Run from python/:  ../.venv/bin/python tests/test_block_outline.py
 The feeds used to draw block_detector's raw segmentation contour, one colour
 per block. This asserts the three things that replaced it - the detection is as
 good as the calibrator's, what is not a block is dropped, and every surviving
-outline is a rectangle sharing one size and one bearing.
+outline is a rectangle sharing one size. A board with a recovered lattice
+shares one bearing; loose blocks retain their individually measured angles.
 """
 
 from __future__ import annotations
@@ -152,14 +153,16 @@ for name, expected in BOARDS.items():
     check(f"{label}: no two outlines overlap (the holder is rejected)",
           not crowded, str(crowded[:3]))
 
-# Without a grid the outlines are still squared and shared, just unchecked
-# against a lattice - camera_feed.py has no MachineGrid and must still work.
+# Without a grid the outlines are still squared and size-normalised, just
+# unchecked against a lattice - camera_feed.py has no MachineGrid and must
+# still work. It must not invent a shared angle.
 path = CAPTURES / next(iter(BOARDS))
 if path.exists():
     image = cv2.imread(str(path))
     free = detect_aligned_blocks(image)
-    check("without a grid it still returns aligned rectangles",
-          free and len({round(d.angle, 3) for d in free}) == 1,
+    check("without a grid it still returns squared rectangles",
+          free and all(len(np.asarray(d.contour).reshape(-1, 2)) == 4
+                       for d in free),
           f"{len(free)} outlines")
     check("without a grid the count is still sane",
           abs(len(free) - 29) <= 1, str(len(free)))
@@ -188,6 +191,49 @@ if path.exists():
           f"{elapsed:.0f} ms vs {baseline:.0f} ms for detect_blocks")
     check("an empty frame returns nothing",
           detect_aligned_blocks(np.full((120, 120, 3), 210, np.uint8)) == [])
+
+
+# Hand-labelled from the clean frame, independently of detector output. These
+# ten loose blocks are the regression that exposed the shared-angle bug. The
+# centres may move a few pixels with segmentation tuning; an unoriented long
+# axis is equivalent modulo 180 degrees.
+scatter_path = CAPTURES / "WITHOUT_BLOCK_DETECTOR_ON_EXAMPLE.png"
+scatter = cv2.imread(str(scatter_path))
+EXPECTED_SCATTER = (
+    ((241, 106), -6), ((301, 155), -48), ((212, 157), 33),
+    ((144, 232), -58), ((223, 271), -90), ((287, 305), 11),
+    ((188, 345), 87), ((226, 387), 0), ((161, 404), -90),
+    ((293, 428), 56),
+)
+
+
+def axis_error(left, right):
+    return abs((left - right + 90.0) % 180.0 - 90.0)
+
+
+for label, kwargs in (("free", {}), ("grid-aware fallback", {"grid": grid})):
+    found = [] if scatter is None else detect_aligned_blocks(scatter, **kwargs)
+    check(f"loose blocks ({label}): finds all 10 blocks",
+          len(found) == len(EXPECTED_SCATTER), str(len(found)))
+    if len(found) != len(EXPECTED_SCATTER):
+        continue
+    unmatched = list(found)
+    worst_center = worst_angle = 0.0
+    for expected_center, expected_angle in EXPECTED_SCATTER:
+        nearest = min(unmatched,
+                      key=lambda item: math.dist(item.center, expected_center))
+        unmatched.remove(nearest)
+        worst_center = max(worst_center,
+                           math.dist(nearest.center, expected_center))
+        worst_angle = max(worst_angle,
+                          axis_error(nearest.angle, expected_angle))
+    check(f"loose blocks ({label}): centres match the hand labels",
+          worst_center <= 4.0, f"worst error {worst_center:.1f} px")
+    check(f"loose blocks ({label}): angles match the hand labels",
+          worst_angle <= 4.0, f"worst error {worst_angle:.1f} deg")
+    check(f"loose blocks ({label}): angles remain genuinely distinct",
+          len({round(item.angle / 10) for item in found}) >= 7,
+          str([round(item.angle, 1) for item in found]))
 
 print()
 if failures:

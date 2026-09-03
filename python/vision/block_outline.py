@@ -21,7 +21,8 @@ feed the same advantage without making it a calibration:
    block-shaped but do not sit where the grid says a block goes. The holder's
    two thin offcuts beside ``[0,0]`` are exactly that.
 2. **Draw a rectangle, not a contour.** Every surviving block is redrawn as a
-   true rectangle with the population's own size and the lattice's own bearing.
+   true rectangle with the population's own size. A recovered lattice supplies
+   its bearing; without one, each block keeps its measured bearing.
 
 Note what is NOT on that list: detecting harder. The obvious move was to borrow
 the calibrator's full-resolution, illumination-flattened settings, and measured
@@ -36,7 +37,9 @@ What is deliberately NOT done
 The rectangle keeps each block's **measured centre**. It would be easy to snap
 positions onto the fitted lattice and get a perfect grid picture, and it would
 be a lie: this overlay's entire job is to show where blocks actually are, and a
-misplaced block must look misplaced. Only the size and the angle are shared.
+misplaced block must look misplaced. Only the size is always shared. The angle
+is shared only when the detections actually support a lattice; loose blocks
+must keep their individual angles.
 """
 
 from __future__ import annotations
@@ -173,12 +176,13 @@ def _lattice_filter(detections, grid):
 
 
 def _rectify(detections, bearing):
-    """Give every block the population's size and one shared angle.
+    """Give every block the population's size and a justified angle.
 
     The centre stays exactly where it was measured. Sharing only the size and
-    the bearing is what turns a scatter of individually-fitted boxes into
-    something that reads as a grid, without moving any outline off the block it
-    belongs to.
+    a recovered lattice bearing makes a board read as one grid. When no lattice
+    bearing was recovered, there is no evidence that the blocks are parallel:
+    keep each detection's own angle instead of manufacturing a grid from the
+    population median.
     """
     if len(detections) < MIN_POPULATION:
         # Not a population - still square each box up to its own rotated rect,
@@ -189,25 +193,18 @@ def _rectify(detections, bearing):
 
     long_med = float(np.median([item.size[0] for item in detections]))
     short_med = float(np.median([item.size[1] for item in detections]))
-    if bearing is None:
-        # Median of the measured angles, taken on the doubled angle so that
-        # -89 and +89 average to 90 rather than to 0.
-        radians = [math.radians(2.0 * item.angle) for item in detections]
-        bearing = math.degrees(math.atan2(
-            float(np.mean([math.sin(a) for a in radians])),
-            float(np.mean([math.cos(a) for a in radians])))) / 2.0
-
     out = []
     for item in detections:
+        item_bearing = item.angle if bearing is None else bearing
         # minAreaRect's angle names the WIDTH side, and the rectangle below is
         # built long-side-first, so the bearing is offset by a quarter turn.
-        rect = (tuple(item.center), (short_med, long_med), bearing - 90.0)
+        rect = (tuple(item.center), (short_med, long_med), item_bearing - 90.0)
         box = cv2.boxPoints(rect)
         out.append(replace(
             item,
             box=box.round().astype(np.int32),
             contour=box.round().astype(np.int32).reshape(-1, 1, 2),
-            width=short_med, height=long_med, angle=bearing,
+            width=short_med, height=long_med, angle=item_bearing,
         ))
     return out
 
@@ -223,9 +220,9 @@ def detect_aligned_blocks(frame: np.ndarray, *, grid=None,
 
     ``grid`` is an optional :class:`rig.grid.MachineGrid`. With one, detections
     that do not sit on the lattice the other blocks describe are dropped, and
-    every rectangle is drawn on the lattice's own bearing. Without one the
-    outlines are still squared up and given a common size, just not checked
-    against a grid.
+    every rectangle is drawn on the recovered lattice bearing. Without a
+    recovered lattice the outlines are still squared up and given a common
+    size, but each keeps its measured angle.
     """
     if frame is None or frame.ndim != 3 or frame.shape[2] != 3:
         raise ValueError("detect_aligned_blocks expects a BGR colour image")

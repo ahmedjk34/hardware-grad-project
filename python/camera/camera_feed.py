@@ -464,8 +464,9 @@ def main():
 
     frame_pump = LatestFramePump(camera)
     # No MachineGrid here on purpose - camera_feed knows nothing about the
-    # rig. The outlines are still squared up and given one shared size and
-    # bearing; only the lattice-based rejection needs a grid.
+    # rig. The outlines are still squared up and given one shared size, while
+    # each loose block keeps its measured bearing; only lattice-based rejection
+    # and a justified shared bearing need a grid.
     analysis = AnalysisWorker(detect_aligned_blocks,
                               max_hz=args.analysis_hz)
     snapshots = SnapshotWorker(save_detection_snapshot)
