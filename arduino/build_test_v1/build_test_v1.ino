@@ -3378,22 +3378,22 @@ bool gotoCell(long col, long row)
 //
 // WHAT WE MEASURED
 // ----------------
-// Moving one cell along X pulls the arm ~0.15 cm along Y. It is linear in the
+// Moving one cell along X pulls the arm ~0.1 cm along Y. It is linear in the
 // column index and there is no row dependence (a pure-Y move - same column -
 // has no error at all):
 //
 //     column 0  ->  +0.00 cm Y   (reference, no X travel)
-//     column 1  ->  +0.15 cm Y
-//     column 2  ->  +0.30 cm Y
-//     column 3  ->  +0.45 cm Y
-//     column k  ->  +0.15 * k cm Y
+//     column 1  ->  +0.10 cm Y
+//     column 2  ->  +0.20 cm Y
+//     column 3  ->  +0.30 cm Y
+//     column k  ->  +0.10 * k cm Y
 //
-// So SKEW_Y_PER_COL_CM = 0.15, and the row / cross terms stay 0 until a
+// So SKEW_Y_PER_COL_CM = 0.1, and the row / cross terms stay 0 until a
 // measurement says otherwise.
 //
 // SIGN - "forward" = +Y = further from the Y home switch (row 0 side). The
 // nudge is ADDED to the Y target, so selecting cell [1,0] drives the rig
-// ~0.15 cm forward, [2,0] ~0.30 cm forward, and so on.
+// ~0.10 cm forward, [2,0] ~0.20 cm forward, and so on.
 //
 //   yNudge_cm = SKEW_Y_PER_COL_CM    * col
 //             + SKEW_Y_PER_ROW_CM    * row
@@ -3414,13 +3414,13 @@ bool gotoCell(long col, long row)
 //     or the 3D grid - every VISUALISATION stays perfectly rectangular. This
 //     bends the MOTION so the real bricks come out straight and level.
 //   * X is never touched.
-float SKEW_Y_PER_COL_CM = 0.15f;   // measured: ~0.15 cm Y pull per column of X travel
+float SKEW_Y_PER_COL_CM = 0.1f;    // measured: ~0.1 cm Y pull per column of X travel
 float SKEW_Y_PER_ROW_CM = 0.0f;    // no row dependence measured (pure-Y is clean)
 float SKEW_Y_PER_COLROW_CM = 0.0f; // cross term, if the pull ever grows with row
 
 // Y step offset to add to a build target for cell [col,row]. Positive = further
-// from the Y home switch ("forward"). With the measured 0.15 cm/col this is
-// +0.15 cm at col 1, +0.30 cm at col 2, ... and exactly 0 anywhere in col 0.
+// from the Y home switch ("forward"). With the measured 0.1 cm/col this is
+// +0.1 cm at col 1, +0.2 cm at col 2, ... and exactly 0 anywhere in col 0.
 long buildYSkewSteps(long col, long row)
 {
   float cm = SKEW_Y_PER_COL_CM * (float)col

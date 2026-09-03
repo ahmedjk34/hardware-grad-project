@@ -12,10 +12,10 @@ Measured on the rig:
 | Column index | Y error introduced |
 | ------------ | ------------------ |
 | 0            | 0.00 cm (no X travel) |
-| 1            | 0.15 cm |
-| 2            | 0.30 cm |
-| 3            | 0.45 cm |
-| k            | 0.15 × k cm |
+| 1            | 0.10 cm |
+| 2            | 0.20 cm |
+| 3            | 0.30 cm |
+| k            | 0.10 × k cm |
 
 Linear in the column index, with **no row dependence**.
 
@@ -44,7 +44,7 @@ In [`arduino/build_test_v1/build_test_v1.ino`](../arduino/build_test_v1/build_te
 just above `gotoBuildTarget()`:
 
 ```c
-float SKEW_Y_PER_COL_CM    = 0.15f; // measured: ~0.15 cm Y pull per column of X travel
+float SKEW_Y_PER_COL_CM    = 0.1f;  // measured: ~0.1 cm Y pull per column of X travel
 float SKEW_Y_PER_ROW_CM    = 0.0f;  // no row dependence measured (pure-Y is clean)
 float SKEW_Y_PER_COLROW_CM = 0.0f;  // cross term, if the pull ever grows with row
 
@@ -63,8 +63,8 @@ is clamped to the Y travel so a bad coefficient can never drive the carriage pas
 a soft limit (`moveAxisTo()` still enforces the limit as well).
 
 **Sign** — "forward" = **+Y** = further from the Y home switch (the row 0 side).
-The nudge is positive, so selecting cell `[1,0]` drives the rig ~0.15 cm forward,
-`[2,0]` ~0.30 cm, `[k,r]` ~0.15·k cm (row `r` does not matter).
+The nudge is positive, so selecting cell `[1,0]` drives the rig ~0.10 cm forward,
+`[2,0]` ~0.20 cm, `[k,r]` ~0.10·k cm (row `r` does not matter).
 
 This is **static in firmware** — nothing supplies it over serial; it is computed
 from the cell indices on every build. The three `SKEW_Y_*` coefficients are the
@@ -99,8 +99,8 @@ console under both:
 Look for these two lines:
 
 ```
-X-rail skew: Y += 0.150*col + 0.000*row + 0.000*col*row  cm   (BUILD only, +Y = away from home)
-             e.g. col 6 row 0 -> Y += 0.900 cm (<steps> steps)
+X-rail skew: Y += 0.100*col + 0.000*row + 0.000*col*row  cm   (BUILD only, +Y = away from home)
+             e.g. col 6 row 0 -> Y += 0.600 cm (<steps> steps)
 ```
 
 If those lines are **absent**, the board is still running old firmware — re-flash.
@@ -109,7 +109,7 @@ During an actual build, `gotoBuildTarget()` also logs the correction per cell as
 it is applied:
 
 ```
-  X-rail skew: Y 1234 -> 1279 steps (0.150 cm, col skew)
+  X-rail skew: Y 1234 -> 1264 steps (0.100 cm, col skew)
 ```
 
 (no line is printed for column 0, where the nudge is exactly 0).
