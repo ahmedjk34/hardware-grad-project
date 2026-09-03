@@ -37,7 +37,7 @@ console this attaches to).
 | M7 — The runner | ✅ delivered | pure exhaustive runner reducer, guarded effect driver, STEP/RUN/DRY RUN, feeder guidance, failure lock/pause, Markdown evidence report |
 | M8 — Wow pass | not started | shift gizmo, x-ray by level, cross-mode bridging |
 
-**Test suite.** `cd web && npm test` — **466 tests across 36 files**, all green.
+**Test suite.** `cd web && npm test` — **482 tests across 38 files**, all green.
 (The per-file table below is maintained for the Studio's own files; a few rows
 have drifted behind the total as unrelated console work landed.)
 
@@ -175,7 +175,7 @@ web/src/
       Settings.tsx       the five visible physical estimates
       ProgramView.tsx    the compiled program as a serial log, latches set apart, copy-to-clipboard
   routes/
-    Root.tsx             hash routing + the lazy Studio import
+    Root.tsx             hash routing (#/, #/build, #/studio) + the one connectEvents
     preload.ts           generic one-promise import cache
     studio-loader.ts     shared idle/intent/navigation Studio import
     Studio.tsx           the Studio route (chrome + viewport)
@@ -1102,11 +1102,17 @@ or animation; the console's RUNNING banner remains the only ambient motion.
 
 ## 7. Routing and code-splitting
 
-`routes/Root.tsx` is the whole of the routing: the console at `#/`, the Studio at
-`#/studio`, with `React.lazy` around the Studio import so three.js lands in its
-own chunk. **Hash routing, deliberately** — it needs no server rewrite, which
-matters because the Pi serves this as static files and the PWA offline shell has
-to keep working.
+`routes/Root.tsx` is the whole of the routing: the console at `#/`, building
+mode at `#/build`, the Studio at `#/studio`, with `React.lazy` around the Studio
+import so three.js lands in its own chunk. Building mode is **not** lazy — it
+reuses the console's own components and pulls no three.js of its own (its twin
+lazy-loads the canvas the same way the console's does). **Hash routing,
+deliberately** — it needs no server rewrite, which matters because the Pi serves
+this as static files and the PWA offline shell has to keep working.
+
+`Root.tsx` also owns the single `connectEvents` subscription for the life of the
+page, reading the `consoleStore.ts` module singleton, so moving between `#/` and
+`#/build` never drops the socket.
 
 The import is cached by `createPreloader()`. `App.tsx` starts it when the browser
 is idle and immediately on pointer-enter, focus or pointer-down over the Studio
@@ -1241,6 +1247,37 @@ first in the diff.
 
 Newest first. One entry per landed change; note anything that contradicts the
 plan or that a future reader could not infer.
+
+### Building mode — the `#/build` fullscreen route
+
+A third route beside `#/` and `#/studio`, for the moment the rig is actually
+running a program: the live camera and the twin side by side and nothing else,
+with status as toasts and the guarded runner in a thin bottom dock. New files
+under `web/src/components/buildmode/`:
+
+- `BuildMode.tsx` — the route. Owns no machine authority: it reuses
+  `CameraView`, `TwinPanel` and `RunnerPanel` unchanged, and every action still
+  travels the same guarded `/api/*` path the console uses. It shares the twin's
+  `TWIN_MODEL_KEY`, so a build chosen here is the build the console shows.
+- `useBuildToasts.ts` / `ToastStack.tsx` — a keyed toast queue. A byte-identical
+  repeat of the newest-content-for-a-key is dropped (the phase stream re-sends
+  ~20×/s); changed content refreshes that toast in place with a fresh expiry;
+  sticky toasts (lock, lost socket) stay until dismissed and `SOCKET LOST`
+  clears itself on reconnect. Cap 4 visible, 6 s TTL.
+- `BuildLibrary.tsx` — a slide-over picker over `twinModelChoices()` with the
+  runner's own compiler estimate per model. It only *selects*; rename/delete/
+  import stay in the Studio's `LibraryDrawer`.
+
+Store change: `createConsoleStore()` moved from a module local in `App.tsx` to
+the `web/src/consoleStore.ts` singleton, and the single `connectEvents`
+subscription moved to `routes/Root.tsx`, so switching between `#/` and `#/build`
+never tears the socket down mid-build.
+
+`RunnerPanel` gained one optional prop, `onToast`. It is a pure mirror of state
+the panel already derives (the feeder prompt, the run phase, the confirm
+prompt); the console mounts the panel without it and nothing about the runner's
+behaviour changes. `TWIN_MODEL_KEY` and its `storedModelId` / `rememberModelId`
+helpers are now exported from `TwinPanel.tsx`.
 
 ### Server-side run logs for builds dispatched from the console
 

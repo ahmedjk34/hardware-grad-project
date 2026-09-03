@@ -14,16 +14,14 @@ import { StatusBar } from "./components/StatusBar";
 import { BuildBanner } from "./components/BuildBanner";
 import { ResultToast } from "./components/ResultToast";
 import { Calibrate } from "./components/Calibrate";
-import { createConsoleStore } from "./store";
-import { connectEvents } from "./ws";
+import { store } from "./consoleStore";
 import { Icon } from "./components/Icon";
 import * as api from "./api";
 import type { StateModel } from "./types";
 import { preloadStudio } from "./routes/studio-loader";
+import { preloadTwin } from "./routes/twin-loader";
 import { usePhone } from "./media";
 import { RunnerPanel } from "./components/RunnerPanel";
-
-const store = createConsoleStore();
 
 /** Arrow keys move the selection one cell by re-selecting the neighbour's
  *  centre pixel — the server still decides whether that cell is legal. */
@@ -53,7 +51,8 @@ export function App() {
   const [cornerHandler, setCornerHandler] = useState<((point: [number, number], imageSize: [number, number]) => void) | null>(null);
   const changeHandler = useCallback((handler: ((point: [number, number], imageSize: [number, number]) => void) | null) => setCornerHandler(() => handler), []);
 
-  useEffect(() => connectEvents(store), []);
+  // The socket subscription lives in `routes/Root.tsx` for the life of the
+  // page, so switching to `#/build` and back never drops it.
 
   // Three.js stays out of first paint, then downloads when the browser is idle.
   // Pointer/focus intent below starts the same cached import immediately.
@@ -145,6 +144,15 @@ export function App() {
               primaryElsewhere={phone}
             />
           </div>
+          <a className="buildmode-enter" href="#/build"
+             onPointerEnter={() => { void preloadTwin(); }}
+             onFocus={() => { void preloadTwin(); }}>
+            <Icon name="power" size={16} />
+            <span>
+              Building mode
+              <small>Full-screen camera + twin, one build at a time</small>
+            </span>
+          </a>
           <ModeSwitch state={state} disabled={!mutable} />
           <Calibrate
             ready={snapshot.connected && state.build_state === "READY" && !collecting}

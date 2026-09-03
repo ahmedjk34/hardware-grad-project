@@ -27,10 +27,12 @@ import type { StateModel } from "../types";
 
 const Twin = lazy(preloadTwin);
 
-/** Which model the twin is showing, remembered across reloads. */
-const TWIN_MODEL_KEY = "rig.console.twin.model.v1";
+/** Which model the twin is showing, remembered across reloads. Building mode
+ *  (`#/build`) reads and writes the same key so a build chosen in one place is
+ *  the build shown in the other. */
+export const TWIN_MODEL_KEY = "rig.console.twin.model.v1";
 
-function storedModelId(): string {
+export function storedModelId(): string {
   try {
     return localStorage.getItem(TWIN_MODEL_KEY) ?? "";
   } catch {
@@ -38,7 +40,7 @@ function storedModelId(): string {
   }
 }
 
-function rememberModelId(id: string): void {
+export function rememberModelId(id: string): void {
   try {
     if (id) localStorage.setItem(TWIN_MODEL_KEY, id);
     else localStorage.removeItem(TWIN_MODEL_KEY);

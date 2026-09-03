@@ -187,14 +187,18 @@ class BlockGridReport:
     size_agreement: float = 0.0      # observed short side / predicted, median
     max_bearing_error_deg: float = 0.0
     residuals: dict = field(default_factory=dict)   # cell -> px
+    #: Set only when enough of the grid was physically placed to measure it -
+    #: see MIN_DENSE_OBSERVATIONS. None means the plain homography was used.
+    dense: object = None
 
     def describe(self) -> str:
         worst = "-" if self.worst_cell is None else f"[{self.worst_cell[0]},{self.worst_cell[1]}]"
-        return (f"{self.observations} placed blocks, residual "
+        line = (f"{self.observations} placed blocks, residual "
                 f"{self.mean_residual_px:.2f} px mean / {self.max_residual_px:.2f} px "
                 f"max at {worst}, footprint {self.size_agreement:.2f}x predicted, "
                 f"bearing off by up to {self.max_bearing_error_deg:.1f} deg, "
                 f"spread {self.hull_area_cells:.1f} cells^2")
+        return line if self.dense is None else line + "\n" + self.dense.describe()
 
 
 # --------------------------------------------------------------------------- #
@@ -237,8 +241,8 @@ def _project(matrix: np.ndarray, points) -> np.ndarray:
     return out[:, :2] / w
 
 
-def _local_scale(matrix: np.ndarray, spec: ColorGridSpec,
-                 cell) -> tuple[float, float, float, float]:
+def _local_scale(matrix: np.ndarray, spec: ColorGridSpec, cell,
+                 curvature=(0.0, 0.0)) -> tuple[float, float, float, float]:
     """Pixel geometry the fit predicts at ``cell``.
 
     Returns ``(pitch_x_px, pitch_y_px, block_x_px, block_y_px)``, all measured
@@ -247,12 +251,12 @@ def _local_scale(matrix: np.ndarray, spec: ColorGridSpec,
     """
     col, row = float(cell[0]), float(cell[1])
     half_x, half_y = spec.fill_x / 2.0, spec.fill_y / 2.0
-    probes = _project(matrix, [
+    probes = _project(matrix, _apply_curvature(np.array([
         (col - 0.5, row), (col + 0.5, row),
         (col, row - 0.5), (col, row + 0.5),
         (col - half_x, row), (col + half_x, row),
         (col, row - half_y), (col, row + half_y),
-    ])
+    ], dtype=np.float64), curvature))
     pitch_x = float(np.linalg.norm(probes[1] - probes[0]))
     pitch_y = float(np.linalg.norm(probes[3] - probes[2]))
     block_x = float(np.linalg.norm(probes[5] - probes[4]))
@@ -260,7 +264,8 @@ def _local_scale(matrix: np.ndarray, spec: ColorGridSpec,
     return pitch_x, pitch_y, block_x, block_y
 
 
-def _bearing(matrix: np.ndarray, spec: ColorGridSpec, cell) -> float:
+def _bearing(matrix: np.ndarray, spec: ColorGridSpec, cell,
+             curvature=(0.0, 0.0)) -> float:
     """Where the fit says this cell's block long axis points, in degrees.
 
     Unoriented: the block is symmetric, so only the line matters, and the
@@ -268,10 +273,11 @@ def _bearing(matrix: np.ndarray, spec: ColorGridSpec, cell) -> float:
     :class:`~vision.block_detector.BlockDetection.angle`.
     """
     col, row = float(cell[0]), float(cell[1])
-    if spec.block_y_cm >= spec.block_x_cm:
-        ends = _project(matrix, [(col, row - 0.5), (col, row + 0.5)])
-    else:
-        ends = _project(matrix, [(col - 0.5, row), (col + 0.5, row)])
+    span = ([(col, row - 0.5), (col, row + 0.5)]
+            if spec.block_y_cm >= spec.block_x_cm
+            else [(col - 0.5, row), (col + 0.5, row)])
+    ends = _project(matrix, _apply_curvature(
+        np.array(span, dtype=np.float64), curvature))
     delta = ends[1] - ends[0]
     return _normalise_angle(math.degrees(math.atan2(delta[1], delta[0])))
 
@@ -624,14 +630,117 @@ def locate_block(frame: np.ndarray, *, baseline: np.ndarray | None = None,
 # the fit
 # --------------------------------------------------------------------------- #
 
+@dataclass
+class BlockGridCalibration(ColorGridCalibration):
+    """A fitted placed-block grid, optionally carrying the machine's own curve.
+
+    A homography describes the camera. It cannot describe a machine whose real
+    advance per cell drifts along its travel, because that is nonlinear in
+    lattice coordinates and no 3x3 can absorb it. So when
+    :func:`analyse_dense_lattice` finds curvature worth fitting, it lives here
+    and is applied inside :meth:`point_at` and :meth:`grid_at` - the two doors
+    every other method goes through. ``cell_quad``, ``outline``, ``cell_at``
+    and ``workspace_corners`` are therefore correct without knowing about it,
+    and a plain ``(0.0, 0.0)`` curvature makes this exactly the base class.
+    """
+
+    curvature: tuple = (0.0, 0.0)
+
+    def point_at(self, col: float, row: float) -> tuple[float, float]:
+        a, b = self.curvature
+        return super().point_at(col + a * col * col, row + b * row * row)
+
+    def grid_at(self, point) -> tuple[float, float]:
+        u, v = super().grid_at(point)
+        return _unbend(u, self.curvature[0]), _unbend(v, self.curvature[1])
+
+    @property
+    def found_cells(self) -> dict:
+        """Only the cells a block was actually placed on.
+
+        The base class keys this off ``cell is not None``, which a filled-in
+        virtual cell also satisfies. Everything that consumes ``found_cells``
+        - grid_evidence's coverage gates, color_grid_check's "physically
+        found" count - is asking what was *measured*, and must never be handed
+        a synthesised cell as if it were an observation.
+        """
+        return {cell.cell: cell for cell in self.cells
+                if cell.cell is not None and cell.full}
+
+    @property
+    def virtual_cells(self) -> dict:
+        """The cells that were filled in from the lattice, never observed."""
+        return {cell.cell: cell for cell in self.cells
+                if cell.cell is not None and not cell.full}
+
+
+def _unbend(value: float, coefficient: float) -> float:
+    """Invert ``x + k*x**2``, taking the root next to ``value``.
+
+    The bend is tiny over a real grid - a few hundredths of a cell across the
+    whole travel - so the branch nearest the identity is always the right one,
+    and the discriminant can only go negative far outside any reachable cell.
+    """
+    if not coefficient:
+        return value
+    discriminant = 1.0 + 4.0 * coefficient * value
+    if discriminant < 0:
+        return value
+    return (math.sqrt(discriminant) - 1.0) / (2.0 * coefficient)
+
+
+def _virtual_cells(calibration, observed, image_size) -> list:
+    """Every cell of the grid that no block was ever placed on.
+
+    This is the point of the whole dense exercise: the block supply is smaller
+    than the grid, so the cells nobody could reach still have to be drawn, and
+    they are drawn from the lattice the placed blocks measured. They are marked
+    ``full=False`` with ``area=0`` and ``fill=0`` so no downstream consumer can
+    mistake a synthesised cell for an observation - ``found_cells`` and the
+    overlays already key off exactly those flags.
+    """
+    spec = calibration.spec
+    cells = []
+    for row in range(spec.rows):
+        for col in range(spec.cols):
+            if (col, row) in observed:
+                continue
+            quad = calibration.cell_quad(col, row)
+            clipped = False
+            if image_size is not None:
+                width, height = image_size
+                clipped = bool(quad[:, 0].min() < 0 or quad[:, 1].min() < 0
+                               or quad[:, 0].max() > width
+                               or quad[:, 1].max() > height)
+            cells.append(PrintedCell(
+                lattice=(col, row),
+                center=calibration.cell_center(col, row),
+                quad=quad,
+                color="green" if (col + row) % 2 == 0 else "magenta",
+                area=0.0, fill=0.0, full=False,
+                cell=(col, row), edge_clipped=clipped,
+            ))
+    return cells
+
+
 def fit_block_grid(observations, spec: ColorGridSpec, *,
-                   image_size=None, strict: bool = True) -> ColorGridCalibration:
+                   image_size=None, strict: bool = True,
+                   dense: bool = True, fill: bool = True) -> ColorGridCalibration:
     """Fit ``[col,row] -> pixel`` from labelled placements.
 
     ``observations`` is any iterable of :class:`BlockObservation`. ``strict``
     off skips the quality gates and is for diagnostics only - it exists so a
     tool can *show* an operator the bad fit that was refused, never so a caller
     can save one.
+
+    ``dense`` lets the measured-lattice analysis run once there are
+    :data:`MIN_DENSE_OBSERVATIONS` placements of a :data:`DENSE_MODES` grid: the
+    real pitch is measured per row and per column, four models are compared by
+    leave-one-out prediction, and the winner replaces the plain homography.
+    ``fill`` adds every unplaced cell to the result as a virtual
+    :class:`PrintedCell`, which is how a grid larger than the block supply gets
+    drawn in full. Virtual cells are marked ``full=False`` with ``area=0`` so
+    nothing downstream can mistake one for a measurement.
     """
     items = list(observations)
     if len(items) < MIN_OBSERVATIONS:
@@ -665,31 +774,46 @@ def fit_block_grid(observations, spec: ColorGridSpec, *,
                 f"nearly collinear; spread them across the envelope",
                 stage="fit")
 
-    matrix, _mask = cv2.findHomography(source, target, 0)
+    dense_report = None
+    curvature = (0.0, 0.0)
+    if (dense and len(cells) >= MIN_DENSE_OBSERVATIONS
+            and spec.mode in DENSE_MODES):
+        best, dense_report = analyse_dense_lattice(cells.values(), spec)
+        matrix, curvature = best.matrix, best.curvature
+    else:
+        matrix, _mask = cv2.findHomography(source, target, 0)
     if matrix is None:
         raise BlockGridError(
             "no homography fits the placed blocks; the correspondences are "
             "degenerate", stage="fit")
     matrix = np.asarray(matrix, dtype=np.float64)
 
-    projected = _project(matrix, source)
+    # Curvature cannot be folded into the 3x3 - it is nonlinear by
+    # construction, which is the entire reason it is worth fitting separately.
+    # BlockGridCalibration carries it and applies it inside point_at/grid_at,
+    # so every downstream caller still speaks plain [col,row] and none of them
+    # need to know this model exists.
+    projected = _project(matrix, _apply_curvature(source, curvature))
     errors = np.linalg.norm(projected - target, axis=1)
     order = list(cells)
     residuals = {cell: float(errors[index]) for index, cell in enumerate(order)}
     worst_index = int(np.argmax(errors))
 
     mid = (float(np.mean(source[:, 0])), float(np.mean(source[:, 1])))
-    pitch_x_px, pitch_y_px, _bx, _by = _local_scale(matrix, spec, mid)
+    pitch_x_px, pitch_y_px, _bx, _by = _local_scale(matrix, spec, mid,
+                                                    curvature=curvature)
     short_pitch = min(pitch_x_px, pitch_y_px)
 
     size_ratios, bearing_errors = [], []
     for cell, item in cells.items():
-        _px, _py, block_x_px, block_y_px = _local_scale(matrix, spec, cell)
+        _px, _py, block_x_px, block_y_px = _local_scale(matrix, spec, cell,
+                                                        curvature=curvature)
         predicted_short = min(block_x_px, block_y_px)
         if predicted_short > 0:
             size_ratios.append(item.sighting.short_len / predicted_short)
         bearing_errors.append(
-            _angle_gap(item.sighting.angle, _bearing(matrix, spec, cell)))
+            _angle_gap(item.sighting.angle,
+                       _bearing(matrix, spec, cell, curvature=curvature)))
 
     report = BlockGridReport(
         observations=len(cells),
@@ -729,11 +853,15 @@ def fit_block_grid(observations, spec: ColorGridSpec, *,
         if problems:
             raise BlockGridError("; ".join(problems), stage="quality")
 
+    if dense_report is not None:
+        report.dense = dense_report
+
     printed = []
     for cell, item in cells.items():
         col, row = cell
         sighting = item.sighting
-        _px, _py, block_x_px, block_y_px = _local_scale(matrix, spec, cell)
+        _px, _py, block_x_px, block_y_px = _local_scale(matrix, spec, cell,
+                                                        curvature=curvature)
         predicted_area = max(block_x_px * block_y_px, 1.0)
         clipped = False
         if image_size is not None:
@@ -776,9 +904,16 @@ def fit_block_grid(observations, spec: ColorGridSpec, *,
         window_index=0,
         window_observed=len(cells),
     )
-    calibration = ColorGridCalibration(spec=spec, homography=matrix,
-                                       cells=printed, metrics=metrics)
+    calibration = BlockGridCalibration(spec=spec, homography=matrix,
+                                       cells=printed, metrics=metrics,
+                                       curvature=tuple(curvature))
     calibration.block_report = report
+    if fill:
+        virtual = _virtual_cells(calibration, set(cells), image_size)
+        calibration.cells.extend(virtual)
+        calibration.cells.sort(key=lambda entry: entry.cell)
+        if dense_report is not None:
+            dense_report.virtual_cells = len(virtual)
     return calibration
 
 
@@ -984,3 +1119,343 @@ class BlockGridSession:
             reasons=tuple(reasons),
             report=report,
         )
+
+
+# --------------------------------------------------------------------------- #
+# Dense mode: measure the real lattice, then fill what was never placed
+# --------------------------------------------------------------------------- #
+#
+# With a handful of placements there is nothing to do but fit a homography and
+# trust it. With most of the grid physically occupied there is enough data to
+# ask a better question: *does a homography actually describe this machine?*
+#
+# A homography already absorbs perspective and any uniform scale error, so a
+# pitch that drifts smoothly across the image is not evidence of anything. What
+# it cannot absorb is a pitch that drifts along the machine's own travel - a
+# belt or lead screw whose real advance per step is not constant. That shows up
+# as curvature in lattice space, and it is the one thing worth adding a
+# parameter for.
+#
+# So four candidates are fitted and compared by leave-one-out cross-validation:
+# each point is predicted by a model fitted without it, which is what stops a
+# richer model from winning merely by having more freedom. The winner is
+# reported by name, so an operator learns whether their rig has real pitch
+# error rather than being told a number and left to trust it.
+
+# Below this, dense analysis is not attempted: model selection over 8-10
+# parameters needs more than a handful of points to mean anything, and the
+# plain homography is the right answer anyway.
+MIN_DENSE_OBSERVATIONS = 25
+
+# Dense analysis is vertical-only for now. The horizontal grid is 3 columns
+# wide, so a per-column pitch table has three entries and curvature along X is
+# fitted from three points - which is not a measurement, it is an interpolation
+# with no residual left over to check it.
+DENSE_MODES = ("vertical",)
+
+# A per-row/per-column pitch table this far from uniform is worth an operator's
+# attention even when the chosen model handles it, because it usually means a
+# loose belt rather than a camera angle.
+PITCH_SPREAD_WARNING = 0.06
+
+LATTICE_MODELS = ("similarity", "affine", "homography", "homography+curvature")
+
+
+@dataclass(frozen=True)
+class AxisPitch:
+    """The measured centre-to-centre spacing along one machine axis.
+
+    Measured between lattice-ADJACENT placements only - never between a cell
+    and its neighbour-but-one, and never across a gap - so every sample is one
+    pitch and no averaging has to guess how many pitches it just crossed.
+    """
+
+    axis: str                     # "x" or "y"
+    pairs: int
+    median_px: float
+    mean_px: float
+    std_px: float
+    expected_cm: float
+    px_per_cm: float
+    by_index: dict                # the other axis's index -> median pitch, px
+    spread: float                 # (max - min) / median over by_index
+
+    def describe(self) -> str:
+        table = ", ".join(f"{index}:{value:.1f}"
+                          for index, value in sorted(self.by_index.items()))
+        return (f"{self.axis} pitch {self.median_px:.2f} px "
+                f"(sd {self.std_px:.2f}, n={self.pairs}) = "
+                f"{self.expected_cm:g} cm -> {self.px_per_cm:.2f} px/cm; "
+                f"spread {self.spread:.1%} across [{table}]")
+
+
+@dataclass(frozen=True)
+class LatticeModelFit:
+    """One candidate model and how well it predicts points it never saw."""
+
+    name: str
+    matrix: np.ndarray
+    curvature: tuple             # (a, b): lattice-space c**2 / r**2 correction
+    parameters: int
+    train_residual_px: float
+    loo_residual_px: float       # leave-one-out; this is what picks the winner
+
+    def describe(self) -> str:
+        return (f"{self.name} ({self.parameters} dof): "
+                f"fit {self.train_residual_px:.2f} px, "
+                f"held-out {self.loo_residual_px:.2f} px")
+
+
+@dataclass
+class DenseLatticeReport:
+    """What the dense analysis measured, and what it concluded."""
+
+    observations: int
+    pitch_x: AxisPitch | None = None
+    pitch_y: AxisPitch | None = None
+    chosen: str = "homography"
+    candidates: tuple = ()
+    curvature: tuple = (0.0, 0.0)
+    virtual_cells: int = 0
+    warnings: tuple = ()
+
+    def describe(self) -> str:
+        lines = [f"dense lattice from {self.observations} placements, "
+                 f"model {self.chosen}"]
+        for pitch in (self.pitch_x, self.pitch_y):
+            if pitch is not None:
+                lines.append("  " + pitch.describe())
+        for candidate in self.candidates:
+            lines.append("  " + candidate.describe()
+                         + ("   <- chosen" if candidate.name == self.chosen else ""))
+        if any(self.curvature):
+            lines.append(f"  travel curvature a={self.curvature[0]:+.5f} "
+                         f"b={self.curvature[1]:+.5f} (cells per cell squared)")
+        lines.append(f"  {self.virtual_cells} cells filled virtually")
+        lines.extend("  ! " + warning for warning in self.warnings)
+        return "\n".join(lines)
+
+
+def measure_pitch(observations, spec: ColorGridSpec, axis: str) -> AxisPitch | None:
+    """Measure one axis's real pitch from lattice-adjacent placements.
+
+    This is the "distance between blocks" answer, and it is deliberately
+    reported per row (for X) and per column (for Y) as well as pooled, because
+    "is the gap a static number or does it depend where you are" is exactly the
+    question a single average hides.
+    """
+    by_cell = {item.cell: item for item in observations}
+    step = (1, 0) if axis == "x" else (0, 1)
+    samples, grouped = [], {}
+    for cell, item in by_cell.items():
+        neighbour = by_cell.get((cell[0] + step[0], cell[1] + step[1]))
+        if neighbour is None:
+            continue
+        distance = math.dist(item.center, neighbour.center)
+        samples.append(distance)
+        # Grouped by the OTHER axis's index: an X pitch measured along row 3 is
+        # a fact about row 3.
+        grouped.setdefault(cell[1] if axis == "x" else cell[0], []).append(distance)
+    if len(samples) < 2:
+        return None
+
+    values = np.asarray(samples, dtype=np.float64)
+    median = float(np.median(values))
+    by_index = {index: float(np.median(group)) for index, group in grouped.items()}
+    spread = 0.0
+    if len(by_index) > 1 and median > 0:
+        spread = (max(by_index.values()) - min(by_index.values())) / median
+    expected_cm = spec.pitch_x_cm if axis == "x" else spec.pitch_y_cm
+    return AxisPitch(
+        axis=axis, pairs=len(samples), median_px=median,
+        mean_px=float(values.mean()), std_px=float(values.std()),
+        expected_cm=expected_cm,
+        px_per_cm=median / expected_cm if expected_cm else 0.0,
+        by_index=by_index, spread=spread,
+    )
+
+
+def _apply_curvature(source: np.ndarray, curvature) -> np.ndarray:
+    """Bend lattice coordinates before projection: c + a*c^2, r + b*r^2.
+
+    A machine whose real advance per step drifts along its travel produces
+    exactly this - a lattice that is regular in index space but not in
+    distance. Applying it in LATTICE space rather than pixel space keeps it a
+    statement about the machine, which is what it is, and leaves the homography
+    to describe the camera.
+    """
+    a, b = curvature
+    if not a and not b:
+        return source
+    bent = source.copy()
+    bent[:, 0] = source[:, 0] + a * source[:, 0] ** 2
+    bent[:, 1] = source[:, 1] + b * source[:, 1] ** 2
+    return bent
+
+
+def _fit_model(name: str, source: np.ndarray, target: np.ndarray):
+    """Fit one candidate. Returns ``(matrix, curvature)`` or None."""
+    if len(source) < 3:
+        return None
+    count = len(source)
+    columns, rows = source[:, 0], source[:, 1]
+    ones = np.ones(count)
+    # Plain least squares rather than cv2's estimators: those default to a
+    # robust method that resamples, which would make the leave-one-out loop
+    # below non-deterministic and let a model's score wobble by more than the
+    # difference it is being judged on. There are no outliers to be robust
+    # against here anyway - every correspondence is labelled by construction.
+    if name == "similarity":
+        # 4 dof. x = a*c - b*r + tx, y = b*c + a*r + ty, so one scale and one
+        # rotation: the model of a camera square-on to a perfectly regular grid.
+        design = np.zeros((2 * count, 4))
+        design[:count] = np.column_stack([columns, -rows, ones, np.zeros(count)])
+        design[count:] = np.column_stack([rows, columns, np.zeros(count), ones])
+        values = np.concatenate([target[:, 0], target[:, 1]])
+        (a, b, tx, ty), *_ = np.linalg.lstsq(design, values, rcond=None)
+        return np.array([[a, -b, tx], [b, a, ty], [0.0, 0.0, 1.0]]), (0.0, 0.0)
+    if name == "affine":
+        # 6 dof: independent X and Y scale plus shear, still no perspective.
+        design = np.column_stack([columns, rows, ones])
+        solution, *_ = np.linalg.lstsq(design, target, rcond=None)
+        return np.vstack([solution.T, [0.0, 0.0, 1.0]]), (0.0, 0.0)
+    if name == "homography":
+        matrix, _mask = cv2.findHomography(source, target, 0)
+        return None if matrix is None else (np.asarray(matrix, float), (0.0, 0.0))
+    if name == "homography+curvature":
+        # Alternate between the camera model and the machine model. Two
+        # parameters only - one curvature term per axis - because with 25-40
+        # points anything richer is fitting the noise, and leave-one-out below
+        # would reject it anyway.
+        curvature = (0.0, 0.0)
+        matrix = None
+        for _pass in range(4):
+            bent = _apply_curvature(source, curvature)
+            matrix, _mask = cv2.findHomography(bent, target, 0)
+            if matrix is None:
+                return None
+            matrix = np.asarray(matrix, float)
+            # Back-project the observations into lattice space and regress what
+            # is left against c^2 and r^2, one axis at a time.
+            try:
+                inverse = np.linalg.inv(matrix)
+            except np.linalg.LinAlgError:
+                return None
+            back = _project(inverse, target)
+            updated = []
+            for column in (0, 1):
+                index = source[:, column]
+                error = back[:, column] - index
+                # Regress on [1, i, i**2] and keep ONLY the quadratic term. The
+                # constant and linear parts of the residual are things the
+                # homography can and will absorb on the next pass, so leaving
+                # them in the design matrix is what stops them biasing the
+                # coefficient that matters. Fitting i**2 alone systematically
+                # under-estimates the curve by most of its magnitude, because
+                # i**2 is strongly correlated with i over a 0..6 range.
+                design = np.column_stack(
+                    [np.ones(len(index)), index, index ** 2])
+                try:
+                    solution, *_ = np.linalg.lstsq(design, error, rcond=None)
+                except np.linalg.LinAlgError:
+                    return None
+                updated.append(float(solution[2]))
+            if max(abs(updated[0] - curvature[0]),
+                   abs(updated[1] - curvature[1])) < 1e-7:
+                curvature = (updated[0], updated[1])
+                break
+            curvature = (updated[0], updated[1])
+        return matrix, curvature
+    raise ValueError(f"unknown lattice model {name!r}")
+
+
+def _model_error(matrix, curvature, source, target) -> np.ndarray:
+    projected = _project(matrix, _apply_curvature(source, curvature))
+    return np.linalg.norm(projected - target, axis=1)
+
+
+def choose_lattice_model(observations, *, models=LATTICE_MODELS) -> tuple:
+    """Fit every candidate and rank them by leave-one-out prediction error.
+
+    Leave-one-out, not fit error: a homography with a curvature term will
+    always fit at least as well as one without, so training error can only ever
+    choose the richest model. Predicting a point the fit never saw is the
+    question that actually matters here - the whole purpose of the model is to
+    place cells no block was ever put on.
+    """
+    items = list(observations)
+    source = np.array([[float(c), float(r)] for c, r in
+                       (item.cell for item in items)], dtype=np.float64)
+    target = np.array([item.center for item in items], dtype=np.float64)
+
+    dof = {"similarity": 4, "affine": 6, "homography": 8,
+           "homography+curvature": 10}
+    fits = []
+    for name in models:
+        whole = _fit_model(name, source, target)
+        if whole is None:
+            continue
+        matrix, curvature = whole
+        train = float(_model_error(matrix, curvature, source, target).mean())
+
+        held = []
+        for index in range(len(items)):
+            keep = np.arange(len(items)) != index
+            partial = _fit_model(name, source[keep], target[keep])
+            if partial is None:
+                held = []
+                break
+            held.append(float(_model_error(
+                partial[0], partial[1], source[index:index + 1],
+                target[index:index + 1])[0]))
+        if not held:
+            continue
+        fits.append(LatticeModelFit(
+            name=name, matrix=matrix, curvature=curvature,
+            parameters=dof.get(name, 0), train_residual_px=train,
+            loo_residual_px=float(np.mean(held))))
+    if not fits:
+        raise BlockGridError("no lattice model could be fitted to the placements",
+                             stage="fit")
+    # Ties go to the simpler model: two models that predict equally well are not
+    # equally believable, and the extra freedom has to earn its place.
+    best = min(fits, key=lambda fit: (round(fit.loo_residual_px, 3), fit.parameters))
+    return best, tuple(fits)
+
+
+def analyse_dense_lattice(observations, spec: ColorGridSpec, *,
+                          models=LATTICE_MODELS):
+    """Measure the lattice and pick the model that predicts it best.
+
+    Returns ``(best_fit, report)``. Raises when there are too few placements to
+    say anything: the caller should fall back to the plain homography, which is
+    what :func:`fit_block_grid` does.
+    """
+    items = list(observations)
+    if len(items) < MIN_DENSE_OBSERVATIONS:
+        raise BlockGridError(
+            f"dense lattice analysis needs at least {MIN_DENSE_OBSERVATIONS} "
+            f"placements; {len(items)} were recorded", stage="fit")
+
+    best, candidates = choose_lattice_model(items, models=models)
+    report = DenseLatticeReport(
+        observations=len(items),
+        pitch_x=measure_pitch(items, spec, "x"),
+        pitch_y=measure_pitch(items, spec, "y"),
+        chosen=best.name, candidates=candidates, curvature=best.curvature,
+    )
+    warnings = []
+    for pitch in (report.pitch_x, report.pitch_y):
+        if pitch is not None and pitch.spread > PITCH_SPREAD_WARNING:
+            warnings.append(
+                f"the {pitch.axis} pitch varies {pitch.spread:.1%} across the "
+                f"grid ({pitch.describe()}). The chosen model accounts for it, "
+                f"but that much variation usually means a loose belt rather "
+                f"than a camera angle")
+    if best.name == "homography+curvature":
+        warnings.append(
+            f"travel curvature was worth fitting (a={best.curvature[0]:+.5f}, "
+            f"b={best.curvature[1]:+.5f}): the machine's advance per cell is "
+            f"not constant along its travel")
+    report.warnings = tuple(warnings)
+    return best, report

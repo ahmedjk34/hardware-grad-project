@@ -247,10 +247,17 @@ def sighting_at(matrix, cell, grid, *, offset=(0.0, 0.0), scale_short=1.0,
     right = project(matrix, (cell[0] + half_x, cell[1]))
     low = project(matrix, (cell[0], cell[1] - half_y))
     high = project(matrix, (cell[0], cell[1] + half_y))
-    block_x = math.dist(left, right) * scale_short
-    block_y = math.dist(low, high)
+    # scale_short deliberately shrinks the SHORT side, whichever axis that is
+    # in this mode - it exists to test the footprint gate, not to swap axes.
+    short_is_x = grid.block_x_cm < grid.block_y_cm
+    block_x = math.dist(left, right) * (scale_short if short_is_x else 1.0)
+    block_y = math.dist(low, high) * (1.0 if short_is_x else scale_short)
     long_len, short_len = max(block_x, block_y), min(block_x, block_y)
-    bearing = math.degrees(math.atan2(high[1] - low[1], high[0] - low[0]))
+    # The long axis is Y in vertical mode and X in horizontal, so the bearing
+    # has to follow the mode rather than always reading off the row direction.
+    head, tail = ((high, low) if grid.block_y_cm >= grid.block_x_cm
+                  else (right, left))
+    bearing = math.degrees(math.atan2(head[1] - tail[1], head[0] - tail[0]))
     return BlockSighting(
         center=(cx + offset[0], cy + offset[1]),
         quad=np.array([[cx - short_len / 2, cy - long_len / 2],
@@ -433,6 +440,187 @@ else:
     check("differencing isolates the block that appeared",
           math.dist(moved.center, (270.0, 434.0)) < 12.0,
           f"found at {moved.center[0]:.0f},{moved.center[1]:.0f}")
+
+
+
+# --------------------------------------------------------------------------- #
+# 8. dense mode: measure the real lattice, then fill what was never placed
+# --------------------------------------------------------------------------- #
+#
+# The vertical grid has 41 buildable cells and the block supply is smaller than
+# that, so the interesting case is "most of the grid placed, the rest filled
+# in". These checks care about two things the plain homography cannot do:
+# reporting the pitch the machine actually achieved, and refusing to buy a
+# richer model than the data supports.
+
+from vision.block_grid import (                                     # noqa: E402
+    DENSE_MODES,
+    MIN_DENSE_OBSERVATIONS,
+    analyse_dense_lattice,
+    choose_lattice_model,
+    measure_pitch,
+)
+
+
+def dense_observations(grid, matrix, cells, *, curvature=(0.0, 0.0), jitter=0.0,
+                       seed=1):
+    """Labelled sightings straight from a known model - no rendering involved."""
+    rng = np.random.default_rng(seed)
+    made = []
+    for col, row in cells:
+        a, b = curvature
+        bent = (col + a * col * col, row + b * row * row)
+        sighting = sighting_at(matrix, bent, grid)
+        if jitter:
+            sighting = BlockSighting(
+                center=(sighting.center[0] + rng.normal(0, jitter),
+                        sighting.center[1] + rng.normal(0, jitter)),
+                quad=sighting.quad, long_len=sighting.long_len,
+                short_len=sighting.short_len, angle=sighting.angle,
+                area=sighting.area, rectangularity=sighting.rectangularity,
+                source=sighting.source)
+        made.append(BlockObservation(cell=(col, row), sighting=sighting))
+    return made
+
+
+# 25 of the 41 buildable vertical cells: rows 0-3 complete, minus the feeder.
+buildable = [(col, row) for row in range(VERTICAL.rows)
+             for col in range(VERTICAL.cols)
+             if VERTICAL.contains_build_target(col, row)]
+supply = buildable[:25]
+dense_truth, dense_scale = truth_homography(VERTICAL)
+
+flat = dense_observations(VERTICAL, dense_truth, supply)
+check("the dense floor is 25 placements", MIN_DENSE_OBSERVATIONS == 25)
+check("dense mode is vertical only", DENSE_MODES == ("vertical",))
+
+# --- the measurement the request was actually about ---------------------
+px = measure_pitch(flat, spec, "x")
+py = measure_pitch(flat, spec, "y")
+check("the X pitch is measured from adjacent pairs only",
+      px is not None and px.pairs >= 15, str(px and px.pairs))
+expected_px_per_cm = dense_scale
+check("the measured X pitch recovers the real px/cm",
+      abs(px.px_per_cm - expected_px_per_cm) / expected_px_per_cm < 0.02,
+      f"{px.px_per_cm:.2f} vs {expected_px_per_cm:.2f} px/cm")
+check("the measured Y pitch recovers the real px/cm",
+      abs(py.px_per_cm - expected_px_per_cm) / expected_px_per_cm < 0.02,
+      f"{py.px_per_cm:.2f} vs {expected_px_per_cm:.2f} px/cm")
+check("a uniform lattice reports a near-zero pitch spread",
+      px.spread < 0.01 and py.spread < 0.01,
+      f"x {px.spread:.3f} y {py.spread:.3f}")
+check("the X pitch is reported per row", len(px.by_index) > 1, str(px.by_index))
+check("the Y pitch is reported per column", len(py.by_index) > 1, str(py.by_index))
+
+# --- model selection must not buy freedom it does not need --------------
+best, candidates = choose_lattice_model(flat)
+check("all four candidates are fitted", len(candidates) == 4, str(len(candidates)))
+check("a clean affine lattice does not buy curvature",
+      best.name != "homography+curvature", best.describe())
+
+noisy = dense_observations(VERTICAL, dense_truth, supply, jitter=0.6, seed=7)
+noisy_best, _ = choose_lattice_model(noisy)
+check("noise alone does not buy curvature either",
+      noisy_best.name != "homography+curvature", noisy_best.describe())
+
+# A machine whose advance per cell drifts along its travel: the one thing a
+# homography genuinely cannot absorb, so the extra parameter must be bought.
+CURVE = (0.006, 0.004)
+curved = dense_observations(VERTICAL, dense_truth, supply, curvature=CURVE,
+                            jitter=0.15, seed=3)
+curved_best, curved_all = choose_lattice_model(curved)
+check("real travel curvature IS bought", curved_best.name == "homography+curvature",
+      "; ".join(fit.describe() for fit in curved_all))
+# The coefficient is only recovered approximately, and that is expected rather
+# than a defect: a quadratic bend in lattice space is partly degenerate with a
+# homography's own perspective terms, so the two share the work. What has to be
+# true is that the fit lands on the right sign and order of magnitude, and -
+# below - that it PREDICTS unseen cells better than a straight homography.
+# Prediction is the claim the model exists to make; the parameter is not.
+check("the fitted curvature has the right sign and scale",
+      all(0.25 <= fitted / real <= 1.75 for fitted, real
+          in zip(curved_best.curvature, CURVE)),
+      f"{curved_best.curvature} vs {CURVE}")
+check("held-out error beats the plain homography on curved data",
+      curved_best.loo_residual_px
+      < min(fit.loo_residual_px for fit in curved_all
+            if fit.name == "homography"),
+      "; ".join(fit.describe() for fit in curved_all))
+
+# --- the fill ------------------------------------------------------------
+filled = fit_block_grid(flat, spec, image_size=SIZE)
+report = filled.block_report
+check("the dense report is attached", report.dense is not None)
+check("every unplaced cell is filled virtually",
+      report.dense.virtual_cells == spec.cols * spec.rows - len(supply),
+      f"{report.dense.virtual_cells} filled, "
+      f"{spec.cols * spec.rows - len(supply)} expected")
+check("found_cells still counts only what was placed",
+      len(filled.found_cells) == len(supply), str(len(filled.found_cells)))
+check("virtual cells are flagged, never full",
+      all(not cell.full and cell.area == 0.0
+          for cell in filled.virtual_cells.values()),
+      str(len(filled.virtual_cells)))
+check("observed and virtual together cover the whole grid",
+      len(filled.found_cells) + len(filled.virtual_cells)
+      == spec.cols * spec.rows)
+
+# The filled cells have to land where the blocks WOULD have gone, which is the
+# only claim that matters. Checked against ground truth, not against the fit.
+worst_virtual = max(
+    math.dist(filled.cell_center(col, row), project(dense_truth, (col, row)))
+    for col, row in filled.virtual_cells)
+check("virtual cells land within 2 px of where a block would go",
+      worst_virtual < 2.0, f"{worst_virtual:.2f} px")
+
+# ...including on a curved machine, where they are extrapolated through the
+# curve rather than a straight homography.
+curved_fit = fit_block_grid(curved, spec, image_size=SIZE)
+check("a curved fit keeps its curvature", any(curved_fit.curvature),
+      str(curved_fit.curvature))
+worst_curved = max(
+    math.dist(curved_fit.cell_center(col, row),
+              project(dense_truth,
+                      (col + CURVE[0] * col * col, row + CURVE[1] * row * row)))
+    for col, row in curved_fit.virtual_cells)
+check("virtual cells follow the machine's curve too",
+      worst_curved < 2.5, f"{worst_curved:.2f} px")
+straight = fit_block_grid(curved, spec, image_size=SIZE, dense=False)
+worst_straight = max(
+    math.dist(straight.cell_center(col, row),
+              project(dense_truth,
+                      (col + CURVE[0] * col * col, row + CURVE[1] * row * row)))
+    for col, row in straight.virtual_cells)
+check("and they beat what a plain homography would have extrapolated",
+      worst_curved < worst_straight * 0.6,
+      f"curved {worst_curved:.2f} px vs straight {worst_straight:.2f} px")
+
+# grid_at must invert point_at exactly, curve and all, or cell_at lies.
+for cell in ((0, 0), (6, 5), (3, 2)):
+    back = curved_fit.grid_at(curved_fit.cell_center(*cell))
+    check(f"grid_at inverts point_at at {cell}",
+          math.dist(back, cell) < 1e-6, f"{back}")
+
+# --- the guards ----------------------------------------------------------
+expect_error("dense analysis refuses too few placements",
+             lambda: analyse_dense_lattice(flat[:20], spec), "at least 25")
+h_truth, _h_scale = truth_homography(HORIZONTAL)
+h_spec = spec_for_grid(HORIZONTAL)
+horizontal_dense = dense_observations(
+    HORIZONTAL, h_truth,
+    [(col, row) for row in range(HORIZONTAL.rows) for col in range(HORIZONTAL.cols)
+     if HORIZONTAL.contains_build_target(col, row)][:25])
+horizontal_fit = fit_block_grid(horizontal_dense, h_spec, image_size=SIZE)
+check("the horizontal grid does not get dense analysis",
+      horizontal_fit.block_report.dense is None)
+check("but the horizontal grid is still filled",
+      len(horizontal_fit.virtual_cells)
+      == h_spec.cols * h_spec.rows - len(horizontal_dense),
+      str(len(horizontal_fit.virtual_cells)))
+
+check("fill can be turned off",
+      not fit_block_grid(flat, spec, fill=False).virtual_cells)
+
 
 print()
 if failures:

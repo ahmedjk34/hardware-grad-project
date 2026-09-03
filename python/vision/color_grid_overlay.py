@@ -67,12 +67,19 @@ def draw_color_grid(frame: np.ndarray, calibration: ColorGridCalibration, *,
         for col in range(spec.cols):
             quads[(col, row)] = _quad(calibration.cell_quad(col, row))
 
+    # A placed-block calibration fills the cells its block supply could not
+    # reach. Those are real geometry but not measurements, so they get the
+    # same "outlined, never tinted" treatment as a cell the sheet detector
+    # projected but did not see.
+    virtual = {cell.cell for cell in calibration.cells
+               if cell.cell is not None and not cell.full}
+
     combined = getattr(calibration, "is_combined", False)
     show_bar_family = (not combined
                        or getattr(calibration, "requested_mode", None) != "horizontal")
     measured_bar_keys = ({pattern.cell for pattern in calibration.patterns
                           if pattern.kind == "bar"}
-                         if combined else set(quads))
+                         if combined else set(quads) - virtual)
 
     if shade > 0 and show_bar_family:
         tinted = frame.copy()

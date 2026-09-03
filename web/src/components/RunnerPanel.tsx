@@ -30,14 +30,36 @@ const STYLES: { style: RunStyle; label: string }[] = [
 const activePhase = (phase: RunState["phase"]) =>
   phase !== "idle" && phase !== "done";
 
+/** A toast building mode can surface. The runner only DESCRIBES them; it owns
+ *  no toast UI of its own, and passing no `onToast` (the console does) changes
+ *  nothing about how this panel behaves. */
+export interface RunnerToast {
+  key: string;
+  kind: "info" | "success" | "warn" | "error";
+  title: string;
+  detail?: string;
+  sticky?: boolean;
+}
+
+/** The one place a run phase becomes an operator-facing headline. */
+const PHASE_TOAST: Partial<Record<RunState["phase"], Omit<RunnerToast, "key">>> = {
+  done: { kind: "success", title: "RUN COMPLETE" },
+  rejected: { kind: "warn", title: "REJECTED — RUN PAUSED" },
+  paused: { kind: "warn", title: "RUN PAUSED" },
+  "stopped-mismatch": { kind: "error", title: "COMMAND MISMATCH — RUN STOPPED", sticky: true },
+  locked: { kind: "error", title: "SESSION LOCKED", sticky: true },
+};
+
 export function RunnerPanel({ state, connected, modelId, api, delay, onActiveChange,
-                              progress = emptyProgress(), lastResult = null }: {
+                              onToast, progress = emptyProgress(), lastResult = null }: {
   state: StateModel;
   connected: boolean;
   modelId: string;
   api?: RunnerApi;
   delay?: (milliseconds: number) => Promise<void>;
   onActiveChange?: (active: boolean) => void;
+  /** Building mode listens; the console does not pass this. */
+  onToast?: (toast: RunnerToast) => void;
   /** The rig's current phase, straight from the serial event stream. */
   progress?: BuildProgress;
   /** The last settled build, as the server's `build_result` event reported it. */
@@ -172,6 +194,43 @@ export function RunnerPanel({ state, connected, modelId, api, delay, onActiveCha
   const op = currentOp(run);
   const operation = currentOperationText(run);
   const canStart = !!modelDocument && !!compiled?.valid && connected && state.build_state === "READY";
+
+  // ── toasts for building mode ────────────────────────────────────────────
+  // Purely a mirror of state this panel already derives. The console mounts
+  // this without `onToast` and none of it runs.
+  const promptKey = prompt ? `${prompt.same ? "same" : prompt.colour}|${prompt.text}` : null;
+  useEffect(() => {
+    if (!onToast || !prompt) return;
+    // `idle` is included on purpose: with a build chosen, "what needs to be
+    // done" is already "load block 1 into the feeder".
+    if (run.phase === "done" || run.phase === "locked"
+        || run.phase === "stopped-mismatch") return;
+    onToast({
+      key: "runner:feed",
+      kind: "info",
+      title: prompt.same ? "FEEDER · SAME COLOUR" : `FEEDER · LOAD ${prompt.colour}`,
+      detail: prompt.text,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onToast, promptKey, run.phase]);
+  useEffect(() => {
+    if (!onToast) return;
+    const toast = PHASE_TOAST[run.phase];
+    if (toast) onToast({ ...toast, key: `runner:phase:${run.phase}`, detail: run.failure ?? toast.detail });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onToast, run.phase]);
+  useEffect(() => {
+    if (!onToast || run.phase !== "awaiting-confirm") return;
+    onToast({
+      key: "runner:confirm",
+      kind: "warn",
+      title: run.pendingConfirm === "mode" ? "CONFIRM MODE CHANGE" : "CONFIRM BUILD",
+      detail: run.pendingConfirm === "mode"
+        ? "Switching grid mode homes X and Y. Confirm in the dock."
+        : "Press BUILD in the dock to send the next block.",
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onToast, run.phase, run.pendingConfirm]);
 
   return (
     <section className={`runner panel${run.style === "dry" && run.phase !== "idle" ? " is-dry" : ""}`}
