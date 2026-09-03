@@ -109,7 +109,7 @@ from rig.grid import MachineGrid  # noqa: E402
 from rig.link import ABORTED, PLACED, REJECTED, Rig, RigError  # noqa: E402
 from rig.workspace import CORNER_NAMES, WORKSPACE_MAP_PATH, WorkspaceMap  # noqa: E402
 from vision.analysis_worker import AnalysisWorker  # noqa: E402
-from vision.block_detector import detect_blocks  # noqa: E402
+from vision.block_outline import detect_aligned_blocks  # noqa: E402
 from vision.camera_source import LatestFramePump, open_camera  # noqa: E402
 from vision.color_grid import (  # noqa: E402
     DEFAULT_HOME_CONVENTION,
@@ -406,7 +406,13 @@ def main():
             camera.release()
         rig.close()
         return 1
-    analysis = AnalysisWorker(detect_blocks, max_hz=args.analysis_hz)
+    # Grid-aware: lets the overlay reject block-shaped things that are not
+    # on the lattice (the holder's offcuts beside [0,0]) and draw every
+    # rectangle on one shared bearing. The lambda re-reads `grid`, which
+    # the mode switch rebinds, so no worker restart is needed.
+    analysis = AnalysisWorker(
+        lambda frame: detect_aligned_blocks(frame, grid=grid),
+        max_hz=args.analysis_hz)
     snapshots = SnapshotWorker(save_detection_snapshot)
     analysis.start()
     paper.start()
@@ -566,6 +572,18 @@ def main():
                 ui["message"] = f"build level set to {controller.level}"
             except BuildStateError as exc:
                 ui["message"] = str(exc)
+        elif key == ord("L"):
+            # Re-read the map file. It is otherwise loaded once at startup and
+            # again only on a mode change, so a calibration saved by Camera
+            # Studio or block_grid_calibrate.py while this window was open
+            # stayed invisible until a restart.
+            map_generation += 1
+            saved_workspace, rejection = load_workspace(
+                args.workspace_map, grid, projection)
+            ui["message"] = (f"reloaded the {grid.mode} calibration"
+                             if saved_workspace is not None else
+                             f"no usable {grid.mode} calibration on disk: "
+                             f"{rejection}")
         elif key == ord("o"):
             # The grid mode changes what every coordinate means, so this drops
             # the selection and the drawn grid has to be rebuilt from the rig.

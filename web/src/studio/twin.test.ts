@@ -6,7 +6,8 @@
  */
 import { describe, expect, it } from "vitest";
 import {
-  BUILDING_OPACITY, DESATURATE_TOKEN, GHOST_OPACITY, LOCKED_MIX, PHASE_BY_ID,
+  BUILDING_OPACITY, DESATURATE_TOKEN, GHOST_OPACITY, GHOST_TOKEN, LOCKED_MIX,
+  PHASE_BY_ID, REJECTED_OPACITY,
   DESCENT_CLAMP, TARGET_OPACITY, TRAVEL_SCENE_Y, descentProgress,
   emptyTwinProgress, foldTwinProgress, loadTwinModel, phaseOffsetScene,
   targetBlock, twinModelChoices, twinPhase, twinScene, twinSignature,
@@ -53,7 +54,7 @@ describe("twinScene — Plan 4 §9.2, row by row", () => {
     const scene = twinScene(state(), model, emptyTwinProgress(), live);
     expect(scene.blocks).toHaveLength(model.blocks.length);
     expect(scene.blocks.every(block => block.appearance === "ghost")).toBe(true);
-    expect(scene.blocks.every(block => block.token === DESATURATE_TOKEN)).toBe(true);
+    expect(scene.blocks.every(block => block.token === GHOST_TOKEN)).toBe(true);
     expect(scene.blocks.every(block => block.opacity === GHOST_OPACITY)).toBe(true);
     expect(scene.banner).toBe("none");
     expect(scene.animating).toBe(false);
@@ -136,7 +137,7 @@ describe("twinScene — Plan 4 §9.2, row by row", () => {
     const rejected = byId(scene.blocks, "t1");
     expect(rejected.appearance).toBe("rejected");
     expect(rejected.reason).toBe("cell occupied");
-    expect(rejected.opacity).toBe(GHOST_OPACITY);
+    expect(rejected.opacity).toBe(REJECTED_OPACITY);
     expect(scene.banner).toBe("rejected");
     expect(scene.bannerText).toBe("cell occupied");
     expect(scene.animating).toBe(false);

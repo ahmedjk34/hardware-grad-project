@@ -170,6 +170,15 @@ export function Calibrate({ ready, onCollecting, onPointChange }: {
     onCollecting?.(false);
   };
 
+  const reload = async () => {
+    setError(null);
+    try {
+      await api.calibration.reload();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
+
   const startBlocks = async () => {
     setError(null);
     try {
@@ -217,6 +226,19 @@ export function Calibrate({ ready, onCollecting, onPointChange }: {
       >
         <span className="btn-title"><Icon name="sheet" size={15} />Calibrate from sheet</span>
         <span className="btn-sub">Detect the printed calibration sheet in the current frame.</span>
+      </button>
+      {/* A calibration saved on the Pi by Camera Studio or
+          block_grid_calibrate.py reaches this console only when it re-reads
+          the file, which it otherwise does once at startup. */}
+      <button
+        type="button"
+        className="btn btn-ghost choice"
+        aria-label="Reload saved calibration"
+        disabled={!ready}
+        onClick={() => void reload()}
+      >
+        <span className="btn-title"><Icon name="ruler" size={15} />Reload saved calibration</span>
+        <span className="btn-sub">Pick up a workspace map saved by Camera Studio or the CLI without restarting.</span>
       </button>
       {error && <p className="wizard-prompt" role="alert">{error}</p>}
     </section>

@@ -51,6 +51,10 @@ export const calibration = {
   cancel: () => post("calibration/cancel"),
   save: () => post<StateModel>("calibration/save"),
   paper: (selection?: number) => post<StateModel>("calibration/paper", selection === undefined ? {} : { selection }),
+  // Re-read config/workspace_map.json. The server loads it once at startup, so
+  // a calibration saved on the Pi by Camera Studio or block_grid_calibrate.py
+  // while this console was running is otherwise invisible until a restart.
+  reload: () => post<StateModel>("calibration/reload"),
   // The placed-block route: the rig puts a block on a cell it was told, so
   // the correspondence is labelled rather than inferred. Each step is one
   // full pick-and-place and blocks for as long as that takes.

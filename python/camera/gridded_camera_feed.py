@@ -78,7 +78,7 @@ from camera.snapshot_worker import SnapshotWorker  # noqa: E402
 from rig.config import CONFIG_PATH, GRID_MODES, load as load_rig_config  # noqa: E402
 from rig.grid import MachineGrid  # noqa: E402
 from rig.workspace import CORNER_NAMES, WORKSPACE_MAP_PATH, WorkspaceMap  # noqa: E402
-from vision.block_detector import detect_blocks  # noqa: E402
+from vision.block_outline import detect_aligned_blocks  # noqa: E402
 from vision.analysis_worker import AnalysisWorker  # noqa: E402
 from vision.color_grid import (  # noqa: E402
     DEFAULT_EDGE_MARGIN,
@@ -721,7 +721,13 @@ def main():
         return 1
 
     frame_pump = LatestFramePump(camera)
-    analysis = AnalysisWorker(detect_blocks, max_hz=args.analysis_hz)
+    # Grid-aware: lets the overlay reject block-shaped things that are not
+    # on the lattice (the holder's offcuts beside [0,0]) and draw every
+    # rectangle on one shared bearing. The lambda re-reads `grid`, which
+    # the mode switch rebinds, so no worker restart is needed.
+    analysis = AnalysisWorker(
+        lambda frame: detect_aligned_blocks(frame, grid=grid),
+        max_hz=args.analysis_hz)
     snapshots = SnapshotWorker(save_detection_snapshot)
     frame_pump.start()
     analysis.start()

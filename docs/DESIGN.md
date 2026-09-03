@@ -86,14 +86,22 @@ component should contain a raw hex value.
   --motion:      #F0A73E;  /* RUNNING, STALE, APPROXIMATION ONLY, REJECTED */
   --danger:      #FF5C5C;  /* LOCKED, ABORTED, disconnected */
 
-  /* detection palette — matches web/geometry.py _colour_name() exactly */
-  --block-red:    #FF6B6B;
+  /* workpiece palette — object colour, never state colour */
+  --block-red:    #FF6B6B;  /* these five match web/geometry.py _colour_name() */
   --block-orange: #FF9F4A;
   --block-yellow: #FFD84A;
   --block-green:  #5AE08B;
   --block-blue:   #5FA8FF;
+  --block-white:      #E9DFCD;  /* the default, unpainted block — pale birch */
+  --block-wood:       #C68A4E;  /* solid oak — Studio/twin placed emphasis + 3D undertone */
+  --block-wood-soft:  #DFB483;  /* light tan — translucent ghost / hover preview */
 }
 ```
+
+The wood tones are the Studio and twin's own (Plan 4): a real workpiece is
+timber, so the blocks read as timber. They are in the same non-state family as
+the five detection hues — a saturated colour here describes an object in the
+workspace, not a machine state, so §2's "colour is reserved" rule is intact.
 
 **Semantic rule for amber vs red.** Amber = *degraded but recoverable, or the
 machine is moving*. Red = *stop, a human is required*. `REJECTED` is amber —

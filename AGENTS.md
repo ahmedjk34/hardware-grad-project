@@ -629,6 +629,55 @@ it and `blockcalsave` reports it; do not let a caller imply a save is lossless.
 Widening `WorkspaceMap` to carry a per-cell table would remove this, and would
 touch every consumer of the format.
 
+##### A block calibration is saved exactly as a paper one
+
+Both routes write the same artefact. `block_workspace_map()` deliberately goes
+through `ColorGridCalibration.workspace_corners()` and `WorkspaceMap.from_grid`
+- the same two calls `paper_workspace_map()` makes - so given the same
+calibration and projection the two produce a **byte-identical**
+`workspace_map.json`: same `corners_normalized`, `grid`, `physical_grid`,
+`projection`, same per-mode entry, and saving one mode leaves the other's entry
+alone. `tests/test_calibration_parity.py` asserts that field by field, because
+if they ever diverge the app adopts one and silently refuses the other, and the
+only symptom is "the grid did not change".
+
+The one place they legitimately differ is **which projection gets stamped**.
+The paper route runs inside the app, so its projection matches the app's by
+construction. Camera Studio does not: it is an editor, and its live lens, crop,
+zoom, flip and correction switch drift from `camera_settings.json` until SAVE
+JSON writes them. A map stamped with unsaved editor state is refused by every
+consumer — correctly, because the frame it was fitted to is not the frame the
+app renders. So `blockcalsave` compares `Studio.projection()` against
+`Studio.saved_projection()` (rebuilt from the file) and **refuses up front**,
+naming which of view/lens/orientation/roi drifted, instead of letting the app
+reject the map later with no clue which knob did it.
+
+##### A saved map does not reach a running app by itself
+
+`config/workspace_map.json` is read **once at startup**, and again only when
+the grid mode changes. On the rig the normal way to calibrate is to run Camera
+Studio or `camera/block_grid_calibrate.py` in a *separate* process while the
+console is up — so until there was a reload door, a freshly saved calibration
+was invisible until the app was restarted, and nothing said so. Saving looked
+like it did nothing.
+
+| Consumer | How to pick up a map saved elsewhere |
+| --- | --- |
+| `camera/rig_build_v1.py` | press **`L`** |
+| web console | **Reload saved calibration** in the Calibration panel, or `POST /api/calibration/reload` |
+| anything embedding `ConsolePipeline` | `reload_workspace()` |
+
+`reload_workspace()` returns `(workspace, rejection)` and bumps
+`_map_generation` so overlays rebuild. A map that is on disk but refused must
+surface its **sentence** — "camera lens/orientation/framing changed" and "no
+calibration saved" need opposite responses from an operator, and silence is
+indistinguishable from both. `tests/test_workspace_reload.py` asserts the whole
+sequence, including that a running console does *not* pick a map up on its own.
+
+Camera Studio's `blockcalsave` names the file and the grid mode in its
+confirmation for the same reason: that window's other SAVE writes
+`camera_settings.json`, so an unqualified "saved" is genuinely ambiguous.
+
 ##### What the reference board proves
 
 `tests/test_block_grid.py` §10 runs the whole unlabelled path on

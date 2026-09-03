@@ -296,6 +296,32 @@ def block_save(http: Request):
     return build_state(app)
 
 
+@router.post("/reload")
+def reload_map(http: Request):
+    """Re-read config/workspace_map.json for the active grid.
+
+    The console reads the map once at startup, so a calibration written by
+    another process - Camera Studio's BLOCK CAL SAVE, or
+    ``camera/block_grid_calibrate.py`` on the Pi - was invisible until the
+    server was restarted. This is the door. A map that is on disk but refused
+    comes back as a 400 saying why, rather than as silence.
+    """
+    app = http.app
+    require_mutable(app)
+    try:
+        workspace, rejection = app.state.pipeline.reload_workspace()
+    except (RuntimeError, OSError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    frame = app.state.latest_frame
+    if workspace is not None and frame is not None:
+        app.state.latest_frame = replace(frame, workspace=workspace,
+                                         calibrated=True)
+    app.state.signal_change()
+    if workspace is None:
+        raise HTTPException(400, rejection or "no calibration on disk")
+    return build_state(app)
+
+
 @router.get("/block/status")
 def block_status(http: Request):
     app = http.app

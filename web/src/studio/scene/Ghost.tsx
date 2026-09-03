@@ -20,8 +20,10 @@ export function Ghost({ mode, shift, target, status }: {
   if (!target || !status) return null;
   const position = cellToScene(mode, target.col, target.row, target.level, shift);
   const size = blockSceneSize(mode);
+  // Severity keeps the reserved state colours; a clean preview is the wood the
+  // block will actually be, so the operator previews the object, not an abstraction.
   const token = status.severity === "error" ? "--danger"
-    : status.severity === "warning" ? "--motion" : "--signal";
+    : status.severity === "warning" ? "--motion" : "--block-wood-soft";
   return (
     <RoundedBox
       args={[size.x, size.y, size.z]}
@@ -31,7 +33,7 @@ export function Ghost({ mode, shift, target, status }: {
       raycast={() => null}
     >
       <meshStandardMaterial
-        color={tokenColor(token)} transparent opacity={status.legal ? 0.35 : 0.30}
+        color={tokenColor(token)} transparent opacity={status.legal ? 0.5 : 0.42}
         depthWrite={false} roughness={0.55} metalness={0}
       />
       <Edges color={tokenColor(token)} threshold={20} />

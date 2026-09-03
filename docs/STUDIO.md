@@ -671,17 +671,26 @@ misleading is most expensive.
 
 | appearance | token | opacity | when |
 | --- | --- | --- | --- |
-| `ghost` | `--text-faint` | 0.2 | remaining work |
-| `target` | `--signal` | 0.45 | the server's current selection, labelled `B 3 2 0` |
-| `building` | `--motion` | 0.85 | that block while `build_state` is RUNNING |
-| `placed` | the block's own `--block-*` | 1 | the server said PLACED |
-| `rejected` | `--text-faint` | 0.2 | the server said REJECTED, with its reason |
+| `ghost` | `--block-wood-soft` | 0.4 | remaining work |
+| `target` | `--signal` | 0.55 | the server's current selection, labelled `B 3 2 0` |
+| `building` | `--motion` | 0.9 | that block while `build_state` is RUNNING |
+| `placed` | the block's own `--block-*` (default `--block-white`, pale birch) | 1 | the server said PLACED |
+| `rejected` | `--text-faint` | 0.22 | the server said REJECTED, with its reason |
+
+Under LOCKED the mapping forces every token to `--text-faint` explicitly (not
+by relying on where each appearance's token points), so "an abort freezes the
+picture" survives the appearance tokens changing.
 
 Two more deviations, both deliberate:
 
-- **Ghosts are 20%, not the prompt's 12%.** That is Plan 4 §9.2's own number.
-  At 12% against `--void`, at the twin's default framing, a ghost is not
-  visible at all.
+- **Ghosts are woodish and 40%, not 12% or 20%.** Plan 4 §9.2's 12% and the
+  earlier 20% were both chosen against `--text-faint`; a grey ghost at either is
+  barely there at the twin's default framing. The remaining-work ghost now uses
+  `--block-wood-soft` (light tan) at 0.4 — it reads as an unbuilt block, still
+  plainly translucent, and legible against `--void`. `placed`, `target`,
+  `building` and `rejected` were bumped alongside it (see the table). `rejected`
+  is deliberately dimmer (0.22) than a live ghost and stays grey — it is inert,
+  not pending.
 - **The `rejected` BANNER does not require the rejected cell to be in the
   model.** The rig refused; that is worth saying either way. Only the block-level
   `rejected` appearance needs an identified block.
@@ -903,8 +912,9 @@ in `style.css`).
 
 Placed geometry is rounded by 0.6 mm and instanced with 512 slots of headroom.
 There is a separate physical geometry for each mode; the held-level x-ray splits
-each into solid and 15%-opacity batches. Instance colour comes from the five
-original `--block-*` tokens plus `--block-white`; new blocks default to white.
+each into solid and 30%-opacity batches. Instance colour comes from the five
+original `--block-*` tokens plus `--block-white`; new blocks default to white
+(now a warm `#E9DFCD` birch, not the old cold near-white).
 A new block fades over 130 ms while settling from +8 mm over 220 ms. Distinct
 rows in one run start 34 ms apart. Per-instance opacity keeps the whole gesture
 in one arriving draw, while the solid/x-ray split remains ordinary materials.
@@ -915,12 +925,17 @@ is active. Reduced motion places immediately.
 Instanced batches mount empty, so the first colour attribute appears only when a
 block is placed. `Blocks.tsx` explicitly recompiles that material once when the
 attribute is created; without it, Three.js retains its empty-batch program and
-renders the missing vertex colour black. White receives a small token-derived
-emissive lift so it remains visibly white against the dark stage.
+renders the missing vertex colour black. Every block carries a faint
+`--block-wood` emissive (intensity 0.1 solid / 0.06 twin) and a matte
+`roughness` of 0.72 — a warm timber undertone that reads as a solid object, not
+the lit-from-within plastic the old cold-white emissive at 0.22 gave.
 
-`Ghost.tsx` uses the active mode's same rounded dimensions at 35% `--signal`, or
-30% `--danger` with a solid edge and one reason label. It has no raycast of its
-own and disappears when the surface target is null.
+`Ghost.tsx` uses the active mode's same rounded dimensions. A clean preview is
+`--block-wood-soft` at 50% — the wood the block will actually be — while a
+warning stays `--motion` and an illegal placement `--danger` at 42%, each with a
+solid edge and one reason label. Severity keeps the reserved state colours; only
+the "this is fine" case went woodish. It has no raycast of its own and
+disappears when the surface target is null.
 
 After a commit, the old hover target is cleared. This prevents an occupied-cell
 danger ghost from masking the newly placed white block while the pointer is
@@ -1152,7 +1167,11 @@ practice:
 - Motion: `--fast` / `--base` for chrome, `TWEEN_MS` for the camera, nothing on
   an idle screen, and `prefers-reduced-motion` honoured.
 - One token was added for the Studio: `--vignette`, the wash behind the 3D stage.
-- The performance/UI pass added `--block-white`, the default placed-block colour.
+- The performance/UI pass added `--block-white`, the default placed-block colour;
+  a later pass warmed it to birch and added `--block-wood` / `--block-wood-soft`
+  for the material undertone and the ghost/preview boxes. All three are object
+  colours, not state — the reserved `--ready` / `--motion` / `--danger` are
+  untouched.
 
 ---
 
@@ -1248,6 +1267,70 @@ first in the diff.
 
 Newest first. One entry per landed change; note anything that contradicts the
 plan or that a future reader could not infer.
+
+### Woodish blocks; ghosts you can actually see
+
+The blocks read as timber now, and the whole opacity ladder went up.
+
+- **New object tokens** in `style.css`: `--block-wood` (`#C68A4E`, solid oak)
+  and `--block-wood-soft` (`#DFB483`, light tan). `--block-white` was warmed
+  from the cold `#F4F7FA` to `#E9DFCD` birch — it is still the default block
+  name and the feeder swatch. The five saturated `--block-*` hues are untouched:
+  they still mirror `web/geometry.py` `_colour_name()` for the camera overlay,
+  and `_colour_name()` never returns white, so warming it costs no parity. These
+  are workpiece colours, in the same non-state family as the detection hues, so
+  DESIGN.md §2's "saturated colour is reserved" still holds — the state colours
+  `--ready` / `--motion` / `--danger` / `--signal` were not touched or reused.
+- **The 3D material** (`Blocks.tsx`) drops the cold-white emissive for a faint
+  `--block-wood` one at intensity 0.1 (0.06 twin) and raises `roughness` to
+  0.72. Placed blocks were already fully opaque (`opacity 1`, `depthWrite`
+  true); the change is that they now look it — matte timber, not backlit
+  plastic.
+- **Opacities up** (`twin.ts`): remaining-work ghost `0.2 → 0.4` and recoloured
+  `--text-faint → --block-wood-soft`; `target` `0.45 → 0.55`; `building`
+  `0.85 → 0.9`; held-level x-ray batch `0.15 → 0.3`. `rejected` split off its
+  own `REJECTED_OPACITY = 0.22` and stays grey — inert, and now clearly dimmer
+  than a live ghost. New exported constants: `GHOST_TOKEN`, `REJECTED_OPACITY`.
+- **LOCKED** now forces every token to `--text-faint` explicitly in the mapping
+  rather than leaning on `TOKEN.ghost` pointing there, so the freeze survives
+  the ghost token changing.
+- **`Ghost.tsx`** clean-preview colour `--signal → --block-wood-soft` at
+  `0.35 → 0.5`; illegal `0.30 → 0.42`. Warning/error keep `--motion` / `--danger`.
+- `twin.test.ts` tracks the two renamed constants; all 489 web tests stay green.
+
+### Fix: a saved calibration never reached a running console
+
+Two independent reasons a `blockcalsave` on the Pi appeared to do nothing, both
+now fixed and both regression-tested.
+
+**The console never re-read the file.** `config/workspace_map.json` is loaded
+once at `ConsolePipeline.start()` and again only inside `set_grid_mode()`. The
+rig workflow is to calibrate from a *separate* process — Camera Studio, or
+`camera/block_grid_calibrate.py` — while the console runs, so the new map sat
+on disk unread until a restart, with nothing on screen saying so. Added
+`ConsolePipeline.reload_workspace()`, `POST /api/calibration/reload`, a
+**Reload saved calibration** button in the Calibration panel, and `L` in
+`rig_build_v1`. A map that is present but refused now surfaces its reason
+(400 + the sentence) rather than silence — "no calibration saved" and "camera
+lens/orientation/framing changed" need opposite responses.
+`tests/test_workspace_reload.py` asserts the full sequence, including that a
+running console does *not* adopt a map on its own.
+
+**And a third, found by checking rather than assuming.** Camera Studio stamps
+the map with its LIVE geometry, but the app renders from `camera_settings.json`
+— so any unsaved crop, zoom, lens tweak or correction toggle made the saved map
+refusable by everything. `blockcalsave` now compares the two and refuses up
+front, naming which of view/lens/orientation/roi drifted, rather than letting
+the app reject it later. `test_calibration_parity.py` additionally asserts that
+the block and paper routes write a *byte-identical* `workspace_map.json` — if
+those ever diverge the app adopts one and silently refuses the other, and the
+only symptom is the one reported here.
+
+**The Studio's confirmation was ambiguous.** That window's SAVE JSON button and
+its autosave both write `camera_settings.json`; `blockcalsave` writes
+`workspace_map.json`. An unqualified "saved" could reasonably be read as the
+wrong one. It now names the file, the grid mode and its dimensions, and says
+how to make a running app pick it up.
 
 ### Fix: a block calibration saved from Camera Studio was never adopted
 

@@ -217,11 +217,11 @@ export function BlockBatch<T extends BatchBlock>({
       >
         {cheap
           ? <meshLambertMaterial vertexColors
-              emissive={tokenColor("--block-white")} emissiveIntensity={0.12}
+              emissive={tokenColor("--block-wood")} emissiveIntensity={0.06}
               transparent={opacity < 1} opacity={opacity} depthWrite={opacity >= 1} />
           : <meshStandardMaterial
-              vertexColors roughness={0.5} metalness={0}
-              emissive={tokenColor("--block-white")} emissiveIntensity={0.22}
+              vertexColors roughness={0.72} metalness={0}
+              emissive={tokenColor("--block-wood")} emissiveIntensity={0.1}
               transparent={opacity < 1} opacity={opacity} depthWrite={opacity >= 1}
             />}
       </instancedMesh>
@@ -234,8 +234,8 @@ export function BlockBatch<T extends BatchBlock>({
         onPointerUp={handle(arrivingBlocks, handlers.onSurfaceUp, true)}
         onPointerOut={handlers.onSurfaceLeave}
       >
-        <meshStandardMaterial vertexColors roughness={0.5} metalness={0}
-                              emissive={tokenColor("--block-white")} emissiveIntensity={0.22}
+        <meshStandardMaterial vertexColors roughness={0.72} metalness={0}
+                              emissive={tokenColor("--block-wood")} emissiveIntensity={0.1}
                               transparent opacity={opacity} depthWrite={false}
                               onBeforeCompile={configureArrivalShader}
                               customProgramCacheKey={arrivalShaderKey} />
@@ -280,7 +280,7 @@ export const Blocks = memo(function Blocks({ blocks, activeMode, shift, heldLeve
           activeMode={activeMode} shift={shift} opacity={1} reduced={reduced} handlers={surfaceHandlers}
           colourOf={authoredColour} />,
         <BlockBatch key={`${mode}-xray`} blocks={groups[mode].xray} animateIds={animateIds} mode={mode}
-          activeMode={activeMode} shift={shift} opacity={0.15} reduced={reduced} handlers={surfaceHandlers}
+          activeMode={activeMode} shift={shift} opacity={0.3} reduced={reduced} handlers={surfaceHandlers}
           colourOf={authoredColour} />,
       ])}
     </>

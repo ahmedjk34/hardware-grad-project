@@ -35,7 +35,7 @@ from rig.config import CONFIG_PATH, load as load_rig_config
 from rig.grid import MachineGrid
 from rig.workspace import WORKSPACE_MAP_PATH, WorkspaceMap
 from vision.analysis_worker import AnalysisWorker
-from vision.block_detector import detect_blocks
+from vision.block_outline import detect_aligned_blocks
 from vision.camera_source import LatestFramePump, open_camera
 from vision.color_grid import ColorGridSpec
 from vision.fisheye import INTERPOLATIONS, build_maps, undistort
@@ -136,7 +136,14 @@ class ConsolePipeline:
             ColorGridSpec.from_config(rig_data, mode=self.grid.mode),
             max_hz=self.paper_hz,
         )
-        self.analysis = AnalysisWorker(detect_blocks, max_hz=self.analysis_hz)
+        # Grid-aware on purpose: with a MachineGrid the overlay can drop
+        # detections that are not on the lattice the other blocks describe -
+        # the holder's offcuts beside [0,0] - and draw every rectangle on the
+        # lattice's own bearing. Read through a lambda so a mode switch is
+        # picked up without rebuilding the worker.
+        self.analysis = AnalysisWorker(
+            lambda frame: detect_aligned_blocks(frame, grid=self.grid),
+            max_hz=self.analysis_hz)
         self.camera = open_camera(self.camera_backend or backend, size, device)
         self.camera.apply(sensor)
         self.frame_pump = LatestFramePump(self.camera)
@@ -174,6 +181,28 @@ class ConsolePipeline:
             self.paper = None
             self.frame_pump = None
             self.camera = None
+
+    def reload_workspace(self):
+        """Re-read ``workspace_map.json`` from disk for the active grid.
+
+        The map is otherwise read once at :meth:`start` and again only when the
+        grid mode changes, so a calibration written by ANOTHER process - Camera
+        Studio's BLOCK CAL SAVE, or ``camera/block_grid_calibrate.py`` - stayed
+        invisible to an already-running console until it was restarted. That is
+        the normal way to calibrate on the rig, so it needs a door.
+
+        Returns ``(workspace, rejection)``; the rejection is a sentence saying
+        why a map on disk was refused, which is far more useful to an operator
+        than the map silently not appearing.
+        """
+        if not self._started:
+            raise RuntimeError("start the pipeline before reloading its workspace")
+        self.saved_workspace, self.workspace_rejection = load_workspace(
+            self.workspace_map_path, self.grid, self.projection)
+        self._map_generation += 1
+        self._last_frame = None
+        self._last_stale = None
+        return self.saved_workspace, self.workspace_rejection
 
     def set_workspace(self, workspace: WorkspaceMap) -> None:
         """Adopt a just-saved calibration for the active grid only."""

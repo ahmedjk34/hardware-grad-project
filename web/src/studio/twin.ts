@@ -123,12 +123,20 @@ const IN_MOTION: ReadonlySet<TwinPhase> = new Set<TwinPhase>([
   "lowering-to-level", "releasing", "parking",
 ]);
 
-/** Present, but clearly not real. Plan 4 §9.2's own number; the milestone
- *  prompt's 12% disappears completely against `--void` at twin scale. */
-export const GHOST_OPACITY = 0.2;
+/**
+ * The remaining-work ghost. Woodish so it reads as "an unbuilt block" rather
+ * than debris, and at 0.4 — up from Plan 4 §9.2's 0.2 — because a ghost has to
+ * be legible against `--void` at the twin's default framing, not merely
+ * present. Still plainly translucent: it is a plan, not a placement.
+ */
+export const GHOST_OPACITY = 0.4;
+/** The remaining-work ghost's colour: light tan, survives alpha over `--void`. */
+export const GHOST_TOKEN = "--block-wood-soft";
+/** A rejected block: inert grey, and dimmer than a live ghost on purpose. */
+export const REJECTED_OPACITY = 0.22;
 /** The next block: `--signal`, with a full-opacity edge drawn by the component. */
-export const TARGET_OPACITY = 0.45;
-export const BUILDING_OPACITY = 0.85;
+export const TARGET_OPACITY = 0.55;
+export const BUILDING_OPACITY = 0.9;
 /** Where LOCKED drags every colour. */
 export const DESATURATE_TOKEN = "--text-faint";
 /** How far. Not all the way: a completely flat twin reads as a broken canvas. */
@@ -430,7 +438,7 @@ export function twinPhase(state: StateModel | null, progress: BuildProgress,
 // ── The scene ──────────────────────────────────────────────────────────────
 
 const TOKEN: Record<Exclude<TwinAppearance, "placed">, string> = {
-  ghost: DESATURATE_TOKEN,
+  ghost: GHOST_TOKEN,
   target: "--signal",
   building: "--motion",
   rejected: DESATURATE_TOKEN,
@@ -441,7 +449,7 @@ const OPACITY: Record<TwinAppearance, number> = {
   target: TARGET_OPACITY,
   building: BUILDING_OPACITY,
   placed: 1,
-  rejected: GHOST_OPACITY,
+  rejected: REJECTED_OPACITY,
 };
 
 function bannerOf(state: StateModel | null, progress: TwinProgress,
@@ -489,7 +497,11 @@ export function twinScene(state: StateModel | null, model: Model, progress: Twin
     return {
       id: block.id, mode: block.mode, col: block.col, row: block.row, level: block.level,
       appearance,
-      token: appearance === "placed" ? `--block-${block.colour}` : TOKEN[appearance],
+      // LOCKED greys everything explicitly, so the "abort freezes the picture"
+      // intent does not depend on where each appearance's token happens to point.
+      token: locked ? DESATURATE_TOKEN
+        : appearance === "placed" ? `--block-${block.colour}`
+        : TOKEN[appearance],
       mix: locked ? LOCKED_MIX : 0,
       opacity: OPACITY[appearance],
       label: appearance === "target" || appearance === "building"

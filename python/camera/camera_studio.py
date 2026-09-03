@@ -107,13 +107,24 @@ Three things worth knowing before trusting what it draws:
     can tell.
   * Wooden things that are not blocks (the holder's offcuts beside [0,0]) are
     discarded for not landing on the lattice, not for looking wrong.
-  * Nothing is written. `blockcalsave` writes `config/workspace_map.json`;
+  * `blockcal` writes NOTHING. The window's SAVE JSON button and its autosave
+    write `camera_settings.json`, which is a different file for a different
+    purpose - if you pressed those, no calibration was saved. `blockcalsave`
+    is the one that writes `config/workspace_map.json`, and it says so.
+  * A workspace map is stored PER GRID MODE, and `blockcal` uses whichever
+    `config/rig.json` calls active. Saving the vertical grid leaves the
+    horizontal entry untouched and vice versa.
+  * An app that is already running has read the map once, at startup. Saving a
+    new one does not reach it: press `L` in `rig_build_v1`, or POST
+    `/api/calibration/reload` in the web console, or restart.
+  * Nothing else is written. `blockcalsave` writes `config/workspace_map.json`;
     `blockcaloff` clears the overlay. Calibrating is a deliberate act, and this
     window is the camera-settings editor rather than the runtime pipeline.
   * The saved map is stamped with THIS window's lens, flip/rotate, correction
-    state and framing, and a feed whose own settings differ will refuse it
-    ("camera lens/orientation/framing changed"). Save from the settings you
-    actually run with.
+    state and framing. Those are editor state until SAVE JSON writes them, and
+    the app renders from the FILE - so `blockcalsave` refuses outright when the
+    two disagree, naming what drifted. Press SAVE JSON first. The file it then
+    writes is byte-identical to what the printed-sheet route produces.
   * `blockcalsave` reports how far the saved map's cells land from the measured
     ones. `workspace_map.json` carries four envelope corners, not a per-cell
     table, so a consumer spaces cells evenly between them and any curvature the
@@ -259,6 +270,7 @@ from vision.color_correction import (
 from rig.config import load as load_rig_config
 from rig.grid import MachineGrid
 from rig.workspace import WORKSPACE_MAP_PATH
+from camera.camera_feed import framing_roi, load_settings, profile_from_settings
 from camera.gridded_camera_feed import projection_metadata
 from vision.block_grid import (
     DEFAULT_LATTICE_ANCHOR,
@@ -1287,6 +1299,29 @@ class Studio:
                                                   "rotate": self.rotate},
                                    self.correct, self.roi())
 
+    def saved_projection(self):
+        """The projection the APP will compute, from the settings file on disk.
+
+        This window is an editor: its live lens, flip, crop, zoom and
+        correction switch are whatever is being tuned right now, and they only
+        become what the rest of the project sees once SAVE JSON writes them.
+        Every consumer of ``workspace_map.json`` builds its projection from
+        that FILE, so a calibration stamped with unsaved editor state is
+        refused by all of them - and correctly so, because the frame it was
+        fitted to is not the frame the app renders.
+
+        Returns None when the file cannot be read; the caller then has nothing
+        to compare against and should not block the save on it.
+        """
+        try:
+            settings = load_settings(self.settings_path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            return None
+        correction = settings.get("correction") or {}
+        return projection_metadata(
+            profile_from_settings(settings), settings.get("capture") or {},
+            bool(correction.get("enabled", True)), framing_roi(settings))
+
     def _cmd_blockcalsave(self, args):
         """Write the last block calibration to config/workspace_map.json.
 
@@ -1304,15 +1339,40 @@ class Studio:
         if frame is None:
             raise CommandError("no corrected frame yet")
         size = frame.shape[1::-1]
+
+        # The paper route runs INSIDE the app, so its projection matches the
+        # app's by construction. This one does not, and an editor's live
+        # geometry is exactly the thing that drifts from the file. Catch it
+        # here with a sentence an operator can act on, rather than letting the
+        # app refuse the map later with "camera lens/orientation/framing
+        # changed" and no clue which knob did it.
+        live = self.projection()
+        on_disk = self.saved_projection()
+        if on_disk is not None and live != on_disk:
+            differs = [name for name in ("view", "lens", "orientation", "roi")
+                       if live.get(name) != on_disk.get(name)]
+            raise CommandError(
+                f"this window's {', '.join(differs)} does not match "
+                f"{self.settings_path.name}, which is what the app renders "
+                f"from. A calibration saved now would be refused by every "
+                f"tool that loads it. Press SAVE JSON first, then save the "
+                f"calibration again")
         try:
             grid = MachineGrid.from_config(load_rig_config(reload=True))
             workspace = block_workspace_map(
-                self.block_lattice, grid, size, projection=self.projection())
+                self.block_lattice, grid, size, projection=live)
             workspace.save(WORKSPACE_MAP_PATH)
         except (BlockGridError, OSError, ValueError) as exc:
             raise CommandError(str(exc))
 
-        note = f"wrote {WORKSPACE_MAP_PATH.name}"
+        # Name the file AND the mode. This window's other SAVE writes
+        # camera_settings.json, so "saved" on its own is genuinely ambiguous -
+        # and a workspace map is stored per grid mode, so which one it landed
+        # in is the thing an operator actually needs told.
+        note = (f"CALIBRATION SAVED: {grid.mode} grid "
+                f"({grid.cols}x{grid.rows}) -> {WORKSPACE_MAP_PATH}. "
+                f"Reload it in the app: press L in rig_build_v1, or POST "
+                f"/api/calibration/reload in the web console")
         try:
             mean_px, max_px, worst = workspace_map_error(
                 self.block_lattice, workspace, grid, size)
@@ -1320,7 +1380,7 @@ class Studio:
             return note
         pitch = self.block_lattice.block_report.dense
         per_cm = pitch.pitch_x.px_per_cm if pitch and pitch.pitch_x else 0.0
-        detail = (f"; saved cells land {mean_px:.2f} px mean / {max_px:.2f} px "
+        detail = (f" | saved cells land {mean_px:.2f} px mean / {max_px:.2f} px "
                   f"max from the measured ones, worst at "
                   f"[{worst[0]},{worst[1]}]")
         if per_cm:

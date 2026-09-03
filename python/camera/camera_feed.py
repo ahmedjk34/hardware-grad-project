@@ -39,7 +39,8 @@ from vision.camera_source import (  # noqa: E402
     open_camera,
 )
 from vision.analysis_worker import AnalysisWorker  # noqa: E402
-from vision.block_detector import BlockDetection, detect_blocks  # noqa: E402
+from vision.block_detector import BlockDetection  # noqa: E402
+from vision.block_outline import detect_aligned_blocks  # noqa: E402
 from vision.fisheye import (  # noqa: E402
     INTERPOLATIONS,
     LensProfile,
@@ -195,17 +196,16 @@ def crop_resize(frame, roi, out_size, interpolation):
     return cv2.resize(sub, tuple(out_size), interpolation=kernel)
 
 
-# Distinct BGR colours make adjacent blocks easy to tell apart. The palette is
-# intentionally high-contrast against the pale work surface and repeats only
-# after six detections.
-BLOCK_COLORS = (
-    (255, 80, 40),    # blue-orange
-    (40, 210, 255),   # yellow
-    (90, 255, 90),    # green
-    (255, 80, 220),   # pink
-    (255, 180, 40),   # cyan
-    (180, 80, 255),   # purple
-)
+# One colour for every block. The old six-colour cycle was meant to separate
+# adjacent blocks, but on a full board it did the opposite: neighbouring
+# outlines in unrelated colours read as unrelated objects, when the thing worth
+# seeing is that they form one grid. A single high-contrast stroke against the
+# pale work surface, plus the dark under-stroke below, keeps every edge
+# readable without implying a difference that is not there.
+BLOCK_COLOR = (90, 255, 90)
+# The hovered block is the only one that differs, and by BRIGHTNESS rather than
+# hue, so it reads as "this one" instead of "a different kind of thing".
+BLOCK_HOVER_COLOR = (255, 255, 255)
 OVERLAY_MODES = ("off", "geometry", "detail")
 STALE_FRAME_AFTER_S = 0.75
 _DISPLAY_CLAHE = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8, 8))
@@ -275,8 +275,8 @@ def draw_block_overlay(frame, detections, hover_point=None, fps=None,
 
     # Blend only each block's small bounding ROI. The former full-frame copy +
     # blend paid for every pixel even when no blocks were visible.
-    for index, detection in enumerate(detections):
-        color = BLOCK_COLORS[index % len(BLOCK_COLORS)]
+    for detection in detections:
+        color = BLOCK_COLOR
         x, y, w, h = cv2.boundingRect(detection.box)
         x0, y0 = max(0, x), max(0, y)
         x1, y1 = min(frame.shape[1], x + w), min(frame.shape[0], y + h)
@@ -290,17 +290,21 @@ def draw_block_overlay(frame, detections, hover_point=None, fps=None,
 
     hovered = hovered_block(detections, hover_point)
     for index, detection in enumerate(detections):
-        color = BLOCK_COLORS[index % len(BLOCK_COLORS)]
-        thickness = 4 if index == hovered else 3
-        # Dark under-stroke makes the coloured edge readable on both white
-        # surfaces and dark hardware, while the anti-aliased colour stroke says
-        # which block the edge belongs to.
-        cv2.polylines(frame, [detection.contour], True, (20, 20, 20), thickness + 3,
+        color = BLOCK_HOVER_COLOR if index == hovered else BLOCK_COLOR
+        thickness = 3 if index == hovered else 2
+        # The rotated BOX, never the segmentation contour. A mask edge wanders
+        # a pixel or two all the way round, so a board of contours reads as a
+        # board of different wobbly shapes; a board of rectangles reads as the
+        # grid it is. vision/block_outline.py is what makes the box worth
+        # trusting - it shares one size and one bearing across the population.
+        outline = np.asarray(detection.box, dtype=np.int32).reshape(-1, 1, 2)
+        # Dark under-stroke keeps the edge readable on both the pale work
+        # surface and the dark hardware behind it.
+        cv2.polylines(frame, [outline], True, (20, 20, 20), thickness + 3,
                       cv2.LINE_AA)
-        cv2.polylines(frame, [detection.contour], True, color, thickness, cv2.LINE_AA)
-        cv2.polylines(frame, [detection.box], True, (255, 255, 255), 1, cv2.LINE_AA)
+        cv2.polylines(frame, [outline], True, color, thickness, cv2.LINE_AA)
         cx, cy = (round(v) for v in detection.center)
-        cv2.drawMarker(frame, (cx, cy), color, cv2.MARKER_CROSS, 16, 2, cv2.LINE_AA)
+        cv2.drawMarker(frame, (cx, cy), color, cv2.MARKER_CROSS, 11, 1, cv2.LINE_AA)
 
         if mode == "detail":
             label = f"#{index + 1} ({cx},{cy})"
@@ -317,7 +321,7 @@ def draw_block_overlay(frame, detections, hover_point=None, fps=None,
     rate = f"  |  {fps:4.1f} fps" if fps is not None else ""
     hud = [
         f"BLOCKS: {len(detections)}{rate}  |  hover for details",
-        "COLOUR EDGES + ROTATED BOXES + CENTRES",
+        "ALIGNED BLOCK RECTANGLES + CENTRES",
         coordinates_label,
     ]
     draw_info_box(frame, hud, width=min(360, frame.shape[1] - 8), scale=0.40)
@@ -459,7 +463,11 @@ def main():
         return 1
 
     frame_pump = LatestFramePump(camera)
-    analysis = AnalysisWorker(detect_blocks, max_hz=args.analysis_hz)
+    # No MachineGrid here on purpose - camera_feed knows nothing about the
+    # rig. The outlines are still squared up and given one shared size and
+    # bearing; only the lattice-based rejection needs a grid.
+    analysis = AnalysisWorker(detect_aligned_blocks,
+                              max_hz=args.analysis_hz)
     snapshots = SnapshotWorker(save_detection_snapshot)
     frame_pump.start()
     analysis.start()
