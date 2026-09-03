@@ -608,6 +608,27 @@ an untidy board is normal. If more than `MIN_ON_LATTICE_FRACTION` of detections
 fail to snap, the lattice vectors themselves are wrong and that *is* an error:
 keeping the minority that happened to fit would renumber the whole grid.
 
+##### Saving is not the same as calibrating
+
+`workspace_map.json` is only adopted by a consumer whose **projection** — lens
+profile, flip/rotate, correction on/off, framing ROI — matches the one embedded
+in the map. `gridded_camera_feed.load_workspace()` refuses a mismatch with
+"camera lens/orientation/framing changed", and a map saved with `projection:
+null` is refused by *everything*: it is written successfully and then silently
+ignored, which looks exactly like it worked. Every writer must pass a real
+projection. `tests/test_block_grid.py` §11 asserts both halves of this, because
+nothing else fails when it regresses.
+
+A saved map also cannot carry the full fit. `WorkspaceMap` stores four envelope
+corners plus the grid geometry — not a per-cell table — so whoever loads it
+spaces cells evenly between those corners, and the curvature term is flattened
+on the way out. The corners come back exact and the error peaks mid-grid, which
+is that flattening's signature. On the reference board it is 1.25 px mean /
+2.07 px max = **0.27 cm on a 2.2 cm block**. `workspace_map_error()` measures
+it and `blockcalsave` reports it; do not let a caller imply a save is lossless.
+Widening `WorkspaceMap` to carry a per-cell table would remove this, and would
+touch every consumer of the format.
+
 ##### What the reference board proves
 
 `tests/test_block_grid.py` §10 runs the whole unlabelled path on

@@ -1249,6 +1249,29 @@ first in the diff.
 Newest first. One entry per landed change; note anything that contradicts the
 plan or that a future reader could not infer.
 
+### Fix: a block calibration saved from Camera Studio was never adopted
+
+`blockcalsave` built its `WorkspaceMap` without a **projection** — the lens /
+flip-rotate / correction / framing identity that `load_workspace()` compares
+against its own before trusting a map. So the file was written, reported as
+written, and then refused by every consumer with "camera lens/orientation/
+framing changed". The worst shape of bug: it looked like it worked.
+
+The Studio has everything needed (`profile`, `flip`, `rotate`, `correct`,
+`roi()`); it simply was not passing it. `Studio.projection()` now builds it and
+`blockcalsave` stamps the map with it. The web route and
+`camera/block_grid_calibrate.py` were always correct — both pass
+`pipeline.projection` — so only the Studio button was affected.
+
+While there: `blockcalsave` now reports how far the saved map's cells land from
+the measured ones. `workspace_map.json` carries four envelope corners and the
+grid geometry, not a per-cell table, so a consumer spaces cells evenly between
+them and any curvature the fit found is flattened on the way out. The corners
+come back exact and the error peaks mid-grid. On the reference board that is
+1.25 px mean / 2.07 px max — 0.27 cm on a 2.2 cm block. Removing it would mean
+widening the `WorkspaceMap` format, which touches every consumer; reporting it
+is the honest interim. `test_block_grid.py` §11 asserts both halves.
+
 ### Placed-block calibration is now the console's first calibration route
 
 `Calibrate.tsx` used to offer two ways to make a workspace map: click four

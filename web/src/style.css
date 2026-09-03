@@ -2005,6 +2005,17 @@ svg.grid-overlay.selectable { cursor: crosshair; }
   border-left: 1px solid var(--line-strong);
   box-shadow: -12px 0 40px rgba(0, 0, 0, .5);
   overflow-y: auto;
+  transition: transform var(--base) var(--ease), visibility var(--base);
+}
+/* `display: flex` above would otherwise beat the native `hidden` attribute and
+   the drawer could never close — the same trap `.studio-library` documents. */
+.bm-library[hidden] {
+  display: flex;
+  visibility: hidden;
+  transform: translateX(101%);
+}
+@media (prefers-reduced-motion: reduce) {
+  .bm-library { transition: none; }
 }
 .bm-library-head {
   display: flex;

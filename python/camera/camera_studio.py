@@ -110,6 +110,15 @@ Three things worth knowing before trusting what it draws:
   * Nothing is written. `blockcalsave` writes `config/workspace_map.json`;
     `blockcaloff` clears the overlay. Calibrating is a deliberate act, and this
     window is the camera-settings editor rather than the runtime pipeline.
+  * The saved map is stamped with THIS window's lens, flip/rotate, correction
+    state and framing, and a feed whose own settings differ will refuse it
+    ("camera lens/orientation/framing changed"). Save from the settings you
+    actually run with.
+  * `blockcalsave` reports how far the saved map's cells land from the measured
+    ones. `workspace_map.json` carries four envelope corners, not a per-cell
+    table, so a consumer spaces cells evenly between them and any curvature the
+    fit found is flattened. The corners stay exact and the error peaks in the
+    middle of the grid.
 
 Prefer `camera/block_grid_calibrate.py` when the rig is available: there the
 machine places each block on a cell it was TOLD, so the labelling is recorded
