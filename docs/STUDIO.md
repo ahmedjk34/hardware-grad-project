@@ -1242,6 +1242,26 @@ first in the diff.
 Newest first. One entry per landed change; note anything that contradicts the
 plan or that a future reader could not infer.
 
+### Server-side run logs for builds dispatched from the console
+
+A real backend run (`python -m web`) now appends two plain-text files under
+`logs/` at the repo root — git-ignored, opened in append mode, no rotation:
+
+- `logs/build.log` — one stopwatch section per `/api/build`: the request, the
+  job handoff, the board `RECV`, every firmware phase with the firmware's own
+  ETA beside the measured duration, and the settled result with total elapsed.
+- `logs/serial.log` — every line to/from the Arduino, each with the wall clock
+  and the gap since the previous line, so a stall reads as a large delta; the
+  terminal ack and a `-- final: …` line close each build.
+
+Off by default (every call a no-op); `web.app.main()` calls
+`rig.build_log.configure()`, so `pytest` never writes to `logs/`. The Studio's
+runner is unchanged — it still dispatches one guarded `/api/build` at a time;
+this is purely observability on the server side of that call. Code:
+`python/rig/build_log.py`, wired from `web/app.py`, `web/routes_command.py`,
+`rig/link.py`. Operator notes in `docs/server-guide.md` §7. Sizing: ~6–7 KB per
+block placed; a 200-block model run is ~1.3 MB.
+
 ### Fix: the Studio library drawer could never read a saved model
 
 Saved builds showed on the index page but **not in the Studio's own library

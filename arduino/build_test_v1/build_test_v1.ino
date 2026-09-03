@@ -3358,19 +3358,50 @@ bool gotoCell(long col, long row)
 // X-RAIL SKEW COMPENSATION  -  Y AXIS ONLY, BUILD MOTION ONLY
 // ------------------------------------------------------------
 //
-// The X rail is not square to Y: as the carriage travels along X it also
-// creeps along Y, and the creep CHANGES with position (it is not a constant
-// offset). A pure-Y move is clean; only X travel introduces the error, so the
-// fix is a Y nudge whose size depends on which cell we are driving to.
+// Full write-up: docs/X_RAIL_SKEW_COMPENSATION.md
+//
+// WHY THIS EXISTS - the mechanical cause
+// --------------------------------------
+// The arm holder (the carriage that rides the X aluminium rod) is not
+// supported symmetrically: its mass, the drag of the cable chain, and the
+// side load from the belt all pull on ONE side of the holder. That constant
+// sideways pull bows / twists the X aluminium rod slightly, so the rod is no
+// longer square to Y - it sits at a small angle. The further the carriage is
+// driven along X, the more of that angled rod it has travelled over, so the
+// carriage also drifts along Y. The drift is therefore proportional to how
+// far along X we go: ~0 at column 0, and growing by a fixed amount per column.
+//
+// We do NOT fix this in hardware (re-machining / re-bracing the rod). We
+// cancel it in software here: for a build we deliberately command Y to a
+// position that is offset by exactly the drift the slanted rod will add, so
+// the two cancel and the block lands where the perfect grid says it should.
+//
+// WHAT WE MEASURED
+// ----------------
+// Moving one cell along X pulls the arm ~0.15 cm along Y. It is linear in the
+// column index and there is no row dependence (a pure-Y move - same column -
+// has no error at all):
+//
+//     column 0  ->  +0.00 cm Y   (reference, no X travel)
+//     column 1  ->  +0.15 cm Y
+//     column 2  ->  +0.30 cm Y
+//     column 3  ->  +0.45 cm Y
+//     column k  ->  +0.15 * k cm Y
+//
+// So SKEW_Y_PER_COL_CM = 0.15, and the row / cross terms stay 0 until a
+// measurement says otherwise.
+//
+// SIGN - "forward" = +Y = further from the Y home switch (row 0 side). The
+// nudge is ADDED to the Y target, so selecting cell [1,0] drives the rig
+// ~0.15 cm forward, [2,0] ~0.30 cm forward, and so on.
+//
+//   yNudge_cm = SKEW_Y_PER_COL_CM    * col
+//             + SKEW_Y_PER_ROW_CM    * row
+//             + SKEW_Y_PER_COLROW_CM * col * row
 //
 // This is STATIC in firmware. Nothing supplies it over serial - it is computed
-// from the cell indices every build. The coefficients below are the ONLY knob;
-// they are 0 for now, which makes the whole term vanish, and get fitted once
-// the physical error has been measured at a spread of cells.
-//
-//   yNudge_cm = SKEW_Y_PER_COL_CM   * col
-//             + SKEW_Y_PER_ROW_CM   * row
-//             + SKEW_Y_PER_COLROW_CM * col * row
+// from the cell indices on every build. The three coefficients below are the
+// ONLY knob; re-fit them if the rig is re-measured.
 //
 // SCOPE - this correction lives here and ONLY here:
 //   * It is applied in gotoBuildTarget() alone. The B (BUILD) motion is the
@@ -3383,12 +3414,13 @@ bool gotoCell(long col, long row)
 //     or the 3D grid - every VISUALISATION stays perfectly rectangular. This
 //     bends the MOTION so the real bricks come out straight and level.
 //   * X is never touched.
-float SKEW_Y_PER_COL_CM = 0.0f;    // Y creep per column of X travel
-float SKEW_Y_PER_ROW_CM = 0.0f;    // Y creep per row (usually 0: pure-Y is clean)
-float SKEW_Y_PER_COLROW_CM = 0.0f; // cross term, if the creep itself grows with row
+float SKEW_Y_PER_COL_CM = 0.15f;   // measured: ~0.15 cm Y pull per column of X travel
+float SKEW_Y_PER_ROW_CM = 0.0f;    // no row dependence measured (pure-Y is clean)
+float SKEW_Y_PER_COLROW_CM = 0.0f; // cross term, if the pull ever grows with row
 
 // Y step offset to add to a build target for cell [col,row]. Positive = further
-// from the Y home switch. Returns 0 while all coefficients are 0.
+// from the Y home switch ("forward"). With the measured 0.15 cm/col this is
+// +0.15 cm at col 1, +0.30 cm at col 2, ... and exactly 0 anywhere in col 0.
 long buildYSkewSteps(long col, long row)
 {
   float cm = SKEW_Y_PER_COL_CM * (float)col
@@ -3423,6 +3455,16 @@ bool gotoBuildTarget(long col, long row, int8_t rotation)
       cappedY = 0;
     else if (cappedY > maxY)
       cappedY = maxY;
+
+    // Log it so a live build shows the correction being applied per cell.
+    Serial.print(F("  X-rail skew: Y "));
+    Serial.print(targetY);
+    Serial.print(F(" -> "));
+    Serial.print(cappedY);
+    Serial.print(F(" steps ("));
+    Serial.print((float)(cappedY - targetY) / xyStepsPerCmOf(AXIS_Y), 3);
+    Serial.println(F(" cm, col skew)"));
+
     targetY = cappedY;
   }
 
@@ -4910,6 +4952,24 @@ void printGridConfig()
   Serial.print(F(" cm / Y "));
   Serial.print(GRID_SHIFT_Y_CM[gridMode], 3);
   Serial.println(F(" cm  (shiftX/shiftY; whole lattice, pick-up excluded)"));
+
+  // X-rail skew compensation. Printed here so a flash can be confirmed from the
+  // serial console: if these coefficients are missing, the board is running old
+  // firmware. BUILD motion only - it never touches the grid model above.
+  Serial.print(F("X-rail skew: Y += "));
+  Serial.print(SKEW_Y_PER_COL_CM, 3);
+  Serial.print(F("*col + "));
+  Serial.print(SKEW_Y_PER_ROW_CM, 3);
+  Serial.print(F("*row + "));
+  Serial.print(SKEW_Y_PER_COLROW_CM, 3);
+  Serial.println(F("*col*row  cm   (BUILD only, +Y = away from home)"));
+  Serial.print(F("             e.g. col "));
+  Serial.print(gridColsNow());
+  Serial.print(F(" row 0 -> Y += "));
+  Serial.print((float)buildYSkewSteps(gridColsNow(), 0) / xyStepsPerCmOf(AXIS_Y), 3);
+  Serial.print(F(" cm ("));
+  Serial.print(buildYSkewSteps(gridColsNow(), 0));
+  Serial.println(F(" steps)"));
 
   Serial.print(F("Edge budget: X "));
   Serial.print(gridMaxEdgeOverhangCmOf(AXIS_X), 3);

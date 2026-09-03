@@ -32,7 +32,8 @@ python/
 │   ├── grid.py                 the machine's cells, and which way round they sit
 │   ├── build_controller.py     selection/confirmation outcome safety state
 │   ├── build_job.py            runs one build off the UI thread, one at a time
-│   └── link.py                 the serial link: send a command, wait for the answer
+│   ├── link.py                 the serial link: send a command, wait for the answer
+│   └── build_log.py            append-only logs/{build,serial}.log for a web run
 ├── tests/
 │   ├── test_block_detector.py  block detection against the committed captures
 │   ├── test_build_controller.py camera-build confirmation and lockout rules
