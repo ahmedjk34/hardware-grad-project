@@ -7,6 +7,7 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field, root_validator
 
+from rig import build_log
 from rig.build_controller import BuildStateError
 from rig.build_job import BUSY_MESSAGE
 from rig.link import RigError
@@ -176,10 +177,19 @@ async def build(request: BuildRequest, http: Request) -> StateModel:
     if request.command != app.state.controller.command:
         raise HTTPException(status_code=400,
                             detail="command does not match the current selection")
+    controller = app.state.controller
     try:
         app.state.job.start()
     except BuildStateError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    # Open this build's section in logs/build.log now that the job is running:
+    # this timestamp is the stopwatch zero for every phase that follows off the
+    # wire (RECV, the fourteen STEPs, the terminal ack).
+    build_log.build.build_requested(
+        request.command, selection=controller.selected,
+        level=controller.level, mode=controller.mode,
+    )
+    build_log.build.job_started()
     # The console's own half of the progress story: the command is ACCEPTED.
     # Nothing has moved and nothing may be claimed yet - the board has not even
     # said RECV. Everything after this comes off the wire.

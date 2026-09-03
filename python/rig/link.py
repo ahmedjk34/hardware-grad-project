@@ -87,6 +87,7 @@ from dataclasses import dataclass, field
 
 import serial
 
+from rig import build_log
 from rig.config import (DEFAULT_GRID_MODE, GRID_MODES, load,
                         serial_port_candidates)
 from rig.grid import MachineGrid
@@ -530,6 +531,7 @@ class Rig:
         self._reset_detected = False
         self._reader = threading.Thread(target=self._read_loop, daemon=True)
         self._reader.start()
+        build_log.serial.session(f"connect {self.port_name} @ {self.baud}")
 
         self._wait_ready(timeout)
         # This BOOT is the expected port-open reset; it is exactly what the
@@ -588,6 +590,7 @@ class Rig:
             except (serial.SerialException, OSError, TypeError):
                 if not self._stopping.is_set():
                     message = "serial port went away — cable unplugged?"
+                    build_log.serial.note(message)
                     self._put((_DEAD, message, time.monotonic()))
                     if self._on_error is not None:
                         self._on_error(message)
@@ -596,6 +599,7 @@ class Rig:
                 continue
 
             text = raw.decode("utf-8", errors="replace").rstrip()
+            build_log.serial.line_in(text)
             if self._on_line is not None:
                 self._on_line(text)
 
@@ -663,6 +667,7 @@ class Rig:
         if not self.connected:
             raise RigNotConnected("not connected — call connect() first")
         self._port.write((line.strip() + "\n").encode())
+        build_log.serial.line_out(line.strip())
 
     # -- waiting ---------------------------------------------------
 

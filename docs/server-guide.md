@@ -222,7 +222,34 @@ block.
   build state, and lock state. Never rely on a disabled browser button as the
   safety mechanism.
 
-## 7. Troubleshooting
+## 7. Run logs
+
+A real server run (`python -m web`, with or without `--mock`) appends to two
+plain-text files under `logs/` at the repository root. Both are git-ignored,
+both are opened in append mode, so they accumulate across runs; delete them
+yourself when they get large. `pytest` never writes to them — only the
+`main()` entry point turns them on, via `rig.build_log.configure()`.
+
+- **`logs/build.log`** — one clearly separated section per build triggered from
+  the web console. It records the `/api/build` request, the job-thread handoff,
+  the board's `RECV`, then every firmware phase with the ETA the firmware
+  predicted beside the time the phase actually took (`(firmware ETA 2.57s,
+  +0.23s)`), and the settled result with the total elapsed. Every timestamp in
+  a section is relative to that build's start, so it reads as a stopwatch.
+- **`logs/serial.log`** — every line to (`>>`) and from (`<<`) the Arduino,
+  each stamped with the wall clock and the gap since the previous serial line.
+  A stall on the cable or a slow phase shows up directly as a large delta in
+  the second column. The terminal ack and a one-line `-- final: …` summary
+  close each build.
+
+Placed-block calibration drives the rig through the same serial link, so its
+traffic also appears in `logs/serial.log`; it does not get a `logs/build.log`
+section.
+
+The code is `python/rig/build_log.py`, wired in from `python/web/app.py`,
+`python/web/routes_command.py`, and `python/rig/link.py`.
+
+## 8. Troubleshooting
 
 **The page says `DISCONNECTED`.** Confirm the backend is listening on port
 8000, the browser is using the correct host, and the reverse proxy forwards the
@@ -247,7 +274,7 @@ calibration when you need a measured camera mapping.
 block, and gantry before restarting the service. There is no browser reset,
 cancel, or retry path for an unknown machine state.
 
-## 8. Verification commands
+## 9. Verification commands
 
 From the repository root:
 

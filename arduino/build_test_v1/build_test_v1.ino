@@ -3354,6 +3354,49 @@ bool gotoCell(long col, long row)
   return gotoCellForRotation(col, row, clawRotation);
 }
 
+// ------------------------------------------------------------
+// X-RAIL SKEW COMPENSATION  -  Y AXIS ONLY, BUILD MOTION ONLY
+// ------------------------------------------------------------
+//
+// The X rail is not square to Y: as the carriage travels along X it also
+// creeps along Y, and the creep CHANGES with position (it is not a constant
+// offset). A pure-Y move is clean; only X travel introduces the error, so the
+// fix is a Y nudge whose size depends on which cell we are driving to.
+//
+// This is STATIC in firmware. Nothing supplies it over serial - it is computed
+// from the cell indices every build. The coefficients below are the ONLY knob;
+// they are 0 for now, which makes the whole term vanish, and get fitted once
+// the physical error has been measured at a spread of cells.
+//
+//   yNudge_cm = SKEW_Y_PER_COL_CM   * col
+//             + SKEW_Y_PER_ROW_CM   * row
+//             + SKEW_Y_PER_COLROW_CM * col * row
+//
+// SCOPE - this correction lives here and ONLY here:
+//   * It is applied in gotoBuildTarget() alone. The B (BUILD) motion is the
+//     only path that gets it.
+//   * It is NOT in cellCentreCmOf() / cellTargetPosition() / gridPitch..., so
+//     the grid MODEL stays a perfect rectangular lattice.
+//   * It is NOT in gotoCellForRotation() (the G command), the grid map, or
+//     positionToIndex().
+//   * It does not exist in the Python link, the camera grid, the Studio grid,
+//     or the 3D grid - every VISUALISATION stays perfectly rectangular. This
+//     bends the MOTION so the real bricks come out straight and level.
+//   * X is never touched.
+float SKEW_Y_PER_COL_CM = 0.0f;    // Y creep per column of X travel
+float SKEW_Y_PER_ROW_CM = 0.0f;    // Y creep per row (usually 0: pure-Y is clean)
+float SKEW_Y_PER_COLROW_CM = 0.0f; // cross term, if the creep itself grows with row
+
+// Y step offset to add to a build target for cell [col,row]. Positive = further
+// from the Y home switch. Returns 0 while all coefficients are 0.
+long buildYSkewSteps(long col, long row)
+{
+  float cm = SKEW_Y_PER_COL_CM * (float)col
+           + SKEW_Y_PER_ROW_CM * (float)row
+           + SKEW_Y_PER_COLROW_CM * (float)col * (float)row;
+  return lround(cm * xyStepsPerCmOf(AXIS_Y));
+}
+
 // Kept separate from gotoCellForRotation() because BUILD has its own range and
 // lock checks around this call. Both axes always move; [0,0] never reaches
 // here, because buildBlock() refuses the feeder before anything picks up.
@@ -3367,6 +3410,21 @@ bool gotoBuildTarget(long col, long row, int8_t rotation)
   if (!cellTargetPosition(AXIS_X, col, rotation, &targetX) ||
       !cellTargetPosition(AXIS_Y, row, rotation, &targetY))
     return false;
+
+  // X-rail skew compensation: nudge Y (only) so the physical brick lands
+  // straight. Clamped to the Y travel so a bad coefficient can never drive the
+  // carriage past a soft limit; moveAxisTo() still enforces the limit too.
+  long skewY = buildYSkewSteps(col, row);
+  if (skewY != 0)
+  {
+    long cappedY = targetY + skewY;
+    long maxY = lround(xyTravelCmOf(AXIS_Y) * xyStepsPerCmOf(AXIS_Y));
+    if (cappedY < 0)
+      cappedY = 0;
+    else if (cappedY > maxY)
+      cappedY = maxY;
+    targetY = cappedY;
+  }
 
   if (!goToOrigin())
     return false;

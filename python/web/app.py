@@ -34,6 +34,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 
 from camera.camera_feed import SETTINGS_PATH
+from rig import build_log
 from rig.build_controller import BuildController
 from rig.build_job import BuildJob
 from rig.console_pipeline import ConsolePipeline
@@ -186,6 +187,14 @@ def _publish_build_result(app: FastAPI, outcome) -> None:
         "from_prose": bool(getattr(result, "from_prose", False)),
     })
     app.state.progress.on_result(result, event.event_id, locked=locked)
+    # build.log + serial.log: the settled outcome and the total elapsed, closing
+    # this build's section.
+    word = str(result) if result is not None else "error"
+    build_log.build.result(
+        word, reason=reason, locked=locked,
+        from_prose=bool(getattr(result, "from_prose", False)),
+    )
+    build_log.serial.note(f"final: {word}" + (f" — {reason}" if reason else ""))
 
 
 def create_app(options: ConsoleAppOptions | None = None) -> FastAPI:
@@ -234,6 +243,7 @@ def create_app(options: ConsoleAppOptions | None = None) -> FastAPI:
         def _serial_error(message: str) -> None:
             app.state.log.append(message)
             app.state.hub.publish("serial", {"line": message, "stream": "error"})
+            build_log.build.note(f"serial error: {message}")
             publish_state(app, force=True)
 
         def _serial_progress(progress) -> None:
@@ -249,10 +259,16 @@ def create_app(options: ConsoleAppOptions | None = None) -> FastAPI:
                 "eta_ms": progress.eta_ms,
             })
             app.state.progress.on_progress(progress, event.event_id)
+            # build.log: closes the previous phase with its measured duration and
+            # opens this one, so the firmware ETA and the wall-clock time sit
+            # side by side.
+            build_log.build.phase(progress)
             publish_state(app, force=True)
 
         def _serial_ack(ack) -> None:
             """On the loop. RECV moves the tracker; everything else is logged."""
+            if getattr(ack, "kind", None) == "RECV":
+                build_log.build.accepted(ack)
             if app.state.progress.on_ack(ack, app.state.hub.last_event_id) is not None:
                 publish_state(app, force=True)
 
@@ -318,6 +334,10 @@ def create_app(options: ConsoleAppOptions | None = None) -> FastAPI:
             # This occurs before the ASGI server accepts traffic.  It can wait
             # for the Mega's boot banner without exposing a half-owned rig.
             rig.connect(home_before_configure=(rig.grid.mode == "horizontal"))
+            build_log.build.run_started(
+                mode=rig.grid.mode, cols=rig.cols, rows=rig.rows,
+                port=rig.port_name, baud=rig.baud, mock=mock,
+            )
             app.state.driver = asyncio.create_task(
                 _drive_pipeline(app, pipeline, job, 1.0 / options.driver_hz,
                                 executor),
@@ -429,6 +449,12 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8000)
     args = parser.parse_args(argv)
+
+    # Turn the append-only run logs on for a real server run only. The
+    # test-suite builds apps through `create_app` and never comes through here,
+    # so `pytest` keeps writing nothing to `logs/`.
+    build_log.configure()
+
     import uvicorn
 
     # Browsers accumulate cookies across every dev server on localhost, and a

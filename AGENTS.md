@@ -432,6 +432,70 @@ positive cells. `"printed"` takes the paper at face value and lands every
 positive cell one `block/2 − (pitch − grid.x_start)` further from home on each
 axis. Do not add a third convention without a row here and a note in the plan.
 
+#### 3d-bis. Placed-block calibration — the primary route, and why it beats a sheet
+
+| Where | What |
+| --- | --- |
+| `python/vision/block_grid.py` | the geometry: labelled cell -> pixel correspondences, the fit, and every gate |
+| `python/rig/block_calibration.py` | drives the machine: one `B <col> <row> 0` per step, parks, captures, observes |
+| `python/vision/block_detector.py` | the front end, with `balance` / `flatten` / `expected_size` turned on for this path only |
+| `python/camera/block_grid_calibrate.py` | the terminal driver; `--mock` is a full hardware-free dry run |
+| `POST /api/calibration/block/{start,step,undo,cancel,save}` | the console routes |
+| `web/src/components/Calibrate.tsx` | the operator UI; placed blocks is the first choice offered |
+
+Every sheet route measures the **camera against a piece of paper** and then
+assumes the paper sits where the firmware's cells are. That assumption is the
+entire reason §3d needs `HOME_CONVENTIONS` and a geometry cross-check. This
+route has the rig place a block on a cell it was told, so the correspondence
+`[3,2] -> (px, py)` is **labelled at the source**. There is no lattice walk, no
+colour-parity gate, no window search, and no paper to disagree with. It also
+measures the real pick-and-place chain — backlash, tool offsets, each mode's
+`error_offset_*_cm` — instead of a printed approximation of it.
+
+Rules that must survive an edit:
+
+- **Five placements minimum, six planned.** Four correspondences fit a
+  homography exactly, so every residual is zero by construction and the
+  calibration carries no evidence it is right. `MIN_OBSERVATIONS = 5` exists
+  for that reason alone; do not lower it to "get a quicker run".
+- **The residual is not an optical number.** It includes where the machine
+  physically put the block, which is why the gates are looser than
+  `MAX_MEAN_RESIDUAL_SHORT_SIDE`. A large residual here means the rig or the
+  map is off, not that the camera is blurry.
+- **Two checks replace the chessboard parity gate.** Identical wooden blocks
+  offer no colour signal, so `fit_block_grid` instead requires the observed
+  block's short side to match the footprint the homography predicts at that
+  cell (`SIZE_AGREEMENT_RANGE`) and its long axis to point along the mode's
+  own axis (`MAX_ANGLE_DISAGREEMENT_DEG`). Between them they catch "a cable was
+  detected instead of the block" and "the block landed on the wrong cell".
+- **A clipped block is refused, never measured.** A block the frame cuts off
+  still segments cleanly; its centroid is simply dragged inwards by whatever
+  was lost — 21 px on a 40 px block at the mock camera's framing. Use
+  `--inset 1` (or the route's `inset`) when the camera cannot see the outermost
+  ring whole, rather than relaxing `EDGE_MARGIN_FRACTION`.
+- **The rig's mode must match the grid being calibrated.** The machine lays a
+  block along whichever axis its active mode says, and nothing downstream can
+  tell a correct vertical block from a horizontal one in the right spot — the
+  bearing check cannot catch it, because the blocks would agree with each
+  other. `BlockCalibrationRun` refuses the mismatch up front.
+- **`aborted` ends the run.** The claw may still be holding a block, so
+  `BlockCalibrationAborted` is a distinct type, the console locks, and there is
+  no retry and no automatic home. `rejected` moved nothing and stays retryable —
+  it usually means the feeder at `[0,0]` is empty.
+- **The build area must be clear at `start()`.** The first frame is the
+  baseline every later capture is differenced against; a block already on the
+  table is invisible to that difference and can only be found by shape, which
+  is the weaker path.
+- Calibration always builds at **level 0**. Nothing here ever stacks.
+
+The route emits an ordinary `ColorGridCalibration`, so the overlays, the
+`workspace_corners()` convention and `WorkspaceMap.from_grid` are shared with
+§3d unchanged. `block_workspace_map` deliberately reuses `workspace_corners`
+rather than recomputing the envelope: sheet centimetres and machine centimetres
+put the envelope's home corner at the same lattice coordinate,
+`-cell_center_x_cm(0) / pitch_x_cm`, so there is no second implementation to
+keep in step.
+
 ### 3e. Camera colour correction — one transform, applied in four places
 
 | Where | What |
@@ -590,6 +654,7 @@ ack and is safe from rewording, but `S`, `G`, `0` and `0+` do not — for those,
 | `camera/gridded_camera_feed.py` | the same runtime feed plus machine-grid calibration/overlay |
 | `camera/rig_build_v1.py` | camera-grid cell selection plus confirmed serial build |
 | `camera/color_grid_check.py` | the printed-sheet detector on its own, live or on a still |
+| `camera/block_grid_calibrate.py` | the placed-block calibrator (§3d-bis); `--mock` is a hardware-free dry run |
 | `python/config/camera_settings.json` -> `colour` | the software colour correction all of the above apply |
 | `rig/build_job.py` | the worker thread that keeps that camera live during a build |
 | `camera/undistorted_viewer.py` | the standalone lens-tuning viewer |

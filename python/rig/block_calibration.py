@@ -103,6 +103,19 @@ class BlockCalibrationRun:
         self.rig = rig
         self.capture = capture
         self.grid = grid if grid is not None else rig.grid
+        # The rig lays a block along whichever axis its ACTIVE mode says, and
+        # nothing downstream can tell a correctly placed vertical block from a
+        # horizontal one that happens to be in the right spot. Calibrating one
+        # mode while the machine is in the other would therefore write a map
+        # that is wrong in a way the bearing check cannot catch, because the
+        # blocks would agree with each other. Refuse it here instead.
+        rig_mode = getattr(getattr(rig, "grid", None), "mode", None)
+        if rig_mode is not None and self.grid.mode is not None \
+                and rig_mode != self.grid.mode:
+            raise BlockCalibrationError(
+                f"the rig is in {rig_mode} mode but the calibration is for the "
+                f"{self.grid.mode} grid; switch the rig's mode first, or the "
+                f"blocks will be laid along the wrong axis")
         self.session = BlockGridSession(self.grid, cells=cells, count=count,
                                         inset=inset)
         self.settle = float(settle)

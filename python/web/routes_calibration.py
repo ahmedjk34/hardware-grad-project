@@ -104,6 +104,11 @@ async def paper(request: PaperRequest, http: Request):
 
 class BlockStartRequest(BaseModel):
     count: int = Field(DEFAULT_OBSERVATIONS, ge=MIN_OBSERVATIONS, le=24)
+    #: Drop this many outermost rings of cells. Raise it to 1 when the camera
+    #: is framed tightly enough that a block on the outer row is cut off by the
+    #: frame edge - locate_block refuses those, correctly, because a clipped
+    #: block's centroid is not its centre.
+    inset: int = Field(0, ge=0, le=3)
     cells: list[tuple[int, int]] | None = None
 
 
@@ -168,6 +173,7 @@ def block_start(request: BlockStartRequest, http: Request):
             grid=app.state.pipeline.grid,
             cells=[tuple(cell) for cell in request.cells] if request.cells else None,
             count=request.count,
+            inset=request.inset,
         )
         run.start()
     except (BlockGridError, BlockCalibrationError, ValueError) as exc:

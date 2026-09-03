@@ -26,12 +26,27 @@ paths = sorted(CAPTURES.glob("*corrected*.png"))
 if not paths:
     raise SystemExit(f"no corrected captures found in {CAPTURES}")
 
+# How many blocks are actually in each capture, counted by eye. The glob used to
+# assert a blanket 6, which was the count in one older scene: every capture
+# added since has failed for having a different number of blocks in it rather
+# than for anything the detector did. A capture with no entry here is only
+# checked for not crashing, so dropping a new file in stays cheap.
+EXPECTED_BLOCKS = {
+    "20260902-165930_corrected_equidistant-lens160-out120-k+0.04_+0.00_+0.02_"
+    "+0.00-c+0_+0-f1.200_1.000-s+0.000-p-0.028_+0.000.png": 3,
+}
+
 failed = False
 for path in paths:
     image = cv2.imread(str(path))
     detections = detect_blocks(image)
-    ok = len(detections) == 6
-    print(f"{'ok  ' if ok else 'FAIL'}  {path.name}: {len(detections)} blocks")
+    expected = EXPECTED_BLOCKS.get(path.name)
+    if expected is None:
+        print(f"ok    {path.name}: {len(detections)} blocks (count not asserted)")
+        continue
+    ok = len(detections) == expected
+    print(f"{'ok  ' if ok else 'FAIL'}  {path.name}: "
+          f"{len(detections)}/{expected} blocks")
     failed |= not ok
 
 

@@ -776,6 +776,9 @@ svg.grid-overlay.selectable { cursor: crosshair; }
 
 .wizard-prompt { margin: 0; font: var(--t-md); color: var(--text-dim); }
 .wizard-prompt strong { color: var(--signal); font-weight: 600; }
+/* The placed-block run reports its residual under the prompt; keep it
+   quieter than the prompt itself so the next action still leads. */
+.calibration .wizard-prompt + .wizard-prompt { font: var(--t-sm); opacity: .8; }
 .wizard-progress { font: var(--t-xs); letter-spacing: .1em; text-transform: uppercase; color: var(--text-dim); }
 
 .choice {
