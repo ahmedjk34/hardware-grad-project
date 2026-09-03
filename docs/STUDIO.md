@@ -37,7 +37,7 @@ console this attaches to).
 | M7 — The runner | ✅ delivered | pure exhaustive runner reducer, guarded effect driver, STEP/RUN/DRY RUN, feeder guidance, failure lock/pause, Markdown evidence report |
 | M8 — Wow pass | not started | shift gizmo, x-ray by level, cross-mode bridging |
 
-**Test suite.** `cd web && npm test` — **454 tests across 36 files**, all green.
+**Test suite.** `cd web && npm test` — **466 tests across 36 files**, all green.
 (The per-file table below is maintained for the Studio's own files; a few rows
 have drifted behind the total as unrelated console work landed.)
 
@@ -61,7 +61,7 @@ have drifted behind the total as unrelated console work landed.)
 | `ws.test.ts` | 7 | immediate delivery against a fake socket, the `?after=` cursor, replay envelope, backoff, unparseable frames |
 | `components/TwinPanel.test.tsx` | 7 | the read-only mode label, SYNC VIEW, locked/stale/rejected banners, controlled model picker, and desktop/phone instrument layout |
 | `studio/thumbnail.test.ts` | 5 | the bottom-up row flip, the 16:10 sizes, graceful absence of `OffscreenCanvas` |
-| `studio/panels/LibraryDrawer.test.tsx` | 18 | cards and meta line, inline rename, duplicate, delete with a real undo, the storage strip, the budget refusal, drop-import confirmation |
+| `studio/panels/LibraryDrawer.test.tsx` | 21 | cards and meta line, inline rename, duplicate, delete with a real undo, the storage strip, the budget refusal, drop-import confirmation, delegated-save re-list, no-`storage`-prop lists real `localStorage` |
 | `studio/settings.test.ts` | 4 | conservative defaults, timing-field backfill, guarded versioned persistence |
 | `studio/panels/ProgramView.test.tsx` | 4 | serial-log rendering, latch dividers, line selection, clipboard copy |
 | `studio/model.test.ts` | 7 | immutable mutations; geometry/order separation |
@@ -1014,6 +1014,14 @@ silent success and no first-save name. The route now owns the whole flow:
 - `openDocument` resets `savedId` and `savedSignature` together with history, so
   a freshly opened model reads as clean and an opened example reads as a new
   unsaved build.
+- **The drawer's card list stays live across a delegated save.** Because the
+  write now happens in the route, not in the drawer, the drawer would otherwise
+  never re-`listModels()` — a card saved from the toolbar or Ctrl/⌘S only
+  appeared after a remount. `Studio.tsx` bumps a `savedTick` counter on every
+  successful write and passes it down; the drawer re-reads storage on that, on
+  `open` going true, and on mount. Deleting a design is the per-card `DELETE`
+  with its six-second undo, unchanged — it just now shows up on a design you
+  saved a moment ago instead of after a reload.
 
 ### 6.10 `scene/Twin.tsx`, `TwinPanel.tsx` and `Instrument.tsx`
 
@@ -1233,6 +1241,37 @@ first in the diff.
 
 Newest first. One entry per landed change; note anything that contradicts the
 plan or that a future reader could not infer.
+
+### Fix: the Studio library drawer could never read a saved model
+
+Saved builds showed on the index page but **not in the Studio's own library
+drawer** — only the three examples, so no card, so no `DELETE` button. Cause:
+the drawer built `const options = { storage, settings }` from a `storage` prop
+the real app never passes, so `storage` was `undefined` *but the key was
+present*. `library.ts` reads `"storage" in options ? options.storage :
+browserStorage()`, so a present-but-undefined key **pinned storage to
+"unavailable"** — every read returned nothing. `TwinPanel` was unaffected
+because it calls `listModels()` with no argument at all, so the key is absent
+and the `localStorage` fallback runs.
+
+Fix is in the drawer only: spread the `storage` key **only when it is set**
+(`storage ? { storage, settings } : { settings }`), in both the memo and
+`refresh()`. `LibraryDrawer.test.tsx`: the "unavailable" test now passes a
+stub that throws on access (a real private-mode store) instead of relying on
+`storage={undefined}`; +1 regression test that a drawer with no `storage` prop
+lists a model really in `localStorage`, `DELETE` button and all. No change to
+`library.ts` or the storage format.
+
+### Follow-up: the library drawer re-reads storage after a toolbar/Ctrl-S save
+
+The save flow below moved the write into `Studio.tsx`, which left the drawer's
+own `listModels()` running only on mount — so a design saved without opening the
+drawer did not appear in it until a remount (it did show on the index page,
+which builds its picker fresh each mount). Fixed by a `savedTick` counter the
+route bumps on every successful write and the drawer re-reads on, alongside
+`open` and mount. `LibraryDrawer.test.tsx` +2 (delegated SAVE writes nothing
+itself; a `savedTick` bump and a reopen both re-list). No storage-format or
+`library.ts` change; per-card `DELETE` + undo was already the delete path.
 
 ### Saving a build is a first-class action, with a name and a confirmation
 

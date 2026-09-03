@@ -23,6 +23,17 @@ class FakeStorage implements LibraryStorage {
   removeItem(key: string) { this.data.delete(key); }
 }
 
+/** A store some browsers hand back that throws on any access (private mode,
+ *  site-data blocked). Passing this is how a test says "storage is unavailable"
+ *  — a bare `undefined` prop now means "fall back to localStorage". */
+const blockedStorage: LibraryStorage = {
+  get length(): number { throw new Error("storage blocked"); },
+  key() { throw new Error("storage blocked"); },
+  getItem() { throw new Error("storage blocked"); },
+  setItem() { throw new Error("storage blocked"); },
+  removeItem() { throw new Error("storage blocked"); },
+};
+
 let storage: FakeStorage;
 const onOpenModel = vi.fn();
 const onClose = vi.fn();
@@ -132,9 +143,30 @@ describe("LibraryDrawer — rename, duplicate, delete with undo", () => {
 
 describe("LibraryDrawer — storage that cannot keep the work", () => {
   it("says so in a strip and still shows the examples", () => {
-    draw({ storage: undefined });
+    draw({ storage: blockedStorage });
     expect(screen.getByRole("alert")).toHaveTextContent(/storage unavailable — your work will not be kept/i);
     expect(screen.getByRole("listitem", { name: /Single tower/ })).toBeInTheDocument();
+  });
+
+  it("with no storage prop, lists what is really in localStorage (not 'unavailable')", () => {
+    // The real app renders <LibraryDrawer> without a storage prop. A
+    // present-but-undefined `storage` key used to pin library.ts to
+    // "unavailable", so a saved build never appeared in the Studio even though
+    // it showed on the index page. Guard that regression.
+    try {
+      writeModel(documentOf(tower(4), { id: "real", name: "Saved for real" }),
+                 { settings: DEFAULT_STUDIO_SETTINGS });
+      render(
+        <LibraryDrawer open onClose={onClose} currentId={null} onOpenModel={onOpenModel}
+                       settings={DEFAULT_STUDIO_SETTINGS} captureCurrent={captureCurrent} />,
+      );
+      expect(screen.getByRole("listitem", { name: /Saved for real/ })).toBeInTheDocument();
+      expect(within(screen.getByRole("listitem", { name: /Saved for real/ }))
+        .getByRole("button", { name: /delete/i })).toBeInTheDocument();
+      expect(screen.queryByText(/storage unavailable/i)).not.toBeInTheDocument();
+    } finally {
+      localStorage.clear();
+    }
   });
 
   it("refuses an over-budget save, names the largest models, and offers a delete right there", async () => {

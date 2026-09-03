@@ -21,6 +21,8 @@ import math
 import cv2
 import numpy as np
 
+from vision.color_grid import flatten_illumination, white_balance
+
 
 MAX_PROCESSING_WIDTH = 384
 MAX_RECTANGLE_HYPOTHESES = 256
@@ -460,7 +462,17 @@ def _geometry(frame: np.ndarray, contour: np.ndarray,
     local_mask = np.zeros((h, w), dtype=np.uint8)
     local_contour = contour - np.array([[[x, y]]], dtype=np.int32)
     cv2.drawContours(local_mask, [local_contour], -1, 255, -1)
-    hue = float(cv2.mean(hsv[y:y + h, x:x + w, 0], mask=local_mask)[0])
+    # The compound path synthesises an *ideal* rectangle, which can hang off
+    # the frame. numpy would silently clip the hue ROI while the mask kept its
+    # full size, and cv2.mean asserts on the mismatch. Clip both together.
+    frame_h, frame_w = hsv.shape[:2]
+    x0, y0 = max(x, 0), max(y, 0)
+    x1, y1 = min(x + w, frame_w), min(y + h, frame_h)
+    if x1 <= x0 or y1 <= y0:
+        hue = 0.0
+    else:
+        hue = float(cv2.mean(hsv[y0:y1, x0:x1, 0],
+                             mask=local_mask[y0 - y:y1 - y, x0 - x:x1 - x])[0])
     return BlockDetection(
         contour=contour,
         box=box,
@@ -479,11 +491,23 @@ def _geometry(frame: np.ndarray, contour: np.ndarray,
 def _detect_blocks_native(frame: np.ndarray, *, color_threshold: int,
                           red_green_threshold: int, min_area: float,
                           max_area: float | None,
-                          metrics: DetectionMetrics | None = None
+                          metrics: DetectionMetrics | None = None,
+                          balance: bool = False, flatten: bool = False,
+                          expected_size: tuple[float, float] | None = None,
                           ) -> list[BlockDetection]:
     """Detector implementation at its bounded working resolution."""
+    # Segment on a corrected copy but measure hue on the original: the caller
+    # asked about the block in front of the camera, not about our stand-in for
+    # a colour matrix. Red-minus-blue is what the rig's magenta cast attacks
+    # hardest, so this is the difference between a stable mask and one that
+    # changes its mind between two processing widths.
+    source = frame
+    if balance:
+        source = white_balance(source)
+    if flatten:
+        source = flatten_illumination(source)
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    mask = _warm_mask(frame, int(color_threshold), int(red_green_threshold))
+    mask = _warm_mask(source, int(color_threshold), int(red_green_threshold))
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL,
                                    cv2.CHAIN_APPROX_SIMPLE)
     contours = [contour for contour in contours
@@ -497,8 +521,21 @@ def _detect_blocks_native(frame: np.ndarray, *, color_threshold: int,
     # the supplied captures. Merged rectangles stay out of this estimate.
     # Block plan is 2.2 x 6.0 cm (aspect ~2.73); the short side is unchanged
     # from the earlier 7.5 cm block, the long side scaled by 6.0 / 7.5.
-    default_length = frame.shape[1] * 0.144
-    default_width = frame.shape[1] * 0.052
+    #
+    # ``expected_size`` replaces that guess with a measurement. The fraction
+    # below assumes the block covers a fixed share of the frame, which is true
+    # only of the captures it was fitted to; a caller that knows the real
+    # px/cm - the calibrator does, from its own homography - should say so
+    # rather than let the frame width stand in for a camera distance.
+    if expected_size is not None:
+        default_length, default_width = (float(value) for value in expected_size)
+        if not (default_length > 0 and default_width > 0):
+            raise ValueError("expected_size must be two positive lengths in pixels")
+        if default_length < default_width:
+            default_length, default_width = default_width, default_length
+    else:
+        default_length = frame.shape[1] * 0.144
+        default_width = frame.shape[1] * 0.052
     records = [(contour, _geometry(frame, contour, hsv)) for contour in contours]
     size_sources = []
     for _contour, detection in records:
@@ -579,6 +616,8 @@ def detect_blocks(frame: np.ndarray, *, color_threshold: int = 8,
                   max_area: int | None = None,
                   max_processing_width: int = MAX_PROCESSING_WIDTH,
                   metrics: DetectionMetrics | None = None,
+                  balance: bool = False, flatten: bool = False,
+                  expected_size: tuple[float, float] | None = None,
                   ) -> list[BlockDetection]:
     """Detect warm rectangular blocks in one corrected BGR frame.
 
@@ -586,6 +625,13 @@ def detect_blocks(frame: np.ndarray, *, color_threshold: int = 8,
     IDs stable and making hover information easy to compare frame to frame.
     Thresholds are arguments so a later camera position or block colour can be
     tuned without changing the detector's geometry code.
+
+    ``balance`` and ``flatten`` run :func:`color_grid.white_balance` and
+    :func:`color_grid.flatten_illumination` over the segmentation copy first.
+    ``expected_size`` is ``(long_px, short_px)`` for one block and replaces the
+    frame-width size guess. All three default off, so the live feed keeps the
+    behaviour it was tuned for; :mod:`vision.block_grid` turns them on, where
+    one wrong answer is written to disk instead of redrawn 30 times a second.
     """
     if frame is None or frame.ndim != 3 or frame.shape[2] != 3:
         raise ValueError("detect_blocks expects a BGR colour image")
@@ -606,7 +652,8 @@ def detect_blocks(frame: np.ndarray, *, color_threshold: int = 8,
             red_green_threshold=int(red_green_threshold),
             min_area=float(min_area),
             max_area=None if max_area is None else float(max_area),
-            metrics=metrics)
+            metrics=metrics, balance=balance, flatten=flatten,
+            expected_size=expected_size)
 
     scale = max_processing_width / original_w
     work_h = max(1, round(original_h * scale))
@@ -614,12 +661,18 @@ def detect_blocks(frame: np.ndarray, *, color_threshold: int = 8,
                       interpolation=cv2.INTER_AREA)
     sx, sy = original_w / work.shape[1], original_h / work.shape[0]
     area_scale = sx * sy
+    # The size prior is stated in input-frame pixels, so it has to come down to
+    # the working resolution with everything else. Both axes shrink by the same
+    # factor here, so one scale is enough.
+    work_expected = None if expected_size is None else (
+        float(expected_size[0]) / sx, float(expected_size[1]) / sy)
     detections = _detect_blocks_native(
         work, color_threshold=int(color_threshold),
         red_green_threshold=int(red_green_threshold),
         min_area=float(min_area) / area_scale,
         max_area=None if max_area is None else float(max_area) / area_scale,
-        metrics=metrics)
+        metrics=metrics, balance=balance, flatten=flatten,
+        expected_size=work_expected)
     return sorted((_rescale_detection(detection, sx, sy)
                    for detection in detections),
                   key=lambda d: (d.center[1], d.center[0]))

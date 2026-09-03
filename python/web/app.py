@@ -26,6 +26,7 @@ from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 import os
 from pathlib import Path
+import threading
 import time
 from typing import AsyncIterator
 
@@ -207,6 +208,11 @@ def create_app(options: ConsoleAppOptions | None = None) -> FastAPI:
         app.state.driver = None
         app.state.mock_board = None
         app.state.calibration_points = []
+        # The placed-block calibration run, when one is in progress.
+        # Its lock is what stops two impatient clicks from issuing two
+        # builds at a rig that is deaf to the second one.
+        app.state.block_calibration = None
+        app.state.block_calibration_lock = threading.Lock()
         app.state.hub = EventHub()
         app.state.progress = BuildProgressTracker()
         app.state.state_signature = None

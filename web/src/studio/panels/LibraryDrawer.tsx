@@ -112,7 +112,12 @@ export function LibraryDrawer({
   open, onClose, currentId, onOpenModel, captureCurrent, onSaved, onSave, dirty,
   savedTick = 0, settings, storage,
 }: LibraryDrawerProps) {
-  const options = { storage, settings };
+  // `storage` is a test seam. To `library.ts`, `{ storage: undefined, settings }`
+  // is NOT the same as `{ settings }`: the first PINS storage to "unavailable"
+  // (`"storage" in options` is true), the second falls back to `localStorage`.
+  // The real app passes no `storage`, so only spread the key when it is set —
+  // otherwise the drawer can never read a single saved model.
+  const options = storage ? { storage, settings } : { settings };
   const [cards, setCards] = useState<ModelCard[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -123,7 +128,7 @@ export function LibraryDrawer({
   const report = storageReport(options);
 
   const refresh = useCallback(() => {
-    const listed = listModels({ storage, settings });
+    const listed = listModels(storage ? { storage, settings } : { settings });
     setCards(listed.ok ? listed.value : []);
     if (!listed.ok) setNotice(null);
   }, [storage, settings]);

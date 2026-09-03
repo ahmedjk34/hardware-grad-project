@@ -23,5 +23,9 @@ pnpm-debug.log*
 # Generated calibration artefacts
 config/workspace_map.json
 
+# Append-only run logs (build pipeline + raw Arduino serial). See
+# python/rig/build_log.py and docs/server-guide.md.
+/logs/
+
 .claude
 .codex
