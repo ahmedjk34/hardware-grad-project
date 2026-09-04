@@ -701,12 +701,24 @@ float GRID_GAP_Y_CM[GRID_MODE_COUNT] = {1.6, 1.6};
 //                                 rotation. Nothing to do with the grid.
 //
 //   THE HORIZONTAL REGISTRATION LIVES IN GRID_TRIM_{X,Y}_CM, +1.9 cm on BOTH
-//   axes. The arm picks a block up standing at the vertical [0,0] feeder and
-//   rotates it 90 degrees about the grip; the rotated 6.0 cm face then
-//   overhangs the vertical footprint by half the vertical pitch (3.8 / 2 =
-//   1.9 cm) on each side. Trimming +1.9 on each axis seats horizontal [0,0]
-//   flush against the vertical [0,0] block edge. It is applied exactly once,
-//   through cellCentreCmOf(); nothing adds it structurally.
+//   axes. The rotated 6.0 cm face overhangs the 2.2 cm vertical footprint by
+//   6.0/2 - 2.2/2 = 1.9 cm per side, and trimming +1.9 on each axis seats
+//   horizontal [0,0] flush against the vertical [0,0] block edge (near edge in
+//   X, far edge in Y). It is applied exactly once, through cellCentreCmOf();
+//   nothing adds it structurally.
+//
+//   TWO CAVEATS, because this constant has been derived two different ways.
+//   (a) This block used to say "half the vertical pitch (3.8 / 2)". That
+//       agrees numerically only because 3.8 happens to equal 6.0 - 2.2; it is
+//       an accident of these dimensions, not a second proof. The overhang
+//       derivation above is the real one.
+//   (b) The overhang is an EXTENT, and +1.9 is a TRANSLATION. A 90-degree turn
+//       about the grip moves the block's centre by zero however far its face
+//       overhangs, so the rotation does not by itself justify any trim. What
+//       justifies +1.9 is the LAYOUT CHOICE on the line above: horizontal
+//       [0,0] is defined edge-flush with vertical [0,0] rather than
+//       centre-coincident. The rotation's real, non-zero contribution is the
+//       grip-to-rotation-axis swing, and that lives in TOOL_OFFSET_CW_*.
 
 // Signed whole-allocation shift, per mode. Not copied between modes. Vertical
 // is anchored on the home corner (0.0 / 0.0); horizontal carries the +1.9 cm
@@ -721,13 +733,31 @@ float GRID_TRIM_Y_CM[GRID_MODE_COUNT] = {0.0, 1.9};
 // VERTICAL stays 0.0 / 0.0 - the grid was re-anchored on the printed sheet and
 // the old 0.15 / 0.05 were measured against the previous CENTRED allocation.
 //
-// HORIZONTAL carries +0.5 cm X / +0.3 cm Y, measured on the rig: placed blocks
-// were landing that far TOWARD the home switches on each axis, so the centres
-// are nudged the same amount AWAY from home. This is rotation slop from the
-// 90-degree CCW pickup-rotate not pivoting on the exact block centre; it is a
-// constant per-mode error, NOT part of the +1.9 cm GRID_TRIM registration.
-float GRID_ERROR_OFFSET_X_CM[GRID_MODE_COUNT] = {0.0, 0.5};
-float GRID_ERROR_OFFSET_Y_CM[GRID_MODE_COUNT] = {0.0, 0.3};
+// HORIZONTAL IS NOW 0.0 / 0.0 TOO, AND USED NOT TO BE.  It carried +0.5 cm X
+// and +0.3 cm Y to absorb the placement error of the 90-degree pickup-rotate.
+// That was the wrong knob, and the wrong knob hid a sign error:
+//
+//   The claw does close on the block's middle.  But that middle does not sit
+//   on the AUX STEPPER'S ROTATION AXIS - it is offset by roughly
+//   (-0.3, +0.6) cm - so a 90-degree CW turn swings the block centre AROUND
+//   that axis instead of spinning it in place.  The swing is a constant
+//   X +0.9 (AWAY from home) and Y -0.3 (toward home).  Y's shipped +0.3
+//   happened to cancel its half.  X's shipped +0.5 pushed the SAME WAY as the
+//   swing, so the two added and placed blocks landed 1.4 cm too far from the
+//   X home switch.  The comment that used to sit here said blocks were
+//   "landing toward home on each axis": true of Y, backwards for X.
+//
+// The swing depends on WHICH WAY the claw turns, so the correction belongs in
+// TOOL_OFFSET_CW_* - which has a slot per rotation - and not here, which is
+// one rotation-blind number per mode and so could not follow when the build
+// rotation settled on CW.  See the TOOL_OFFSET_* block below.
+//
+// Moving it there also returns the LATTICE to trim-only (horizontal X centres
+// 1.9 / 9.5 / 17.1), which is where blocks physically land and therefore what
+// MachineGrid, the camera overlay and the Studio should draw.  An error offset
+// moves cell centres; a tool offset moves only the holder.
+float GRID_ERROR_OFFSET_X_CM[GRID_MODE_COUNT] = {0.0, 0.0};
+float GRID_ERROR_OFFSET_Y_CM[GRID_MODE_COUNT] = {0.0, 0.0};
 
 // The live GRID SHIFT, per mode. Set by the shiftX / shiftY serial commands,
 // cleared to 0 by shiftX 0 / shiftY 0 and by every board reset. It is folded
@@ -812,10 +842,31 @@ const char *gridModeName(uint8_t mode)
 // Keep these paired with config/rig.json -> tool_offsets.  CW/CCW apply after
 // the requested 90-degree claw rotation, which can move an asymmetric tool
 // centre.
+//
+// NEUTRAL IS GENUINELY ZERO: the claw closes on the middle of the block and
+// places it without turning, so holder and block centre coincide.
+//
+// CW CARRIES THE PICKUP-ROTATE SWING, and it is the only rotation a build can
+// ask for (buildRotationForMode: horizontal -> ROT_CW).  The grip point sits
+// about (-0.3, +0.6) cm off the aux stepper's rotation axis, so the 90-degree
+// turn carries the block centre round that axis by X +0.9 / Y -0.3 cm.
+// Subtracting this vector sends the holder that far back, and the swing then
+// delivers the block onto the cell centre.  Derived from a rig measurement of
+// a horizontal placement landing 1.4 cm too far from the X home switch with
+// Y dead on; the (0.9, -0.3) pair is the unique fit to those two readings.
+//
+// NOT to be confused with GRID_ERROR_OFFSET_* (a rotation-blind nudge to the
+// cell centres themselves) or with the +1.9 cm GRID_TRIM_* registration (grid
+// layout).  This one is claw geometry and nothing else - see D15 in
+// plans/dual-orientation-grid.md.
+//
+// CCW stays zero: no grid or build route requests it, so it has never been
+// measured.  The recorded (3.75, 1.40) CCW trial predates the centre-anchored
+// lattice and must NOT be copied here.
 float TOOL_OFFSET_NEUTRAL_X_CM = 0.0;
 float TOOL_OFFSET_NEUTRAL_Y_CM = 0.0;
-float TOOL_OFFSET_CW_X_CM = 0.0;
-float TOOL_OFFSET_CW_Y_CM = 0.0;
+float TOOL_OFFSET_CW_X_CM = 0.9;
+float TOOL_OFFSET_CW_Y_CM = -0.3;
 float TOOL_OFFSET_CCW_X_CM = 0.0;
 float TOOL_OFFSET_CCW_Y_CM = 0.0;
 

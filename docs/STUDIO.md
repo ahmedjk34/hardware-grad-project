@@ -1269,6 +1269,47 @@ first in the diff.
 Newest first. One entry per landed change; note anything that contradicts the
 plan or that a future reader could not infer.
 
+### The pickup-rotate swing moved out of `error_offset` and into `tool_offsets.cw`
+
+- **The 56% bridge in the Studio was real, and it was a firmware calibration
+  bug, not a Studio bug.** §5.12 has always documented the built-in bridge at
+  **73.3%** union contact. It was actually rendering **56.1%**, because
+  `grid.modes.horizontal.error_offset_*` shipped `(+0.5, +0.3) cm` and
+  `coords.ts` folds `error_offset` into the lattice origin
+  (`trim + error_offset + shift`). Both are now `0` and the bridge measures
+  73.3% again. No Studio code changed.
+- **Why the offset was wrong.** The claw's grip point sits about
+  `(−0.3, +0.6) cm` off the aux stepper's rotation axis, so the 90° `ROT_CW`
+  pickup-rotate swings the block *centre* around that axis by **X `+0.9`,
+  Y `−0.3` cm** — a carousel, not a spin in place. Y's shipped `+0.3` cancelled
+  its half. X's shipped `+0.5` pushed the **same** way as the swing, so on the
+  rig a horizontal block landed **1.4 cm too far from the X home switch** while
+  Y was dead on. The firmware comment that justified the pair described the
+  rotation as CCW; `buildRotationForMode()` returns `ROT_CW`.
+- **Where it belongs.** A rotation-dependent displacement is claw geometry, so
+  per D15 it lives in `tool_offsets.cw`, now `(+0.9, −0.3) cm`. That knob has a
+  slot per rotation; `error_offset` is one rotation-blind number per mode and
+  so could not follow the CCW→CW change. Crucially a tool offset moves only the
+  **holder** (`holder = centre − toolOffset`) and never the lattice, so the
+  cell centres the Studio draws are now also where a block physically rests.
+- Horizontal centres are therefore trim-only: X `1.9 → 17.1`, Y `1.9 → 36.1`.
+  Y's *holder* targets are byte-identical to before (`2.2, 13.6, 25.0, 36.4`),
+  so the axis that was already landing correctly cannot regress; only X moved,
+  by exactly `−1.4 cm`.
+- **Fixture fallout, one case:** `coords.fixtures.json`'s
+  *"horizontal shift y −2.0 refused"* is now genuinely refused. It previously
+  reported `3 × 10` reachable despite its own name — the `+0.3` error offset had
+  been lending horizontal Y an extra 0.3 cm of negative-shift headroom.
+- Two web expectations moved with the origin: horizontal cell 0 is `19 mm` on
+  both axes (was `24 / 22`), and the X shift-clipping boundary is `5.7 / 5.8 cm`
+  (was `5.2 / 5.3`). `test_grid.py`'s SECTION_3 contract and
+  `test_config_modes.py`'s tool-offset assertions were updated in the same
+  commit. 491 web tests and 194 Python checks green.
+- **Not verified on hardware.** Nothing was flashed. The `(+0.9, −0.3)` pair is
+  the unique fit to two rig readings (X 1.4 cm out, Y dead on); its geometric
+  sign assumes a handedness that X's `DIR_NEG` travel could mirror. Confirm
+  with one horizontal placement at two different columns before trusting it.
+
 ### Stable instanced blocks and explicit wheel zoom
 
 The Studio and twin refresh Three.js's cached `InstancedMesh` bounding sphere

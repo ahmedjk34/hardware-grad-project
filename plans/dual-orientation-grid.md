@@ -135,9 +135,13 @@ else, that is a signal to stop and re-read the plan.
 > for the pickup-cell registration described in D14 (later revised from the
 > single-axis `trim_y = +1.6` this note originally quoted; `config/rig.json` and
 > `python/tests/test_grid.py` `SECTION_3` are authoritative). Horizontal also
-> now ships a measured `error_offset_x = +0.5`, `error_offset_y = +0.3` cm
-> (blocks were landing that far toward home; rotation slop from the 90° CCW
-> pickup-rotate, kept out of the +1.9 trim per D14). Vertical error
+> **shipped** a measured `error_offset_x = +0.5`, `error_offset_y = +0.3` cm
+> for the pickup-rotate slop. **That was corrected — both are now 0.** The
+> swing is claw geometry, so per D15 it belongs in `tool_offsets.cw`, which is
+> now `(+0.9, −0.3) cm`; `error_offset` is rotation-blind and its X sign was
+> measured under CCW while the build rotates CW, which placed horizontal blocks
+> 1.4 cm too far from the X home switch. Horizontal centres are therefore
+> trim-only: X `1.9 → 17.1`, Y `1.9 → 36.1`. Vertical error
 > offsets ship at
 > `(+0.15, +0.05) cm` for X/Y after incremental correction: the prior
 > `(+0.15, -0.45) cm` was increased by the newly measured `0.5 cm`
@@ -437,9 +441,11 @@ drift here is not cosmetic — it is how the two machines stop agreeing.
 
 ## 9. What this plan does not do
 
-- Records the current horizontal-grid `ccw` tool-offset trial as X `+3.75 cm`,
-  Y `+1.40 cm`; `neutral` and `cw` remain zero. This is an on-hardware trial
-  and must be remeasured if the holder or claw geometry changes.
+- Records the historical horizontal-grid `ccw` tool-offset trial as X
+  `+3.75 cm`, Y `+1.40 cm`. **Superseded — do not copy these in.** They predate
+  the centre-anchored lattice, and the build rotation is `ROT_CW`, not CCW.
+  `ccw` and `neutral` are zero; `cw` now carries the measured pickup-rotate
+  swing `(+0.9, −0.3) cm`. See the §3 note on the error-offset correction.
 - Does not change travel, step envelopes, Z levels or the feeder.
 - Does not add a third orientation, or any rotation other than 90° CCW.
 - Does not auto-detect the claw's physical angle. Nothing senses it (D10).

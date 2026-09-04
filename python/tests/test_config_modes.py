@@ -106,15 +106,29 @@ check("travel is mode-independent",
       == (22.8, 38.0))
 check("tool_offsets keeps neutral/cw/ccw (D15)",
       set(config["tool_offsets"]) == {"neutral", "cw", "ccw"})
-# All three ship at zero, deliberately. The claw closes on the middle of the
-# block, which is its centre, so neutral is genuinely zero rather than merely
-# unmeasured - and the horizontal registration is a GRID trim now, not a tool
-# offset, so the old (3.75, 1.4) CCW pair would double-count it. Re-measure
-# these on the rig after the geometry change before putting numbers back.
-check("every tool offset starts at zero, pending re-measurement",
+# NEUTRAL is genuinely zero: the claw closes on the middle of the block and a
+# vertical build never turns, so holder and block centre coincide.
+#
+# CW is NOT zero any more. The claw's grip point sits about (-0.3, +0.6) cm off
+# the aux stepper's rotation axis, so the 90-degree pickup-rotate swings the
+# block centre round that axis by X +0.9 / Y -0.3 cm. That swing was previously
+# absorbed by grid.modes.horizontal.error_offset_* (+0.5, +0.3), which is a
+# rotation-blind knob and had X's sign backwards - blocks landed 1.4 cm too far
+# from the X home switch. It is claw geometry, so per D15 it belongs here.
+#
+# CCW stays zero: no grid or build route requests it, so it is unmeasured. The
+# recorded (3.75, 1.40) CCW trial predates the centre-anchored lattice and must
+# not be copied in.
+check("neutral and ccw tool offsets stay at zero",
       all((config["tool_offsets"][k]["x_cm"],
            config["tool_offsets"][k]["y_cm"]) == (0.0, 0.0)
-          for k in ("neutral", "cw", "ccw")))
+          for k in ("neutral", "ccw")))
+check("cw carries the measured pickup-rotate swing (D15, not an error offset)",
+      (config["tool_offsets"]["cw"]["x_cm"],
+       config["tool_offsets"]["cw"]["y_cm"]) == (0.9, -0.3))
+check("horizontal no longer hides the rotation swing in its error offset",
+      (config["grid"]["modes"]["horizontal"]["error_offset_x_cm"],
+       config["grid"]["modes"]["horizontal"]["error_offset_y_cm"]) == (0.0, 0.0))
 
 # ------------------------------------------------------------------
 # Legacy migration

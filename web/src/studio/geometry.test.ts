@@ -136,10 +136,10 @@ describe("grid shift clipping, as the firmware does it", () => {
 
   it("checks the block EDGES against this mode's overhang budget", () => {
     // Horizontal X tolerates 3.0 cm of edge overhang and its last centre sits
-    // at trim_x 1.9 + error_offset_x 0.5 + 2 * 7.6 = 17.6 cm, so on top of that
-    // registration a further 5.2 cm of shift still lands the last centre on the
-    // 22.8 cm cap and 5.3 cm does not.
-    expect(clippedCells("horizontal", { x_cm: 5.2, y_cm: 0 }).reachable.cols).toBe(3);
-    expect(clippedCells("horizontal", { x_cm: 5.3, y_cm: 0 }).reachable.cols).toBe(2);
+    // at trim_x 1.9 + 2 * 7.6 = 17.1 cm, so on top of that registration a
+    // further 5.7 cm of shift still lands the last centre on the 22.8 cm cap
+    // and 5.8 cm does not.
+    expect(clippedCells("horizontal", { x_cm: 5.7, y_cm: 0 }).reachable.cols).toBe(3);
+    expect(clippedCells("horizontal", { x_cm: 5.8, y_cm: 0 }).reachable.cols).toBe(2);
   });
 });

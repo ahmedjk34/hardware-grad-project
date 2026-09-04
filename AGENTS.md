@@ -139,8 +139,17 @@ at the active software cap. The live calibration is:
 Never hard-code those ratios; firmware derives them from the cap and measured
 displacement. A separate physical observation found a **24.3 × 43 cm build
 footprint**; it does not change the 24.3 × 40 cm holder-centre motion cap. The
-Horizontal builds use the CW tool-offset slot. All tool offsets currently
-remain zero; remeasure the CW offset before entering a non-zero value.
+Horizontal builds use the CW tool-offset slot, and it is **no longer zero**:
+`cw = (+0.9, −0.3) cm`, the pickup-rotate swing (see §3a). `neutral` is
+genuinely zero — a vertical build never turns — and `ccw` stays zero because no
+grid or build route requests it. The recorded `(3.75, 1.40)` CCW trial predates
+the centre-anchored lattice and must not be copied in.
+
+**`tool_offsets` is flash-only today.** No serial command sets it and
+`rig/link.py` never pushes it, so `config/rig.json → tool_offsets` and the
+sketch's `TOOL_OFFSET_*` are held together only by `test_grid.py`'s pairing
+check. Change both in the same commit or the check fails; changing the value on
+the rig requires a reflash.
 
 A block is **2.2 × 6.0 × 1.5 cm**. Which of its two plan dimensions lies along
 X is what the mode decides. `[0,0]` is the feeder-block centre where the claw
@@ -166,16 +175,31 @@ Worked out for both at the shipped calibration:
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | vertical | X | 2.2 | 1.6 | 3.8 | **7** | 25.00 | 0.00 → 22.80 | −1.10 → 23.90 |
 | vertical | Y | 6.0 | 1.6 | 7.6 | **6** | 44.00 | 0.00 → 38.00 | −3.00 → 41.00 |
-| horizontal | X | 6.0 | 1.6 | 7.6 | **3** | 21.20 | 2.40 → 17.60 | −0.60 → 20.60 |
-| horizontal | Y | 2.2 | 1.6 | 3.8 | **10** | 36.40 | 2.20 → 36.40 | 1.10 → 37.50 |
+| horizontal | X | 6.0 | 1.6 | 7.6 | **3** | 21.20 | 1.90 → 17.10 | −1.10 → 20.10 |
+| horizontal | Y | 2.2 | 1.6 | 3.8 | **10** | 36.40 | 1.90 → 36.10 | 0.80 → 37.20 |
 
-Horizontal's centres above are `trim (+1.9 / +1.9)` **plus its shipped
-`error_offset` of `+0.5 cm` X / `+0.3 cm` Y** — a measured constant per-mode
-placement error (blocks were landing that far toward home; rotation slop from
-the 90° CCW pickup-rotate). The registration trim alone would put the centres
-at `1.90 → 17.10` (X) and `1.90 → 36.10` (Y). The error offset corrects
-placement but never resizes the grid: `gridGeometryFits` / `_assert_fits`
-strip it.
+Horizontal's centres above are its `trim (+1.9 / +1.9)` and **nothing else**.
+Both modes now ship `error_offset = 0`.
+
+**Horizontal used to carry `error_offset` `+0.5 cm` X / `+0.3 cm` Y and that was
+wrong twice over.** It was absorbing the placement error of the 90° pickup-
+rotate, which is claw geometry, not lattice geometry — D15's exact prohibition.
+And because `error_offset` is one rotation-blind number per mode, it could not
+follow when the build rotation settled on `ROT_CW`: the X half kept the sign
+measured under CCW and pushed the *same* way as the error instead of against
+it, landing horizontal blocks **1.4 cm too far from the X home switch** while Y
+stayed dead on.
+
+The cause is that the claw's grip point sits ≈`(−0.3, +0.6) cm` off the aux
+stepper's rotation axis, so a 90° CW turn swings the block centre round that
+axis by **X `+0.9`, Y `−0.3` cm** — a carousel, not a spin in place. That swing
+now lives in `tool_offsets.cw = (+0.9, −0.3)`, which displaces the **holder**
+and leaves the cell centres alone. Y's holder targets are unchanged by the move
+(it was already landing correctly); X's shift 1.4 cm toward home.
+
+Because a tool offset never enters the lattice, these centres are now also
+where a placed block physically comes to rest — so `MachineGrid`, the camera
+overlay and the Studio all draw the truth without a correction of their own.
 
 `count` is a COUNT; the firmware's `S` and `GRID_COLS` / `GRID_ROWS` speak in
 highest indices, one less. `python/rig/grid.py` is the authoritative statement
@@ -191,7 +215,12 @@ feeder `[0,0]`, centred on home, then rotated 90° about the grip. The rotated
 per side, so a +1.9 cm trim on each axis seats horizontal `[0,0]` flush against
 the vertical `[0,0]` block edge (near edge in X, far edge in Y). This is a
 mode-specific grid registration shift, positive away from each home switch; it
-is not a tool offset and must not be added to `tool_offsets.ccw`.
+is not a tool offset and must not be added to `tool_offsets.ccw`. Note the
+overhang is an *extent* while the trim is a *translation*: a 90° turn about the
+grip moves the block's centre by zero however far its face overhangs, so what
+justifies `+1.9` is the layout choice (horizontal `[0,0]` defined edge-flush
+with vertical `[0,0]`), not the rotation. The rotation's real contribution is
+the grip-to-axis swing in `tool_offsets.cw`.
 **Horizontal's trims are still not vertical's and must not be copied from
 them.**
 

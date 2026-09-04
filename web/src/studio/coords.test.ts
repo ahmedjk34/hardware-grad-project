@@ -63,10 +63,14 @@ describe("Studio coordinates against python/rig/grid.py", () => {
 });
 
 describe("the facts the fixtures cannot state on their own", () => {
-  it("puts vertical cell 0 on the home corner and horizontal cell 0 on its +1.9 cm registration plus error offset", () => {
+  it("puts vertical cell 0 on the home corner and horizontal cell 0 on its +1.9 cm registration", () => {
     expect(cellToMachine("vertical", 0, 0, 0)).toEqual({ x: 0, y: 0, z: 7.5 });
-    expect(cellToMachine("horizontal", 0, 0, 0).x).toBeCloseTo(24, 6); // trim_x +1.9 cm + error_offset_x +0.5 cm
-    expect(cellToMachine("horizontal", 0, 0, 0).y).toBeCloseTo(22, 6); // trim_y +1.9 cm + error_offset_y +0.3 cm
+    // Trim only, on both axes. The pickup-rotate swing that used to sit here
+    // as error_offset (+0.5, +0.3) moved to tool_offsets.cw, which displaces
+    // the HOLDER and never the lattice - so this is now where a placed block
+    // physically comes to rest, which is the whole point of drawing it here.
+    expect(cellToMachine("horizontal", 0, 0, 0).x).toBeCloseTo(19, 6); // trim_x +1.9 cm
+    expect(cellToMachine("horizontal", 0, 0, 0).y).toBeCloseTo(19, 6); // trim_y +1.9 cm
   });
 
   it("never swaps a width for a length", () => {
