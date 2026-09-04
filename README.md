@@ -101,6 +101,7 @@ of open-loop timing.
 - Python tools, setup and usage → **[python/README.md](python/README.md)**
 - Per-tool walkthrough → **[python/GUIDE.md](python/GUIDE.md)**
 - Firmware → **[arduino/README.md](arduino/README.md)**, open the relevant sketch in `arduino/` with the Arduino IDE
+- Full browser → Pi → Uno + Mega communication pipeline, end to end → **[docs/communication-pipeline.md](docs/communication-pipeline.md)**
 - Uno feeder hardware, state machine and serial protocol → **[docs/feeder-controller.md](docs/feeder-controller.md)**
 - Uno commissioning CLI → `python/feeder_console.py`; dual-role flashing → `scripts/flash.sh feeder …`
 - Web operator console — how to run it → **[docs/server-guide.md](docs/server-guide.md)**, how it's built → **[docs/CONSOLE.md](docs/CONSOLE.md)**

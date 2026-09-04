@@ -5,6 +5,10 @@ implementation, not generic Arduino serial behavior and not an assumed deployed
 state. In particular, the repository itself says that the structured `@` ACK
 firmware is compile-verified but has **never been flashed** (`docs/ack-protocol.md:3-7`).
 
+This is a deep audit of the Pi ↔ Mega link only. For the end-to-end pipeline
+across both boards, see **[communication-pipeline.md](communication-pipeline.md)**;
+for the Uno half, **[feeder-controller.md](feeder-controller.md)**.
+
 ## Executive findings
 
 The production path is USB-A on the Raspberry Pi to the Mega's primary USB-B

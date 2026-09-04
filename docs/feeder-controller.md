@@ -11,6 +11,10 @@ the gantry or decides where a block is placed. The Mega treats its `[0,0]` cell
 as the feeder/pickup position. The Pi coordinates both boards over two
 independent USB serial ports; the boards never talk directly to one another.
 
+This page is the Uno half in depth. For the full picture — browser/Studio →
+FastAPI → the guard stack → both serial clients → result → `/api/events` — see
+**[communication-pipeline.md](communication-pipeline.md)**.
+
 ## What it does
 
 One `FEED` request runs this sequence:

@@ -13,7 +13,9 @@ top of this console and shares its store/components),
 [docs/BLOCK-VISION.md](BLOCK-VISION.md) (the detection layers this console's
 camera pipeline consumes), [AGENTS.md](../AGENTS.md) (the Pi/firmware
 contract), [docs/ack-protocol.md](ack-protocol.md) (the serial protocol this
-console's `/api/events` stream carries).
+console's `/api/events` stream carries),
+[docs/communication-pipeline.md](communication-pipeline.md) (the full
+browser → Pi → Uno + Mega path this console drives).
 
 ---
 

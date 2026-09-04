@@ -5,6 +5,10 @@ The service owns exactly one camera and two Arduino serial connections, so run
 one backend process only. Do not start multiple Uvicorn workers or launch a
 second camera/serial client while the service is running.
 
+For how a placement actually travels from the browser through the Pi to both
+boards and back, see
+[docs/communication-pipeline.md](communication-pipeline.md).
+
 ## 1. Prerequisites
 
 You need:
