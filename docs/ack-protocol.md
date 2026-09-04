@@ -463,6 +463,12 @@ same stream so the whole console can be exercised off-rig; and the web
 console's `/api/events` carries each phase as a `build_step` event with a
 server event id (`python/web/events.py`).
 
+Verified in software: `link.py`'s ack/progress parsing and `MockBoard`'s full
+kind coverage are exercised by `python/tests/mock_board_test.py`,
+`web_command_test.py` and `web_events_test.py` (all green). Firmware-side
+correctness rests only on the host-stub compile — no hardware confirmation
+yet (item 1 below).
+
 **Not done and next:**
 
 1. **Flash it and watch.** `./scripts/flash.sh`, then open `rig_console.py` and

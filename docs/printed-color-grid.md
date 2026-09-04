@@ -8,6 +8,14 @@ an invisible rectangle.
 [printed-grid-spec.md](printed-grid-spec.md)** — read that to decide whether a
 change is still correct. This document is how it works and what was measured.
 
+**Current status.** The combined A2 target described below (§"The current
+one-page target") is the primary, actively-used calibration artefact; its
+geometry is verified by `python/tests/test_combined_grid.py` (all passing).
+The legacy per-mode sheet described in §"The sheet" is a fallback only,
+reachable through `detect_printed_grids()`; its reference training captures
+are of the retired pre-6cm-block sheet and are skipped by
+`test_color_grid.py` until a new legacy sheet is reprinted and reshot.
+
 Implemented by `python/vision/color_grid.py` (geometry),
 `python/vision/combined_grid.py` (the one-page target and legacy fallback),
 `python/vision/color_grid_overlay.py` (drawing),
@@ -106,16 +114,19 @@ measured ones are `H`.
 ## The sheet
 
 Each printed cell has the active mode's block footprint with white between
-neighbours — **1.6 cm along X, 0.8 cm along Y**: vertical is **2.2 × 6.0 cm**,
-horizontal is **6.0 × 2.2 cm**. Both come from `config/rig.json`, so the paper
-and the machine are describing the same grid. Colours alternate like a
-chessboard, which costs nothing to print and gives the detector a free
-consistency check: if a cell's colour disagrees with the parity of its index,
-the indices are wrong.
+neighbours — **a uniform 1.6 cm on both axes** (an earlier revision claimed
+0.8 cm along Y; that was wrong — see AGENTS.md §3a): vertical is
+**2.2 × 6.0 cm**, horizontal is **6.0 × 2.2 cm**. Both come from
+`config/rig.json`, so the paper and the machine are describing the same grid.
+Colours alternate like a chessboard, which costs nothing to print and gives
+the detector a free consistency check: if a cell's colour disagrees with the
+parity of its index, the indices are wrong.
 
 The sheet is deliberately printed **larger than the machine's grid**. An A2
 print holds more cells than the mapped window. Vertical maps 7 × 6; the
-horizontal sheet maps 3 × 11. That surplus is what makes the sheet usable at
+horizontal sheet maps **3 × 10** (30 cells — the horizontal grid dropped from
+11 to 10 rows in a later block revision; see
+[dual-orientation-grid.md](dual-orientation-grid.md) §3). That surplus is what makes the sheet usable at
 any camera height without reprinting it — and it is why choosing which cells
 count, and which of several overlapping mode-sized windows to calibrate on, is
 half the problem.

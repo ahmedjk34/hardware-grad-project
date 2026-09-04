@@ -17,8 +17,9 @@ panel", not "a starter template".
 1. `docs/DESIGN.md` — the design system. Tokens, layout, component specs and
    the explicit "do not do" list. This is authoritative; follow it rather than
    inventing a look.
-2. `plans/plan-3-web-operator-console.md` — sections 1, 2 and 9. Section 2's
-   eight facts explain *why* the safety states are shaped the way they are.
+2. `docs/CONSOLE.md` — §2 "The product" and §3 "The eight facts that shape
+   the design". The eight facts explain *why* the safety states are shaped
+   the way they are.
 3. `web/src/` — all of it. It is small: `App.tsx`, `store.ts`, `ws.ts`,
    `api.ts`, `types.ts`, `style.css`, and eight components.
 4. `python/web/state.py`, `routes_command.py`, `app.py` — the exact state

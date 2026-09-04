@@ -47,7 +47,7 @@ per block orientation: `vertical` (blocks standing, 9 x 5) and `horizontal`
 outright. Nothing anywhere swaps a width for a length — a swap would have to be
 performed identically in the firmware, in `MachineGrid` and in the camera
 overlay, which is three chances to get an axis backwards. See
-plans/dual-orientation-grid.md D12.
+docs/dual-orientation-grid.md D12.
 
 `workspace`, `observed_build_area`, `tool_offsets`, `serial`, `board` and
 `frame` are NOT per mode: travel and claw geometry are physical facts, and a
@@ -66,7 +66,7 @@ edges against, on both machines. Vertical allows half a block on each axis
 the held block unavoidably overhangs — that is the shipped, physically
 verified 9 x 5 grid. Horizontal allows zero, because its 15 rows are flush
 with both walls and any overhang there means the trims are wrong. See
-plans/dual-orientation-grid.md D20 and R2. A mode that omits the pair gets
+docs/dual-orientation-grid.md D20 and R2. A mode that omits the pair gets
 half a block, which makes the edge check exactly as permissive as the
 centre-only check that predates it — so a legacy config does not start failing.
 """
@@ -82,7 +82,7 @@ CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "rig.json"
 _cache: dict | None = None
 
 # The two block orientations. Vertical is the compiled firmware default and the
-# state every USB open resets the board to; see plans/dual-orientation-grid.md D2.
+# state every USB open resets the board to; see docs/dual-orientation-grid.md D2.
 GRID_MODES = ("vertical", "horizontal")
 DEFAULT_GRID_MODE = "vertical"
 
@@ -179,7 +179,7 @@ def grid_geometry(cfg: dict | None = None, mode: str | None = None) -> dict:
             # The single-mode shape is exactly what migrate_grid() produces from
             # a legacy flat block, so say that rather than "typo?".
             hint = (" This config only defines the vertical grid — it predates "
-                    "plans/dual-orientation-grid.md and needs the modes table "
+                    "docs/dual-orientation-grid.md and needs the modes table "
                     "from that plan's section 5.")
         raise UnknownGridMode(
             f"unknown grid mode {name!r}; config/rig.json defines: {available}.{hint}"

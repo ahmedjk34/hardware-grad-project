@@ -102,7 +102,7 @@ BUILD_OK = [
 
 # The same build with the machine channel the firmware now prints: RECV, one
 # STEP per phase, the phase-11 'done' that confirms the release, then the OK.
-# Copied from the host-stub transcript in plans/ack-protocol.md.
+# Copied from the host-stub transcript in docs/ack-protocol.md.
 BUILD_WITH_STEPS = [
     "@12 RECV cmd=B col=3 row=4 level=0",
     "@12 STEP step=1 total=14 phase=raise_clear action=move"

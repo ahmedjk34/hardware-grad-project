@@ -55,7 +55,7 @@ that side along X (`horizontal`, 3 x 10). These are separate grids with
 separate counts, separate trims and separate calibrations, and `mode` names
 which one this object is. Every mode declares both `block_x_cm` and
 `block_y_cm` outright, so nothing in this module swaps an X extent for a Y one
-- see plans/dual-orientation-grid.md D12 for why that matters.
+- see docs/dual-orientation-grid.md D12 for why that matters.
 
 `mode` is emphatically NOT `swap_axes`. `swap_axes` is about the CAMERA: it
 covers a lens mounted a quarter turn out, where the machine's columns run down
@@ -278,7 +278,7 @@ class MachineGrid:
         The centre check above asks only whether the holder can reach every
         placement point. That accepts a grid whose far block hangs off the
         machine, because the centre it hangs from is legal — see
-        plans/dual-orientation-grid.md R2. This is the firmware's
+        docs/dual-orientation-grid.md R2. This is the firmware's
         `gridGeometryFits` block-edge half, kept identical on purpose.
         """
         slack = 1e-4

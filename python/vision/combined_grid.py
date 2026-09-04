@@ -75,7 +75,7 @@ RELAXED_BAR_CLOSE_PX = 7
 STRIPE_ASPECT_RANGE = (1.0, 2.2)
 
 # Exact internal geometry measured from the supplied 2245 x 1587 raster and
-# matched by plans/assets/combined-calibration-grid.svg. At 37.79 px/cm the
+# matched by docs/assets/combined-calibration-grid.svg. At 37.79 px/cm the
 # solid runs are approximately 83, 60, 83 px across each 227 px bar.
 OUTER_THIRD_CM = 2.2
 CENTER_THIRD_CM = 1.6

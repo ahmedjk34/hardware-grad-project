@@ -5,9 +5,8 @@ This is the visual and interaction specification for the browser console
 person actually *touches*: the gantry, the vision pipeline and the firmware are
 all judged through it.
 
-Read [plans/plan-3-web-operator-console.md](../plans/plan-3-web-operator-console.md)
-first for what the console *does*. This document covers only how it should look
-and behave.
+Read [CONSOLE.md](CONSOLE.md) first for what the console *does*. This document
+covers only how it should look and behave.
 
 ---
 
@@ -98,7 +97,7 @@ component should contain a raw hex value.
 }
 ```
 
-The wood tones are the Studio and twin's own (Plan 4): a real workpiece is
+The wood tones are the Studio and twin's own (see STUDIO.md): a real workpiece is
 timber, so the blocks read as timber. They are in the same non-state family as
 the five detection hues — a saturated colour here describes an object in the
 workspace, not a machine state, so §2's "colour is reserved" rule is intact.
@@ -296,7 +295,7 @@ sent to the Mega.
 
 ### 6.4 BUILD button
 
-The two-tap confirmation from Plan 3 Step 9 is a safety mechanism, so it gets
+The two-tap confirmation (CONSOLE.md §2) is a safety mechanism, so it gets
 design weight:
 
 - **Idle**: full-width, 56px, `--ready` background, `--void` text, 600 weight.

@@ -110,7 +110,7 @@ image and is not evidence that camera and motor cells match. To calibrate:
    before placing a block.
 
 There is a second, faster route. Print
-[`plans/assets/combined-calibration-grid.svg`](../plans/assets/combined-calibration-grid.svg)
+[`docs/assets/combined-calibration-grid.svg`](../docs/assets/combined-calibration-grid.svg)
 at 100% / actual size, never “fit to page”. Lay the combined A2
 green/magenta/beige calibration page in the work area with its physical
 lower-left page corner at holder home, press `p` to see its 8×10 chromatic
@@ -150,8 +150,8 @@ cells amber/dashed. It refuses to save unless the physical evidence covers all
 four corners and outer edges, so it never invents a workspace boundary. `x`
 cancels without changing an existing map. The full procedure, quality gates and
 camera/crop order are in
-[Evidence-Assisted Printed-Grid Calibration](../plans/evidence-assisted-printed-grid-calibration.md).
-See [printed-color-grid.md](../plans/printed-color-grid.md), and check strict
+[Evidence-Assisted Printed-Grid Calibration](../docs/evidence-assisted-printed-grid-calibration.md).
+See [printed-color-grid.md](../docs/printed-color-grid.md), and check strict
 single-frame detection first with `color_grid_check.py`.
 
 `x` cancels calibration without destroying the previous saved map, `g` toggles
@@ -334,7 +334,7 @@ looks fine. Refusals are sentences you can act on, such as
 
 Full detail, including the one place the sheet's layout disagrees with the
 firmware's, is in
-[plans/printed-color-grid.md](../plans/printed-color-grid.md).
+[docs/printed-color-grid.md](../docs/printed-color-grid.md).
 
 ---
 

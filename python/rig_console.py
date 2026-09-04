@@ -48,7 +48,7 @@ The `@` lines
 -------------
 Anything starting with `@` is for the Pi, not for you — `@3 OK col=3 row=5`
 beside the prose that says the same thing. They are printed here unchanged so
-you can eyeball them. See plans/ack-protocol.md.
+you can eyeball them. See docs/ack-protocol.md.
 """
 
 import argparse

@@ -182,7 +182,7 @@ def _publish_build_result(app: FastAPI, outcome) -> None:
         "locked": locked,
         "locked_reason": controller.locked_reason,
         # True when `Rig` had to read the prose because no ack arrived. Worth
-        # surfacing: it is the evidence `plans/ack-protocol.md` wants before
+        # surfacing: it is the evidence `docs/ack-protocol.md` wants before
         # the fallback can be deleted.
         "from_prose": bool(getattr(result, "from_prose", False)),
     })

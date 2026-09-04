@@ -1,25 +1,24 @@
 # The 3D Build Studio — living record
 
 **What this document is.** The single, current, complete description of the
-Studio as it actually exists in the repository. Plan 4
-([plans/plan-4-3d-build-studio.md](../plans/plan-4-3d-build-studio.md)) says what
-the Studio is *for* and is deliberately not rewritten as the work lands; the
-milestone prompts file records what each milestone was *asked* for. **This file
-records what is true right now** — every module, every exported function, every
-decision that a future reader would otherwise have to reverse-engineer from the
-code.
+Studio as it actually exists in the repository, superseding the original
+design plan (`plans/plan-4-3d-build-studio.md`, now retired — §12 keeps the
+one part of it, M8, that was never built, so the idea is not lost). **This
+file records what is true right now** — every module, every exported
+function, every decision that a future reader would otherwise have to
+reverse-engineer from the code.
 
 **How to keep it.** Update it in the same commit as the change it describes.
 Anything that would surprise someone reading the code cold belongs here: a
-decision that contradicts the plan, a constant with no home in `rig.json`, a
-library that had to be used a particular way. §11 is the changelog; add to it
-every time. If this file and the code disagree, the code is right and this file
-is a bug.
+decision that contradicts the original intent, a constant with no home in
+`rig.json`, a library that had to be used a particular way. §11 is the
+changelog; add to it every time. If this file and the code disagree, the code
+is right and this file is a bug.
 
 Related: [DESIGN.md](DESIGN.md) (the visual language, shared with the console),
 [AGENTS.md](../AGENTS.md) §3a/§3b (the machine's grid geometry, authoritative),
-[plan-3-web-operator-console.md](../plans/plan-3-web-operator-console.md) (the
-console this attaches to).
+[CONSOLE.md](CONSOLE.md) (the console this attaches to, and shares components
+with).
 
 ---
 
@@ -712,7 +711,7 @@ changes.
 `twinScene(..., build)` takes the `BuildProgress` the store folded out of
 `build_step` events, and `twinPhase()` maps the firmware's phase id to one of
 seventeen visual states. `PHASE_BY_ID` is the whole mapping and `twin.test.ts`
-asserts every row of it against the fourteen ids in `plans/ack-protocol.md`.
+asserts every row of it against the fourteen ids in `docs/ack-protocol.md`.
 
 `descentOffsetScene()` **is gone.** It interpolated a looping 1.6-second descent
 off `performance.now()` and returned a height nobody had measured — and it
@@ -2041,3 +2040,49 @@ phase and the whole stack carries it.
   `MachineGrid`; pass `"requested"` for the operator's grid.
 - `AGENTS.md` §3a and §3b were stale against `grid.py` and the firmware and were
   corrected in the same pass.
+
+---
+
+## 12. Not yet built — M8, the wow pass
+
+The design document that originally specified the Studio
+(`plans/plan-4-3d-build-studio.md`) has been retired now that this file is the
+complete current-state record; its milestones M0–M7 are folded into §1 above.
+This section keeps the one part of it that was never built, so the idea is not
+lost with the plan.
+
+**The idea, in short.** Open the Studio: a dark, infinite space with the rig's
+motion envelope as a faint wireframe cage and the machine's real block lattice
+glowing inside it — 7 × 6 cells in vertical mode, each one exactly one block's
+footprint. Orbit, hover, click to drop a real 2.2 × 6.0 × 1.5 cm block with a
+settle animation, stack on it. Press `M` and the lattice morphs live between
+grids while every placed block stays exactly where it is in real centimetres.
+Drag a grid-shift handle and the reachable lattice clips live, in real
+millimetres, exactly as the firmware would clip it. Save to a library with a
+rendered thumbnail; load it on the index page and the twin fills in beside the
+camera as the real machine builds it, one `B` at a time.
+
+**M8 scope — not started:**
+
+- live shift-gizmo clipping of the reachable cells as it's dragged (§8.5 of
+  the retired plan);
+- cross-mode bridging validated by real footprint-overlap support maths — a
+  horizontal block spanning two vertical towers;
+- timeline scrub and replay, with compiled `R`/`RR` latches visible as
+  dividers;
+- a plan-projection overlay on the live camera feed (near-AR, reusing the
+  existing `WorkspaceMap` homography already used for `web/geometry.py`);
+- time-lapse export stitched from real `PLACED` frames;
+- a printable instruction-sheet export rendered from the timeline;
+- ambient audio cues (soft tick per placed block, a chord on completion),
+  mutable and remembered;
+- a `?` shortcut overlay listing every key.
+
+**Acceptance was originally framed as a five-minute demo script:** open the
+console (real machine, live), open the Studio (same machine to scale), build a
+two-tower bridge by hand with a mode switch mid-way, drag the grid shift and
+watch the far column drop out, show the compiled program is a handful of
+serial lines, dry-run it, send it to the console for a real build beside the
+twin, then show the run report and time-lapse. None of M8 blocks a real
+demo today — M0–M7 alone already produce a working design-compile-run-verify
+loop end to end against `--mock` or real hardware.

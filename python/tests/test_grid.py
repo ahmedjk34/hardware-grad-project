@@ -163,7 +163,7 @@ check("that overhang is exactly each axis' budget, both ends",
 # ------------------------------------------------------------------
 # The dual-orientation numeric contract
 # ------------------------------------------------------------------
-# Section 3 of plans/dual-orientation-grid.md tabulates every derived
+# Section 3 of docs/dual-orientation-grid.md tabulates every derived
 # centimetre for both modes. That table IS the contract between the firmware,
 # MachineGrid and the camera overlay, so it is transcribed here rather than
 # recomputed: a test that redoes the arithmetic would agree with a bug.

@@ -5,7 +5,7 @@ Run from python/:  ../.venv/bin/python tests/test_cluster_grid.py
 
 No camera, no capture files. A sheet is drawn in-process the same way
 tests/test_color_grid.py draws the green/magenta sheet, then the bordered
-cluster detector is run on it. See plans/cluster-calibration-grid.md.
+cluster detector is run on it. See docs/cluster-calibration-grid.md.
 """
 
 import sys

@@ -631,7 +631,7 @@ const bool SOFT_LIMIT_VERBOSE = true;
 //   vertical [0,0] block edge (near edge in X, far edge in Y).
 //
 // Nothing here swaps an X extent for a Y one; see D12 in
-// plans/dual-orientation-grid.md.
+// docs/dual-orientation-grid.md.
 //
 // THE PRINTED SHEET is registered the same way: lay it so the CENTRE of its
 // [0,0] block sits on the holder home point, and printed [c,r] is firmware
@@ -867,7 +867,7 @@ const char *gridModeName(uint8_t mode)
 // NOT to be confused with GRID_ERROR_OFFSET_* (a rotation-blind nudge to the
 // cell centres themselves) or with the +1.9 cm GRID_TRIM_* registration (grid
 // layout).  This one is claw geometry and nothing else - see D15 in
-// plans/dual-orientation-grid.md.
+// docs/dual-orientation-grid.md.
 //
 // CCW stays zero: no grid or build route requests it, so it has never been
 // measured.  The recorded (3.75, 1.40) CCW trial predates the centre-anchored
@@ -3640,7 +3640,7 @@ long levelToZSteps(long level)
 // early limit makes the real move longer - never shorter, since nothing
 // here goes faster than its step rate. Consumers must therefore treat it
 // as a floor, and must never let it stand in for the phase actually
-// finishing. See plans/ack-protocol.md.
+// finishing. See docs/ack-protocol.md.
 long zEtaMs(long steps)
 {
   if (steps < 0)

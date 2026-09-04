@@ -44,7 +44,7 @@ export interface BuildProgress {
    * The firmware's predicted duration for this phase, in ms, or null.
    *
    * A FLOOR, not a schedule — the real phase can only take longer. See
-   * `plans/ack-protocol.md`. Its expiry means nothing; only the next event
+   * `docs/ack-protocol.md`. Its expiry means nothing; only the next event
    * says a phase is over.
    */
   etaMs: number | null;

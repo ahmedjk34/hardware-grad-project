@@ -21,7 +21,7 @@ of that, and this module uses both:
 1. `@` acknowledgement lines. `build_test_v1` prints one beside the prose for
    every build outcome — `@3 OK col=3 row=5 level=0`, `@3 SAFE ...`,
    `@3 HELD ...`. A fixed token in a fixed position. This is the real answer.
-   See plans/ack-protocol.md.
+   See docs/ack-protocol.md.
 2. Prose matching, as a FALLBACK, because the ack lines are compile-verified
    but were written before anyone flashed them. Every time the fallback fires
    it says so on stderr. Once it has gone quiet for a while, delete it.
@@ -69,7 +69,7 @@ Build rotation is not per-block
 active GRID, not of the block: the vertical grid places blocks as the feeder
 presents them, the horizontal grid turns every one of them 90° CW. Choose
 with `set_mode()`, which sends the firmware's `R` / `RR` latch. See
-plans/dual-orientation-grid.md D7 and D8.
+docs/dual-orientation-grid.md D7 and D8.
 
 For a deliberate bench test there is also `rotate_aux(degrees)`, which sends
 the firmware's signed relative `A <degrees>` command. It is not an absolute
@@ -940,7 +940,7 @@ class Rig:
 
         The board comes up vertical after every reset, so a session that wants
         horizontal has to say so before anything else — see R4 in
-        plans/dual-orientation-grid.md. Sending the latch is skipped when the
+        docs/dual-orientation-grid.md. Sending the latch is skipped when the
         board has already told us, on its READY line, that it is where we want
         it; that keeps the common vertical case free of an error line in the
         log and free of an unasked-for homing move.
@@ -1026,7 +1026,7 @@ class Rig:
 
         There is no rotation argument. The active grid decides how the block is
         laid; use `set_mode()` to change that. See D7/D8 in
-        plans/dual-orientation-grid.md.
+        docs/dual-orientation-grid.md.
 
         For calibration, firmware also accepts zero for either coordinate:
         ``B 0 5`` skips X and ``B 9 0`` skips Y; ``B 0 0`` is an inert no-op.
@@ -1037,7 +1037,7 @@ class Rig:
 
         The timeout is generous on purpose. A build is ~40 s of motion, and the
         firmware bounds every one of its own seeks and reports its own failures
-        (see plans/ack-protocol.md on why there is no watchdog). Hitting this
+        (see docs/ack-protocol.md on why there is no watchdog). Hitting this
         timeout therefore means something outside the firmware's model went
         wrong, which is also a go-and-look, not a retry.
         """

@@ -1,7 +1,8 @@
 # Research notes — Click-to-Build (superseded)
 
 > **This was the first draft of Plan 2, written before Plan 1 was built.**
-> The active plan is [../plan-2-click-to-build.md](../plan-2-click-to-build.md).
+> The plan it drafted (plan-2-click-to-build.md) is itself retired now that it
+> is built; its content lives in [../../docs/CONSOLE.md](../../docs/CONSOLE.md).
 > Much of the phasing here is done or obsolete — the config, the flash script
 > and the serial console all exist now, and v1 (not v2) is the frozen firmware.
 > Kept for the detail the short plan omits: the exact strings the firmware

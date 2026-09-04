@@ -119,9 +119,9 @@ else, that is a signal to stop and re-read the plan.
 ### Docs — see §8, this is not optional
 
 `AGENTS.md` §3, §3a, §3b, §3c, §3d; `plans/README.md`;
-`plans/printed-grid-spec.md` R5/R6 and the "vertical only" section (L198-203);
-`plans/printed-color-grid.md`; `plans/evidence-assisted-printed-grid-calibration.md`;
-`plans/plan-2-click-to-build.md`; `python/GUIDE.md`; `python/README.md`;
+`docs/printed-grid-spec.md` R5/R6 and the "vertical only" section (L198-203);
+`docs/printed-color-grid.md`; `docs/evidence-assisted-printed-grid-calibration.md`;
+`docs/CONSOLE.md`; `python/GUIDE.md`; `python/README.md`;
 `arduino/README.md`.
 
 ---
@@ -271,32 +271,42 @@ implement through Step 5, then ask.
 
 ## 5. Target config shape
 
+**Superseded — this was written against the pre-revision 7.5 cm block /
+0.5 cm gap geometry, same as §3's original D1 answer.** `config/rig.json` is
+authoritative at runtime (AGENTS.md §3); its shipped shape today is:
+
 ```json
 "grid": {
   "active_mode": "vertical",
   "modes": {
     "vertical": {
-      "cols": 9, "rows": 5,
-      "block_x_cm": 2.2, "block_y_cm": 7.5,
-      "gap_x_cm": 0.5, "gap_y_cm": 0.5,
-      "trim_x_cm": 1.1, "trim_y_cm": 3.75,
-      "max_edge_overhang_x_cm": 1.1, "max_edge_overhang_y_cm": 3.75,
+      "cols": 7, "rows": 6,
+      "block_x_cm": 2.2, "block_y_cm": 6.0,
+      "gap_x_cm": 1.6, "gap_y_cm": 1.6,
+      "trim_x_cm": 0.0, "trim_y_cm": 0.0,
+      "max_edge_overhang_x_cm": 1.1, "max_edge_overhang_y_cm": 3.0,
       "error_offset_x_cm": 0.0, "error_offset_y_cm": 0.0
     },
     "horizontal": {
-      "cols": 3, "rows": 15,
-      "block_x_cm": 7.5, "block_y_cm": 2.2,
-      "gap_x_cm": 0.5, "gap_y_cm": 0.5,
-      "trim_x_cm": 0.0, "trim_y_cm": -0.25,
-      "max_edge_overhang_x_cm": 0.0, "max_edge_overhang_y_cm": 0.0,
+      "cols": 3, "rows": 10,
+      "block_x_cm": 6.0, "block_y_cm": 2.2,
+      "gap_x_cm": 1.6, "gap_y_cm": 1.6,
+      "trim_x_cm": 1.9, "trim_y_cm": 1.9,
+      "max_edge_overhang_x_cm": 3.0, "max_edge_overhang_y_cm": 1.1,
       "error_offset_x_cm": 0.0, "error_offset_y_cm": 0.0
     }
   }
 }
 ```
 
-`workspace`, `observed_build_area`, `tool_offsets`, `serial`, `board` and
-`frame` are **unchanged** — travel and claw geometry are physical, not per-mode.
+(This is `config/rig.json` as it ships today; check the file directly before
+relying on any specific value here, since error offsets in particular are
+re-measured periodically — see AGENTS.md §3a.)
+
+The shape (which keys exist, per-mode) is unchanged from the original design
+below; only the numbers moved. `workspace`, `observed_build_area`,
+`tool_offsets`, `serial`, `board` and `frame` are **unchanged** — travel and
+claw geometry are physical, not per-mode.
 
 ---
 
@@ -483,14 +493,18 @@ drift here is not cosmetic — it is how the two machines stop agreeing.
   became mode selection; `rig_build_v1.py`'s `o` key latches the grid.
 
 **Docs updated in step:** AGENTS.md §3, §3a, §3b, §3c, §6; `arduino/README.md`;
-`python/README.md`; `python/GUIDE.md`; `plans/ack-protocol.md`;
+`python/README.md`; `python/GUIDE.md`; `docs/ack-protocol.md`;
 `plans/README.md` (draft → active). D20's amendment is recorded in §1.
 
-**Step 6 is built and desk-tested.** `ColorGridSpec` takes an explicit mode;
-vertical maps 10 x 6 printed coordinates and horizontal maps 4 x 16. The
+**Step 6 is built and desk-tested.** `ColorGridSpec` takes an explicit mode.
+The "10 x 6" / "4 x 16" figures originally recorded here describe the
+pre-revision (7.5 cm block, 0.5 cm gap) sheet layout and are superseded by the
+§3 "Superseded geometry" note: at the shipped 2.2×6.0 cm / 1.6 cm-gap
+geometry, vertical maps **7 x 6** printed coordinates and horizontal maps
+**3 x 10** (see `config/rig.json`, `color_grid.py:280-285`). The
 pitch-to-axis mapping follows that mode, not the image. Count and physical
 geometry are cross-checked before a sheet map can be applied to a
-`MachineGrid`. Horizontal synthetic tests cover 64 mapped cells, overlapping
+`MachineGrid`. Horizontal synthetic tests cover the mapped cells, overlapping
 operator-selectable windows, partial-cell rejection, wrong-layout refusal and
 the evidence collector's scaled coverage gates.
 
@@ -510,9 +524,9 @@ the horizontal latch until after home; the hardware-moving UI still locks the
 session for a human inspection rather than invoking recovery itself.
 
 **Docs updated with these steps:** AGENTS.md §3d;
-`plans/printed-grid-spec.md`, `plans/printed-color-grid.md` and
-`plans/evidence-assisted-printed-grid-calibration.md` now describe both sheets
-and per-mode evidence gates; `plans/plan-2-click-to-build.md`, `python/GUIDE.md`
+`docs/printed-grid-spec.md`, `docs/printed-color-grid.md` and
+`docs/evidence-assisted-printed-grid-calibration.md` now describe both sheets
+and per-mode evidence gates; `docs/CONSOLE.md`, `python/GUIDE.md`
 and `python/README.md` describe the keyed workspace map and reset recovery.
 
 ### Verification honesty

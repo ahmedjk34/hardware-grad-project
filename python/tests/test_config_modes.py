@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Step 1 of plans/dual-orientation-grid.md: the two-mode `grid` block.
+"""Step 1 of docs/dual-orientation-grid.md: the two-mode `grid` block.
 
     cd python
     ../.venv/bin/python tests/test_config_modes.py

@@ -59,7 +59,7 @@ The sheet may describe either calibrated machine layout.  In vertical mode the
 machine X side is the short block side; in horizontal mode it is the long one.
 The mode is an explicit input — the detector never guesses it from a partial
 sheet — and the complete coordinate counts cross-check that the sheet and the
-machine grid agree.  See ``plans/dual-orientation-grid.md`` D18.
+machine grid agree.  See ``docs/dual-orientation-grid.md`` D18.
 """
 
 from __future__ import annotations

@@ -1,6 +1,8 @@
 # Plan 1 — Get the cable working
 
-> **ARCHIVED — superseded by [plan-2-click-to-build.md](../plan-2-click-to-build.md).**
+> **ARCHIVED — superseded by [docs/CONSOLE.md](../../docs/CONSOLE.md) (the
+> plan that followed this one, plan-2-click-to-build.md, is itself retired;
+> its content lives there now).**
 > All four steps were built. Steps 1 and 2 are verified; steps 3 and 4 need the
 > Pi and the board to confirm. Kept as the record of how the link was set up.
 

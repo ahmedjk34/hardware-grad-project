@@ -35,7 +35,7 @@ CORNER_NAMES = (
 )
 
 
-# Maps saved before plans/dual-orientation-grid.md named the two block extents
+# Maps saved before docs/dual-orientation-grid.md named the two block extents
 # `block_width_cm` / `block_length_cm`. They meant exactly X and Y, so reading
 # them under the new names is a rename, not a reinterpretation.
 _LEGACY_BLOCK_KEYS = {"x": "block_width_cm", "y": "block_length_cm"}

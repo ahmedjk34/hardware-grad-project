@@ -129,12 +129,20 @@ trying to reuse its corners.
   strict single-frame `p`/`k` route. Do calibration in the non-moving gridded
   viewer first, then use the saved map for builds.
 
-## Implementation and tests
+## Implementation and tests — built
 
 `vision/color_grid.py` performs sparse whole-cell detection when explicitly
-called in evidence mode. `vision/grid_evidence.py` pools accepted frames and
-enforces the readiness gates. `camera/gridded_camera_feed.py` owns the `e`,
-`Space`, `k`, and `x` operator flow.
+called in evidence mode. `vision/grid_evidence.py`'s `PaperGridEvidence` pools
+accepted frames and enforces the readiness gates — its constants
+(`MIN_FRAMES=2`, `MIN_CELL_FRACTION=0.60`, `MIN_SHORT_EDGE_FRACTION=0.50`,
+`MIN_LONG_EDGE_FRACTION=0.30`, `MIN_FRAME_OVERLAP=4`,
+`MAX_MEAN_RESIDUAL_PX=2.0`, `MAX_RESIDUAL_PX=6.0`, `MAX_CELL_SPREAD_PX=3.0`)
+match the readiness-gate table above exactly. `camera/gridded_camera_feed.py`
+owns the `e`, `Space`, `k`, and `x` operator flow, and reaches this through
+`combined_grid.PrintedGridEvidence`, a thin wrapper over
+`PaperGridEvidence` — so the combined A2 target (the primary calibration
+artefact, see [printed-color-grid.md](printed-color-grid.md)) gets the same
+evidence workflow as the legacy sheet this doc was written against.
 
 Run the headless regression suite with:
 
@@ -145,4 +153,11 @@ cd python
 
 It includes a synthetic gantry-shaped occlusion: strict calibration refuses the
 frame, while evidence calibration keeps six interior cells virtual and becomes
-ready only after two consistent accepted frames.
+ready only after two consistent accepted frames, for both grid modes.
+
+**A note on running this script, not on the feature:** the same file has an
+unrelated flaky check — an off-thread `PaperGridTracker` poll around line 507
+with a 5-second deadline — that can crash the script on a cold/slow run
+before it reaches the evidence-gantry checks further down. A warm run, or a
+longer poll deadline, shows every check including the evidence ones passing.
+Nothing here has been run against a live Pi camera.

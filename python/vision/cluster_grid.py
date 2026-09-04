@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Detect the bordered-cluster calibration sheet by its black line lattice.
 
-See ``plans/cluster-calibration-grid.md`` for the sheet design and the
+See ``docs/cluster-calibration-grid.md`` for the sheet design and the
 numbered requirements C1-C9 this module implements.
 
 Why this exists, next to ``color_grid.py``

@@ -4,6 +4,11 @@
 threshold marked `TUNE-WITH-CAPTURE` in `python/vision/cluster_grid.py` is a
 guess until a real Pi frame is run through `camera/color_grid_check.py`.**
 
+Built: `vision/cluster_grid.py` (all of C1–C9 below implemented),
+`tests/test_cluster_grid.py` passes (24/24, both modes, tilt, three colour
+casts, wrong-mode refusal). The printed sheet itself does not exist yet, so
+nothing above the synthetic-test line has been checked against reality.
+
 ## Context
 
 The green/magenta sheet (`printed-color-grid.md`) and the A2 combined target
@@ -36,8 +41,10 @@ lock onto regardless of cast:
 
 One **cluster = one lattice site = one printed `[col,row]`**, exactly like the
 combined target's 3-part fiducials (not one-block-per-cell). The complete
-coordinate counts are unchanged: **7×6 vertical, 3×11 horizontal**
-(`rig.json`, `test_grid.py` SECTION_3).
+coordinate counts are unchanged: **7×6 vertical, 3×10 horizontal** (30 cells
+— not 3×11/33; that was a stale carry-over from before the horizontal grid
+dropped to 10 rows, see `config/rig.json` and
+`vision/color_grid.py:267-270`'s "No +1" comment).
 
 ## Why a new module, not an edit of `color_grid.py`
 
@@ -110,9 +117,14 @@ Numbered so a review can point at one.
 * Real-capture tuning of every `TUNE-WITH-CAPTURE` constant (adaptive-threshold
   block size / C, close kernel, quad-area band, hue centres for blue vs
   purple, ramp-variance thresholds).
-* Wiring `cluster_grid` into `gridded_camera_feed` / `rig_build_v1` /
-  `console_pipeline` as the selected detector — a one-line swap once C-tuning
-  passes on hardware.
+* ~~Wiring `cluster_grid` into `gridded_camera_feed` / `rig_build_v1` /
+  `console_pipeline` as the selected detector~~ — **partly done already,
+  ahead of this list.** `gridded_camera_feed.py` has a `_PAPER_DETECTORS`
+  registry (`{"color": ..., "cluster": (detect_cluster_grids,
+  detect_cluster_grid)}`) with `set_paper_detector()`, and
+  `rig_build_v1.py` exposes `--paper-detector {color,cluster}` on the CLI
+  (default stays `color`). Still unwired: `console_pipeline.py` and
+  `camera/color_grid_check.py`.
 * Evidence pooling is inherited for free (`PaperGridEvidence.add` takes any
   `ColorGridCalibration`); its gates are not re-tuned here.
 * The printed artwork / SVG generator for the new sheet.
@@ -138,5 +150,5 @@ cd python
 ../.venv/bin/python camera/color_grid_check.py   # after the one-line detector swap
 ```
 
-Expect a sub-2-px mean residual and all 42 (vertical) / 33 (horizontal)
+Expect a sub-2-px mean residual and all 42 (vertical) / 30 (horizontal)
 clusters in the selected window, matching spec R1.

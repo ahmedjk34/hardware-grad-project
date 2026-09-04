@@ -133,7 +133,7 @@ PAPER_OVERLAY_WIDTH = 1024
 #   "color"   - the shipped green/magenta sheet + A2 combined target
 #               (vision/combined_grid.py)
 #   "cluster" - the black-bordered 3x3 cluster sheet
-#               (vision/cluster_grid.py, plans/cluster-calibration-grid.md);
+#               (vision/cluster_grid.py, docs/cluster-calibration-grid.md);
 #               geometry from the printed border by edge detection.
 # Each entry is (multi-window fn, single-window fn); both share the
 # ColorGridCalibration output contract so the overlay and the map writer do not

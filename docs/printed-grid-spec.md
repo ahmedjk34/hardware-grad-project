@@ -103,14 +103,19 @@ pitch-sized border.
 ### R4 — Grid size and origin
 
 Vertical is **7 columns × 6 rows** (`0..6`, `0..5`); horizontal is **3 columns
-× 11 rows** (`0..2`, `0..10`). Both are the complete coordinate map including
+× 10 rows** (`0..2`, `0..9`). Both are the complete coordinate map including
 zero, matching the active firmware layout. A sheet starts at `[0,0]` with **no
 outer margin**, with inner margins between every pair of neighbours.
+
+*(Horizontal was originally specified as 3×11/33 cells; the block revision
+that dropped `horizontal.rows` from 11 to 10 in `config/rig.json` — see
+[dual-orientation-grid.md](dual-orientation-grid.md) §3 — makes it 3×10/30
+cells today. `color_grid.py` and `config/rig.json` are authoritative.)*
 
 `[0,0]` of the **selected window** is the cell nearest the **bottom-left of the
 image**. Both indices increase away from that corner.
 
-**Accept when:** exactly 42 vertical or 33 horizontal cells are mapped in the
+**Accept when:** exactly 42 vertical or 30 horizontal cells are mapped in the
 selected window, its `[0,0]` is the bottom-left corner cell of that window, and
 raising either index moves away from it.
 
@@ -206,7 +211,7 @@ interior cells virtually.
 **Accept when:** `e` starts a fresh session, Space accepts one frame, and `k`
 writes the ordinary mode-keyed `workspace_map.json` only after at least two
 accepted frames (each later frame overlapping four earlier physical cells), at
-least 60% of that mode's physical cells (26/42 vertical; 20/33 horizontal), all
+least 60% of that mode's physical cells (26/42 vertical; 18/30 horizontal), all
 four corner regions, at least half of each short edge and 30% of each long edge,
 <=2 px mean / <=6 px max merged residual and <=3 px cross-frame spread.
 Physical cells are solid green; virtual cells are amber and dashed. `x`
@@ -317,15 +322,23 @@ colour correction is applied in four places).
 
 ## 8. Status
 
+**This whole document describes the legacy per-mode sheets, which are now the
+fallback route, not the primary one.** The primary calibration artefact is
+the combined A2 target (`vision/combined_grid.py`), documented in
+[printed-color-grid.md](printed-color-grid.md); these legacy sheets remain
+detectable via `detect_printed_grids()` for backward compatibility. Current
+horizontal grid is **3×10 (30 cells)**, not the 3×11/33 this document was
+originally written against — see the note under R4.
+
 Verified on the training captures, on synthetic sheets rendered at known
 homographies, and on one real frame from the rig.
 
 | requirement | status |
 | --- | --- |
-| R1 detect and fit | done — 1.13 px mean residual on the training capture |
+| R1 detect and fit | done — 1.13 px mean residual, but that capture is of the retired pre-6cm-block sheet and is now skipped by `test_color_grid.py` until a new legacy sheet is reshot |
 | R2 whole cells only | done — partials excluded; short frames refused |
 | R3 margins | done — inner margins return `None`, outer never measured |
-| R4 7 × 6 / 3 × 11, `[0,0]` bottom-left; R4a all sub-grids offered | done |
+| R4 7 × 6 / 3 × 10, `[0,0]` bottom-left; R4a all sub-grids offered | done |
 | R5 axis from explicit mode + cell size | done — survives a 90° input rotation |
 | R6 modular core | done |
 | R7 verification tool | done — live path **not verified on hardware** |

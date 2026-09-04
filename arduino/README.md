@@ -76,7 +76,7 @@ Fourteen lines, not one per motor step — at 9600 baud that is about 0.3 s of
 airtime inside the build, where per-step telemetry would be minutes of it and
 would starve the terminal ack. `status=done` appears exactly once, at phase 11,
 and means the block has left the claw; it does **not** mean the build finished.
-Only the terminal `@n OK` does. `plans/ack-protocol.md` has the full field list
+Only the terminal `@n OK` does. `docs/ack-protocol.md` has the full field list
 and the fourteen phase identifiers.
 
 **`R` and `RR` no longer jog it.** They are the grid mode latch — `R` selects

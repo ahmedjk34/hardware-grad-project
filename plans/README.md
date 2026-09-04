@@ -1,21 +1,29 @@
 # Plans
 
-One plan at a time. A plan is written, reviewed, worked through, then archived.
+This directory used to hold every plan, worked through one at a time then
+archived. It no longer does that.
 
-| Plan | State | What it covers |
-| --- | --- | --- |
-| [plan-4-3d-build-studio.md](plan-4-3d-build-studio.md) | **drafted** | a browser 3D modelling studio for block structures plus a live digital twin beside the camera: design in 3D, compile to ordered `B`/`R`/`RR` commands, validate support and collisions, run it |
-| [placement-supervision.md](placement-supervision.md) | **drafted** | verify every placement against a server-side ledger of what the machine was commanded to place, and notice when a human moves or removes a block: occupancy diff in the quiet window between builds, no tracking, bounded repair |
-| [plan-3-web-operator-console.md](plan-3-web-operator-console.md) | **active — Steps 1–3 built** | `rig_build_v1` as a React PWA + FastAPI service: browser click-to-build, server-side safety state, `--mock` mode for off-Pi work, tests-first |
-| [plan-2-click-to-build.md](plan-2-click-to-build.md) | **built** | click a spot on the camera image, the rig places a block there — every step implemented (`gridded_camera_feed.py`, `rig_build_v1.py`); Pi/rig acceptance and the ack flash remain |
-| [dual-orientation-grid.md](dual-orientation-grid.md) | **built** | a second, equally valid grid: blocks laid horizontally 3 x 15 alongside the vertical 9 x 5, with per-mode geometry, trims and calibration, latched by `RR` / `R`; Pi/camera and hardware verification remain |
-| [printed-grid-spec.md](printed-grid-spec.md) | **built** | what the printed grid must do, as numbered requirements: whole cells only, the margin rules, `[0,0]` bottom-left, what is deferred, and the ambiguities that were resolved |
-| [printed-color-grid.md](printed-color-grid.md) | **built** | the printed green/magenta sheet: how it is measured, which cells count, and the one place its layout disagrees with the firmware's |
-| [cluster-calibration-grid.md](cluster-calibration-grid.md) | **drafted, desk-only** | replacement sheet with a hard black border round every cell in 3×3 clusters; `vision/cluster_grid.py` finds the lattice by edge detection, colour only for parity/mode; synthetic tests pass, no camera has seen it |
-| [evidence-assisted-printed-grid-calibration.md](evidence-assisted-printed-grid-calibration.md) | **built** | operator workflow for calibrating through interior gantry occlusions without virtualising a workspace boundary |
-| [ack-protocol.md](ack-protocol.md) | **partly built** | machine-readable `@` lines beside the human prose. The safety subset is in `build_test_v1` but has never been flashed; `python/rig/link.py` reads it, with prose matching as a fallback |
-| [archive/plan-1-cable.md](archive/plan-1-cable.md) | done | archive the old sketches, one config file, flash from the Pi, talk to the rig from Python |
-| [archive/plan-2-research-notes.md](archive/plan-2-research-notes.md) | reference | the long first draft of Plan 2. Superseded, but it holds the detail the short version leaves out — exact firmware output strings, GPIO UART pinout and level-shifting, timing constraints |
+Every plan that reached "built" has been retired: its content was folded into
+the hard documentation for the subsystem it describes, and the plan file was
+deleted so there is exactly one place — the code and its living doc — that
+describes current behaviour. Genuine reference material that had been sitting
+alongside those plans (grid geometry specs, the printed-sheet detector, the
+ack protocol, calibration guides) was moved out to [../docs/](../docs/)
+unchanged, since it was never a plan to begin with.
 
-Keep the active plan short enough to read in one sitting. If it needs a table of
-risks to be understood, it is too big — split it.
+| What you're looking for | Where it lives now |
+| --- | --- |
+| The web operator console — architecture, current state | [docs/CONSOLE.md](../docs/CONSOLE.md) |
+| The 3D Build Studio — architecture, current state, changelog | [docs/STUDIO.md](../docs/STUDIO.md) |
+| Grid geometry, printed sheets, calibration routes | [docs/printed-grid-spec.md](../docs/printed-grid-spec.md), [docs/printed-color-grid.md](../docs/printed-color-grid.md), [docs/cluster-calibration-grid.md](../docs/cluster-calibration-grid.md), [docs/dual-orientation-grid.md](../docs/dual-orientation-grid.md), [docs/evidence-assisted-printed-grid-calibration.md](../docs/evidence-assisted-printed-grid-calibration.md) |
+| The `@`-line serial protocol | [docs/ack-protocol.md](../docs/ack-protocol.md) |
+| Lens/fisheye tuning, grid capture calibration | [docs/camera-fisheye-tuning-guide.md](../docs/camera-fisheye-tuning-guide.md), [docs/grid-capture-calibration-playbook.md](../docs/grid-capture-calibration-playbook.md) |
+| Designed but not yet built (placement supervision, the Studio's "wow pass") | [docs/feature-ideas.md](../docs/feature-ideas.md) |
+
+`archive/` is untouched: two already-superseded early drafts, kept for the
+detail they hold that the docs above don't repeat (exact firmware strings,
+GPIO pinout, the original cable/upload bring-up).
+
+If a new plan starts here, the same rule applies when it lands: fold what got
+built into the relevant doc under `docs/`, then delete the plan rather than
+letting it sit as a second, drifting description of the same code.

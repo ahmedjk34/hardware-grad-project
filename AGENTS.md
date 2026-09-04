@@ -396,7 +396,7 @@ X/Y envelope are refused, never silently clipped.
 | `config/rig.json` -> `grid.modes.<mode>.*` | applied after the shared page-plane fit; still stored separately per mode |
 | the two legacy physical sheets | vertical: 2.2 x 6.0 cm; horizontal: 6.0 x 2.2 cm; 1.6 cm inner margin along X, 0.8 cm along Y |
 | `python/vision/color_grid.py` | detects legacy sheets and refuses a measured geometry mismatch |
-| `plans/printed-color-grid.md` | the full treatment, including the layout disagreement below |
+| `docs/printed-color-grid.md` | the full treatment, including the layout disagreement below |
 
 The current combined sheet measures the page plane independently of either
 block layout. It uses 6.0 x 2.2 cm fiducial bars, 0.8 cm X gaps and 1.6 cm Y
@@ -900,7 +900,7 @@ the machine envelope in `workspace`.
 | `build_test_v1.ino` SECTION 7C | emits `@<seq> <KIND> ...` |
 | `python/rig/link.py` | parses them — `parse_ack()`, `parse_progress()`, `_KIND_TO_OUTCOME` |
 | `python/rig/mock_board.py` | a fake board that must speak the same protocol |
-| `plans/ack-protocol.md` | the kind list, the phase table, and the reasoning |
+| `docs/ack-protocol.md` | the kind list, the phase table, and the reasoning |
 
 `OK`, `ERR`, `SAFE`, `HELD`, `BOOT`, `READY`, `RECV`, `STEP`. **`SAFE` and
 `HELD` are not interchangeable**: `SAFE` means nothing moved, `HELD` means the
@@ -925,7 +925,7 @@ compile error. The word form is separately named `ackWord()`.
 | `build_test_v1.ino` `buildStep()` call sites | the authoritative fourteen `phase=` ids |
 | `python/rig/mock_board.py` `MockBoard.BUILD_PHASES` | the off-rig copy that lets the whole console be tested |
 | `web/src/studio/twin.ts` `PHASE_BY_ID` | what the 3D twin draws for each one |
-| `plans/ack-protocol.md` | the table, with what each phase physically does |
+| `docs/ack-protocol.md` | the table, with what each phase physically does |
 
 `B` prints one `@n STEP step= total= phase= action= text= status=` line per
 phase, **before that phase runs**. `phase` is a stable machine identifier that
