@@ -16,8 +16,8 @@ when it is a complete, colour-detected printed block that passes the detector's
 fullness, lattice, parity and per-frame residual checks. The feature then pools
 those physical observations from two or more manually accepted camera frames.
 
-The merged fit draws every coordinate in the selected mode: 10 x 6 vertical or
-4 x 16 horizontal. A cell seen physically is solid green. A cell that is
+The merged fit draws every coordinate in the selected mode: 7 x 6 vertical or
+3 x 10 horizontal. A cell seen physically is solid green. A cell that is
 present only in the fitted geometry is amber and dashed. Amber means
 **virtual**, not measured.
 
@@ -31,8 +31,11 @@ four corner regions before it can save a map.
 1. Tune and save lens, orientation, colour and framing settings first with
    `camera_studio.py` / the lens tools. The printed grid maps the final camera
    view; changing any of those settings afterwards invalidates the map.
-2. Put the printed green/magenta sheet flat in the work area. Its 2.2 x 7.5 cm
-   blocks and 0.5 cm gaps must match `config/rig.json`.
+2. Put the printed sheet flat in the work area. Its block footprint and gaps
+   must match `config/rig.json` — 2.2 x 6.0 cm (vertical) / 6.0 x 2.2 cm
+   (horizontal), a uniform 1.6 cm gap on both axes. (The legacy green/magenta
+   per-mode sheets carry a 0.8 cm Y gap and are now refused until reprinted;
+   the combined A2 target is the primary artefact.)
 3. Keep the **camera and paper fixed** throughout the evidence session. The
    gantry may remain in view.
 4. Use only normal, safe manual rig positioning if you choose to reveal a
@@ -54,7 +57,8 @@ preview; read the evidence report in the dashboard.
    session. This clears any old, unsaved evidence; it does not erase an
    existing workspace map.
 3. Inspect the preview. Green solid cells are physical evidence already
-   accepted. Amber dashed cells are the still-virtual part of the 10 x 6 map.
+   accepted. Amber dashed cells are the still-virtual part of the map (7 x 6
+   or 3 x 10).
 4. When the current gantry position exposes useful cells, press `Space` once.
    The tool either accepts the frame or explains why it was rejected.
 5. If needed, move the gantry only through your normal safe controls, wait for
@@ -75,9 +79,9 @@ preview; read the evidence report in the dashboard.
 | --- | --- | --- |
 | accepted frames | at least 2 | catches camera/paper motion and avoids saving an accidental single glimpse |
 | overlap between later frames | at least 4 previously verified cells | proves a newly revealed region still belongs to the same fixed camera/sheet view |
-| physical printed cells | at least 60%: 36 of 60 vertical, 39 of 64 horizontal | the fit is supported by most of the selected map |
+| physical printed cells | at least 60% (`ceil(0.60·cols·rows)`): 26 of 42 vertical, 18 of 30 horizontal | the fit is supported by most of the selected map |
 | corner regions | 4 of 4 | no virtual extrapolation at a workspace corner |
-| each outer edge | at least 50% of a short edge and 30% of a long edge | no virtual extrapolation along a workspace boundary; horizontal's 16-cell sides need 8 anchors |
+| each outer edge | `ceil(0.50·rows)` on each short edge, `ceil(0.30·cols)` on each long edge | no virtual extrapolation along a workspace boundary |
 | merged residual | mean <= 2 px, max <= 6 px | the virtual grid remains tied to the ink |
 | repeated-cell spread | <= 3 px | camera and paper did not move between accepted frames |
 
@@ -100,7 +104,7 @@ without making an unsafe camera map.
 
 | Situation | Route |
 | --- | --- |
-| One clean frame contains a complete unobstructed mode-sized window (10 x 6 vertical; 4 x 16 horizontal) | `p`, then `k`: strict single-frame printed-sheet calibration. |
+| One clean frame contains a complete unobstructed mode-sized window (7 x 6 vertical; 3 x 10 horizontal) | `p`, then `k`: strict single-frame printed-sheet calibration. |
 | Gantry/cable hides interior sheet cells but the outer boundaries can be seen across a few positions | `e`, `Space` for each useful position, wait for READY TO SAVE, then `k`. |
 | A workspace boundary cannot be seen at all | Reframe the camera/sheet or use four clicked corners; evidence mode correctly refuses to invent it. |
 | Lens/crop/orientation is being changed | Do that first, then calibrate the workspace again. |

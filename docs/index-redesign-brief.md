@@ -1,5 +1,13 @@
 # Handoff prompt — redesign the operator console index page
 
+**Status: done.** This handoff was carried out — `web/src/style.css` is the
+token-driven system, the layout and components match [DESIGN.md](DESIGN.md),
+and every deliverable-D feature shipped (`RigLog.tsx`, `ModeSwitch.tsx`,
+`CameraChip.tsx`, `Shortcuts.tsx`, the calibration wizard in `Calibrate.tsx`,
+direct level entry, view toggles). Kept as a record of the brief; the current
+state is [CONSOLE.md](CONSOLE.md) and [DESIGN.md](DESIGN.md). Candidate for
+retirement — see the audit note.
+
 Paste everything below the line into a fresh agent session that has this
 repository checked out.
 

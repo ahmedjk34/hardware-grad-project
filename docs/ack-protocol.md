@@ -37,19 +37,19 @@ depends on it. Print **one extra line** beside it, for the machine.
 BUILD COMPLETE - block placed at [3,5] level 0 (0.00 cm)   <- human
 Place time: 41.2s
 ======================================
-@12 OK col=3 row=5 level=0 ms=41210                        <- machine
+@12 OK col=3 row=5 level=0                                 <- machine
 ```
 
 Two audiences, two lines, neither compromised.
 
 ## What is actually built
 
-`SECTION 7C` of `build_test_v1.ino`, plus six one-line call sites:
+`SECTION 7C` of `build_test_v1.ino`, plus its call sites:
 
 | Where | Emits |
 | --- | --- |
 | `setup()`, straight after `Serial.begin` | `@0 BOOT fw=build_test_v1` |
-| `setup()`, last line | `@0 READY grid=10x20` |
+| `setup()`, last line | `@0 READY grid=<cols>x<rows> mode=<mode>` |
 | `handleBuildCommand()`, two parse failures | `@n ERR <what was expected>` |
 | `buildReject()` | `@n SAFE <why>` |
 | `buildAbort()` | `@n HELD <why>` |
@@ -63,7 +63,7 @@ running it:
 
 ```
 @0 BOOT fw=build_test_v1
-@0 READY grid=10x20
+@0 READY grid=6x5 mode=vertical
 @1 ERR expected: B <col> <row> <level>
 @2 SAFE cell out of range
 @3 OK col=3 row=5 level=0
@@ -82,12 +82,14 @@ Nothing is lost: the Pi branches on the **kind**, which is a fixed token. The
 reason is for the log and for the human. If a Pi-side branch on a specific
 reason is ever needed, codes can be added then.
 
-### Note on `@0 READY grid=10x20`
+### Note on `@0 READY grid=<cols>x<rows> mode=<mode>`
 
-That reports the grid the board **booted with**, which is the compiled default.
-The Pi still pushes `S <cols> <rows>` from `config/rig.json` afterwards. Seeing
-the boot value is useful precisely because it is the one the Pi is about to
-override.
+`ackReady()` prints `gridColsNow()` / `gridRowsNow()` — **highest indices, the
+form `S` speaks**, not counts — and `gridModeName(gridMode)`. Every reset
+returns the board to its compiled default, so at boot this is
+`grid=6x5 mode=vertical`. The Pi still pushes the mode latch and then
+`S <cols> <rows>` from `config/rig.json` afterwards; seeing the boot value is
+useful precisely because it is the one the Pi is about to override.
 
 ## `STEP` — real-time build progress
 
@@ -160,7 +162,9 @@ Only `@n OK` says that. See `python/web/progress.py`.
 The steppers have no acceleration ramp: `moveAxisSteps()` is a fixed-period
 pulse loop, so a move of N steps takes `N * stepPeriodMs(axis)` and that is
 genuinely computable rather than guessed. `zEtaMs()` does the arithmetic and
-`ms=` puts the answer on the four Z phases (1, 5, 7, 10).
+`ms=` puts the answer on the five Z-move phases: 1 (`raise_clear`),
+5 (`lower_to_ground`), 7 (`lift_block`), 10 (`lower_to_level`) and
+12 (`park_clear`).
 
 For the current calibration — `Z_TRAVEL_STEPS = 1350`, `STEP_DELAY_Z = 950 us`
 (so 1.9 ms/step), `Z_TRAVEL_CM = 26.5`, `BLOCK_HEIGHT_CM = 1.5` — that is:
@@ -198,7 +202,8 @@ the moment the phase-10 event arrived, clamped short of the cell so the block
 can only actually land when the release event says it did. See
 `web/src/studio/twin.ts` `descentProgress()`.
 
-Phases 2, 3, 4, 6, 8, 9, 11, 13 and 14 send no `ms` at all. X/Y moves could in
+Phases 2, 3, 4, 6, 8, 9, 11, 13 and 14 send no `ms` at all — 8 and 13 are the
+X/Y moves, the rest turn a servo or the aux stepper. X/Y moves could in
 principle be predicted the same way, but they are not: the useful case is the
 one the eye follows, and adding fields nobody reads costs airtime for nothing.
 
@@ -230,19 +235,19 @@ the phase announcements in order (the same technique as the transcript above):
 
 ```
 @12 RECV cmd=B col=3 row=5 level=0
-@12 STEP step=1 total=14 phase=raise_clear action=move text=Raise_Z_into_the_top_switch status=begin
+@12 STEP step=1 total=14 phase=raise_clear action=move text=Raise_Z_into_the_top_switch status=begin ms=2570
 @12 STEP step=2 total=14 phase=home_feeder action=move text=Home_XY_to_the_feeder status=begin
 @12 STEP step=3 total=14 phase=neutralise_claw action=rotate text=Return_the_claw_to_neutral status=begin
 @12 STEP step=4 total=14 phase=open_claw action=release text=Open_the_claw status=begin
 @12 STEP step=5 total=14 phase=lower_to_ground action=move text=Lower_Z_to_the_ground_switch status=begin ms=2570
 @12 STEP step=6 total=14 phase=grip action=grip text=Close_the_claw_and_grip status=begin
-@12 STEP step=7 total=14 phase=lift_block action=move text=Raise_Z_to_carry_height status=begin
+@12 STEP step=7 total=14 phase=lift_block action=move text=Raise_Z_to_carry_height status=begin ms=2570
 @12 STEP step=8 total=14 phase=move_to_target action=move text=Move_XY_to_the_target_cell status=begin
 @12 STEP step=9 total=14 phase=rotate_to_grid action=rotate text=Apply_the_grid_rotation status=begin
 @12 STEP step=10 total=14 phase=lower_to_level action=move text=Lower_Z_to_the_target_level status=begin ms=2570
 @12 STEP step=11 total=14 phase=release action=release text=Open_the_claw_and_release status=begin
 @12 STEP step=11 total=14 phase=release action=release text=Open_the_claw_and_release status=done
-@12 STEP step=12 total=14 phase=park_clear action=park text=Raise_Z_clear_of_the_stack status=begin
+@12 STEP step=12 total=14 phase=park_clear action=park text=Raise_Z_clear_of_the_stack status=begin ms=2570
 @12 STEP step=13 total=14 phase=park_home action=park text=Return_XY_to_the_origin status=begin
 @12 STEP step=14 total=14 phase=park_rotation action=park text=Return_the_claw_to_neutral status=begin
 @12 OK col=3 row=5 level=0
@@ -280,7 +285,7 @@ event. No exceptions — that is what makes the Pi's wait loop safe.
 | Kind | Terminal | Meaning |
 | --- | --- | --- |
 | `RECV` | no | parsed, accepted, about to run. **Built.** |
-| `BUSY` | **yes** | refused — something is already running |
+| `BUSY` | **yes** | refused — something is already running. **Reserved, not emitted yet** — the firmware runs one command at a time and never sees a second; `link.py`'s `TERMINAL_KINDS` keeps it so a future rig can add it without a Pi change. |
 | `ERR` | **yes** | refused — bad syntax or out of range. **Nothing moved.** |
 | `STEP` | no | progress: one build phase, before it runs. **Built** — see above. (This is the kind the design below calls `RUN`.) |
 | `OK` | **yes** | finished, succeeded |
@@ -301,10 +306,10 @@ Seq `0` means "nobody asked for this".
 
 | Line | When |
 | --- | --- |
-| `@0 BOOT fw=build_test_v1` | first line after reset |
-| `@0 READY grid=10x20 homed=0` | end of the startup banner — **the Pi's sync marker** |
-| `@0 LIMIT axis=X` | a switch tripped unexpectedly |
-| `@0 NOTE ...` | anything else worth logging |
+| `@0 BOOT fw=build_test_v1` | first line after reset. **Built** (`ackBoot()`) |
+| `@0 READY grid=<cols>x<rows> mode=<mode>` | end of the startup banner — **the Pi's sync marker**. **Built** (`ackReady()`); no `homed=` field |
+| `@0 LIMIT axis=X` | a switch tripped unexpectedly. **Not built** — no emitter in the sketch, not parsed by `link.py` |
+| `@0 NOTE ...` | anything else worth logging. **Not built** |
 
 `@0 READY` replaces the current fragile approach of matching the last banner
 line by its wording.
@@ -342,7 +347,7 @@ into a watchdog. That argument is weaker than it looked, and the reason is worth
 writing down.
 
 **The firmware does not hang.** Homing runs `while (travelled < maxSteps)`
-(`build_test_v1.ino:1673`), seeks are capped the same way, and a motion that
+(`build_test_v1.ino:2401`, in `seekLimit()`), seeks are capped the same way, and a motion that
 does not find its switch prints `SEEK FAILED` or `ABORTED` and returns. The rig
 reports its own failures. A watchdog would mostly be waiting for something the
 firmware is already going to tell us.
@@ -421,31 +426,32 @@ for everything downstream — see `web/app.py`, which forwards each with
 
 The reader thread parses any line starting with `@` into an `Ack` and prints
 everything else unchanged. `link.send_and_wait()` blocks until a terminal kind
-with the matching seq arrives, resetting its watchdog on every `RUN`.
+with the matching seq arrives, resetting its watchdog on every `STEP`.
 
 ## Sample transcript
 
+Trimmed to the terminal and milestone lines — a real build prints all fourteen
+`STEP` lines (see the verified host-stub transcript above).
+
 ```
 @0 BOOT fw=build_test_v1
-@0 READY grid=10x20 homed=0
-                                    <- Pi sends: S 10 20
-@1 RECV S
-@1 OK cols=10 rows=20
-                                    <- Pi sends: B 3 5 0
-@2 RECV B
-@2 RUN 2/14 home
-@2 RUN 5/14 descend
-@2 RUN 8/14 travel
-@2 RUN 11/14 release
-@2 OK col=3 row=5 level=0 ms=41210
+@0 READY grid=6x5 mode=vertical
+                                    <- Pi sends: R / RR mode latch, then S 6 5
+@1 RECV cmd=B col=3 row=5 level=0
+@1 STEP step=2 total=14 phase=home_feeder action=move text=Home_XY_to_the_feeder status=begin
+@1 STEP step=5 total=14 phase=lower_to_ground action=move text=Lower_Z_to_the_ground_switch status=begin ms=2570
+@1 STEP step=8 total=14 phase=move_to_target action=move text=Move_XY_to_the_target_cell status=begin
+@1 STEP step=11 total=14 phase=release action=release text=Open_the_claw_and_release status=begin
+@1 STEP step=11 total=14 phase=release action=release text=Open_the_claw_and_release status=done
+@1 OK col=3 row=5 level=0
 ```
 
 And the one that matters:
 
 ```
-@3 RECV B
-@3 RUN 5/14 descend
-@3 HELD SWITCH
+@3 RECV cmd=B col=3 row=5 level=0
+@3 STEP step=5 total=14 phase=lower_to_ground action=move text=Lower_Z_to_the_ground_switch status=begin ms=2570
+@3 HELD Z never reached the ground switch
 ```
 
 Three lines, and the Pi knows to stop and put a red banner on the screen.
@@ -483,8 +489,9 @@ yet (item 1 below).
    flashed rig shows the phases arriving late or the terminal ack delayed, the
    fix is fewer fields per line — not more baud, and not fewer phases.
 
-Everything else in this note — `RECV`, `BUSY`, `RUN`, the code table — is
-optional and waits for a reason to exist. Prose is never removed.
+`RECV` and `STEP` are now built (above). The rest of this note — `BUSY`, the
+`RUN`/watchdog design, the reason-code table — is optional and waits for a
+reason to exist. Prose is never removed.
 
 ## Costs
 

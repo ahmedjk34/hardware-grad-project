@@ -133,9 +133,9 @@ chooses every target).
    an *approximate* grid computed from `config/rig.json` geometry — drawn
    amber, labelled `APPROXIMATION ONLY`. Calibration only refines the
    pixel-to-cell mapping; it is never required to place a block.
-7. **There are two grids, latched by mode.** `vertical` (6 cols × 5 rows of
-   real build cells) and `horizontal` (2 cols × 10 rows). `[0,0]` is the
-   feeder in both. Switching mode changes what every coordinate means, so it
+7. **There are two grids, latched by mode.** `vertical` (7 × 6 addressable,
+   6 × 5 positive build cells) and `horizontal` (3 × 10 addressable, 2 × 9
+   positive). `[0,0]` is the feeder in both. Switching mode changes what every coordinate means, so it
    clears any selection, and entering `horizontal` requires X/Y to be homed
    first. See AGENTS.md §3.
 8. **The camera pipeline is heavy and already built.** Colour correction,

@@ -410,8 +410,8 @@ Before saving final settings:
 3. Confirm left/right and top/bottom errors are approximately symmetric.
 4. Toggle raw/corrected and ensure the correction is a plausible smooth warp,
    with no folds, duplicated strips or sudden corner changes.
-5. Confirm the entire required 10 x 6 printed sheet or machine envelope remains
-   visible at the selected output FOV.
+5. Confirm the entire required printed sheet (7 x 6 vertical / 3 x 10
+   horizontal) or machine envelope remains visible at the selected output FOV.
 6. Save settings and restart Camera Studio; the first frame should match.
 7. Recreate the workspace map after any lens, orientation or framing change.
 8. Run `color_grid_check.py` on several live frames, not only one favourable

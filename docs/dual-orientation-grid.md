@@ -4,10 +4,22 @@
 and hardware verification remain. See §10 for exactly what has and has not run.
 **Blocked on:** nothing; §4 was answered (see §4)
 
-The rig currently knows one grid: blocks standing with their 7.5 cm side along
-Y, packed 9 × 5. This plan adds a second, equally valid grid where the block
-lies with its 7.5 cm side along X, packed 3 × 15 — and makes both of them
-first-class, separately calibrated, and separately stored.
+> **Numbers here are pre-revision. Read §5 and §10 first.** This started as a
+> plan against a 7.5 cm block / 0.5 cm gap layout with a centred allocation.
+> The shipped geometry is a **2.2 × 6.0 × 1.5 cm** block, uniform **1.6 cm**
+> gaps on every axis, and a **centre-anchored** lattice (`centre(i) = trim +
+> error_offset + shift + i·pitch`). Vertical is **7 × 6** addressable
+> (6 × 5 positive), horizontal **3 × 10** (2 × 9 positive); holder travel is
+> **22.8 × 38.0 cm**. `config/rig.json`, `python/rig/grid.py` and
+> `python/tests/test_grid.py` are authoritative — §5 shows the shipped config
+> and §10 records what was actually built. The value of §1–§4 now is the
+> **mechanism and the locked decisions** (D1–D21, R1–R6), which AGENTS.md §3a
+> cites; the cell numbers in them are stale.
+
+The rig knows two grids. Blocks stand with their 6.0 cm side along Y
+(`vertical`, 7 × 6) or lie with that side along X (`horizontal`, 3 × 10). Both
+are first-class, separately calibrated, and separately stored. This document
+records how that second grid was introduced.
 
 The change is larger than it looks. Every centimetre constant in the project
 silently assumes the vertical layout, on both machines. This plan's real work
@@ -24,7 +36,7 @@ quietly working around it.
 
 | # | Decision | Rationale |
 | --- | --- | --- |
-| D1 | Vertical is 9 × 5. Horizontal is 3 × 15. | Derived in §3. Both are hard geometric maxima. |
+| D1 | Vertical is 9 × 5. Horizontal is 3 × 15. **(Superseded: shipped as 7 × 6 and 3 × 10 addressable after the 2.2 × 6.0 cm block / 1.6 cm gap revision — see §5.)** | Derived in §3. Both are hard geometric maxima. |
 | D2 | The build **always starts vertical**. | No EEPROM; a USB open resets the board. Vertical is the compiled default. |
 | D3 | `RR` switches vertical → horizontal. `R` switches horizontal → vertical. | The operator's mental model. |
 | D4 | `RR` is rejected when already horizontal; `R` is rejected when already vertical. | No free-running jog. The command is a latch, not a motion. |
@@ -128,31 +140,33 @@ else, that is a signal to stop and re-read the plan.
 
 ## 3. The math, verified
 
-> **Superseded geometry (block/gap change).** The block plan is now
-> **2.2 × 6.0 cm** with gaps **1.6 cm along X, 0.8 cm along Y** in both modes;
-> `BLOCK_HEIGHT_CM` stays 1.5. Vertical is **6 × 5**, horizontal is **2 × 10**.
-> Vertical trims remain zero; horizontal ships at `trim_x = trim_y = +1.9 cm`
-> for the pickup-cell registration described in D14 (later revised from the
-> single-axis `trim_y = +1.6` this note originally quoted; `config/rig.json` and
-> `python/tests/test_grid.py` `SECTION_3` are authoritative). Horizontal also
-> **shipped** a measured `error_offset_x = +0.5`, `error_offset_y = +0.3` cm
-> for the pickup-rotate slop. **That was corrected — both are now 0.** The
-> swing is claw geometry, so per D15 it belongs in `tool_offsets.cw`, which is
-> now `(+0.9, −0.3) cm`; `error_offset` is rotation-blind and its X sign was
-> measured under CCW while the build rotates CW, which placed horizontal blocks
-> 1.4 cm too far from the X home switch. Horizontal centres are therefore
-> trim-only: X `1.9 → 17.1`, Y `1.9 → 36.1`. Vertical error
-> offsets ship at
-> `(+0.15, +0.05) cm` for X/Y after incremental correction: the prior
-> `(+0.15, -0.45) cm` was increased by the newly measured `0.5 cm`
-> toward-home Y error. The tables below are recomputed
-> at the shipped calibration. The decision log (D1–D20) and §4–§8 below are the
-> original record and still describe the *mechanism*; only the numbers moved.
-> `python/tests/test_grid.py` `SECTION_3` mirrors the tables here.
+> **Superseded geometry — the whole of §3 below is the pre-revision model.**
+> The shipped block is **2.2 × 6.0 × 1.5 cm** with a **uniform 1.6 cm** gap on
+> every axis of both modes (the "0.8 cm along Y" the tables use was dropped;
+> measuring the printed sheet — 6.00 cm tiles, 1.56 cm gaps — settled it). The
+> lattice is **centre-anchored**, not centred-in-travel: `centre(i) = trim +
+> error_offset + shift + i·pitch`, cell 0's centre on the home corner. So the
+> `start = (travel − allocation) / 2 …` formula and every "centres" / "block
+> edges" column in the two tables below are wrong; see §5 and
+> `python/rig/grid.py`.
+>
+> Shipped counts: vertical **7 × 6** addressable (X centres 0.00 → 22.80, Y
+> 0.00 → 38.00), horizontal **3 × 10** (X centres 1.90 → 17.10, Y 1.90 →
+> 36.10). Vertical trims and **both modes' `error_offset_*` are `0.0`**
+> (`config/rig.json`, `GRID_ERROR_OFFSET_*_CM[]`) — the `+0.15 / +0.05` and
+> `+0.5 / +0.3` this note once quoted are gone. Horizontal ships
+> `trim_x = trim_y = +1.9 cm` (D14). The pickup-rotate swing is claw geometry
+> and per D15 lives in `tool_offsets.cw = (+0.9, −0.3) cm`, not in
+> `error_offset`. The decision log (D1–D21) and §4–§8 still describe the
+> *mechanism*; only the numbers moved. `python/tests/test_grid.py` `SECTION_3`
+> is authoritative.
 
-Travel is physical and **mode-independent**: X = 24.3 cm, Y = 40.0 cm.
+Travel is physical and **mode-independent**: X = 22.8 cm, Y = 38.0 cm
+(holder-centre motion cap; the separately-measured build footprint is
+24.3 × 43 cm, `rig.json → observed_build_area`).
 
-The firmware model:
+The firmware model **as this plan first wrote it** (superseded — the shipped
+model is centre-anchored, see above):
 
 ```text
 pitch      = block + gap
@@ -163,37 +177,36 @@ lastCentre = firstCentre + (count - 1) * pitch
 footprint  = count * block + (count - 1) * gap
 ```
 
-### Vertical — 6 × 5, shipped calibration
+### Vertical — pre-revision table (centred-allocation model, superseded)
 
 | axis | block | gap | pitch | count | footprint | centres | block edges |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | X | 2.2 | 1.6 | 3.8 | **6** | 21.20 | 3.60 → 22.60 | 2.50 → 23.70 |
 | Y | 6.0 | 0.8 | 6.8 | **5** | 33.20 | 6.35 → 33.55 | 3.35 → 36.55 |
 
-30 build cells; 7 × 6 addressable including the zero lanes. Block edges beyond
-travel are **expected and safe** — the holder only needs to reach each *centre*,
-and the held block overhangs. Vertical keeps a half-block overhang budget
-(`1.1` / `3.0`).
+Shipped instead: 7 × 6 addressable (6 × 5 positive), uniform 1.6 cm gaps,
+centre-anchored — X centres 0.00 → 22.80, Y 0.00 → 38.00, footprint 25.0 × 44.0.
+Block edges beyond travel are **expected and safe** — the holder only needs to
+reach each *centre*, and the held block overhangs. Vertical keeps a half-block
+overhang budget (`1.1` / `3.0`).
 
-### Horizontal — 2 × 10, shipped calibration
+### Horizontal — pre-revision table (centred-allocation model, superseded)
 
-X and Y swap their block dimensions. Horizontal has `trim_x = trim_y = +1.9 cm`
-for the pickup-cell registration (this sub-table's numbers below predate that
-and the block-edge budget amendment in D20 — see `config/rig.json` and
-`test_grid.py` `SECTION_3` for the shipped values).
+X and Y swap their block dimensions. Horizontal ships `trim_x = trim_y = +1.9 cm`
+for the pickup-cell registration; `error_offset` is `0.0`.
 
 | axis | block | gap | pitch | count | footprint | centres | block edges |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | X | 6.0 | 1.6 | 7.6 | **2** | 13.60 | 9.15 → 16.75 | 6.15 → 19.75 |
 | Y | 2.2 | 0.8 | 3.0 | **10** | 29.20 | 8.50 → 35.50 | 7.40 → 36.60 |
 
-20 build cells; 3 × 11 addressable including the zero lanes.
+Shipped instead: 3 × 10 addressable (2 × 9 positive), uniform 1.6 cm gaps —
+X centres 1.90 → 17.10, Y 1.90 → 36.10, footprint 21.2 × 36.4.
 
-**These counts are the printed grids, not maxima.** Against the 24.3 × 40.0 cm
-travel at trim 0, vertical could take a 6th Y row and horizontal a 3rd X column
-/ up to 13 Y rows before `gridGeometryFits` refuses the next cell. A 7th
-vertical column (`7 × 3.8` allocation, last centre 24.35 cm) and a 4th
-horizontal column (`4 × 7.6`, last centre 24.35 cm) are both refused.
+**The shipped counts are the geometric maxima**, not a paper choice with slack.
+On the 22.8 × 38.0 cm travel with each mode's overhang budget an 8th vertical
+column, a 7th vertical row, a 4th horizontal column and an 11th horizontal row
+are all refused by `gridGeometryFits` (`python/tests/test_grid.py`).
 
 **Why trims cannot be copied between modes.** Once measured, the feeder-centre
 shift is a property of how each grid sits relative to the pickup point. A
@@ -227,15 +240,21 @@ does not physically test this reference. A future rig measurement may refine
 the magnitude per axis; keep any such correction in `horizontal.trim_{x,y}_cm`
 and never hide it inside the rotation/tool offset.
 
-**Tolerance note.** The +1.9 cm registration plus the shipped `+0.5 / +0.3 cm`
-error offset leaves horizontal far-end slack on each axis (X last centre 17.6
-into 22.8, Y 36.4 into 38.0) and a −0.6 cm X near edge, inside its
-`max_edge_overhang_x_cm = 3.0` budget. Measure a real stack before trusting the
-last row of horizontal's 10.
+**Tolerance note.** The +1.9 cm registration (error offset `0.0`) leaves
+horizontal far-end slack on each axis (X last centre 17.10 into 22.8, Y 36.10
+into 38.0) and a −1.1 cm X near edge, inside its `max_edge_overhang_x_cm = 3.0`
+budget. Measure a real stack before trusting the last row of horizontal's 10.
 
 ---
 
 ## 4. Open input — ANSWERED
+
+> **Pre-revision counts.** Written against the 7.5 cm-block sheet. At the
+> shipped geometry `ColorGridSpec.from_config` reads `grid.cols` / `grid.rows`
+> straight from config **with no `+1`** (`color_grid.py:293-307`), so the
+> vertical sheet maps **7 × 6** printed coordinates and the horizontal sheet
+> **3 × 10** — the machine grid's own count, since both now put a real block on
+> coordinate zero. §10 "Step 6" has the current statement.
 
 **The horizontal sheet maps 4 columns x 16 rows = 64 cells**, the same
 convention as the existing 10 x 6 = 60: the positive grid plus the zero lanes.
@@ -285,7 +304,8 @@ authoritative at runtime (AGENTS.md §3); its shipped shape today is:
       "gap_x_cm": 1.6, "gap_y_cm": 1.6,
       "trim_x_cm": 0.0, "trim_y_cm": 0.0,
       "max_edge_overhang_x_cm": 1.1, "max_edge_overhang_y_cm": 3.0,
-      "error_offset_x_cm": 0.0, "error_offset_y_cm": 0.0
+      "error_offset_x_cm": 0.0, "error_offset_y_cm": 0.0,
+      "shift_x_cm": 0.0, "shift_y_cm": 0.0
     },
     "horizontal": {
       "cols": 3, "rows": 10,
@@ -293,7 +313,8 @@ authoritative at runtime (AGENTS.md §3); its shipped shape today is:
       "gap_x_cm": 1.6, "gap_y_cm": 1.6,
       "trim_x_cm": 1.9, "trim_y_cm": 1.9,
       "max_edge_overhang_x_cm": 3.0, "max_edge_overhang_y_cm": 1.1,
-      "error_offset_x_cm": 0.0, "error_offset_y_cm": 0.0
+      "error_offset_x_cm": 0.0, "error_offset_y_cm": 0.0,
+      "shift_x_cm": 0.0, "shift_y_cm": 0.0
     }
   }
 }
@@ -413,7 +434,9 @@ refused.
 Push mode before `S` on connect and after any detected reset (R4).
 
 *Acceptance:* connecting while config says horizontal leaves the firmware in
-horizontal with 3 × 15; a mid-session reset is detected and re-synced.
+horizontal with that mode's counts (3 × 10 in the shipped config; the
+`test_link.py` fixture uses 3 × 9 and asserts `RR` precedes `S 2 8`); a
+mid-session reset is detected and re-synced.
 
 ---
 
@@ -457,7 +480,8 @@ drift here is not cosmetic — it is how the two machines stop agreeing.
   `ccw` and `neutral` are zero; `cw` now carries the measured pickup-rotate
   swing `(+0.9, −0.3) cm`. See the §3 note on the error-offset correction.
 - Does not change travel, step envelopes, Z levels or the feeder.
-- Does not add a third orientation, or any rotation other than 90° CCW.
+- Does not add a third orientation, or any rotation other than the 90° CW a
+  horizontal build applies (`buildRotationForMode`: horizontal → `ROT_CW`).
 - Does not auto-detect the claw's physical angle. Nothing senses it (D10).
 - Does not verify that the block is really 2.2 cm to within the tolerance that
   15 rows demands (§3).
@@ -516,7 +540,8 @@ entry points select the mode (`--mode` in the non-moving feeds; the rig UI
 rebuilds the sheet tracker and reloads that mode's map when `o` latches it).
 
 **Step 8 is built and desk-tested.** The connect-time half remains mode then
-`S`; `test_link.py` asserts `RR` precedes `S 3 15`. An unexpected `BOOT` now
+`S`; `test_link.py` asserts `RR` precedes `S 2 8` (its horizontal fixture is
+3 × 9). An unexpected `BOOT` now
 latches a reset state so an idle reset cannot be drained by a later command.
 `recover_after_reset(home=True)` explicitly homes and then replays mode before
 `S`. It is intentionally not automatic: reset loses X/Y homing and D9 forbids

@@ -11,23 +11,21 @@ Visual language for all of it is in [DESIGN.md](DESIGN.md).
 
 ---
 
-## Tier 0 — already supported by the backend, absent from the UI
+## Tier 0 — done in the index redesign
 
-These cost hours, not days. Every endpoint listed exists and is tested; the
-browser simply does not call it.
+**All of these shipped** with the console redesign (see [CONSOLE.md](CONSOLE.md)
+§1 "Grown beyond the original ten steps", [DESIGN.md](DESIGN.md), and the
+components under `web/src/`). Kept as a record of the plan.
 
-| # | Feature | What already exists |
+| # | Feature | Where it landed |
 | --- | --- | --- |
-| 0.1 | **Rig serial log panel** — every line the Mega prints, terminal-styled, `@`-ack lines highlighted | `app.py` broadcasts `{"type":"log","line":…}` on `/api/events`; `web/src/ws.ts` discards it |
-| 0.2 | **Overlay view toggles** — grid / detections / printed sheet / overlay | `POST /api/view`, mirrored in `state.views` |
-| 0.3 | **Grid mode switch in the browser** — vertical ⇄ horizontal | `POST /api/mode`; needs a confirm step, it homes X/Y first |
-| 0.4 | **Camera freshness meter** — `LIVE 42 ms` / `STALE` / `WAITING` | `state.camera`, `state.camera_age_ms` |
-| 0.5 | **Direct level entry** instead of only `+`/`−` | `POST /api/level` accepts `{value}` |
-| 0.6 | **Axis select** — pick a column and row numerically when the camera tap is imprecise or the gantry occludes the cell | `POST /api/select/axis` |
-| 0.7 | **Keyboard control** — arrows nudge the cell, `+`/`−` level, `B` arms, `Enter` confirms, `Esc` deselects | pure client work over existing routes |
-
-Do these first. They make the console look finished before a single new
-backend line is written.
+| 0.1 | **Rig serial log panel** | `web/src/components/RigLog.tsx`; `consoleStore.ts` keeps a bounded buffer of `serial` events |
+| 0.2 | **Overlay view toggles** | `api.view()` → `POST /api/view`, chips on the camera stage |
+| 0.3 | **Grid mode switch in the browser** | `web/src/components/ModeSwitch.tsx` → `api.mode()`; confirm step warns it homes X/Y |
+| 0.4 | **Camera freshness meter** | `web/src/components/CameraChip.tsx` from `state.camera` / `camera_age_ms` |
+| 0.5 | **Direct level entry** | `api.setLevel()` → `POST /api/level {value}`, guarded ≥ 0 |
+| 0.6 | **Axis select** | `api.selectAxis()` → `POST /api/select/axis` |
+| 0.7 | **Keyboard control** | `web/src/components/Shortcuts.tsx`, `?` overlay |
 
 ---
 
@@ -100,12 +98,16 @@ then have the console tell the operator which block to load next:
 **`FEED: RED`**, with the count remaining per colour. Turns a manual feeder into
 a guided one without touching the hardware.
 
-### 1.6 Build execution runner
+### 1.6 Build execution runner — built (Studio M7)
 
 Given a compiled model, step through it: current command, blocks placed / total,
 elapsed and estimated remaining from measured cycle time, per-block confirm or
 continuous run, and a clean resume point if a build is rejected. The safety
 rules do not change — one command at a time, never queued.
+
+**Built** as the Studio's runner: `web/src/studio/runner.ts`,
+`runner-driver.ts`, `run-report.ts`, surfaced by
+`web/src/components/RunnerPanel.tsx`. See [STUDIO.md](STUDIO.md) M7.
 
 ---
 

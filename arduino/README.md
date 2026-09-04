@@ -2,19 +2,41 @@
 
 ## Container + belt controller
 
-Flash `belt_v1/belt_v1.ino` for the container sequence. Its wiring is:
+Flash `belt_v1/belt_v1.ino` to an **Arduino Uno** for the feeder. Its wiring is:
 
 - A4988 belt driver: `DIR = 2`, `STEP = 3`
 - A4988 `ENABLE` is not used; connect it to GND
-- HC-SR04 ultrasonic: `TRIG = 4`, `ECHO = 5`
-- Container servo signal: pin `6`
+- Exit HC-SR04: `TRIG = 4`, `ECHO = 5`
+- Alignment-servo signal: pin `6`
+- Pickup/stage HC-SR04: `TRIG = 8`, `ECHO = 9`
+- Container-servo signal: pin `12`
 
-`RUN` performs the complete test cycle: close to 20 degrees, open to 140
-degrees, wait for an object below 10 cm, then run the belt counter-clockwise
-for 10 seconds. Individual commands are `OPEN`, `CLOSE`, `ANGLE <degrees>`,
-`ARM`, `ON`, `OFF`, `F`, `B`, and `T`; use `S <speed>` to set the belt speed
-in steps per second. The default speed is 200 steps per second. Use `P` for
-status. If the belt turns the wrong physical direction, invert
+`FEED [id]` (or its `RUN [id]` alias) performs one complete feeder cycle:
+close the container to 20°, open it in stages (90° then 160°), wait for the
+exit sensor to see a block below 10 cm, run the belt, and stop it only when the
+stage sensor sees the block. The alignment servo then nudges the block square
+and the stage sensor verifies that it remained present.
+
+Every controller command must end in a newline. A feed cycle is identified by
+the optional numeric `id` and reports structured telemetry:
+
+```text
+@42 EVENT phase=waiting_for_exit
+@42 EVENT phase=exit_detected_container_closed_belt_running distance_cm=7.4
+@42 EVENT phase=stage_detected_aligning distance_cm=8.2
+@42 EVENT phase=block_ready distance_cm=8.1
+@42 OK state=block_ready
+```
+
+`@id OK state=block_ready` is the successful terminal response and means the
+Mega may pick from `[0,0]`. A terminal `@id ERROR reason=stage_occupied`,
+`exit_timeout`, `stage_timeout`, or `cancelled` means it must not. The Uno also
+prints `@0 READY firmware=belt_v1 protocol=1 board=uno` at boot.
+
+Use `STOP` to cancel a cycle safely. Manual commands are `STATUS` (or `P`),
+`OPEN`, `CLOSE`, `ON`, `OFF`, `F`, `B`, `S <speed>`, `US`, and `HELP`. The
+default belt speed is 150 steps per second. `US`/`STATUS` read both sensors.
+If the belt turns the wrong physical direction, invert
 `BELT_CCW_DIRECTION_LEVEL` in the sketch.
 
 ## `build_test_v1/` is the sketch on the rig

@@ -8,6 +8,13 @@ all judged through it.
 Read [CONSOLE.md](CONSOLE.md) first for what the console *does*. This document
 covers only how it should look and behave.
 
+**Status.** This spec has been implemented in `web/src/` (`style.css` plus the
+components in [CONSOLE.md](CONSOLE.md) §4). The build followed it closely; the
+tokens below are the source of truth and a few shipped values differ slightly
+(`--void` is `#08090B`, the rail is `clamp(20rem, 25vw, 24rem)` via a
+`--rail-w` custom property). `--ready` / `--motion` / `--danger` / `--signal`
+match exactly, and `style.css` adds `*-deep` companions for chip backgrounds.
+
 ---
 
 ## 1. What this interface actually is

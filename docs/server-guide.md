@@ -283,7 +283,15 @@ PYTHONPATH=python .venv/bin/python -m pytest
 cd web && npm test && npm run build
 ```
 
-The Python suite currently has one documented Step 2 race in
-`mock_camera_test.py`: an in-flight frame may arrive immediately after
-`MockCamera.freeze()`. Do not hide that failure as part of server/frontend
-changes.
+The Python suite (`pytest`) currently has two known failures, both isolated to
+`mock_camera_test.py` and neither a console regression (see
+[CONSOLE.md](CONSOLE.md) §6): a freeze/pump race — an in-flight frame arriving
+just after `MockCamera.freeze()` — and `test_warm_mock_blocks_..._grid_cells`
+occasionally seeing 1 detection instead of ≥2 for two same-colour blocks. Do
+not hide either as part of server/frontend changes.
+
+Note that `pytest` only collects the `*_test.py` files (`pytest.ini`); the
+`python/tests/test_*.py` scripts are plain-assert programs, run individually
+(`../.venv/bin/python tests/test_grid.py`). Three of those currently fail on a
+fresh checkout for missing fixtures / a moved asset path — see the repo notes,
+not this guide.

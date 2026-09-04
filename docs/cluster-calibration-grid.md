@@ -5,7 +5,7 @@ threshold marked `TUNE-WITH-CAPTURE` in `python/vision/cluster_grid.py` is a
 guess until a real Pi frame is run through `camera/color_grid_check.py`.**
 
 Built: `vision/cluster_grid.py` (all of C1–C9 below implemented),
-`tests/test_cluster_grid.py` passes (24/24, both modes, tilt, three colour
+`tests/test_cluster_grid.py` passes (23/23, both modes, tilt, three colour
 casts, wrong-mode refusal). The printed sheet itself does not exist yet, so
 nothing above the synthetic-test line has been checked against reality.
 
@@ -44,7 +44,7 @@ combined target's 3-part fiducials (not one-block-per-cell). The complete
 coordinate counts are unchanged: **7×6 vertical, 3×10 horizontal** (30 cells
 — not 3×11/33; that was a stale carry-over from before the horizontal grid
 dropped to 10 rows, see `config/rig.json` and
-`vision/color_grid.py:267-270`'s "No +1" comment).
+`vision/color_grid.py:304`'s "No +1" comment).
 
 ## Why a new module, not an edit of `color_grid.py`
 

@@ -36,9 +36,10 @@ with).
 | M7 — The runner | ✅ delivered | pure exhaustive runner reducer, guarded effect driver, STEP/RUN/DRY RUN, feeder guidance, failure lock/pause, Markdown evidence report |
 | M8 — Wow pass | not started | shift gizmo, x-ray by level, cross-mode bridging |
 
-**Test suite.** `cd web && npm test` — **489 tests across 38 files**, all green.
-(The per-file table below is maintained for the Studio's own files; a few rows
-have drifted behind the total as unrelated console work landed.)
+**Test suite.** `cd web && npm test` — **491 tests across 38 files**, all green.
+(The per-file table below is maintained for the Studio's own files; several rows
+have drifted behind the total as unrelated console work landed — treat the
+per-file counts as approximate.)
 
 | file | tests | what it holds |
 | --- | --- | --- |

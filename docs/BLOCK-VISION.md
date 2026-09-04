@@ -90,10 +90,10 @@ All default **off**, so the live feed keeps the behaviour it was tuned for.
 
 ### Known limitations
 
-- The compound decomposition over-detects: `synthetic U` returns 4 for 3, and
-  `end-to-end pair` 3 for 2, in `tests/test_block_detector.py`. Pre-existing,
-  and layer 2's IoU pass covers it in practice.
-- `captures/v2/` fixtures referenced by that test are missing from the repo.
+- The compound decomposition used to over-detect (`synthetic U` 4 for 3,
+  `end-to-end pair` 3 for 2); `tests/test_block_detector.py` now passes those at
+  3/3 and 2/2. Layer 2's IoU pass still covers any residual over-detection in
+  practice.
 - One fixed crash: `_geometry` built a hue mask sized to a contour's bounding
   box, but the compound path synthesises rectangles that hang off the frame.
   numpy silently clipped the ROI while the mask kept full size, and `cv2.mean`
@@ -463,16 +463,19 @@ builds the mock camera directly.
 
 ## 6. Tests
 
-| Suite | Checks | Covers |
-| --- | --- | --- |
-| `test_block_outline.py` | 25 | both boards to exactly 29, square corners, shared size/bearing, centres unmoved, edge and holder rejection, a timing budget |
-| `test_block_grid.py` | 115 | planning, the fit against known homographies, tilt/perspective/noise, every gate, dense metrology, model selection, virtual fill, the real board's exact cell sets, projection round-trip |
-| `test_block_calibration.py` | 30 | the rig-driven run against a mock rig + camera, recovering the mock's own workspace map, and every refusal (rejected, aborted, unseen, clipped) |
-| `test_calibration_parity.py` | 14 | block and paper routes write a byte-identical file; per-mode saves do not clobber each other |
-| `test_workspace_reload.py` | 8 | a map saved by another process reaches a running console, and a refused one explains itself |
-| `test_block_detector.py` | — | layer 1; 4 pre-existing failures (2 missing fixtures, 2 compound over-detections) |
+Counts below are approximate — the plain-assert harness prints "all checks
+passed", not a number, and several `check()`s run inside loops.
 
-Known pre-existing failures elsewhere: `mock_camera_test.py` (2), unrelated to
+| Suite | Covers |
+| --- | --- |
+| `test_block_outline.py` | both boards to exactly 29, square corners, shared size/bearing, centres unmoved, edge and holder rejection, a timing budget. **The timing check ("costs no more than twice the plain detector") is load-sensitive and fails intermittently on a busy machine** |
+| `test_block_grid.py` | planning, the fit against known homographies, tilt/perspective/noise, every gate, dense metrology, model selection, virtual fill, the real board's exact cell sets, projection round-trip. Slow (~2 min) |
+| `test_block_calibration.py` | the rig-driven run against a mock rig + camera, recovering the mock's own workspace map, and every refusal (rejected, aborted, unseen, clipped) |
+| `test_calibration_parity.py` | block and paper routes write a byte-identical file; per-mode saves do not clobber each other |
+| `test_workspace_reload.py` | a map saved by another process reaches a running console, and a refused one explains itself |
+| `test_block_detector.py` | layer 1; passes (the compound over-detections it once carried are fixed) |
+
+Known failures elsewhere: `mock_camera_test.py` (2 under pytest), unrelated to
 this work and unchanged by it.
 
 ---

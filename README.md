@@ -16,7 +16,7 @@ Three controllers, one brain:
 | --- | --- | --- |
 | **Raspberry Pi 5** | vision, web server/Studio, orchestration — **the master** | — |
 | **Arduino MEGA 2560** | the gantry: X/Y/Z motion, claw, rotation, placement | serial (built, in daily use) |
-| **Arduino Uno** | the feeder module: container, belt, alignment | serial (prototype firmware only — see [Status](#status)) |
+| **Arduino Uno** | the feeder module: container, belt, alignment | serial (firmware prototype; not integrated — see [Status](#status)) |
 
 ## The end-to-end flow
 
@@ -60,8 +60,8 @@ of open-loop timing.
   Arduino Uno (feeder, prototype)
 - **Motion:** gantry X / Y / Z, plus a claw servo and an auxiliary rotation
   stepper, driven by the Mega
-- **Feed:** A4988-driven belt, a container servo, and two HC-SR04 ultrasonic
-  sensors, driven by the Uno
+- **Feed:** A4988-driven belt, container and alignment servos, and two HC-SR04
+  ultrasonic sensors, driven by the Uno
 - **Camera:** DORHEA Raspberry Pi Camera Module — OV5647 sensor, 5 MP, 160°
   fisheye lens, mounted ~50 cm above the surface, pointing straight down
 - **Controlled holder displacement:** 24.3 cm X × 40 cm Y
@@ -91,7 +91,7 @@ of open-loop timing.
 | Web operator console | **built** — all ten build steps (see [docs/CONSOLE.md](docs/CONSOLE.md)) |
 | 3D Build Studio (design/validate/compile/twin/run) | **built** through Milestone 7 (see [docs/STUDIO.md](docs/STUDIO.md)); Milestone 8 ("wow pass") not started |
 | Placement supervision (verify placements, notice human interference) | **designed, not started** — full design at [docs/feature-ideas.md](docs/feature-ideas.md) Appendix A |
-| Feeder module — container + belt + dual ultrasonic staging (Uno) | **prototype firmware only.** `belt_v1.ino` currently does a single-ultrasonic, fixed-time belt run with a one-stage container open — a stand-in for the two-stage/dual-sensor design described above. Not yet wired to the Pi; no doc yet |
+| Feeder module — container + belt + dual ultrasonic staging (Uno) | **firmware prototype complete.** `belt_v1.ino` implements two-stage container release, exit confirmation, sensor-stopped belt staging, alignment, timeouts, and structured serial results. It is not yet wired to the Pi or Mega; no orchestration doc yet |
 | Feeder ↔ Pi ↔ Mega orchestration | **not started** — the Pi does not yet talk to a second serial device, and the Studio's runner assumes a block is already staged at `[0,0]` |
 | Autonomous block-to-target planning | **not implemented**, and out of scope — the human designs the structure |
 
@@ -101,6 +101,7 @@ of open-loop timing.
 - Python tools, setup and usage → **[python/README.md](python/README.md)**
 - Per-tool walkthrough → **[python/GUIDE.md](python/GUIDE.md)**
 - Firmware → **[arduino/README.md](arduino/README.md)**, open the relevant sketch in `arduino/` with the Arduino IDE
+- Uno feeder hardware, state machine and serial protocol → **[docs/feeder-controller.md](docs/feeder-controller.md)**
 - Web operator console — how to run it → **[docs/server-guide.md](docs/server-guide.md)**, how it's built → **[docs/CONSOLE.md](docs/CONSOLE.md)**
 - 3D Build Studio, current state → **[docs/STUDIO.md](docs/STUDIO.md)**
 - What's designed but not yet built → **[docs/feature-ideas.md](docs/feature-ideas.md)**

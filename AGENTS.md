@@ -19,15 +19,17 @@ file is the list of them.
 | Where | What |
 | --- | --- |
 | `config/rig.json` → `serial.baud` | what the Pi opens the port at |
-| `arduino/build_test_v1/build_test_v1.ino:898` | `Serial.begin(9600)` |
+| `arduino/build_test_v1/build_test_v1.ino:1419` | `Serial.begin(9600)` |
 | `arduino/README.md` | states the baud in prose |
 
 A mismatch does not error. You get garbage bytes or silence, which reads like a
 dead cable. Change all three together.
 
-Python serial clients try `/dev/ttyACM0` first and automatically fall back to
-`/dev/ttyACM1` when the preferred ACM port cannot be opened. The configured
-port remains the preferred port and the upload script still uses it directly.
+Python serial clients open the configured `serial.port` first.
+`serial_port_candidates()` adds a `/dev/ttyACM0` ↔ `/dev/ttyACM1` fallback
+**only when the configured port is one of those two**; the shipped config now
+points at a stable `/dev/serial/by-id/...` path, so there is no automatic
+fallback and the upload script uses the configured path directly.
 
 ### 2. Serial port and board — single source, keep it that way
 
@@ -59,13 +61,20 @@ they sit. So each orientation is a complete, separately calibrated grid:
 
 | mode | block | grid | addressable with zero lanes |
 | --- | --- | --- | --- |
-| `vertical` | 2.2 X × 6.0 Y cm | **6 cols × 5 rows = 30 cells** | 7 × 6 |
-| `horizontal` | 6.0 X × 2.2 Y cm | **2 cols × 10 rows = 20 cells** | 3 × 11 |
+| `vertical` | 2.2 X × 6.0 Y cm | **6 cols × 5 rows = 30 positive cells** | 7 × 6 |
+| `horizontal` | 6.0 X × 2.2 Y cm | **2 cols × 9 rows = 18 positive cells** | 3 × 10 |
 
-These counts are the grids currently printed on paper, not geometric maxima:
-at trim 0 the 24.3 × 40.0 cm holder travel would take a 6th vertical Y row, a
-3rd horizontal X column and up to 13 horizontal Y rows before `gridGeometryFits`
-refuses. The travel is physical and does **not** change with the mode — see §3a.
+("Positive cells" = both indices ≥ 1; every cell but the `[0,0]` feeder is a
+real placement, so the buildable counts are 7 × 6 − 1 = 41 and 3 × 10 − 1 = 29.)
+The addressable extents are the `cols` / `rows` in `config/rig.json`, one more
+than the firmware's `GRID_COLS[]` / `GRID_ROWS[]` highest indices.
+
+These counts are the geometric maxima on the shipped envelope, not a paper
+choice with room to spare: on the 22.8 × 38.0 cm holder travel with each mode's
+overhang budget, an 8th vertical column, a 7th vertical row, a 4th horizontal
+column and an 11th horizontal row are all refused by `gridGeometryFits`
+(`python/tests/test_grid.py`). The travel is physical and does **not** change
+with the mode — see §3a.
 
 The sketch uses no EEPROM, so nothing survives a reset — and opening the USB
 port resets the board. Every session therefore starts at the compiled default,
@@ -131,16 +140,18 @@ These centimetre measurements are **holder displacements**, not pure object
 dimensions: they compare the holder reference at home with that same reference
 at the active software cap. The live calibration is:
 
-- X: **24.3 cm holder displacement = 4750 steps**, so `4750 / 24.3 =
-  195.4733 steps/cm`;
-- Y: **40 cm holder displacement = 8250 steps**, so `8250 / 40 =
-  206.25 steps/cm`.
+- X: **22.8 cm holder displacement = 4550 steps** (`SOFT_LIMIT_X_TRAVEL` /
+  `X_TRAVEL_CM`), so `4550 / 22.8 = 199.56 steps/cm`;
+- Y: **38 cm holder displacement = 7600 steps** (`SOFT_LIMIT_Y_TRAVEL` /
+  `Y_TRAVEL_CM`), so `7600 / 38 = 200.0 steps/cm`.
 
 Never hard-code those ratios; firmware derives them from the cap and measured
 displacement. A separate physical observation found a **24.3 × 43 cm build
-footprint**; it does not change the 24.3 × 40 cm holder-centre motion cap. The
+footprint** (`rig.json → observed_build_area`); it does not change the
+22.8 × 38 cm holder-centre motion cap.
+
 Horizontal builds use the CW tool-offset slot, and it is **no longer zero**:
-`cw = (+0.9, −0.3) cm`, the pickup-rotate swing (see §3a). `neutral` is
+`cw = (+0.9, −0.3) cm`, the pickup-rotate swing (see §3c). `neutral` is
 genuinely zero — a vertical build never turns — and `ccw` stays zero because no
 grid or build route requests it. The recorded `(3.75, 1.40)` CCW trial predates
 the centre-anchored lattice and must not be copied in.
@@ -279,9 +290,10 @@ gap_x_cm                    = repeated spacing between cells
 The same separation applies on Y (`horizontal.trim_y_cm` carries the identical
 +1.9 cm). A future rig measurement may refine the registration magnitude per
 axis (`horizontal.trim_{x,y}_cm`) or, for a measured constant placement error on
-top of it, `horizontal.error_offset_{x,y}_cm` (shipped at `+0.5` / `+0.3 cm` —
-see the table note above); either way do not silently move it into
-`tool_offsets`.
+top of it, `horizontal.error_offset_{x,y}_cm` (shipped at `0.0` / `0.0` — the
+`+0.5` / `+0.3 cm` it once carried was the pickup-rotate swing on the wrong
+knob and moved to `tool_offsets.cw`, see the §3a note above); either way do not
+silently move it into `tool_offsets`.
 
 Each mode also declares `max_edge_overhang_x_cm` / `_y_cm`: the budget the
 block **edges** are checked against, on both machines. It is not a trim and
@@ -294,12 +306,11 @@ moves nothing.
   `_y_cm = 1.1`), which the +1.9 cm registration's `−1.1 cm` X near edge needs.
 
 **Vertical sits exactly on its cap; horizontal keeps far-end slack after the
-+1.9 cm registration and its `+0.5` / `+0.3 cm` error offset** (X last centre
-17.6 into 22.8, Y 36.4 into 38.0). Measure a real stack before trusting
-horizontal's last row.
++1.9 cm registration** (X last centre 17.1 into 22.8, Y 36.1 into 38.0).
+Measure a real stack before trusting horizontal's last row.
 
 The firmware owns the step counts and derives both steps/cm ratios at runtime;
-never hard-code either ratio and do not copy the `4750 × 8250` safety envelope
+never hard-code either ratio and do not copy the `4550 × 7600` safety envelope
 into JSON. Neither the step envelope nor either steps/cm ratio is per mode:
 they describe the machine, and a block lying down does not move a limit switch. The Pi does not need motor steps to draw or select a cell: it maps
 camera pixel → physical cm → `[col,row]`, and the Arduino alone maps that cell
@@ -311,13 +322,11 @@ home/feeder reference; negative trim moves it toward that reference. The
 shipped vertical trims are `0.0` on both axes; horizontal `trim_x` and `trim_y`
 are both `+1.9 cm` for the pickup-cell-to-horizontal-grid registration
 described above.
-The shipped vertical error offsets are `-0.3 cm` on X and `-0.4 cm` on Y,
-moving placements toward the home switches to correct the measured error.
-Horizontal remains at `0.0` on both axes until it is measured. Start any new
-error calibration from these current values.
-For any user-marked **error offsetting**, use `error_offset_x_cm` and
-`error_offset_y_cm` (and the paired firmware variables) as an additional
-signed shift exactly like the grid trim.
+**Both modes ship `error_offset_x_cm = error_offset_y_cm = 0.0`**
+(`config/rig.json` and `GRID_ERROR_OFFSET_*_CM[]` alike). Start any new error
+calibration from zero. For any user-marked **error offsetting**, use
+`error_offset_x_cm` and `error_offset_y_cm` (and the paired firmware variables)
+as an additional signed shift exactly like the grid trim.
 
 ### 3b. Grid NUMBERING — the convention, not the count
 
@@ -365,27 +374,31 @@ the requested cell. `neutral` is the vertical grid's placement orientation and `
 horizontal grid's; a `G` command uses the claw's current orientation, a `B`
 command uses the active grid's.
 
+Shipped values, `config/rig.json` and `TOOL_OFFSET_*_CM` in agreement:
+
+| slot | value (cm) | why |
+| --- | --- | --- |
+| `neutral` | `(0.0, 0.0)` | a vertical build never turns — holder and block centre coincide |
+| `cw` | `(+0.9, −0.3)` | the pickup-rotate swing: the grip point sits ≈`(−0.3, +0.6) cm` off the aux stepper's axis, so a 90° CW turn carries the block centre round it. `buildRotationForMode` gives horizontal → `ROT_CW`, so this is the only rotation a `B` asks for |
+| `ccw` | `(0.0, 0.0)` | no grid or build route requests CCW, so it has never been measured |
+
 **`ccw` is not a grid/build orientation and is kept anyway.** `B` has no
 rotation word, and the mode latch derives placement from the grid — vertical →
 none, horizontal → 90° CW. There is no counter-clockwise grid because that
 would be a second, separately calibrated layout that nobody has measured. An
 explicit manual `A -90` can put the claw in the CCW state for a bench `G` test,
-but it does not create a CCW placement mode and its offset is uncalibrated. The `cw`
-entry stays in both JSON and firmware because `toolOffsetCmOf()` is written
-over the three rotation states; deleting one leg would make it no longer line
-up with `ROT_CW` / `ROT_NONE` / `ROT_CCW`. Leave it at zero unless it is
-measured; do not read it as a hint that a clockwise grid exists.
+but it does not create a CCW placement mode and its offset is uncalibrated. The
+`ccw` entry stays in both JSON and firmware because `toolOffsetCmOf()` is
+written over the three rotation states; deleting one leg would make it no
+longer line up with `ROT_CW` / `ROT_NONE` / `ROT_CCW`. Leave it at zero unless
+it is measured; the recorded `(3.75, 1.40)` CCW trial predates the
+centre-anchored lattice and must not be copied in.
 
-The CW tool-offset slot is used for horizontal builds. It remains zero until
-it is measured on hardware; do not move the existing grid error offsets into
-it.
-
-The neutral and CW offsets remain **zero** as intentional no-ops. The horizontal
-CCW values are an entered measured trial. Keep measured values paired in both
-places in the same commit. Do not compensate this by moving the camera grid or
-changing `grid.trim_*`: those define the block grid itself, not the
-holder-to-tool geometry. Targets that would put the holder outside its safe
-X/Y envelope are refused, never silently clipped.
+Keep measured values paired in both places in the same commit. Do not
+compensate a tool offset by moving the camera grid or changing `grid.trim_*`:
+those define the block grid itself, not the holder-to-tool geometry. Targets
+that would put the holder outside its safe X/Y envelope are refused, never
+silently clipped.
 
 #### 3d. The printed colour calibration sheet — geometry it must be reprinted for
 
@@ -434,32 +447,43 @@ The paragraphs below describe the retained legacy sheets. A legacy sheet is a
 `block_*_cm` or `gap_*_cm` changes, that sheet must be reprinted;
 `ColorGridCalibration._check_geometry_matches` refuses a stale one.
 
-`ColorGridSpec.from_config(mode=...)` reads that mode's `cols + 1` and `rows +
-1`: each sheet prints a real block at **every** coordinate, coordinate zero
-included. The vertical sheet maps the complete 7 x 6 map, not the 6 x 5
-positive one; the horizontal sheet maps 3 x 11, not 2 x 10. Mode is explicit:
-the detector does not infer it from a partial sheet, and it refuses a sheet/map
-count or geometry mismatch.
+`ColorGridSpec.from_config(mode=...)` reads that mode's `cols` and `rows`
+**with no `+1`** (`color_grid.py`: "No +1: the machine grid counts a real block
+at coordinate zero, exactly as the sheet prints one, so the two counts agree
+outright"). The vertical sheet maps the complete 7 x 6 coordinate map; the
+horizontal sheet maps 3 x 10. Mode is explicit: the detector does not infer it
+from a partial sheet, and `_check_geometry_matches(grid)` refuses a sheet whose
+`(cols, rows)` or block/gap geometry does not equal the active `MachineGrid`'s.
 
-**The sheet and the firmware do not lay coordinate zero out the same way.** The
-sheet puts a whole 2.2 x 6.0 cm block there; the firmware puts a bare point with
-only the gap before cell 1. The printed grid is therefore one block wider on X
-and one block taller on Y than the machine's grid, and aligning them is an
-explicit decision, not an assumption (rig X/Y below are at trim 0):
+Since the centre-anchored lattice landed, the sheet and the firmware **do**
+lay coordinate zero out the same way — both put a real 2.2 x 6.0 cm block on
+the home corner, half of it hanging back past the switches. The printed grid
+and the machine grid are therefore the same coordinate count; only the
+allocation extents differ, because the sheet's uniform 1.6 cm gaps and the
+legacy sheets' 0.8 cm Y gap are physical print choices:
 
 ```text
-vertical sheet X = 7 x 2.2 + 6 x 1.6 = 25.0 cm    rig X = 6 x 3.8 = 22.8 cm
-vertical sheet Y = 6 x 6.0 + 5 x 0.8 = 40.0 cm    rig Y = 5 x 6.8 = 34.0 cm
-horizontal sheet X = 3 x 6.0 + 2 x 1.6 = 21.2 cm  rig X = 2 x 7.6 = 15.2 cm
-horizontal sheet Y = 11 x 2.2 + 10 x 0.8 = 32.2 cm rig Y = 10 x 3.0 = 30.0 cm
+vertical sheet X = 7 x 2.2 + 6 x 1.6 = 25.0 cm    rig X footprint 25.0 cm, centres 0.00 → 22.80
+vertical sheet Y = 6 x 6.0 + 5 x 1.6 = 44.0 cm    rig Y footprint 44.0 cm, centres 0.00 → 38.00
+horizontal sheet X = 3 x 6.0 + 2 x 1.6 = 21.2 cm  rig X footprint 21.2 cm, centres 1.90 → 17.10
+horizontal sheet Y = 10 x 2.2 + 9 x 1.6 = 36.4 cm rig Y footprint 36.4 cm, centres 1.90 → 36.10
 ```
 
-`ColorGridCalibration.workspace_corners()` takes a `convention`. The default
-`"firmware"` puts the machine origin at the far corner of printed `[0,0]`, which
-makes printed `[c,r]` coincide exactly with the firmware's `[c,r]` for all
-positive cells. `"printed"` takes the paper at face value and lands every
-positive cell one `block/2 − (pitch − grid.x_start)` further from home on each
-axis. Do not add a third convention without a row here and a note in the plan.
+(The retained *legacy* mode-specific sheets still carry 0.8 cm Y gaps and, for
+horizontal, an 11-row layout; those now mismatch `config/rig.json` and
+`_check_geometry_matches` refuses them until reprinted.)
+
+`ColorGridCalibration.workspace_corners()` takes a `convention`
+(`HOME_CONVENTIONS = ("firmware", "printed")`, default `"firmware"`). `"firmware"`
+puts the machine origin at the far corner of printed `[0,0]`, which makes
+printed `[c,r]` coincide with the firmware's `[c,r]` for all positive cells.
+`"printed"` takes the paper at face value and lands every positive cell one
+`block/2 − (pitch − grid.x_start)` further from home on each axis. Do not add a
+third convention without a row here and a note in the plan. **Note:**
+`color_grid.py`'s `HOME_CONVENTIONS` docblock still describes coordinate zero as
+"a bare point" and cites cells `[1,1]..[9,5]` — that comment predates the
+centre-anchored lattice and the two-mode split; the code paths themselves read
+`grid.cols` / `grid.rows` from config.
 
 #### 3d-bis. Placed-block calibration — the primary route
 
@@ -472,7 +496,7 @@ axis. Do not add a third convention without a row here and a note in the plan.
 | `camera_studio.py` `blockcal` / `blockcalsave` | the BLOCK CALIBRATION buttons — read the grid off the board as it stands |
 | `POST /api/calibration/block/{start,step,undo,cancel,save}` | the console routes |
 | `web/src/components/Calibrate.tsx` | the operator UI; placed blocks is the first choice offered |
-| `python/captures/IMAGE_TO_TEST_BLOCK_CALIBRATION.png` | the reference board: 29 blocks, 13 cells filled, asserted in `tests/test_block_grid.py` |
+| `python/captures/IMAGE_TO_TEST_BLOCK_CALIBRATION.png` | the reference board: 29 blocks placed, 13 cells left virtual, asserted in `tests/test_block_grid.py` |
 
 Every sheet route (§3d) measures the **camera against a piece of paper** and
 then assumes the paper sits where the firmware's cells are. That assumption is
@@ -1104,7 +1128,7 @@ These are physical facts about the machine. Nothing can push them over serial,
 so a copy in the JSON would be a lie that nobody notices until the rig crashes
 into something.
 
-- firmware-only X/Y software caps (`X = 4750`, `Y = 8250`)
+- firmware-only X/Y software caps (`X = 4550`, `Y = 7600`)
 - `Z_TRAVEL_CM`, `Z_TRAVEL_STEPS`, `BLOCK_HEIGHT_CM`, build ceiling
 - pin assignments, servo angles, motor direction polarity
 

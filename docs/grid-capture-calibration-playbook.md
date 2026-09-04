@@ -21,7 +21,7 @@ Do these, in order, and it will work:
 
 1. **Colour-calibrate the camera** — `camera_studio.py` → `colourcal <phone photo of the same sheet>`. Mandatory. `wb` alone is not enough here.
 2. **Reframe** — the whole A2 page in view, with a white margin, nothing (gantry, cable, ruler) lying across it.
-3. **Full resolution** — `camera_studio.py --full-res`, and drop the zoomed-in crop stack.
+3. **Full resolution** — `camera_studio.py --hq`, and drop the zoomed-in crop stack.
 4. **Pin the sensor** — `awb tungsten` (or manual `redgain`/`bluegain`), fixed `exposure`, `sharpness 1`.
 5. Re-`save`, then re-run `color_grid_check.py`.
 
@@ -94,8 +94,8 @@ Run `camera_studio.py`, watch the preview, `save` at the end.
 ### 1. Resolution & framing
 
 ```
---full-res              # start it at the sensor's full 2592x1944, not 1296x972
-nocrop                  # drop the 6-deep crop stack in the current settings
+--hq                    # start it at the sensor's full 2592x1944, not 1296x972
+nocrop                  # drop the stacked crops in the current settings
 zoom 1                  # no digital zoom
 grid on                 # 8x8 straightness ruler
 ```
@@ -231,8 +231,8 @@ the first to fail the 76/80 gate.
 ### ZOOM / CROP
 
 `zoom` `pan` `crop` `uncrop` `nocrop` `fitmode` `viewbox` `refit` `fill`.
-**The current settings carry a 6-deep crop stack that ends at a 30 %×45 %
-window of the sensor** — that alone can keep the full page out of frame. `nocrop`.
+**The current settings carry a stacked crop that ends at an ROI of about
+[0.28, 0.25, 0.62, 0.78] of the sensor** — that alone can keep the full page out of frame. `nocrop`.
 
 ### FRAME
 
@@ -240,7 +240,7 @@ window of the sensor** — that alone can keep the full page out of frame. `nocr
 
 ### FILES
 
-`save` `autosave` `load` `lens` `snap` `params` `reset`. CLI: `--full-res`,
+`save` `autosave` `load` `lens` `snap` `params` `reset`. CLI: `--hq`,
 `--width/--height`, `--shutter`, `--gain`, `--awb`, `--sharpness`, `--fresh`.
 
 ---
@@ -249,22 +249,27 @@ window of the sensor** — that alone can keep the full page out of frame. `nocr
 
 ### `python/config/camera_settings.json`
 
+*(As of the `2026-09-03` `camera_settings.json`. Re-read the file — the audit
+below drifts as the camera is tuned.)*
+
 | field | value now | issue |
 | --- | --- | --- |
-| `colour` | **absent** | no software colour correction at all → identity → the cast goes straight into the detector. **Fix first.** |
+| `colour` | present but `enabled: false` (`source: "tuned to raw_with_phone.jpeg"`, `similarity ≈ 0.67`) | a `matrix`/`gain` fit exists from the raw-phone tuner but is switched off, so identity still reaches the detector. **Enable it or refit.** |
 | `sensor.awb` | `auto` | unstable cast frame-to-frame; pin it |
 | `sensor.saturation` / `contrast` / `ev` / `exposure` / `gain` | `auto` | brightness/colour hunt; pin exposure + gain at least |
-| `sensor.sharpness` | `10.0` | far too aggressive for a fiducial with a thin dark centre stripe; set `1` |
-| `capture.width/height` | `1296 × 972` | not full res; `--full-res` for an 80-fiducial target |
-| `framing.crops` | **6 stacked crops → ROI ≈ [0.30, 0.34, 0.60, 0.79]** | cropped to a small centre window; `nocrop` |
-| `lens.output_fov_deg` | `120` (from 160° fisheye) | fine, but `lens.source: "estimated"`, `k1/k2 = 0` — uncalibrated, edge distortion remains |
+| `sensor.sharpness` | `16.0` | far too aggressive for a fiducial with a thin dark centre stripe; set `1` |
+| `capture.width/height` | `1296 × 972` | not full res; `--hq` for an 80-fiducial target |
+| `framing.crops` | **2 stacked crops → ROI ≈ [0.28, 0.25, 0.62, 0.78]** | cropped to a centre window; `nocrop` |
+| `lens.output_fov_deg` | `120` (from a 168° fisheye) | `lens.source: "estimated"` with hand-tuned `k1≈0.14 / k2≈0.18 / k3≈0.035` — visually straightened, not checkerboard-calibrated; edge distortion remains |
 | `correction.enabled` | `true` | good |
 
 ### `config/rig.json` (unchanged by this work, for reference)
 
-- `grid.modes.vertical` = 6 × 5, block `2.2 × 6.0`, gap `1.6 / 0.8`, trims `0`.
-- `grid.modes.horizontal` = 2 × 10, block `6.0 × 2.2`, gap `1.6 / 0.8`, trims `0`.
-- `workspace` = 24.3 × 40.0 cm (holder travel; the combined target's page plane
+- `grid.modes.vertical` = 7 × 6 addressable, block `2.2 × 6.0`, gap `1.6 / 1.6`,
+  trims `0`.
+- `grid.modes.horizontal` = 3 × 10 addressable, block `6.0 × 2.2`, gap
+  `1.6 / 1.6`, `trim_x = trim_y = +1.9`.
+- `workspace` = 22.8 × 38.0 cm (holder travel; the combined target's page plane
   must contain this rectangle, and the A2 page — 59.4 × 42.0 cm — does).
 - The combined A2 fiducial geometry lives in `vision/combined_grid.py`, **not**
   in `rig.json`, and did not change: 6.0 × 2.2 cm bars, 0.8 / 1.6 cm gaps, 8 × 10
@@ -304,7 +309,7 @@ Before you press `s` in `color_grid_check.py`, all of these must be true:
 - [ ] preview: green ink reads green, paper reads white
 - [ ] `sensor.awb` is pinned (not `auto`); exposure and gain are fixed
 - [ ] `sensor.sharpness` ≤ 2
-- [ ] no crop stack (`nocrop`), no digital zoom, full-res capture
+- [ ] no crop stack (`nocrop`), no digital zoom, --hq (full-res) capture
 - [ ] the entire A2 page + a white margin is inside the frame, not touching an edge
 - [ ] nothing physical is lying across the sheet
 - [ ] `color_grid_check.py` reports **≥ 76/80** (or ≥ your `--page-plane-min`) and the fitted extent is **8×10**

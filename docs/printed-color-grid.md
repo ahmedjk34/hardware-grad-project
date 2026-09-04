@@ -82,7 +82,9 @@ the complete
 8 × 10 chromatic geometry, alternating-colour parity, aspect and residual
 gates. All 80
 chromatic bars fit one page-coordinate homography; that same
-fit yields the shared 24.3 × 40.0 cm holder envelope for either active mode.
+fit yields the shared holder envelope
+(`grid.workspace_width_cm` × `grid.workspace_height_cm` = 22.8 × 38.0 cm) for
+either active mode.
 The resulting `WorkspaceMap` is still saved under the active mode and embeds
 that mode's independent block/gap/trim geometry.
 
@@ -172,7 +174,7 @@ half the problem.
    and merged cells. Colour parity, measured aspect, mean residual and maximum
    residual are hard acceptance gates rather than status-only measurements.
 5. **Every strongly supported mode-sized window is retained** (7 × 6 vertical,
-   3 × 11 horizontal), swept across **both** axes — an oversized sheet exposes
+   3 × 10 horizontal), swept across **both** axes — an oversized sheet exposes
    every full copy of the coordinate map it contains, not just short-axis
    shifts off one anchored edge. A window needs at least 95% physical coverage
    with every row/column supported, so one underlit edge cell does not move the
@@ -187,7 +189,7 @@ half the problem.
 Never from the image alone. The explicit mode decides which physical side is
 machine X: vertical maps 2.2 cm to X; horizontal maps 6.0 cm to X. The detected
 short/long lattice axes then follow that declared geometry, whichever way the
-sheet was photographed. `ColorGridSpec.mode` and the 7 × 6 / 3 × 11 complete
+sheet was photographed. `ColorGridSpec.mode` and the 7 × 6 / 3 × 10 complete
 counts cross-check the `MachineGrid` before calibration; a partial sheet never
 causes an orientation guess.
 
@@ -239,43 +241,33 @@ the white balance and gains are tuned and saved.
 
 ---
 
-## The one place the paper and the firmware disagree
+## The paper and the firmware once disagreed at coordinate zero
 
-**This is worth reading before trusting a saved calibration.**
+**Historical — resolved by the centre-anchored lattice.** Kept because the
+`--home-convention` switch is still in the code.
 
-The sheet prints a real block at every coordinate, coordinate zero included, so
-its 7 × 6 layout is 7 blocks across:
+Before the centre-anchored lattice, the sheet printed a real block at
+coordinate zero while the firmware treated zero as a bare home *point* with
+only the gap before cell 1, so the printed grid was one block wider on X and
+one taller on Y than the machine's, and `workspace_corners()` needed an
+explicit convention to reconcile them. The figures that used to be worked out
+here (`10 × 2.2 + 9 × 0.5`, `9 × 2.7 = 24.3 cm`, "45 positive cells",
+"3.75 cm on Y") are all pre-revision.
 
-```text
-sheet X:  |block|gap|block|gap| ... |block|      = 10 x 2.2 + 9 x 0.5 = 26.5 cm
-sheet Y:  same with 6.0/0.8                      =  6 x 6.0 + 5 x 0.8 = 40.0 cm
-```
-
-The firmware's coordinate zero is not a block. It is the home *point*, with
-only the gap between it and cell 1:
-
-```text
-rig X:    |0|gap|block|gap| ... |block|          = 9 x 2.7 = 24.3 cm
-rig Y:    same with 7.5/0.5                      = 5 x 8.0 = 40.0 cm
-```
-
-So the printed sheet is one block wider on X and one block taller on Y than the
-machine's grid. Laying the sheet's `[0,0]` block on the machine's home and
-expecting cell `[5,3]` to land on the sheet's `[5,3]` block puts every block
-**1.1 cm out on X and 3.75 cm out on Y**.
-
-`workspace_corners()` therefore takes an explicit convention rather than
-assuming one:
+Today the firmware **also** puts a real 2.2 × 6.0 cm block on the home corner
+(cell 0's centre is home, half the block hanging back past the switches), so
+`ColorGridSpec.from_config` reads `grid.cols` / `grid.rows` from config **with
+no `+1`** and the counts agree outright. `workspace_corners()` still takes a
+convention:
 
 | convention | machine origin sits at | effect |
 | --- | --- | --- |
-| `firmware` *(default)* | the far corner of printed `[0,0]` | printed `[c,r]` lands exactly on the firmware's `[c,r]` for all 45 positive cells. Printed row/column zero are an anchor only — they are **not** where the firmware draws its axis-only lanes. |
-| `printed` | the centre of printed `[0,0]` | every printed cell is taken at face value; positive cells sit 1.1 cm (X) and 3.75 cm (Y) further from home than the firmware puts them. |
+| `firmware` *(default)* | the far corner of printed `[0,0]` | printed `[c,r]` lands exactly on the firmware's `[c,r]` for all positive cells |
+| `printed` | the centre of printed `[0,0]` | every printed cell taken at face value; positive cells sit `block/2 − (pitch − grid.x_start)` further from home per axis |
 
-Measured on the real capture, the `firmware` convention puts all 45 printed
-cell centres within **0.0 px** of the machine's own cell centres, and the
-`printed` convention offsets them by up to **131 px ≈ 3.9 cm**. The default is
-the one that makes the rig place blocks where the paper says.
+`tests/test_color_grid.py` derives the expected offset from the current grid
+geometry rather than hard-coding it, so the two conventions differ by whatever
+the shipped trims say (`0` for vertical, `+1.9` for horizontal).
 
 Switch with `--home-convention`, or with `h` in `color_grid_check.py`.
 
@@ -354,7 +346,7 @@ first live attempt was reported as *no detection, no overlay, nothing*.
 
 | what you see | what it means |
 | --- | --- |
-| `N whole cells along the 2.2 cm side where 10 are needed … Move the sheet or the camera` | genuinely not enough sheet in view. The named side says which way to move. |
+| `N whole cells along the 2.2 cm side where 7 are needed … Move the sheet or the camera` | genuinely not enough sheet in view. The named side says which way to move. |
 | `… The sheet is big enough in view, so the gaps are holes` | enough cells, but something punched holes in them — a cable lying across the sheet, or an edge clipping a row. The strict route refuses; Evidence-Assisted calibration can cover an interior hole from other safe gantry positions. |
 | `only N coloured blocks visible` | the sheet is not in frame, or the colours are being lost. Look at the drawn blobs: many blobs means a colour problem, almost none means a framing one. |
 | `they do not form a regular lattice` | blobs found, but not in a grid. Usually something else in view is ink-coloured and the sheet is mostly out of shot. |

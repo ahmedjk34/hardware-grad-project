@@ -137,9 +137,10 @@ is the window that gets saved.
 ### R5 — Which axis is X
 
 Decided by **the explicit mode plus cell size, never by image direction**. The
-2.2 cm and 7.5 cm sides are 3.4:1 apart. Vertical maps the short side to X
-(10) and the long side to Y (6); horizontal maps the long side to X (4) and
-the short side to Y (16). A quarter-turned camera changes neither assignment.
+2.2 cm and 6.0 cm sides are ~2.7:1 apart. Vertical maps the short side to X
+(7 cols) and the long side to Y (6 rows); horizontal maps the long side to X
+(3 cols) and the short side to Y (10 rows). A quarter-turned camera changes
+neither assignment.
 
 **Accept when:** rotating the input frame 90° leaves the column/row assignment
 unchanged.
@@ -255,42 +256,40 @@ The spec said *"only calibrate on the vertical"* and also *"the 7.5 cm is on
 the Y side"*, and the two filenames appear to say the opposite of each other.
 
 Resolved by geometry, not by the filename. A 7 × 6 grid needs **6 whole cells
-along the 7.5 cm axis**. `original_image_VERTICAL.jpeg` has 7; the horizontal
-one has 5. Only one of the two can hold the grid at all, and it is the one the
-spec named. The rule *"the 7.5 cm side is Y"* is what the code implements; the
-filenames are not consulted.
+along the 6.0 cm axis**. `original_image_VERTICAL.jpeg` has them; the
+horizontal one does not. Only one of the two can hold the grid at all, and it
+is the one the spec named. The rule *"the long (6.0 cm) side is Y"* is what the
+code implements; the filenames are not consulted. (The training figures were
+shot against the pre-revision 7.5 cm block; the geometric argument is
+unchanged.)
 
-### A2 — The sheet and the firmware lay out coordinate zero differently
+### A2 — The sheet and the firmware once laid out coordinate zero differently
 
-**The single most important thing in this document.**
+**Historical — resolved by the centre-anchored lattice.** Left in because the
+`--home-convention` switch and its test derivation are still in the code.
 
-The sheet prints a real 2.2 × 6.0 cm block at coordinate zero. The firmware
-does not: its zero is the home *point*, with only the gap before cell 1.
+This was the model when the sheet and the firmware disagreed at coordinate
+zero. **They no longer do:** since the centre-anchored lattice landed the
+firmware also puts a real 2.2 × 6.0 cm block on the home corner (half of it
+hanging back past the switches), so `ColorGridSpec.from_config` reads
+`grid.cols` / `grid.rows` from config **with no `+1`** and the two counts
+agree outright (`color_grid.py:293-307`).
 
-```text
-sheet X = 10 × 2.2 + 9 × 0.5 = 26.5 cm      rig X = 9 × 2.7 = 24.3 cm
-sheet Y =  6 × 6.0 + 5 × 0.8 = 40.0 cm      rig Y = 5 × 6.8 = 34.0 cm  (trim 0)
-```
+The pre-revision figures this section was written against (10 × 2.2 + 9 × 0.5,
+`trim_y_cm = 3.75`, "45 positive cells") are stale on every count: the block is
+2.2 × 6.0, gaps are a uniform 1.6 cm, vertical is 7 × 6 (30 positive cells) and
+**both modes ship `trim = error_offset = 0` except horizontal's
+`trim = +1.9`** (`config/rig.json`).
 
-So the printed grid is one block wider on X and one block taller on Y than the
-machine's grid. Laying the sheet's `[0,0]` on the machine's home and expecting
-`[5,3]` to match puts every block **1.1 cm out on X and 3.75 cm out on Y**.
-
-Resolved by making it an **explicit, switchable convention** rather than an
-assumption, defaulting to the one that makes the rig place blocks where the
-paper says:
+The `--home-convention` switch survives for the envelope placement:
 
 | `--home-convention` | machine origin at | effect |
 | --- | --- | --- |
-| `firmware` *(default)* | the far corner of printed `[0,0]` | printed `[c,r]` lands exactly on the firmware's `[c,r]` for all 45 positive cells |
-| `printed` | the centre of printed `[0,0]` | every printed cell taken at face value; positive cells sit 1.1 cm (X) / 3.75 cm (Y) further from home |
+| `firmware` *(default)* | the far corner of printed `[0,0]` | printed `[c,r]` lands exactly on the firmware's `[c,r]` for all positive cells |
+| `printed` | the centre of printed `[0,0]` | every printed cell taken at face value; positive cells sit `block/2 − (pitch − grid.x_start)` further from home on each axis |
 
-**Since then**, `config/rig.json` gained `grid.trim_y_cm = 3.75`, which shifts
-the machine's grid to agree with the sheet on Y and collapses the disagreement
-to the 1.1 cm on X. The two conventions therefore now differ by whatever the
-trims say, not by a fixed number — which is why
 `tests/test_color_grid.py` derives the expected offset from the grid rather
-than hard-coding it.
+than hard-coding it, so it follows whatever the trims say.
 
 ### A3 — Which mode-sized window of an oversized sheet
 
