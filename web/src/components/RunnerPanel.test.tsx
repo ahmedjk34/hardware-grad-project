@@ -37,6 +37,7 @@ function mockedApi(command = "B 3 2 0"): RunnerApi {
     selectAxis: vi.fn(async () => readyState({ selected: [3, 2], command })),
     build: vi.fn(async sent => readyState({ selected: [3, 2], command: sent, build_state: "RUNNING" })),
     mode: vi.fn(async next => readyState({ mode: next })),
+    stop: vi.fn(async () => readyState({ build_state: "RUNNING", cell_phase: "feeding" })),
   };
 }
 
@@ -45,7 +46,7 @@ describe("RunnerPanel", () => {
     const api = mockedApi();
     render(<RunnerPanel state={readyState()} connected modelId="example-tower"
                         api={api} delay={async () => {}} />);
-    expect(screen.getByText("FEED: BLUE")).toBeInTheDocument();
+    expect(screen.getByText("NEXT: BLUE")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "DRY RUN" }));
     fireEvent.click(screen.getByRole("button", { name: "START DRY RUN" }));
 
@@ -73,9 +74,23 @@ describe("RunnerPanel", () => {
 
   it("states the honest stop semantics and exposes no cancel or retry control", () => {
     render(<RunnerPanel state={readyState()} connected modelId="example-tower" api={mockedApi()} />);
-    expect(screen.getByText("the block in flight will finish — the rig cannot be interrupted")).toBeInTheDocument();
+    expect(screen.getByText("the block in flight will finish — Mega motion cannot be interrupted")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /cancel/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /retry/i })).not.toBeInTheDocument();
+  });
+
+  it("sends Uno cancellation while the server reports feeding", async () => {
+    const api = mockedApi();
+    const { rerender } = render(
+      <RunnerPanel state={readyState()} connected modelId="example-tower" api={api} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "RUN" }));
+    fireEvent.click(screen.getByRole("button", { name: "START RUN" }));
+    await waitFor(() => expect(api.build).toHaveBeenCalledOnce());
+    rerender(<RunnerPanel state={readyState({ build_state: "RUNNING", cell_phase: "feeding" })}
+                          connected modelId="example-tower" api={api} />);
+    fireEvent.click(screen.getByRole("button", { name: "CANCEL FEED" }));
+    await waitFor(() => expect(api.stop).toHaveBeenCalledOnce());
   });
 
   it("pauses on the server's REJECTED result at the same block", async () => {

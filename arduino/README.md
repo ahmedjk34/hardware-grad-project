@@ -21,17 +21,27 @@ Every controller command must end in a newline. A feed cycle is identified by
 the optional numeric `id` and reports structured telemetry:
 
 ```text
+@42 RECV cmd=FEED
+@42 ACK cmd=FEED accepted=1
+@42 STATE state=waiting_for_exit
 @42 EVENT phase=waiting_for_exit
+@42 STATE state=moving_to_stage
+@42 SENSOR sensor=exit distance_cm=7.4 detected=1
 @42 EVENT phase=exit_detected_container_closed_belt_running distance_cm=7.4
+@42 SENSOR sensor=stage distance_cm=8.2 detected=1
 @42 EVENT phase=stage_detected_aligning distance_cm=8.2
 @42 EVENT phase=block_ready distance_cm=8.1
-@42 OK state=block_ready
+@42 OK state=block_ready result=staged
 ```
 
-`@id OK state=block_ready` is the successful terminal response and means the
-Mega may pick from `[0,0]`. A terminal `@id ERROR reason=stage_occupied`,
-`exit_timeout`, `stage_timeout`, or `cancelled` means it must not. The Uno also
-prints `@0 READY firmware=belt_v1 protocol=1 board=uno` at boot.
+`@id OK state=block_ready result=staged` is the successful terminal response and means the
+Mega may pick from `[0,0]`. `ACK`, `STATE`, `SENSOR`, and `EVENT` are progress
+telemetry; `OK` or `ERROR` is terminal. A terminal `@id ERROR
+state=... reason=stage_occupied`, `exit_timeout`, `stage_timeout`, or
+`cancelled` means it must not. The Uno prints
+`@0 READY firmware=belt_v1 protocol=2 board=uno` at boot. See
+[the full feeder-controller protocol](../docs/feeder-controller.md) for every
+message type and controller recovery rule.
 
 Use `STOP` to cancel a cycle safely. Manual commands are `STATUS` (or `P`),
 `OPEN`, `CLOSE`, `ON`, `OFF`, `F`, `B`, `S <speed>`, `US`, and `HELP`. The
@@ -50,13 +60,16 @@ rotation settings as `build_test_v1/`: close **52°**, fixed placement margin
 **+0.10 cm**, and a horizontal build turn of **90° CW**.
 
 ```
-./scripts/flash.sh            # compile, then upload
-./scripts/flash.sh compile    # syntax check only
-./scripts/flash.sh boards     # what is actually plugged in
+./scripts/flash.sh                    # Mega: compile, then upload
+./scripts/flash.sh compile            # Mega syntax check (back-compatible)
+./scripts/flash.sh feeder compile     # Uno syntax check
+./scripts/flash.sh feeder upload      # Uno upload using feeder.port
+./scripts/flash.sh all compile        # syntax-check both production sketches
+./scripts/flash.sh boards             # what is actually plugged in
 ```
 
-The script reads the port, the board FQBN and the sketch path out of
-`config/rig.json`, so none of them are written down twice.
+The script reads each role's port, FQBN and sketch path from `config/rig.json`,
+so none of them are written down twice.
 
 Board is an Arduino MEGA 2560. Serial is **9600 baud**. Multi-character
 commands need a newline; single digits do not. `V <angle>` sets the gripper

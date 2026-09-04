@@ -8,8 +8,8 @@ gantry pickup point, then explicitly report whether that succeeded.
 The feeder is intentionally separate from the Mega gantry controller. The Uno
 only owns the path from the hopper to the fixed pickup location; it never moves
 the gantry or decides where a block is placed. The Mega treats its `[0,0]` cell
-as the feeder/pickup position. The Pi will eventually coordinate the two, but
-that Pi ↔ Uno ↔ Mega integration is not implemented yet.
+as the feeder/pickup position. The Pi coordinates both boards over two
+independent USB serial ports; the boards never talk directly to one another.
 
 ## What it does
 
@@ -30,7 +30,7 @@ One `FEED` request runs this sequence:
    the block. Detection stops the belt.
 8. Move the alignment servo briefly to nudge the block square, return it to
    rest after 350 ms, and read the stage sensor again.
-9. Emit `@id OK state=block_ready` only if the block is still at the stage.
+9. Emit `@id OK state=block_ready result=staged` only if the block is still at the stage.
    The controller may now instruct the Mega to pick up from `[0,0]`.
 
 This is sensor-stopped staging, not a fixed belt-duration guess. The exit and
@@ -58,53 +58,117 @@ wrong way.
 
 ## Serial protocol
 
-The useful controller command is:
+Protocol 2 is line-oriented ASCII at 9600 baud. Every command and every
+response is one newline-terminated line. Responses are deliberately formatted
+as space-separated `key=value` fields so a controller can parse them without
+depending on prose intended for a human serial monitor.
+
+The main controller command is:
 
 ```text
 FEED <id>\n
 ```
 
-`RUN <id>` is an alias. `id` is an optional non-negative numeric request ID.
-Supplying one lets a controller associate every event and terminal response
-with its request. Without one, the firmware allocates the next ID itself.
+`RUN <id>` is an alias. `id` should be a positive numeric request ID chosen by
+the controller. It labels every asynchronous response from that feed cycle.
+If omitted, the Uno allocates its next ID. An explicit `0` is invalid. `@0` is reserved for
+device-level boot, status, configuration and manual-command messages; it is
+never a feed transaction ID.
+
+Every protocol response has this envelope:
+
+```text
+@<id> <TYPE> key=value key=value ...
+```
+
+| Type | Scope | Meaning |
+| --- | --- | --- |
+| `READY` | `@0` | Boot/reset announcement. Discards any controller assumption about an earlier in-flight request. |
+| `RECV` | `@id` | The Uno received a `FEED` line and assigned it this transaction ID. |
+| `ACK` | `@id` or `@0` | A command was accepted. For a feed, `accepted=1` means the stage was empty and the cycle has started. |
+| `STATE` | `@id` | A feed-state transition. It is the authoritative current state. |
+| `SENSOR` | `@id` or `@0` | A named HC-SR04 observation. `detected=1` means the value is below the configured threshold. |
+| `EVENT` | `@id` | A meaningful physical milestone within the current state. |
+| `STATUS` | `@0` | A requested snapshot of state, active flag, belt, container and speed. It is followed by two `SENSOR` lines. |
+| `CONFIG` | `@0` | A manual setting change, currently the belt speed. |
+| `OK` | `@id` | Successful terminal result. No more lines for that feed request are expected. |
+| `ERROR` | `@id` or `@0` | Terminal feed failure or a malformed/manual command failure. |
 
 At boot the Uno prints:
 
 ```text
-@0 READY firmware=belt_v1 protocol=1 board=uno
+@0 READY firmware=belt_v1 protocol=2 board=uno
 ```
 
 For `FEED 42`, a normal transaction is:
 
 ```text
 @42 RECV cmd=FEED
+@42 SENSOR sensor=stage distance_cm=32.6 detected=0
+@42 ACK cmd=FEED accepted=1
+@42 STATE state=closing
 @42 EVENT phase=container_closing
+@42 STATE state=opening_stage_1
 @42 EVENT phase=container_opening_stage_1
+@42 STATE state=opening_stage_2
 @42 EVENT phase=container_opening_stage_2
+@42 STATE state=waiting_for_exit
 @42 EVENT phase=waiting_for_exit
+@42 STATE state=moving_to_stage
+@42 SENSOR sensor=exit distance_cm=7.4 detected=1
 @42 EVENT phase=exit_detected_container_closed_belt_running distance_cm=7.4
+@42 STATE state=aligning
+@42 SENSOR sensor=stage distance_cm=8.2 detected=1
 @42 EVENT phase=stage_detected_aligning distance_cm=8.2
+@42 STATE state=verifying_stage
 @42 EVENT phase=verifying_stage
+@42 STATE state=block_ready
 @42 EVENT phase=block_ready distance_cm=8.1
-@42 OK state=block_ready
+@42 OK state=block_ready result=staged
 ```
 
-Only the final `OK` is permission to pick the block up. Events are progress
-telemetry, not a success result. A controller should wait for exactly one
-terminal line for its active request and should not send the Mega a build/pick
-command after an error.
+Only the final `OK` is permission to pick the block up. `ACK`, `STATE`,
+`SENSOR`, and `EVENT` lines are progress telemetry, not success results. A
+controller should wait for exactly one `OK` or `ERROR` for its active request
+and should not send the Mega a build/pick command after an error.
+
+`SENSOR` values are reported in centimetres, rounded to one decimal place.
+`distance_cm=no_echo` means the HC-SR04 received no echo before its 30 ms
+firmware timeout; it is never treated as a detected block. The detection rule
+is `distance_cm < 10.0` and is represented explicitly by `detected=0` or `1`.
+The firmware reports sensor readings at cycle admission and on detections;
+it does not flood the serial port with its 100 ms polling reads.
+
+### Status and manual acknowledgement
+
+`STATUS` (or `P`) creates a complete device snapshot, regardless of whether a
+feed request is running:
+
+```text
+@0 STATUS state=moving_to_stage active=1 belt=running container=closed speed_steps_s=150
+@0 SENSOR sensor=exit distance_cm=21.7 detected=0
+@0 SENSOR sensor=stage distance_cm=14.3 detected=0
+```
+
+Manual operations also acknowledge their completion on the device channel.
+For example, `S 500` returns `@0 CONFIG speed_steps_s=500` followed by
+`@0 ACK cmd=S`; `STOP` returns `@0 ACK cmd=STOP`. If `STOP` cancelled a live
+feed, its transaction first receives `STATE state=idle`, an `EVENT` describing
+the cancellation, and terminal `ERROR state=idle reason=cancelled`.
 
 ### Terminal failures
 
 | Response | Meaning | Safe controller response |
 | --- | --- | --- |
-| `@id ERROR reason=stage_occupied` | A block was already at the pickup point before release started. | Do not feed another block. Inspect, pick the staged block, or clear the area. |
-| `@id ERROR reason=exit_timeout` | No block was seen leaving the container within 10 seconds. | Check hopper supply, container movement and exit-sensor alignment. |
-| `@id ERROR reason=stage_timeout` | A released block did not reach the pickup sensor within 15 seconds. | Stop/inspect for a belt jam, wrong direction or sensor placement. |
-| `@id ERROR reason=cancelled` | A running feed was cancelled with `STOP`, or superseded by another `FEED`. | Treat the pickup point as unknown and inspect before retrying. |
+| `@id ERROR state=fault reason=stage_occupied` | A block was already at the pickup point before release started. | Do not feed another block. Inspect, pick the staged block, or clear the area. |
+| `@id ERROR state=fault reason=exit_timeout` | No block was seen leaving the container within 10 seconds. | Check hopper supply, container movement and exit-sensor alignment. |
+| `@id ERROR state=fault reason=stage_timeout` | A released block did not reach the pickup sensor within 15 seconds. | Stop/inspect for a belt jam, wrong direction or sensor placement. |
+| `@id ERROR state=idle reason=cancelled` | A running feed was cancelled with `STOP`. | Treat the pickup point as unknown and inspect before retrying. |
+| `@id ERROR state=... reason=busy` | A second `FEED` arrived while one transaction still owned the stage. The original continues. | Fix the caller; wait for the original terminal result and never queue feeds. |
 
-An `ERROR unknown_command=...` or `ERROR command_too_long` is a command parser
-error and is not a feed transaction result.
+`@0 ERROR reason=unknown_command command=...` and `@0 ERROR
+reason=command_too_long` or `reason=invalid_request_id` are command parser failures, not feed transaction
+results. A controller should reject malformed input locally before sending it.
 
 ### Other commands
 
@@ -149,62 +213,85 @@ No echo is treated as no detection. The values are installation calibrations:
 adjust `DETECT_DISTANCE_CM`, the three servo-angle groups, belt rate, and
 timeouts only after testing with the actual hopper and pickup fixture.
 
-## Controller integration contract
+## Pi orchestration contract
 
-The eventual Pi-side orchestrator should use the Uno as a transaction partner:
+`python/rig/feeder.py` owns the Uno port and validates the exact protocol-2
+`READY` identity before use. `python/rig/link.py` independently owns the Mega
+port. `python/rig/orchestrator.py` is the only production handoff between them:
 
 ```text
 Pi                    Uno                         Mega
  |--- FEED 42 -------->|                           |
  |<-- @42 EVENT ... ---|                           |
- |<-- @42 OK ----------|                           |
+ |<-- @42 OK state=block_ready result=staged       |
  |-------------------------------- B col row z --->|
- |<-------------------------------- build result --|
+ |<-------------------------- terminal PLACED -----|
 ```
 
 Important rules:
 
 - Send only one `FEED` at a time and retain its ID until a terminal response.
 - Do not infer success from elapsed time, a container-open event, or a belt
-  event. Only `OK state=block_ready` proves the feeder sequence completed.
+  event. Only matching `OK state=block_ready result=staged` proves the feeder
+  sequence completed.
 - On any Uno error, do not issue the Mega pick/build command. Surface the
   reason to the operator and require a safe inspection/recovery decision.
 - A Mega build removes the staged block. Do not request the next `FEED` until
-  that pick/build has safely progressed and the physical pickup area is clear.
+  that exact `B` returns terminal `PLACED`. A Mega rejection is safe for the
+  gantry but not for the whole cell: a block was already staged, so the
+  controller locks for inspection rather than feeding another.
 - A fresh serial connection resets an Uno. Wait for its `READY` line, then
   treat any previous in-flight request as unknown.
+- A timeout, disconnect, reset, malformed success, or cancellation has an
+  unknown physical outcome. It never authorizes `B` and is never auto-retried;
+  on a host timeout the client makes a best-effort `STOP` without treating
+  delivery as proof of recovery.
+- Operator stop while feeding sends Uno `STOP`. Once Mega placement starts,
+  software stop remains stop-after-current because the Mega cannot read serial
+  inside `buildBlock()`.
 
-The current Python serial link communicates only with the Mega. Adding an Uno
-link should preserve the existing Mega acknowledgement protocol rather than
-trying to combine two devices on one serial port.
+The FastAPI lifespan owns both clients exactly once. `BuildController` and
+`BuildJob` remain the outer one-operation guard used by click-to-build and the
+Studio runner. Direct Mega paths remain only for deliberate calibration and
+commissioning where a person is responsible for staging.
 
 ## Commissioning checklist
 
 1. With power off, verify every connection in the wiring table and a shared
    ground. Keep the A4988 motor supply and servo power appropriate to the
    hardware.
-2. Compile for the Uno and upload the sketch. A direct command is:
+2. Discover both boards with `./scripts/flash.sh boards`. Put their stable
+   `/dev/serial/by-id/...` paths in `serial.port` and `feeder.port` in
+   `config/rig.json`; never rely on `/dev/ttyACM0`/`1` ordering.
+3. Compile and upload the Uno using that same config:
 
    ```bash
-   arduino-cli compile --fqbn arduino:avr:uno arduino/belt_v1
+   ./scripts/flash.sh feeder compile
+   ./scripts/flash.sh feeder upload
    ```
 
-3. Open a 9600-baud serial monitor and confirm the `READY` line.
-4. Run `STATUS`; with clear sensors it should report distances/no echo rather
+4. Stop the web service, then run
+   `.venv/bin/python python/feeder_console.py status` and confirm the validated
+   `READY` identity and structured status.
+5. With clear sensors, `status` should report distances/no echo rather
    than a false nearby block. Position a block at each sensor separately and
    confirm its reading crosses the 10 cm threshold only where intended.
-5. With the belt unloaded, use `F`, `B`, `ON`, and `OFF` to verify direction
+6. With the belt unloaded, use the CLI's `on`, `off`, and manual controls to verify direction
    and stop behaviour. If CCW is physically wrong, invert
    `BELT_CCW_DIRECTION_LEVEL`, recompile and reflash.
-6. Use `OPEN` and `CLOSE` to confirm container travel. Adjust only the named
+7. Use `open` and `close` to confirm container travel. Adjust only the named
    container angles after checking for mechanical interference.
-7. Run `FEED 1` with one block. Confirm the exit event, automatic container
+8. Run `.venv/bin/python python/feeder_console.py feed` with one block. Confirm the exit event, automatic container
    closure, belt stop at the pickup point, alignment movement, and final `OK`.
-8. Test every failure deliberately: start with the stage occupied, leave the
+9. Test every failure deliberately: start with the stage occupied, leave the
    hopper empty, and obstruct the belt. Confirm the relevant terminal error
    and that the belt is stopped.
+10. Only after both boards pass commissioning, start the web service and run a
+    one-block build while watching `[UNO/FEEDER ...]` then
+    `[MEGA/GANTRY ...]` in the operator log. Repeat for a multi-block Studio
+    run and confirm no next `FEED` appears before the prior Mega terminal.
 
-Do not connect this feeder to automatic gantry builds until those physical
-tests have passed repeatedly. Firmware success means the sensors agree with
-the configured geometry; it cannot by itself prove that the claw can safely
-grip the staged block.
+The software path is integrated, but do not operate automatic gantry builds
+until these physical tests have passed repeatedly. Firmware success means the
+sensors agree with the configured geometry; it cannot by itself prove that the
+claw can safely grip the staged block.

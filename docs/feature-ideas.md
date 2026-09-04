@@ -91,12 +91,12 @@ The full design — every decision, the milestone breakdown and the known
 limits — is kept at [Appendix A](#appendix-a--placement-supervision-full-design)
 rather than left to rot in a separate plan file.
 
-### 1.5 Colour-aware planning and feeder prompts
+### 1.5 Colour-aware planning and next-block guidance — built in Studio
 
 Detections already carry a colour name. Let a model assign a colour per block,
-then have the console tell the operator which block to load next:
-**`FEED: RED`**, with the count remaining per colour. Turns a manual feeder into
-a guided one without touching the hardware.
+then have the console preview which colour the automatic feeder path must stage
+next: **`NEXT: RED`**. The current Uno stages the hopper's next block; it does
+not select colours, so loading/sorting the hopper remains an operator concern.
 
 ### 1.6 Build execution runner — built (Studio M7)
 

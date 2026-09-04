@@ -18,6 +18,7 @@ export const mode = (next: "vertical" | "horizontal") => post<StateModel>("mode"
 export const select = (x: number, y: number, img_w: number, img_h: number) => post<StateModel>("select", { x, y, img_w, img_h });
 export const selectAxis = (axis: "col" | "row", value: number) => post<StateModel>("select/axis", { axis, value });
 export const build = (command: string) => post<StateModel>("build", { confirm: true, command });
+export const stop = () => post<StateModel>("stop");
 
 export interface BlockCalibrationReport {
   observations: number;

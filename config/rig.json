@@ -7,6 +7,14 @@
     "port": "/dev/serial/by-id/usb-www.Arduino.cc_Arduino_14011-if00",
     "baud": 9600
   },
+  "feeder": {
+    "port": "",
+    "baud": 9600,
+    "firmware": "belt_v1",
+    "protocol": 2,
+    "fqbn": "arduino:avr:uno",
+    "sketch": "arduino/belt_v1"
+  },
   "grid": {
     "active_mode": "vertical",
     "modes": {

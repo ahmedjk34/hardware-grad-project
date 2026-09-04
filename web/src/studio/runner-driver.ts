@@ -17,6 +17,7 @@ export interface RunnerApi {
   selectAxis(axis: "col" | "row", value: number): Promise<StateModel>;
   build(command: string): Promise<StateModel>;
   mode(next: "vertical" | "horizontal"): Promise<StateModel>;
+  stop?(): Promise<StateModel>;
 }
 
 export interface DriverContext {

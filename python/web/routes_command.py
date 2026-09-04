@@ -56,6 +56,25 @@ class BuildRequest(BaseModel):
     command: str
 
 
+@router.post("/stop", response_model=StateModel)
+async def stop(http: Request) -> StateModel:
+    """Cancel an active Uno feed; Mega motion remains stop-after-current only."""
+    app = http.app
+    if not app.state.job.running:
+        raise HTTPException(status_code=409, detail="no cell operation is running")
+    try:
+        stopped = app.state.orchestrator.cancel()
+    except Exception as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not stopped:
+        raise HTTPException(
+            status_code=409,
+            detail="gantry placement cannot be interrupted; stop applies after this block",
+        )
+    _signal(app)
+    return _state(app)
+
+
 def require_mutable(app) -> None:
     """Reject actions that could queue behind motion or a locked machine."""
     if app.state.job.running:
@@ -172,6 +191,11 @@ async def build(request: BuildRequest, http: Request) -> StateModel:
     app = http.app
     require_mutable(app)
     require_fresh_camera(app)
+    if not app.state.rig.connected or not app.state.feeder.connected:
+        raise HTTPException(
+            status_code=409,
+            detail="both Uno feeder and Mega gantry must be connected before build",
+        )
     if not request.confirm:
         raise HTTPException(status_code=400, detail="build requires confirm=true")
     if request.command != app.state.controller.command:

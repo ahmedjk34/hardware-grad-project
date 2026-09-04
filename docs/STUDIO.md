@@ -36,7 +36,7 @@ with).
 | M7 — The runner | ✅ delivered | pure exhaustive runner reducer, guarded effect driver, STEP/RUN/DRY RUN, feeder guidance, failure lock/pause, Markdown evidence report |
 | M8 — Wow pass | not started | shift gizmo, x-ray by level, cross-mode bridging |
 
-**Test suite.** `cd web && npm test` — **491 tests across 38 files**, all green.
+**Test suite.** `cd web && npm test` — **492 tests across 38 files**, all green.
 (The per-file table below is maintained for the Studio's own files; several rows
 have drifted behind the total as unrelated console work landed — treat the
 per-file counts as approximate.)
@@ -56,7 +56,7 @@ per-file counts as approximate.)
 | `studio/runner.test.ts` | 25 | every named transition, serial phases that never advance the cursor, socket-loss pause and phase-driven resume, HELD locks / SAFE does not, feeder sequencing, abort program position, elapsed/ETA arithmetic, plus an exhaustive all-event walk proving no second build and no serial effect while RUNNING |
 | `studio/runner-driver.test.ts` | 7 | the level/select/verify/build/mode request sequence against a mocked API, axis selection, zero-API dry transport and the defensive RUNNING refusal |
 | `studio/run-report.test.ts` | 2 | deterministic event-derived Markdown, verbatim failures, durations, verification and camera evidence |
-| `components/RunnerPanel.test.tsx` | 8 | full dry tower with no API traffic, mismatch stop, honest stop copy, rejected pause and abort lock, the rig's own phase readout, fourteen phases advancing nothing, stale-on-disconnect |
+| `components/RunnerPanel.test.tsx` | 9 | full dry tower with no API traffic, mismatch stop, feeder cancel, honest stop copy, rejected pause and abort lock, the rig's own phase readout, fourteen phases advancing nothing, stale-on-disconnect |
 | `store.test.ts` | 20 | `build_step` applied with no timer advanced, id deduplication, phase/snapshot tie-breaks, the reconnect cursor, terminal-only `placed` |
 | `ws.test.ts` | 7 | immediate delivery against a fake socket, the `?after=` cursor, replay envelope, backoff, unparseable frames |
 | `blockCalibration.test.tsx` | 4 | the placed-block calibration panel — the plan walked cell by cell, SAVE disabled until the backend calls the fit ready, a refused step kept retryable, an abort disabling further steps, and a refusal to start leaving the other two routes reachable |
@@ -800,12 +800,13 @@ select/build/mode while the resulting state still says `RUNNING`. This is the
 proof M7 exists to supply; `routes_command.require_mutable`, `BuildJob.start`
 and `BuildController` still repeat the guard server-side.
 
-Feeder guidance is pure too. Before START it shows the first block. Once a
-build is in flight that block has already left the feeder, so the prompt uses
-the otherwise-dead motion window to show the next block's colour and command.
-Repeated colour becomes the quiet `SAME COLOUR` line. That is how continuous
-RUN remains compatible with a manual feeder instead of flashing an instruction
-after it is too late to act on it.
+The next-block colour guidance is pure too. Before START it previews the first
+block. While the Mega is placing, it previews the next required colour, but it
+does not claim another feed is active: the server waits for the current Mega
+terminal before starting the next Uno transaction. Live cell phases come from
+the backend as feeding → staging → ready-for-pick → placing → complete/error.
+During feeding/staging the run control can send Uno `STOP`; during Mega motion
+it remains the honest stop-after-current control.
 
 ### 5.15 `runner-driver.ts` and `run-report.ts`
 
@@ -1555,17 +1556,16 @@ A real backend run (`python -m web`) now appends two plain-text files under
 - `logs/build.log` — one stopwatch section per `/api/build`: the request, the
   job handoff, the board `RECV`, every firmware phase with the firmware's own
   ETA beside the measured duration, and the settled result with total elapsed.
-- `logs/serial.log` — every line to/from the Arduino, each with the wall clock
+- `logs/serial.log` — serial diagnostics with board-labelled Uno/Mega lines, each with the wall clock
   and the gap since the previous line, so a stall reads as a large delta; the
   terminal ack and a `-- final: …` line close each build.
 
 Off by default (every call a no-op); `web.app.main()` calls
-`rig.build_log.configure()`, so `pytest` never writes to `logs/`. The Studio's
-runner is unchanged — it still dispatches one guarded `/api/build` at a time;
-this is purely observability on the server side of that call. Code:
-`python/rig/build_log.py`, wired from `web/app.py`, `web/routes_command.py`,
-`rig/link.py`. Operator notes in `docs/server-guide.md` §7. Sizing: ~6–7 KB per
-block placed; a 200-block model run is ~1.3 MB.
+`rig.build_log.configure()`, so `pytest` never writes to `logs/`. The Studio
+still dispatches one guarded `/api/build` at a time; that route now owns the
+complete Uno-feed then Mega-place operation. Code: `python/rig/build_log.py`,
+`rig/feeder.py`, `rig/orchestrator.py`, and `web/app.py`. Operator notes are in
+`docs/server-guide.md` §7.
 
 ### Fix: the Studio library drawer could never read a saved model
 
@@ -1647,7 +1647,7 @@ phase and the whole stack carries it.
   wire order. `MockBoard` speaks the same stream so the console is testable
   off-rig, with `fail_next_build(..., at_step=)` for a mid-carry abort.
 - **New `python/web/events.py`**: the durable/coalesced split. `serial`,
-  `build_step` and `build_result` are delivered once each in order and kept in a
+  `feeder`, `build_step` and `build_result` are delivered once each in order and kept in a
   replay buffer; `state` is coalesced to one pending snapshot per client.
   Durable first, always — camera geometry can no longer delay a build phase.
   Every event has a monotonic id and a timestamp.

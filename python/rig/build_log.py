@@ -164,10 +164,13 @@ class BuildLog:
         return f"+{now - self._t0:.2f}s"
 
     def run_started(self, *, mode: str | None, cols: int, rows: int,
-                    port: str, baud: int, mock: bool) -> None:
+                    port: str, baud: int, mock: bool,
+                    feeder_port: str | None = None,
+                    feeder_baud: int | None = None) -> None:
         """A run banner, written to BOTH logs so they line up by eye."""
         line = (f"SERVER RUN  {_stamp()}  mode={mode} grid={cols}x{rows} "
-                f"port={port} baud={baud} mock={mock}")
+                f"mega_port={port} mega_baud={baud} "
+                f"feeder_port={feeder_port} feeder_baud={feeder_baud} mock={mock}")
         rule = "=" * 78
         for sink in (_build_sink, _serial_sink):
             if sink.enabled:

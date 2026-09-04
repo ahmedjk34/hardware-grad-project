@@ -406,9 +406,9 @@ export function buildPosition(state: RunState): { current: number; total: number
 export function feederPrompt(state: RunState): { colour: string; same: boolean; text: string } | null {
   let targetIndex = state.cursor;
   const current = currentOp(state);
-  // Once a build is in flight its feeder block has already been picked up.
-  // Use that otherwise-dead motion time to tell the human what must be loaded
-  // for the next B, which is how RUN can be continuous with a manual feeder.
+  // Once a build is in flight, the Uno transaction for that block is over.
+  // Preview the next required colour while the Mega works, but never imply
+  // that another feed is happening: the orchestrator waits for terminal B.
   if (state.inFlight && current?.op === "build") {
     const next = state.program.findIndex((item, index) => index > state.cursor && item.op === "build");
     if (next < 0) return null;

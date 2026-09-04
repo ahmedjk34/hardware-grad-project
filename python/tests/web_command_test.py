@@ -152,6 +152,13 @@ def test_build_placed_rejected_and_aborted_paths_are_server_guarded(tmp_path):
                 done = await wait_for_state(client, lambda state: state["last_result"] == "placed")
                 assert done["build_state"] == "READY"
                 assert done["selected"] is None
+                assert done["hardware_ready"] is True
+                assert done["gantry_connected"] is True
+                assert done["feeder_connected"] is True
+                assert any(line.endswith("OK state=block_ready result=staged")
+                           for line in app.state.mock_feeder.timeline)
+                assert sum(line.startswith("B ")
+                           for line in app.state.mock_board.written) == 1
 
                 assert (await select_cell(client, app)).status_code == 200
                 app.state.mock_board.fail_next_build("REJECTED", "simulated safe refusal")
@@ -159,18 +166,63 @@ def test_build_placed_rejected_and_aborted_paths_are_server_guarded(tmp_path):
                     "confirm": True, "command": "B 3 5 0",
                 })
                 assert rejected.status_code == 200
-                safe = await wait_for_state(client, lambda state: state["last_result"] == "rejected")
-                assert safe["build_state"] == "READY"
-                assert safe["selected"] == [3, 5]
-
-                app.state.mock_board.fail_next_build("ABORTED", "simulated held block")
-                aborted = await client.post("/api/build", json={
-                    "confirm": True, "command": "B 3 5 0",
-                })
-                assert aborted.status_code == 200
                 locked = await wait_for_state(client, lambda state: state["build_state"] == "LOCKED")
                 assert locked["last_result"] == "aborted"
-                assert locked["locked_reason"] == "simulated held block"
+                assert "simulated safe refusal" in locked["locked_reason"]
+                assert "pickup state requires inspection" in locked["locked_reason"]
                 assert (await client.post("/api/level", json={"delta": 1})).status_code == 409
+
+    asyncio.run(scenario())
+
+
+def test_feeder_failure_and_operator_cancel_never_send_mega_build(tmp_path):
+    app = create_app(ConsoleAppOptions(
+        mock=True, settings_path=mock_settings(tmp_path),
+        workspace_map_path=tmp_path / "workspace_map.json", build_seconds=0.1,
+    ))
+
+    async def scenario():
+        async with LifespanManager(app):
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport,
+                                         base_url="http://test") as client:
+                await wait_for_state(client, lambda state: state["camera"] == "LIVE")
+                assert (await select_cell(client, app)).status_code == 200
+                app.state.mock_feeder.fail_next("stage_timeout")
+                assert (await client.post("/api/build", json={
+                    "confirm": True, "command": "B 3 5 0",
+                })).status_code == 200
+                failed = await wait_for_state(
+                    client, lambda state: state["build_state"] == "LOCKED")
+                assert failed["last_result"] == "aborted"
+                assert "stage_timeout" in failed["locked_reason"]
+                assert not any(line.startswith("B ")
+                               for line in app.state.mock_board.written)
+
+        # A new service process is the required recovery from LOCKED.
+        second = create_app(ConsoleAppOptions(
+            mock=True, settings_path=mock_settings(tmp_path),
+            workspace_map_path=tmp_path / "workspace_map_2.json",
+            build_seconds=0.1,
+        ))
+        async with LifespanManager(second):
+            second.state.mock_feeder.feed_seconds = 1.0
+            transport = httpx.ASGITransport(app=second)
+            async with httpx.AsyncClient(transport=transport,
+                                         base_url="http://test") as client:
+                await wait_for_state(client, lambda state: state["camera"] == "LIVE")
+                assert (await select_cell(client, second)).status_code == 200
+                assert (await client.post("/api/build", json={
+                    "confirm": True, "command": "B 3 5 0",
+                })).status_code == 200
+                await wait_for_state(client, lambda state: state["cell_phase"] == "feeding")
+                stopped = await client.post("/api/stop")
+                assert stopped.status_code == 200
+                cancelled = await wait_for_state(
+                    client, lambda state: state["build_state"] == "LOCKED")
+                assert "cancelled" in cancelled["locked_reason"]
+                assert "STOP" in second.state.mock_feeder.writes
+                assert not any(line.startswith("B ")
+                               for line in second.state.mock_board.written)
 
     asyncio.run(scenario())

@@ -97,7 +97,7 @@ export interface ConsoleStore {
 }
 
 /** How a raw line is drawn. The `@n STEP` lines earn their own treatment. */
-export function logKindOf(text: string, stream: "rig" | "error"): LogKind {
+export function logKindOf(text: string, stream: "rig" | "feeder" | "error"): LogKind {
   if (stream === "error") return "error";
   const trimmed = text.trimStart();
   if (/^@\d+\s+STEP\b/.test(trimmed)) return "step";
@@ -178,7 +178,7 @@ export function createConsoleStore(): ConsoleStore {
     // real lines the rig printed; the same id twice is one event delivered
     // twice, which a generous replay does on purpose.
     const durable = event.type === "serial" || event.type === "build_step"
-      || event.type === "build_result";
+      || event.type === "build_result" || event.type === "feeder";
     if (durable && event.event_id <= snapshot.resumeId) return false;
     if (event.type === "state" && event.event_id <= lastStateId) return false;
 
@@ -228,6 +228,10 @@ export function createConsoleStore(): ConsoleStore {
         }].slice(-LOG_CAP),
         lastEventId, resumeId,
       };
+      return true;
+    }
+    if (event.type === "feeder") {
+      snapshot = { ...snapshot, lastEventId, resumeId };
       return true;
     }
     // A heartbeat carries nothing but its id, and that is the point: it proves

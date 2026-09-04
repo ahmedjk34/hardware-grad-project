@@ -17,6 +17,9 @@ export const BASE_STATE: StateModel = {
   build_phase_started_at: null, build_phase_eta_ms: null,
   build_phase_status: "idle",
   build_release_confirmed: false, serial_event_id: 0,
+  gantry_connected: true, feeder_connected: true, hardware_ready: true,
+  cell_phase: "idle", feeder_transaction_id: null, feeder_state: "idle",
+  feeder_error: null,
   views: {}, geometry: null,
 };
 

@@ -39,8 +39,13 @@ export function BuildBanner({ state, connected }: { state: StateModel; connected
         </>
       ) : (
         <>
-          <strong>RIG MOVING</strong>
-          <span className="detail">The rig is moving and cannot be interrupted</span>
+          <strong>{state.cell_phase === "feeding" ? "FEEDING BLOCK"
+            : state.cell_phase === "staging" ? "STAGING BLOCK"
+            : state.cell_phase === "ready_for_pick" ? "BLOCK READY"
+            : "GANTRY PLACING"}</strong>
+          <span className="detail">{state.cell_phase === "feeding" || state.cell_phase === "staging"
+            ? `Uno feeder: ${state.feeder_state ?? state.cell_phase}`
+            : "Mega gantry is moving and cannot be interrupted"}</span>
           <span className="elapsed">{elapsed}s</span>
         </>
       )}

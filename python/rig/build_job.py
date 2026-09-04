@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Run one confirmed build off the UI thread, without blocking the camera.
 
-``BuildController.build`` waits for the Mega to finish moving, which is minutes
-of dead time. A camera UI that calls it directly stops reading frames and its
+``BuildController.build`` waits for Uno staging and Mega motion, which is
+minutes of dead time. A camera UI that calls it directly stops reading frames and its
 window goes grey — the operator loses sight of the rig exactly while it moves.
 
 ``BuildJob`` moves that wait onto a worker thread so the UI keeps grabbing and

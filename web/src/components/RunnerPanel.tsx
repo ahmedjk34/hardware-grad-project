@@ -18,6 +18,7 @@ import {
 } from "../studio/runner";
 import { captureCameraThumbnail, downloadMarkdown } from "../studio/run-report";
 import { executeEffect, type RunnerApi } from "../studio/runner-driver";
+import * as transportApi from "../api";
 import { BuildButton } from "./BuildButton";
 import { Icon } from "./Icon";
 
@@ -202,7 +203,8 @@ export function RunnerPanel({ state, connected, modelId, api, delay, onActiveCha
   const timing = runTiming(run, now, BLOCK_CYCLE_SECONDS, LATCH_HOMING_SECONDS);
   const op = currentOp(run);
   const operation = currentOperationText(run);
-  const canStart = !!modelDocument && !!compiled?.valid && connected && state.build_state === "READY";
+  const canStart = !!modelDocument && !!compiled?.valid && connected
+    && state.hardware_ready && state.build_state === "READY";
 
   // ── toasts for building mode ────────────────────────────────────────────
   // Purely a mirror of state this panel already derives. The console mounts
@@ -217,7 +219,7 @@ export function RunnerPanel({ state, connected, modelId, api, delay, onActiveCha
     onToast({
       key: "runner:feed",
       kind: "info",
-      title: prompt.same ? "FEEDER · SAME COLOUR" : `FEEDER · LOAD ${prompt.colour}`,
+      title: prompt.same ? "NEXT BLOCK · SAME COLOUR" : `NEXT BLOCK · ${prompt.colour}`,
       detail: prompt.text,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -286,7 +288,7 @@ export function RunnerPanel({ state, connected, modelId, api, delay, onActiveCha
         <div className="feeder" aria-live="polite">
           <strong className={prompt.same ? "is-same" : ""}>
             {!prompt.same && <span className="feeder-swatch" data-colour={prompt.colour.toLowerCase()} aria-hidden="true" />}
-            {prompt.same ? "SAME COLOUR" : `FEED: ${prompt.colour}`}
+            {prompt.same ? "NEXT: SAME COLOUR" : `NEXT: ${prompt.colour}`}
           </strong>
           <span>{prompt.text}</span>
         </div>
@@ -332,13 +334,27 @@ export function RunnerPanel({ state, connected, modelId, api, delay, onActiveCha
         <div className="runner-stop">
           <button type="button" className="btn btn-ghost"
                   disabled={run.stopAfterCurrent || run.phase === "stopped-mismatch"}
-                  onClick={() => applyEvent({ type: "stop-after", now: Date.now() })}>
-            {run.stopAfterCurrent ? "STOPPING AFTER THIS BLOCK" : "STOP AFTER THIS BLOCK"}
+                  onClick={() => {
+                    if (state.cell_phase === "feeding" || state.cell_phase === "staging") {
+                      void (api?.stop ?? transportApi.stop)().catch(error =>
+                        dispatchRef.current({
+                          type: "transport-error",
+                          reason: error instanceof Error ? error.message : String(error),
+                          now: Date.now(),
+                        }));
+                    }
+                    applyEvent({ type: "stop-after", now: Date.now() });
+                  }}>
+            {run.stopAfterCurrent ? "STOPPING AFTER THIS BLOCK"
+              : state.cell_phase === "feeding" || state.cell_phase === "staging"
+                ? "CANCEL FEED" : "STOP AFTER THIS BLOCK"}
           </button>
         </div>
       )}
       {!compact && (
-        <p className="reason runner-honest">the block in flight will finish — the rig cannot be interrupted</p>
+        <p className="reason runner-honest">{state.cell_phase === "feeding" || state.cell_phase === "staging"
+          ? "feed cancellation stops the Uno; inspect the pickup area before recovery"
+          : "the block in flight will finish — Mega motion cannot be interrupted"}</p>
       )}
 
       {run.phase === "rejected" && (

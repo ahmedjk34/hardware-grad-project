@@ -20,9 +20,10 @@ console's `/api/events` stream carries).
 ## 1. Status at a glance
 
 **Built and tested.** All ten of the original build steps are implemented;
-`npm test -- --run` is 491/491 green across 38 files (console + Studio
+`npm test -- --run` is 492/492 green across 38 files (console + Studio
 combined, they now share a test run); the relevant backend suites
-(`pytest python/tests -k "web or link or mock_board"`) are 31/31 green.
+(`pytest python/tests -k "web or link or mock_board or feeder or orchestrator"`)
+are 62/62 green.
 
 | Piece | State |
 | --- | --- |
@@ -40,7 +41,7 @@ combined, they now share a test run); the relevant backend suites
 **Grown beyond the original ten steps, undocumented until now:**
 
 - `python/web/events.py` — a durable, replayable `/api/events` history
-  (`serial`, `build_step`, `build_result` event types with server-assigned
+  (`serial`, `feeder`, `build_step`, `build_result` event types with server-assigned
   ids), added to carry the ack-protocol `STEP` channel (see
   [ack-protocol.md](ack-protocol.md)).
 - `python/web/progress.py` — the full build-progress state machine:
@@ -82,9 +83,10 @@ replaced:
    moves.
 2. The panel shows `B <col> <row> <level>` — the exact command.
 3. Operator taps **BUILD**, then a second **CONFIRM** (two deliberate taps).
-4. The server sends the command to the Arduino, which performs a ~40-second
-   pick-and-place. The camera keeps streaming throughout; every control is
-   disabled until the rig reports back.
+4. The server sends one correlated `FEED` to the Uno. Only its exact terminal
+   staged success permits the selected `B` to be sent to the Mega. The camera
+   keeps streaming throughout and every mutation stays disabled until the
+   complete two-board operation settles.
 5. Result: **PLACED** (green, selection clears), **REJECTED** (amber, bad
    input, nothing moved, selection kept), or **ABORTED** / timeout (red, the
    machine's physical state is unknown, session locks — a human inspects the
@@ -123,11 +125,10 @@ chooses every target).
    build, an aborted build locks. The web backend reuses those modules
    unchanged and re-checks everything server-side — **the browser is never
    trusted.**
-5. **There is exactly one owner of the camera and one owner of the serial
-   port.** One process, one `Picamera2` object, one `serial.Serial`. The
-   FastAPI service runs with a single uvicorn worker and holds both as
-   singletons via the app lifespan. No second script, no reload worker, no
-   per-request connection.
+5. **There is exactly one owner of the camera and one owner of each serial
+   port.** One process, one `Picamera2` object, one Mega `serial.Serial`, and
+   one Uno `serial.Serial`. The FastAPI lifespan owns all three. No second
+   script, reload worker, per-request connection, or board-to-board link.
 6. **Calibration is optional for selection.** Without a saved
    `config/workspace_map.json`, the app still lets an operator select cells on
    an *approximate* grid computed from `config/rig.json` geometry — drawn
@@ -166,8 +167,9 @@ chooses every target).
   │   │    ├─ LatestFramePump → camera source    │
   │   │    ├─ AnalysisWorker (block detection)   │
   │   │    └─ PaperGridTracker (printed grid)    │
-  │   ├─ Rig  (real serial, or MockBoard)        │
-  │   ├─ BuildController + BuildJob               │
+  │   ├─ Feeder (Uno serial, or MockFeeder)       │
+  │   ├─ Rig     (Mega serial, or MockBoard)      │
+  │   ├─ CellOrchestrator → BuildController/Job   │
   │   └─ MJPEG encoder (encode-once, fan-out)     │
   │                                               │
   │  GET  /api/state         full snapshot        │
@@ -180,8 +182,8 @@ chooses every target).
   │                            placed-block)      │
   └───────────────┬───────────────┬──────────────┘
                   ▼               ▼
-           CSI camera       USB serial → Arduino Mega → motors
-        (or MockCamera)     (or MockBoard)
+           CSI camera       USB serial → Uno feeder
+        (or MockCamera)     USB serial → Mega gantry
 ```
 
 **Backend modules** (`python/`):
@@ -193,9 +195,12 @@ chooses every target).
 | `camera/gridded_camera_feed.py` → `PaperGridTracker` | async printed-grid detection |
 | `rig/build_controller.py` → `BuildController` | selection, level, mode-cycle, the one safety gate every mutation goes through |
 | `rig/build_job.py` → `BuildJob` | one-build-at-a-time worker thread |
+| `rig/feeder.py` → `Feeder` | protocol-2 Uno client, READY identity validation, correlated terminal results |
+| `rig/orchestrator.py` → `CellOrchestrator` | serializes the pickup resource: staged Uno success first, then Mega `B` |
 | `rig/link.py` → `Rig`, `BuildResult` | the serial protocol client; `str(result)` ∈ `{"placed","rejected","aborted"}` |
 | `rig/workspace.py` → `WorkspaceMap` | pixel ↔ cell math; `.cell_at()`, `.target_polygon()`, `.from_grid()`, `.save()` |
 | `rig/mock_board.py` → `MockBoard` | protocol-level fake Mega, promoted from the old test-only `FakeSerial` |
+| `rig/mock_feeder.py` → `MockFeeder` | protocol-2 fake Uno with failure/reset/disconnect/cancel controls |
 | `vision/mock_camera.py` → `MockCamera` | renders blocks at real grid cells plus a printed-lattice stand-in, so detection is exercisable off the Pi |
 | `rig/console_pipeline.py` → `ConsolePipeline`, `ProcessedFrame` | the headless capture+detect loop; owns exactly one camera, applies orientation then colour correction exactly once, does **not** own a serial `Rig` |
 | `web/app.py` | FastAPI app factory, one-owner lifespan, `GET /api/state`, `WS /api/events` |
@@ -204,7 +209,7 @@ chooses every target).
 | `web/routes_calibration.py` | corner calibration, printed-sheet calibration, and the placed-block calibration sub-flow |
 | `web/mjpeg.py` | one latest-JPEG slot shared across clients, no encoding while nobody is subscribed |
 | `web/geometry.py` | cached grid polygons + current selection/detection geometry for `StateModel` |
-| `web/events.py` | durable, replayable `/api/events` history (`serial`, `build_step`, `build_result`) |
+| `web/events.py` | durable, replayable `/api/events` history (`serial`, `feeder`, `build_step`, `build_result`) |
 | `web/progress.py` | the idle→accepted→validating→running→parking→placed/rejected/aborted→locked state machine |
 
 **Frontend modules** (`web/src/`): `App.tsx`, `store.ts` (client state store),

@@ -14,7 +14,7 @@ export function BuildButton({ state, connected, onBuild }: {
 }) {
   const [confirming, setConfirming] = useState(false);
   const [remaining, setRemaining] = useState(CONFIRM_MS);
-  const allowed = connected && state.selected !== null && state.camera === "LIVE"
+  const allowed = connected && state.hardware_ready && state.selected !== null && state.camera === "LIVE"
     && state.build_state === "READY" && !!state.command;
 
   useEffect(() => {
@@ -56,6 +56,7 @@ export function BuildButton({ state, connected, onBuild }: {
   );
 
   const reason = !connected ? "Disconnected"
+    : !state.hardware_ready ? "Uno feeder and Mega gantry must both be connected"
     : state.build_state !== "READY" ? "Rig is unavailable"
     : !state.selected ? "Select a cell first"
     : state.camera !== "LIVE" ? "Camera is not live"

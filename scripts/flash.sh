@@ -1,18 +1,26 @@
 #!/usr/bin/env bash
 #
-# Compile and upload the rig firmware, reading the port and board from
-# config/rig.json so those numbers live in exactly one place.
+# Compile and upload either controller, reading both roles from config/rig.json.
 #
-#   ./scripts/flash.sh            compile, then upload
-#   ./scripts/flash.sh compile    compile only  (this is the syntax check)
-#   ./scripts/flash.sh upload     upload only
-#   ./scripts/flash.sh boards     list what arduino-cli can see on USB
+#   ./scripts/flash.sh                    gantry: compile, then upload
+#   ./scripts/flash.sh compile            gantry: compile only (back-compatible)
+#   ./scripts/flash.sh feeder compile     feeder: compile only
+#   ./scripts/flash.sh all compile        compile both firmware roles
+#   ./scripts/flash.sh feeder upload      upload feeder to feeder.port
+#   ./scripts/flash.sh boards             list what arduino-cli can see on USB
 #
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIG="$ROOT/config/rig.json"
-ACTION="${1:-both}"
+ROLE="gantry"
+ACTION="both"
+if [ "${1:-}" = "gantry" ] || [ "${1:-}" = "feeder" ] || [ "${1:-}" = "all" ]; then
+  ROLE="$1"
+  ACTION="${2:-both}"
+elif [ -n "${1:-}" ]; then
+  ACTION="$1"
+fi
 
 # Which interpreter: the venv's if it exists (always called `python` inside a
 # venv, on every machine), otherwise whichever of python3/python this box has.
@@ -45,31 +53,58 @@ MSG
   exit 1
 fi
 
-FQBN="$(read_cfg board fqbn)"
-SKETCH="$ROOT/$(read_cfg board sketch)"
-PORT="$(read_cfg serial port)"
-
 if [ "$ACTION" = "boards" ]; then
   arduino-cli board list
   exit 0
 fi
 
-if [ "$ACTION" = "compile" ] || [ "$ACTION" = "both" ]; then
-  echo ">> compiling $SKETCH for $FQBN"
-  arduino-cli compile --fqbn "$FQBN" "$SKETCH"
-  echo ">> compile OK"
+if [ "$ACTION" != "compile" ] && [ "$ACTION" != "upload" ] && [ "$ACTION" != "both" ]; then
+  echo "!! action must be compile, upload, both, or boards" >&2
+  exit 2
 fi
 
-if [ "$ACTION" = "upload" ] || [ "$ACTION" = "both" ]; then
-  if [ ! -e "$PORT" ]; then
-    echo "!! $PORT does not exist." >&2
-    echo "   Plug the board in, then run: ./scripts/flash.sh boards" >&2
-    echo "   A CH340 clone shows up as /dev/ttyUSB0 — put that in config/rig.json." >&2
+flash_role() {  # flash_role <gantry|feeder>
+  local role="$1" fqbn sketch port
+  if [ "$role" = "gantry" ]; then
+    fqbn="$(read_cfg board fqbn)"
+    sketch="$ROOT/$(read_cfg board sketch)"
+    port="$(read_cfg serial port)"
+  else
+    fqbn="$(read_cfg feeder fqbn)"
+    sketch="$ROOT/$(read_cfg feeder sketch)"
+    port="$(read_cfg feeder port)"
+  fi
+
+  if [ "$ACTION" = "compile" ] || [ "$ACTION" = "both" ]; then
+    echo ">> compiling $role: $sketch for $fqbn"
+    arduino-cli compile --fqbn "$fqbn" "$sketch"
+    echo ">> $role compile OK"
+  fi
+
+  if [ "$ACTION" != "upload" ] && [ "$ACTION" != "both" ]; then
+    return
+  fi
+  if [ -z "$port" ]; then
+    echo "!! $role port is not configured in config/rig.json." >&2
+    echo "   Run ./scripts/flash.sh boards, then set the role's stable /dev/serial/by-id path." >&2
     exit 1
   fi
-  echo ">> uploading to $PORT"
+  if [ ! -e "$port" ]; then
+    echo "!! $port does not exist." >&2
+    echo "   Plug the board in, then run: ./scripts/flash.sh boards" >&2
+    echo "   Put its stable /dev/serial/by-id path in config/rig.json." >&2
+    exit 1
+  fi
+  echo ">> uploading $role to $port"
   # An upload fails if anything else holds the port. That is almost always a
   # serial monitor or a still-running rig_console.py; close it and retry.
-  arduino-cli upload -p "$PORT" --fqbn "$FQBN" "$SKETCH"
-  echo ">> upload OK — the rig has rebooted and printed its banner"
+  arduino-cli upload -p "$port" --fqbn "$fqbn" "$sketch"
+  echo ">> $role upload OK — the controller has rebooted and printed its banner"
+}
+
+if [ "$ROLE" = "all" ]; then
+  flash_role gantry
+  flash_role feeder
+else
+  flash_role "$ROLE"
 fi

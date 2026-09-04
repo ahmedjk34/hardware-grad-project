@@ -51,7 +51,7 @@ from typing import Any
 
 
 #: Event types that are durable: delivered once each, kept for replay.
-DURABLE_TYPES = frozenset({"serial", "build_step", "build_result"})
+DURABLE_TYPES = frozenset({"serial", "feeder", "build_step", "build_result"})
 
 #: The coalescing type. Only the newest pending one survives per client.
 STATE_TYPE = "state"

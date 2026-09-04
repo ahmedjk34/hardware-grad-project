@@ -27,6 +27,7 @@ class BuildController:
 
     rig: object
     level: int = 0
+    orchestrator: object | None = None
     selected: tuple[int, int] | None = None
     last_result: BuildResult | None = None
     locked_reason: str | None = None
@@ -123,7 +124,7 @@ class BuildController:
         )
 
     def build(self, timeout: float = 300.0) -> BuildResult:
-        """Send the selected B command once; lock if machine state is unknown."""
+        """Run one selected cell operation; lock if physical state is unknown."""
         if self.locked:
             raise BuildStateError(self.locked_reason)
         if self.selected is None:
@@ -131,7 +132,13 @@ class BuildController:
 
         col, row = self.selected
         try:
-            result = self.rig.build(col, row, self.level, timeout=timeout)
+            if self.orchestrator is None:
+                # Commissioning/tests may still use a staged block and address
+                # the Mega directly. Production injects CellOrchestrator.
+                result = self.rig.build(col, row, self.level, timeout=timeout)
+            else:
+                result = self.orchestrator.place_block(
+                    col, row, self.level, timeout=timeout)
         except RigError as exc:
             self.locked_reason = (
                 f"serial/build state unknown: {exc}; inspect the rig and restart"

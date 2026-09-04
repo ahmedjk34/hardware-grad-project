@@ -16,7 +16,7 @@ Three controllers, one brain:
 | --- | --- | --- |
 | **Raspberry Pi 5** | vision, web server/Studio, orchestration — **the master** | — |
 | **Arduino MEGA 2560** | the gantry: X/Y/Z motion, claw, rotation, placement | serial (built, in daily use) |
-| **Arduino Uno** | the feeder module: container, belt, alignment | serial (firmware prototype; not integrated — see [Status](#status)) |
+| **Arduino Uno** | the feeder module: container, belt, alignment | its own USB serial link to the Pi |
 
 ## The end-to-end flow
 
@@ -57,7 +57,7 @@ of open-loop timing.
 ## Hardware
 
 - **Controllers:** Raspberry Pi 5 (master) + Arduino MEGA 2560 (gantry) +
-  Arduino Uno (feeder, prototype)
+  Arduino Uno (feeder, protocol 2)
 - **Motion:** gantry X / Y / Z, plus a claw servo and an auxiliary rotation
   stepper, driven by the Mega
 - **Feed:** A4988-driven belt, container and alignment servos, and two HC-SR04
@@ -76,8 +76,8 @@ of open-loop timing.
 
 | Directory | What it holds |
 | --- | --- |
-| [arduino/](arduino/) | Firmware. `build_test_v1/` is the gantry sketch that matters; `belt_v1/` and `container_servo_test/` are the feeder-module prototypes |
-| [python/](python/) | Everything on the Raspberry Pi: camera feed, lens/colour correction, block detection and grid calibration, the serial link to the Mega, the FastAPI web server |
+| [arduino/](arduino/) | Firmware. `build_test_v1/` is the Mega gantry sketch; `belt_v1/` is the Uno feeder sketch; the other sketches are commissioning aids |
+| [python/](python/) | Everything on the Raspberry Pi: vision, two independent serial clients, feed→place orchestration, and the FastAPI web server |
 | [web/](web/) | The React PWA: the operator console (click-to-build) and the 3D Build Studio (design, validate, compile, run, digital twin) |
 | [docs/](docs/) | Living reference docs — how the console and Studio actually work, grid/calibration geometry, block vision internals, the server guide, the visual design language |
 | [plans/](plans/) | Historical/archived plans only; anything built has been folded into `docs/` — see [plans/README.md](plans/README.md) |
@@ -91,8 +91,8 @@ of open-loop timing.
 | Web operator console | **built** — all ten build steps (see [docs/CONSOLE.md](docs/CONSOLE.md)) |
 | 3D Build Studio (design/validate/compile/twin/run) | **built** through Milestone 7 (see [docs/STUDIO.md](docs/STUDIO.md)); Milestone 8 ("wow pass") not started |
 | Placement supervision (verify placements, notice human interference) | **designed, not started** — full design at [docs/feature-ideas.md](docs/feature-ideas.md) Appendix A |
-| Feeder module — container + belt + dual ultrasonic staging (Uno) | **firmware prototype complete.** `belt_v1.ino` implements two-stage container release, exit confirmation, sensor-stopped belt staging, alignment, timeouts, and structured serial results. It is not yet wired to the Pi or Mega; no orchestration doc yet |
-| Feeder ↔ Pi ↔ Mega orchestration | **not started** — the Pi does not yet talk to a second serial device, and the Studio's runner assumes a block is already staged at `[0,0]` |
+| Feeder module — container + belt + dual ultrasonic staging (Uno) | **protocol-2 firmware and Pi client built; physical commissioning still required.** The Uno reports correlated progress and exactly one terminal result per feed |
+| Pi-owned feeder → gantry orchestration | **built and mock-tested** — two USB serial links; only matching `OK state=block_ready result=staged` authorizes Mega `B`; failures lock out unsafe continuation |
 | Autonomous block-to-target planning | **not implemented**, and out of scope — the human designs the structure |
 
 ## Getting started
@@ -102,6 +102,7 @@ of open-loop timing.
 - Per-tool walkthrough → **[python/GUIDE.md](python/GUIDE.md)**
 - Firmware → **[arduino/README.md](arduino/README.md)**, open the relevant sketch in `arduino/` with the Arduino IDE
 - Uno feeder hardware, state machine and serial protocol → **[docs/feeder-controller.md](docs/feeder-controller.md)**
+- Uno commissioning CLI → `python/feeder_console.py`; dual-role flashing → `scripts/flash.sh feeder …`
 - Web operator console — how to run it → **[docs/server-guide.md](docs/server-guide.md)**, how it's built → **[docs/CONSOLE.md](docs/CONSOLE.md)**
 - 3D Build Studio, current state → **[docs/STUDIO.md](docs/STUDIO.md)**
 - What's designed but not yet built → **[docs/feature-ideas.md](docs/feature-ideas.md)**

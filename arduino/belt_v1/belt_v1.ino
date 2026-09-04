@@ -14,8 +14,8 @@
     STATUS                print a snapshot
     OPEN, CLOSE, ON, OFF, F, B, S <steps/s>, US, HELP
 
-  A cycle emits machine-readable lines.  `@<id> OK state=block_ready` is the
-  only successful terminal result; `@<id> ERROR reason=...` is terminal.
+  A cycle emits machine-readable lines. The exact terminal success is
+  `@<id> OK state=block_ready result=staged`; `@<id> ERROR ...` is terminal.
   Human-readable status lines are deliberately separate from the protocol.
 */
 
@@ -76,6 +76,7 @@ float stageDistanceCm = -1.0;
 
 char commandBuffer[48];
 uint8_t commandLength = 0;
+bool discardingCommand = false;
 
 bool elapsed(unsigned long since, unsigned long duration) {
   return millis() - since >= duration;
@@ -95,9 +96,39 @@ bool detected(float distanceCm) {
   return distanceCm >= 0.0f && distanceCm < DETECT_DISTANCE_CM;
 }
 
-void protocolPrefix() {
+const __FlashStringHelper *stateName();
+
+void protocolPrefixFor(unsigned long id) {
   Serial.print('@');
-  Serial.print(commandId);
+  Serial.print(id);
+}
+
+void protocolPrefix() {
+  protocolPrefixFor(commandId);
+}
+
+void stateChanged() {
+  protocolPrefix();
+  Serial.print(F(" STATE state="));
+  Serial.println(stateName());
+}
+
+void sensorReportFor(unsigned long id, const __FlashStringHelper *sensor,
+                     float distanceCm) {
+  protocolPrefixFor(id);
+  Serial.print(F(" SENSOR sensor="));
+  Serial.print(sensor);
+  Serial.print(F(" distance_cm="));
+  if (distanceCm < 0.0f) Serial.print(F("no_echo"));
+  else Serial.print(distanceCm, 1);
+  Serial.print(F(" detected="));
+  Serial.println(detected(distanceCm) ? 1 : 0);
+}
+
+void acknowledgeManual(const __FlashStringHelper *command) {
+  protocolPrefixFor(0);
+  Serial.print(F(" ACK cmd="));
+  Serial.println(command);
 }
 
 void event(const __FlashStringHelper *phase) {
@@ -116,18 +147,29 @@ void eventDistance(const __FlashStringHelper *phase, float distanceCm) {
 
 void success() {
   protocolPrefix();
-  Serial.println(F(" OK state=block_ready"));
+  Serial.println(F(" OK state=block_ready result=staged"));
 }
 
 void failure(const __FlashStringHelper *reason) {
   protocolPrefix();
-  Serial.print(F(" ERROR reason="));
+  Serial.print(F(" ERROR state="));
+  Serial.print(stateName());
+  Serial.print(F(" reason="));
+  Serial.println(reason);
+}
+
+void failureFor(unsigned long id, const __FlashStringHelper *reason) {
+  protocolPrefixFor(id);
+  Serial.print(F(" ERROR state="));
+  Serial.print(stateName());
+  Serial.print(F(" reason="));
   Serial.println(reason);
 }
 
 void setState(FeedState next) {
   feedState = next;
   stateStartedAtMs = millis();
+  stateChanged();
 }
 
 void stopBelt() {
@@ -171,7 +213,12 @@ void cancelCycle(bool announce) {
 }
 
 void startFeed(unsigned long id) {
-  cancelCycle(false);
+  // The pickup stage is a single-owner resource. Never cancel and replace an
+  // in-flight transaction: its first block may already have left the hopper.
+  if (cycleActive) {
+    failureFor(id, F("busy"));
+    return;
+  }
   commandId = id;
   protocolPrefix();
   Serial.println(F(" RECV cmd=FEED"));
@@ -179,11 +226,14 @@ void startFeed(unsigned long id) {
   closeContainer();
   restAligner();
   stageDistanceCm = readDistanceCm(STAGE_TRIG_PIN, STAGE_ECHO_PIN);
+  sensorReportFor(commandId, F("stage"), stageDistanceCm);
   if (detected(stageDistanceCm)) {
     setState(FAULT);
     failure(F("stage_occupied"));
     return;
   }
+  protocolPrefix();
+  Serial.println(F(" ACK cmd=FEED accepted=1"));
   cycleActive = true;
   closeContainer();
   restAligner();
@@ -273,6 +323,7 @@ void updateSensors() {
       closeContainer();
       startBelt(BELT_CCW_DIRECTION_LEVEL);
       setState(MOVING_TO_STAGE);
+      sensorReportFor(commandId, F("exit"), exitDistanceCm);
       eventDistance(F("exit_detected_container_closed_belt_running"), exitDistanceCm);
     }
   } else if (feedState == MOVING_TO_STAGE) {
@@ -281,6 +332,7 @@ void updateSensors() {
       stopBelt();
       alignmentServo.write(ALIGN_NUDGE_ANGLE);
       setState(ALIGNING);
+      sensorReportFor(commandId, F("stage"), stageDistanceCm);
       eventDistance(F("stage_detected_aligning"), stageDistanceCm);
     }
   }
@@ -289,17 +341,6 @@ void updateSensors() {
 void setMotorSpeed(long speed) {
   motorSpeed = constrain(speed, 10L, 3000L);
   stepIntervalUs = 1000000UL / motorSpeed;
-  Serial.print(F("Speed: "));
-  Serial.print(motorSpeed);
-  Serial.println(F(" steps_per_second"));
-}
-
-void printDistance(const __FlashStringHelper *name, float value) {
-  Serial.print(name);
-  Serial.print('=');
-  if (value < 0.0f) Serial.print(F("no_echo"));
-  else Serial.print(value, 1);
-  Serial.println(F("cm"));
 }
 
 const __FlashStringHelper *stateName() {
@@ -315,22 +356,37 @@ const __FlashStringHelper *stateName() {
 void printStatus() {
   exitDistanceCm = readDistanceCm(EXIT_TRIG_PIN, EXIT_ECHO_PIN);
   stageDistanceCm = readDistanceCm(STAGE_TRIG_PIN, STAGE_ECHO_PIN);
-  Serial.print(F("STATE state=")); Serial.print(stateName());
+  protocolPrefixFor(0);
+  Serial.print(F(" STATUS state=")); Serial.print(stateName());
+  Serial.print(F(" active=")); Serial.print(cycleActive ? 1 : 0);
   Serial.print(F(" belt=")); Serial.print(beltRunning ? F("running") : F("stopped"));
-  Serial.print(F(" container=")); Serial.println(containerOpen ? F("open") : F("closed"));
-  printDistance(F("EXIT_DISTANCE"), exitDistanceCm);
-  printDistance(F("STAGE_DISTANCE"), stageDistanceCm);
+  Serial.print(F(" container=")); Serial.print(containerOpen ? F("open") : F("closed"));
+  Serial.print(F(" speed_steps_s=")); Serial.println(motorSpeed);
+  sensorReportFor(0, F("exit"), exitDistanceCm);
+  sensorReportFor(0, F("stage"), stageDistanceCm);
 }
 
 void printHelp() {
   Serial.println(F("FEED [id] | RUN [id] : stage exactly one block"));
   Serial.println(F("STOP | STATUS | OPEN | CLOSE | ON | OFF | F | B | S <steps/s> | US | HELP"));
-  Serial.println(F("Terminal protocol: @id OK state=block_ready | @id ERROR reason=..."));
+  Serial.println(F("Protocol: RECV, ACK, STATE, SENSOR, EVENT, then one OK or ERROR."));
 }
 
-unsigned long requestIdFrom(const char *argument) {
+bool requestIdFrom(const char *argument, unsigned long *result) {
   while (*argument == ' ') ++argument;
-  return *argument ? strtoul(argument, NULL, 10) : ++commandId;
+  if (!*argument) {
+    unsigned long next = commandId + 1;
+    *result = next == 0 ? 1 : next;
+    return true;
+  }
+  char *end = NULL;
+  unsigned long requested = strtoul(argument, &end, 10);
+  while (end && *end == ' ') ++end;
+  // @0 is reserved for boot/status/manual messages. Requiring the entire
+  // argument to be decimal also rejects ambiguous tails such as `12x`.
+  if (!end || *end || requested == 0 || *argument == '-') return false;
+  *result = requested;
+  return true;
 }
 
 void handleCommand(char *line) {
@@ -339,29 +395,39 @@ void handleCommand(char *line) {
   if (argument) { *argument++ = '\0'; }
 
   if (!strcmp(line, "FEED") || !strcmp(line, "RUN")) {
-    startFeed(requestIdFrom(argument ? argument : ""));
+    unsigned long requestId = 0;
+    if (!requestIdFrom(argument ? argument : "", &requestId)) {
+      Serial.println(F("@0 ERROR reason=invalid_request_id"));
+    } else {
+      startFeed(requestId);
+    }
   } else if (!strcmp(line, "STOP") || !strcmp(line, "OFF") || !strcmp(line, "X")) {
-    cancelCycle(true); stopBelt(); Serial.println(F("BELT STOPPED"));
+    cancelCycle(true); stopBelt(); acknowledgeManual(F("STOP"));
   } else if (!strcmp(line, "STATUS") || !strcmp(line, "P")) {
     printStatus();
   } else if (!strcmp(line, "OPEN") || !strcmp(line, "O")) {
-    cancelCycle(true); stopBelt(); openContainerStage1(); delay(CONTAINER_STAGE_DELAY_MS); openContainerStage2(); Serial.println(F("CONTAINER OPEN"));
+    cancelCycle(true); stopBelt(); openContainerStage1(); delay(CONTAINER_STAGE_DELAY_MS); openContainerStage2(); acknowledgeManual(F("OPEN"));
   } else if (!strcmp(line, "CLOSE") || !strcmp(line, "C")) {
-    cancelCycle(true); stopBelt(); closeContainer(); Serial.println(F("CONTAINER CLOSED"));
+    cancelCycle(true); stopBelt(); closeContainer(); acknowledgeManual(F("CLOSE"));
   } else if (!strcmp(line, "ON")) {
-    cancelCycle(true); startBelt(BELT_CCW_DIRECTION_LEVEL); Serial.println(F("BELT RUNNING"));
+    cancelCycle(true); startBelt(BELT_CCW_DIRECTION_LEVEL); acknowledgeManual(F("ON"));
   } else if (!strcmp(line, "F")) {
-    cancelCycle(true); startBelt(HIGH); Serial.println(F("BELT RUNNING FORWARD"));
+    cancelCycle(true); startBelt(HIGH); acknowledgeManual(F("F"));
   } else if (!strcmp(line, "B") || !strcmp(line, "R") || !strcmp(line, "REVERSE")) {
-    cancelCycle(true); startBelt(BELT_CCW_DIRECTION_LEVEL); Serial.println(F("BELT RUNNING BACKWARD"));
+    cancelCycle(true); startBelt(BELT_CCW_DIRECTION_LEVEL); acknowledgeManual(F("B"));
   } else if (!strcmp(line, "S") && argument) {
     setMotorSpeed(strtol(argument, NULL, 10));
+    protocolPrefixFor(0);
+    Serial.print(F(" CONFIG speed_steps_s="));
+    Serial.println(motorSpeed);
+    acknowledgeManual(F("S"));
   } else if (!strcmp(line, "US")) {
     printStatus();
   } else if (!strcmp(line, "H") || !strcmp(line, "HELP") || !strcmp(line, "?")) {
     printHelp();
   } else {
-    Serial.print(F("ERROR unknown_command=")); Serial.println(line);
+    protocolPrefixFor(0);
+    Serial.print(F(" ERROR reason=unknown_command command=")); Serial.println(line);
   }
 }
 
@@ -370,14 +436,22 @@ void readSerialCommands() {
     char c = Serial.read();
     if (c == '\r') continue;
     if (c == '\n') {
+      if (discardingCommand) {
+        discardingCommand = false;
+        commandLength = 0;
+        continue;
+      }
       commandBuffer[commandLength] = '\0';
       if (commandLength) handleCommand(commandBuffer);
       commandLength = 0;
+    } else if (discardingCommand) {
+      continue;
     } else if (commandLength < sizeof(commandBuffer) - 1) {
       commandBuffer[commandLength++] = c;
     } else {
       commandLength = 0;
-      Serial.println(F("ERROR command_too_long"));
+      discardingCommand = true;
+      Serial.println(F("@0 ERROR reason=command_too_long"));
     }
   }
 }
@@ -390,7 +464,7 @@ void setup() {
   containerServo.attach(CONTAINER_SERVO_PIN); alignmentServo.attach(ALIGN_SERVO_PIN);
   closeContainer(); restAligner();
   Serial.begin(9600);
-  Serial.println(F("@0 READY firmware=belt_v1 protocol=1 board=uno"));
+  Serial.println(F("@0 READY firmware=belt_v1 protocol=2 board=uno"));
   printHelp();
 }
 

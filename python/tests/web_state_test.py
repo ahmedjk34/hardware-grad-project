@@ -115,7 +115,7 @@ def test_events_send_initial_update_and_heartbeat(tmp_path):
             assert replay["type"] == "replay"
             # A first connection has no history to be missing, so no gap.
             assert replay["gap"] is False
-            assert all(event["type"] in {"serial", "build_step", "build_result"}
+            assert all(event["type"] in {"serial", "feeder", "build_step", "build_result"}
                        for event in replay["events"])
 
             app.state.controller.select((3, 5))

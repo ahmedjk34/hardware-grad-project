@@ -11,7 +11,8 @@ setup and layout.
 
 ```
 python/
-├── rig_console.py              type commands at the Arduino over USB
+├── rig_console.py              commission the Mega directly over USB
+├── feeder_console.py           commission the Uno feeder directly over USB
 ├── grid/                       tools that draw a measurement grid
 │   ├── undistorted_grid_viewer.py  correction + grid  ← the main tool
 │   ├── grid_viewer.py              grid overlay labelled in pixels
@@ -32,7 +33,10 @@ python/
 │   ├── grid.py                 the machine's cells, and which way round they sit
 │   ├── build_controller.py     selection/confirmation outcome safety state
 │   ├── build_job.py            runs one build off the UI thread, one at a time
-│   ├── link.py                 the serial link: send a command, wait for the answer
+│   ├── link.py                 independent Mega serial client
+│   ├── feeder.py               independent protocol-2 Uno serial client
+│   ├── orchestrator.py         strict Uno terminal success → Mega B handoff
+│   ├── mock_feeder.py          deterministic pyserial-shaped feeder fake
 │   └── build_log.py            append-only logs/{build,serial}.log for a web run
 ├── tests/
 │   ├── test_block_detector.py  block detection against the committed captures
@@ -42,7 +46,9 @@ python/
 │   ├── test_color_correction.py the colour transform and Studio's COLOUR section
 │   ├── test_color_grid.py      the printed sheet, on synthetic and real captures
 │   ├── test_grid.py            the cell numbering, against the firmware's own map
-│   └── test_link.py            link.py against a fake board — no rig needed
+│   ├── test_link.py            link.py against a fake board — no rig needed
+│   ├── feeder_test.py          Uno protocol parsing, identity, correlation, reset
+│   └── orchestrator_test.py    the FEED-terminal-OK-then-Mega-B pickup invariant
 └── vision/                     importable library — no windows, no argv, no prints
     ├── camera_source.py        Picamera2 on the Pi, V4L2 elsewhere
     ├── block_detector.py       colour + contour block detection and geometry
@@ -66,6 +72,12 @@ L, U, side-by-side and end-to-end arrangements, instead of being treated as one
 colour blob.
 Future robot-coordinate code should consume these detections rather than
 opening the camera independently.
+
+The production FastAPI/Studio path owns both serial ports for its full
+lifespan. A normal build goes through `CellOrchestrator`: it stages exactly one
+block with a correlated Uno request, then and only then calls the existing Mega
+build. `rig_console.py`, `feeder_console.py`, and direct-Mega calibration tools are
+commissioning surfaces; do not run them alongside the server.
 
 `camera/gridded_camera_feed.py` reuses that feed and adds the machine grid from
 the repository-level `config/rig.json`. Positive block rectangles are

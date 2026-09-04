@@ -38,6 +38,14 @@ class StateModel(BaseModel):
     camera_age_ms: int | None
     last_result: Literal["placed", "rejected", "aborted"] | None
     last_result_reason: str | None
+    gantry_connected: bool
+    feeder_connected: bool
+    hardware_ready: bool
+    cell_phase: Literal["idle", "feeding", "staging", "ready_for_pick",
+                        "placing", "complete", "error"]
+    feeder_transaction_id: int | None
+    feeder_state: str | None
+    feeder_error: str | None
     build_command_seq: int | None
     build_step: int | None
     build_total_steps: int | None
@@ -103,6 +111,13 @@ def build_state(app) -> StateModel:
         camera_age_ms=camera_age_ms,
         last_result=str(result) if result is not None else None,
         last_result_reason=result.reason if result is not None else None,
+        gantry_connected=rig.connected,
+        feeder_connected=app.state.feeder.connected,
+        hardware_ready=rig.connected and app.state.feeder.connected,
+        cell_phase=app.state.cell_phase,
+        feeder_transaction_id=app.state.feeder_transaction_id,
+        feeder_state=app.state.feeder_state,
+        feeder_error=app.state.feeder_error,
         **progress.as_state_fields(),
         views=dict(app.state.views),
         geometry=build_geometry(frame, controller.selected) if frame is not None else None,

@@ -296,7 +296,7 @@ def test_a_new_command_clears_the_previous_phase():
 # runner both have to get right, and it is not the same as a parking failure.
 @pytest.mark.parametrize("failure,expected_result,expect_locked", [
     (None, "placed", False),
-    (("REJECTED", "no block at the feeder", 0), "rejected", False),
+    (("REJECTED", "no block at the feeder", 0), "aborted", True),
     (("ABORTED", "could not reach the target cell", 8), "aborted", True),
 ])
 def test_a_build_streams_its_phases_then_exactly_one_result(
@@ -332,8 +332,16 @@ def test_a_build_streams_its_phases_then_exactly_one_result(
     steps = [event for event in delivered if event.type == "build_step"]
     results = [event for event in delivered if event.type == "build_result"]
     serial = [event for event in delivered if event.type == "serial"]
+    feeder = [event for event in delivered if event.type == "feeder"]
+    staged = [event for event in feeder
+              if event.payload["message_type"] == "OK"
+              and event.payload["fields"].get("state") == "block_ready"
+              and event.payload["fields"].get("result") == "staged"]
 
     assert len(results) == 1, "one command settles exactly once"
+    assert len(staged) == 1, "one matching Uno terminal stages one block"
+    assert staged[0].event_id < results[0].event_id
+    assert all(staged[0].event_id < event.event_id for event in steps)
     assert results[0].payload["result"] == expected_result
     assert results[0].payload["locked"] is expect_locked
 
@@ -345,11 +353,12 @@ def test_a_build_streams_its_phases_then_exactly_one_result(
     # The raw line is still there for the log, beside the structured event.
     assert any("STEP" in event.payload["line"] for event in serial) or not steps
 
-    if expected_result == "rejected":
-        assert steps == [], "a rejection refuses before anything moves"
-        assert final["build_phase_status"] == "rejected"
-        assert final["build_state"] == "READY", "SAFE does not lock the session"
-        assert final["locked_reason"] is None
+    if failure is not None and failure[0] == "REJECTED":
+        assert steps == [], "the Mega rejection refuses before gantry motion"
+        assert final["build_phase_status"] in {"aborted", "locked"}
+        assert final["build_state"] == "LOCKED", (
+            "the Uno already staged a block, so SAFE on the Mega cannot feed again")
+        assert "pickup state requires inspection" in final["locked_reason"]
     else:
         assert [event.payload["step"] for event in steps] == sorted(
             event.payload["step"] for event in steps)
@@ -377,7 +386,10 @@ def test_a_build_streams_its_phases_then_exactly_one_result(
         assert final["build_phase_status"] == "locked"
         assert final["build_release_confirmed"] is False, (
             "it died carrying the block; nothing released it")
-        assert final["build_step"] == 8, "the last phase seen is the last known"
+        if failure is not None and failure[0] == "REJECTED":
+            assert final["build_step"] is None
+        else:
+            assert final["build_step"] == 8, "the last phase seen is the last known"
 
 
 def test_nothing_says_placed_before_the_terminal_acknowledgement(tmp_path):
@@ -508,7 +520,7 @@ def test_a_fresh_socket_is_told_the_state_then_the_replay(tmp_path):
     assert opening.to_json()["at"] > 0
     # Minted, not published: nobody else was handed this client's own frame.
     assert opening.event_id <= last_id
-    assert all(event.type in {"serial", "build_step", "build_result"}
+    assert all(event.type in {"serial", "feeder", "build_step", "build_result"}
                for event in replay)
 
 

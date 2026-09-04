@@ -39,6 +39,13 @@ export interface StateModel {
   camera_age_ms: number | null;
   last_result: "placed" | "rejected" | "aborted" | null;
   last_result_reason: string | null;
+  gantry_connected: boolean;
+  feeder_connected: boolean;
+  hardware_ready: boolean;
+  cell_phase: "idle" | "feeding" | "staging" | "ready_for_pick" | "placing" | "complete" | "error";
+  feeder_transaction_id: number | null;
+  feeder_state: string | null;
+  feeder_error: string | null;
   build_command_seq: number | null;
   build_step: number | null;
   build_total_steps: number | null;
@@ -74,7 +81,8 @@ interface EventEnvelope { event_id: number; at: number }
 export type ServerEvent =
   | (EventEnvelope & { type: "state"; state: StateModel })
   | (EventEnvelope & { type: "build_step" } & BuildStepEvent)
-  | (EventEnvelope & { type: "serial"; line: string; stream: "rig" | "error" })
+  | (EventEnvelope & { type: "serial"; line: string; stream: "rig" | "feeder" | "error" })
+  | (EventEnvelope & { type: "feeder"; request_id: number; message_type: string; fields: Record<string, string> })
   | (EventEnvelope & { type: "build_result" } & BuildResultEvent)
   | (EventEnvelope & { type: "heartbeat" })
   /** Not a fact type: the envelope a reconnect's missed events arrive in. */

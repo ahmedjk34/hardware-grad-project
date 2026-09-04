@@ -45,6 +45,37 @@ README or a script — that is how the duplicate comes back.
 A genuine Mega enumerates as `/dev/ttyACM0`; a CH340 clone as `/dev/ttyUSB0`.
 Switching boards is then a one-line edit to `rig.json`.
 
+### 2a. Uno feeder link — independent port, strict handoff
+
+The Pi owns a second, independent USB serial link for the Uno. There is no
+Uno↔Mega wire protocol and neither board may command the other.
+
+| Where | What |
+| --- | --- |
+| `config/rig.json` → `feeder.port` | what `rig/feeder.py` opens and `scripts/flash.sh feeder upload` uses |
+| `config/rig.json` → `feeder.baud` | must match `Serial.begin(9600)` in `belt_v1.ino` and `arduino/README.md` |
+| `config/rig.json` → `feeder.fqbn` / `.sketch` | what the feeder flash role compiles |
+| `config/rig.json` → `feeder.firmware` / `.protocol` | exact identity required from the Uno's `@0 READY` banner |
+
+Do not guess or commit a machine-specific Uno device name. Until its real
+`/dev/serial/by-id/...` path is known, `feeder.port` stays an explicit empty
+placeholder and production startup fails with setup instructions. Never use
+`/dev/ttyACM*` ordering to distinguish the boards.
+
+Every production placement is one indivisible Pi-owned operation:
+
+```text
+Uno: FEED <id> → matching @id OK state=block_ready result=staged
+Mega: B <col> <row> <level> → terminal placement result
+```
+
+No Uno terminal success means no Mega `B`. No Mega terminal success means no
+next `FEED`: even a pre-motion Mega rejection leaves the already-staged pickup
+state requiring inspection. `BuildController` + `BuildJob` remain the outer
+single-operation guard; `CellOrchestrator` owns this two-board handoff. Direct
+Mega build calls are reserved for explicit calibration/commissioning paths
+where a person has staged the block.
+
 ### 3. Grid dimensions — the one the firmware forgets
 
 | Where | What |

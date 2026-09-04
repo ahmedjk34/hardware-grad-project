@@ -114,12 +114,12 @@ describe("ToastStack", () => {
 // ── the runner speaks through onToast, unchanged otherwise ──────────────────
 
 describe("RunnerPanel onToast", () => {
-  it("emits a feeder toast for the loaded model and a completion toast on a dry run", async () => {
+  it("emits a next-block toast for the loaded model and a completion toast on a dry run", async () => {
     const onToast = vi.fn();
     render(<RunnerPanel state={readyState()} connected modelId="example-tower"
                         api={mockedApi()} delay={async () => {}} onToast={onToast} />);
     await waitFor(() => expect(onToast).toHaveBeenCalledWith(
-      expect.objectContaining({ key: "runner:feed", title: "FEEDER · LOAD BLUE" })));
+      expect.objectContaining({ key: "runner:feed", title: "NEXT BLOCK · BLUE" })));
 
     fireEvent.click(screen.getByRole("button", { name: "DRY RUN" }));
     fireEvent.click(screen.getByRole("button", { name: "START DRY RUN" }));
@@ -131,7 +131,7 @@ describe("RunnerPanel onToast", () => {
     // Same assertion the console relies on: the honest-stop line is present and
     // no cancel/retry affordance exists.
     render(<RunnerPanel state={readyState()} connected modelId="example-tower" api={mockedApi()} />);
-    expect(screen.getByText(/the rig cannot be interrupted/)).toBeInTheDocument();
+    expect(screen.getByText(/Mega motion cannot be interrupted/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /retry/i })).not.toBeInTheDocument();
   });
 });

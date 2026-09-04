@@ -599,7 +599,7 @@ class Rig:
                 continue
 
             text = raw.decode("utf-8", errors="replace").rstrip()
-            build_log.serial.line_in(text)
+            build_log.serial.line_in(f"[MEGA/GANTRY] {text}")
             if self._on_line is not None:
                 self._on_line(text)
 
@@ -667,7 +667,7 @@ class Rig:
         if not self.connected:
             raise RigNotConnected("not connected — call connect() first")
         self._port.write((line.strip() + "\n").encode())
-        build_log.serial.line_out(line.strip())
+        build_log.serial.line_out(f"[MEGA/GANTRY] {line.strip()}")
 
     # -- waiting ---------------------------------------------------
 
@@ -693,6 +693,13 @@ class Rig:
             if kind == _DEAD:
                 raise RigError(payload)
             if kind == _ACK and payload.kind == "READY":
+                board = payload.fields.get("board")
+                if board is not None and board != "mega":
+                    self.close()
+                    raise RigError(
+                        f"configured gantry port announced board={board!r}, "
+                        "not the Mega; check serial.port and feeder.port"
+                    )
                 return
             last_line_at = at
 

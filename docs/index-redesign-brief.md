@@ -36,10 +36,10 @@ panel", not "a starter template".
 ## What the app is
 
 A gantry rig places blocks on a surface. An overhead camera watches. The
-operator taps a cell in the live camera image, confirms, and the Arduino runs an
-uninterruptible ~40 second pick-and-place. A FastAPI service on a Raspberry Pi
-owns the one camera and the one serial port and enforces every safety rule; the
-browser is untrusted and only mirrors server state.
+operator taps a cell in the live camera image, confirms, and the Pi first asks
+the Uno to stage one block, then asks the Mega to run its uninterruptible
+pick-and-place. A FastAPI service owns one camera and one serial link per board
+and enforces every safety rule; the browser is untrusted and mirrors server state.
 
 ## Hard constraints
 
