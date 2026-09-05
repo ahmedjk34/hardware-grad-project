@@ -272,21 +272,26 @@ export default function Studio() {
    * its delete controls already lives.
    */
   const performSave = useCallback(async (name?: string): Promise<void> => {
-    const base = await captureCurrent();
-    const document: StudioModel = savedId === null
-      ? { ...base, id: newModelId(), name: (name ?? base.name).trim() || "Untitled" }
-      : { ...base, id: savedId };
-    const written = writeModel(document, { settings });
-    if (!written.ok) {
-      setToast({ kind: "warn", text: written.reason });
-      setLibraryOpen(true);
-      return;
+    try {
+      const base = await captureCurrent();
+      const document: StudioModel = savedId === null
+        ? { ...base, id: newModelId(), name: (name ?? base.name).trim() || "Untitled" }
+        : { ...base, id: savedId };
+      const written = writeModel(document, { settings });
+      if (!written.ok) {
+        setToast({ kind: "warn", text: written.reason });
+        setLibraryOpen(true);
+        return;
+      }
+      setModelDocument(document);
+      setSavedId(document.id);
+      setSavedSignature(signatureOf(document.blocks, document.order, document.name));
+      setSavedTick(tick => tick + 1);
+      setToast({ kind: "ok", text: `Saved “${document.name}”` });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "save failed unexpectedly";
+      setToast({ kind: "warn", text: reason });
     }
-    setModelDocument(document);
-    setSavedId(document.id);
-    setSavedSignature(signatureOf(document.blocks, document.order, document.name));
-    setSavedTick(tick => tick + 1);
-    setToast({ kind: "ok", text: `Saved “${document.name}”` });
   }, [captureCurrent, savedId, settings]);
 
   /** The one entry point for SAVE and Ctrl/Cmd-S: name a build the first time,
