@@ -1,4 +1,4 @@
-# X-rail skew compensation (Y axis, build motion only)
+# Dynamic X/Y skew compensation (per mode, build motion only)
 
 ## Symptom
 
@@ -12,10 +12,10 @@ Measured on the rig:
 | Column index | Y error introduced |
 | ------------ | ------------------ |
 | 0            | 0.00 cm (no X travel) |
-| 1            | 0.10 cm |
-| 2            | 0.20 cm |
-| 3            | 0.30 cm |
-| k            | 0.10 × k cm |
+| 1            | 0.115 cm |
+| 2            | 0.230 cm |
+| 3            | 0.345 cm |
+| k            | 0.115 × k cm |
 
 Linear in the column index, with **no row dependence**.
 
@@ -44,31 +44,46 @@ In [`arduino/build_test_v1/build_test_v1.ino`](../arduino/build_test_v1/build_te
 just above `gotoBuildTarget()`:
 
 ```c
-float SKEW_Y_PER_COL_CM    = 0.1f;  // measured: ~0.1 cm Y pull per column of X travel
-float SKEW_Y_PER_ROW_CM    = 0.0f;  // no row dependence measured (pure-Y is clean)
-float SKEW_Y_PER_COLROW_CM = 0.0f;  // cross term, if the pull ever grows with row
+//                                      { vertical, horizontal }
+float SKEW_X_PER_COL_CM[GRID_MODE_COUNT]    = {0.0f, 0.0f};
+float SKEW_X_PER_ROW_CM[GRID_MODE_COUNT]    = {0.0f, 0.0f};
+float SKEW_X_PER_COLROW_CM[GRID_MODE_COUNT] = {0.0f, 0.0f};
+float SKEW_Y_PER_COL_CM[GRID_MODE_COUNT]    = {0.115f, 0.115f};
+float SKEW_Y_PER_ROW_CM[GRID_MODE_COUNT]    = {0.0f, 0.0f};
+float SKEW_Y_PER_COLROW_CM[GRID_MODE_COUNT] = {0.0f, 0.0f};
 
-long buildYSkewSteps(long col, long row)
+long buildSkewSteps(uint8_t axis, long col, long row)
 {
-  float cm = SKEW_Y_PER_COL_CM    * (float)col
-           + SKEW_Y_PER_ROW_CM    * (float)row
-           + SKEW_Y_PER_COLROW_CM * (float)col * (float)row;
-  return lround(cm * xyStepsPerCmOf(AXIS_Y));
+  float perCol = (axis == AXIS_X) ? SKEW_X_PER_COL_CM[gridMode]
+                                  : SKEW_Y_PER_COL_CM[gridMode];
+  float perRow = (axis == AXIS_X) ? SKEW_X_PER_ROW_CM[gridMode]
+                                  : SKEW_Y_PER_ROW_CM[gridMode];
+  float perColRow = (axis == AXIS_X) ? SKEW_X_PER_COLROW_CM[gridMode]
+                                     : SKEW_Y_PER_COLROW_CM[gridMode];
+  float cm = perCol * (float)col + perRow * (float)row
+           + perColRow * (float)col * (float)row;
+  return lround(cm * xyStepsPerCmOf(axis));
 }
 ```
 
-`buildYSkewSteps(col, row)` is **added** to the Y build target inside
-`gotoBuildTarget()`, after `cellTargetPosition()` and before the move. The result
-is clamped to the Y travel so a bad coefficient can never drive the carriage past
-a soft limit (`moveAxisTo()` still enforces the limit as well).
+`buildSkewSteps(axis, col, row)` is independently **added** to each X and Y
+build target inside `gotoBuildTarget()`, after `cellTargetPosition()` and before
+the move. Each result is clamped to that axis's travel so a bad coefficient
+cannot drive the carriage past a soft limit (`moveAxisTo()` still enforces the
+limit as well).
 
 **Sign** — "forward" = **+Y** = further from the Y home switch (the row 0 side).
-The nudge is positive, so selecting cell `[1,0]` drives the rig ~0.10 cm forward,
-`[2,0]` ~0.20 cm, `[k,r]` ~0.10·k cm (row `r` does not matter).
+The nudge is positive, so selecting cell `[1,0]` drives the rig ~0.115 cm forward,
+`[2,0]` ~0.230 cm, `[k,r]` ~0.115·k cm (row `r` does not matter).
 
 This is **static in firmware** — nothing supplies it over serial; it is computed
-from the cell indices on every build. The three `SKEW_Y_*` coefficients are the
-only knob. Re-fit them if the rig is re-measured.
+from the cell indices on every build. There are now separate coefficient tables
+for X and Y, with one slot each for vertical and horizontal. Re-fit only the
+mode and axis that were measured.
+
+The shipped values use the same measured setting in both modes: `Y += 0.115 * col`;
+all X, row, and cross terms are zero. Horizontal has its own table slot but has
+not yet been independently measured.
 
 ## Scope — where this lives, and where it must never leak
 
@@ -86,7 +101,7 @@ It is **not** in:
 
 Every **representation** of the grid stays perfectly rectangular and level. This
 correction bends only the physical **motion**, so the real bricks come out
-straight. **X is never touched.**
+straight.
 
 ## Confirming the board was flashed with this firmware
 
@@ -96,11 +111,12 @@ console under both:
 - **`5`** — full report
 - **`9`** — grid config + map
 
-Look for these two lines:
+Look for the four per-mode lines (two coefficient lines and two examples):
 
 ```
-X-rail skew: Y += 0.100*col + 0.000*row + 0.000*col*row  cm   (BUILD only, +Y = away from home)
-             e.g. col 6 row 0 -> Y += 0.600 cm (<steps> steps)
+Dynamic skew [vertical]: X += 0.000*col + 0.000*row + 0.000*col*row cm   (BUILD only, + = away from home)
+Dynamic skew [vertical]: Y += 0.115*col + 0.000*row + 0.000*col*row cm   (BUILD only, + = away from home)
+             e.g. col 6 row 0 -> Y += 0.690 cm (<steps> steps)
 ```
 
 If those lines are **absent**, the board is still running old firmware — re-flash.
@@ -109,7 +125,7 @@ During an actual build, `gotoBuildTarget()` also logs the correction per cell as
 it is applied:
 
 ```
-  X-rail skew: Y 1234 -> 1264 steps (0.100 cm, col skew)
+  Dynamic skew: Y 1234 -> 1257 steps (0.115 cm)
 ```
 
 (no line is printed for column 0, where the nudge is exactly 0).
@@ -118,6 +134,6 @@ it is applied:
 
 Syntax-checked with the stub-Arduino g++ harness (no Arduino toolchain on the dev
 machine); compiles clean, identical to the unchanged control. **Untested on
-hardware.** To confirm: flash the Mega and check that `B 3 0 0` lands level with
-`B 0 3 0`. If a residual remains, `SKEW_Y_PER_COL_CM` is the one number to
-re-tune.
+hardware.** To confirm: flash the Mega and measure vertical and horizontal
+placements independently. Update only the corresponding `SKEW_<AXIS>_*` table
+slot when a residual is measured.

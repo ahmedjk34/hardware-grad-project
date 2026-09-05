@@ -493,6 +493,27 @@ for constant, json_key in per_mode_pairs.items():
               actual[mode_name] == expected,
               f"firmware {actual[mode_name]}, JSON {expected}")
 
+# Dynamic build-motion compensation is deliberately firmware-only: it bends
+# the holder path, not the rectangular grid that the Pi/camera draw.  It must
+# nevertheless stay split by target axis AND grid mode, so a vertical tuning
+# cannot silently become horizontal's calibration (or vice versa).
+dynamic_skew_defaults = {
+    "SKEW_X_PER_COL_CM": {"vertical": 0.0, "horizontal": 0.0},
+    "SKEW_X_PER_ROW_CM": {"vertical": 0.0, "horizontal": 0.0},
+    "SKEW_X_PER_COLROW_CM": {"vertical": 0.0, "horizontal": 0.0},
+    "SKEW_Y_PER_COL_CM": {"vertical": 0.115, "horizontal": 0.115},
+    "SKEW_Y_PER_ROW_CM": {"vertical": 0.0, "horizontal": 0.0},
+    "SKEW_Y_PER_COLROW_CM": {"vertical": 0.0, "horizontal": 0.0},
+}
+for constant, expected_by_mode in dynamic_skew_defaults.items():
+    actual = firmware_mode_numbers(constant)
+    if actual is None:
+        check(f"dynamic skew table {constant}", False, "no readable per-mode table")
+        continue
+    for mode_name, expected in expected_by_mode.items():
+        check(f"dynamic skew {constant}[{mode_name}]", actual[mode_name] == expected,
+              f"firmware {actual[mode_name]}, expected {expected}")
+
 paired_values = {
     "X_TRAVEL_CM": from_cfg.workspace_width_cm,
     "Y_TRAVEL_CM": from_cfg.workspace_height_cm,

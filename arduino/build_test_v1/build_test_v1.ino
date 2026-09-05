@@ -3406,7 +3406,7 @@ bool gotoCell(long col, long row)
 }
 
 // ------------------------------------------------------------
-// X-RAIL SKEW COMPENSATION  -  Y AXIS ONLY, BUILD MOTION ONLY
+// DYNAMIC X/Y SKEW COMPENSATION  -  PER MODE, BUILD MOTION ONLY
 // ------------------------------------------------------------
 //
 // Full write-up: docs/X_RAIL_SKEW_COMPENSATION.md
@@ -3429,30 +3429,34 @@ bool gotoCell(long col, long row)
 //
 // WHAT WE MEASURED
 // ----------------
-// Moving one cell along X pulls the arm ~0.1 cm along Y. It is linear in the
-// column index and there is no row dependence (a pure-Y move - same column -
-// has no error at all):
+// The current measurement finds that moving one cell along X pulls the arm
+// ~0.115 cm along Y. It is linear in the column index and there is no
+// row dependence (a pure-Y move - same column - has no error at all):
 //
 //     column 0  ->  +0.00 cm Y   (reference, no X travel)
-//     column 1  ->  +0.10 cm Y
-//     column 2  ->  +0.20 cm Y
-//     column 3  ->  +0.30 cm Y
-//     column k  ->  +0.10 * k cm Y
+//     column 1  ->  +0.115 cm Y
+//     column 2  ->  +0.230 cm Y
+//     column 3  ->  +0.345 cm Y
+//     column k  ->  +0.115 * k cm Y
 //
-// So SKEW_Y_PER_COL_CM = 0.1, and the row / cross terms stay 0 until a
-// measurement says otherwise.
+// This is now stored separately for EACH target axis and EACH grid mode.  A
+// physical error is allowed to have an X and a Y component, and the vertical
+// and horizontal grids have distinct pitches and can be calibrated separately.
+//
+// Both modes presently use the same measured Y/column setting. The horizontal
+// slot remains independent: measure horizontal placements before retuning it.
 //
 // SIGN - "forward" = +Y = further from the Y home switch (row 0 side). The
 // nudge is ADDED to the Y target, so selecting cell [1,0] drives the rig
-// ~0.10 cm forward, [2,0] ~0.20 cm forward, and so on.
+// ~0.115 cm forward, [2,0] ~0.230 cm forward, and so on.
 //
-//   yNudge_cm = SKEW_Y_PER_COL_CM    * col
-//             + SKEW_Y_PER_ROW_CM    * row
-//             + SKEW_Y_PER_COLROW_CM * col * row
+//   axisNudge_cm = SKEW_<AXIS>_PER_COL_CM[gridMode]    * col
+//                + SKEW_<AXIS>_PER_ROW_CM[gridMode]    * row
+//                + SKEW_<AXIS>_PER_COLROW_CM[gridMode] * col * row
 //
 // This is STATIC in firmware. Nothing supplies it over serial - it is computed
-// from the cell indices on every build. The three coefficients below are the
-// ONLY knob; re-fit them if the rig is re-measured.
+// from the cell indices on every build. The six per-axis tables below are the
+// ONLY knobs; re-fit the active mode if the rig is re-measured.
 //
 // SCOPE - this correction lives here and ONLY here:
 //   * It is applied in gotoBuildTarget() alone. The B (BUILD) motion is the
@@ -3464,20 +3468,31 @@ bool gotoCell(long col, long row)
 //   * It does not exist in the Python link, the camera grid, the Studio grid,
 //     or the 3D grid - every VISUALISATION stays perfectly rectangular. This
 //     bends the MOTION so the real bricks come out straight and level.
-//   * X is never touched.
-float SKEW_Y_PER_COL_CM = 0.1f;    // measured: ~0.1 cm Y pull per column of X travel
-float SKEW_Y_PER_ROW_CM = 0.0f;    // no row dependence measured (pure-Y is clean)
-float SKEW_Y_PER_COLROW_CM = 0.0f; // cross term, if the pull ever grows with row
+//   * Either X or Y may be corrected; a zero table leaves that axis unchanged.
+//
+//                                         { vertical, horizontal }
+float SKEW_X_PER_COL_CM[GRID_MODE_COUNT]    = {0.0, 0.0};
+float SKEW_X_PER_ROW_CM[GRID_MODE_COUNT]    = {0.0, 0.0};
+float SKEW_X_PER_COLROW_CM[GRID_MODE_COUNT] = {0.0, 0.0};
+float SKEW_Y_PER_COL_CM[GRID_MODE_COUNT]    = {0.115, 0.115};
+float SKEW_Y_PER_ROW_CM[GRID_MODE_COUNT]    = {0.0, 0.0};
+float SKEW_Y_PER_COLROW_CM[GRID_MODE_COUNT] = {0.0, 0.0};
 
-// Y step offset to add to a build target for cell [col,row]. Positive = further
-// from the Y home switch ("forward"). With the measured 0.1 cm/col this is
-// +0.1 cm at col 1, +0.2 cm at col 2, ... and exactly 0 anywhere in col 0.
-long buildYSkewSteps(long col, long row)
+// Step offset to add to an X or Y build target for cell [col,row]. Positive
+// means farther from that axis's home switch. At the shipped calibration only
+// vertical/horizontal Y get +0.115 cm at col 1, +0.230 cm at col 2, etc.; all
+// X terms and all row/cross terms are zero until measured.
+long buildSkewSteps(uint8_t axis, long col, long row)
 {
-  float cm = SKEW_Y_PER_COL_CM * (float)col
-           + SKEW_Y_PER_ROW_CM * (float)row
-           + SKEW_Y_PER_COLROW_CM * (float)col * (float)row;
-  return lround(cm * xyStepsPerCmOf(AXIS_Y));
+  float perCol = (axis == AXIS_X) ? SKEW_X_PER_COL_CM[gridMode]
+                                  : SKEW_Y_PER_COL_CM[gridMode];
+  float perRow = (axis == AXIS_X) ? SKEW_X_PER_ROW_CM[gridMode]
+                                  : SKEW_Y_PER_ROW_CM[gridMode];
+  float perColRow = (axis == AXIS_X) ? SKEW_X_PER_COLROW_CM[gridMode]
+                                     : SKEW_Y_PER_COLROW_CM[gridMode];
+  float cm = perCol * (float)col + perRow * (float)row
+           + perColRow * (float)col * (float)row;
+  return lround(cm * xyStepsPerCmOf(axis));
 }
 
 // Kept separate from gotoCellForRotation() because BUILD has its own range and
@@ -3494,29 +3509,33 @@ bool gotoBuildTarget(long col, long row, int8_t rotation)
       !cellTargetPosition(AXIS_Y, row, rotation, &targetY))
     return false;
 
-  // X-rail skew compensation: nudge Y (only) so the physical brick lands
-  // straight. Clamped to the Y travel so a bad coefficient can never drive the
-  // carriage past a soft limit; moveAxisTo() still enforces the limit too.
-  long skewY = buildYSkewSteps(col, row);
-  if (skewY != 0)
+  // Dynamic skew compensation: independently nudge X and Y so the physical
+  // brick lands on the rectangular grid. Clamp each target to its own travel
+  // so a bad calibration coefficient cannot command beyond a soft limit.
+  long *targets[AXIS_COUNT] = {&targetX, &targetY};
+  for (uint8_t axis = AXIS_X; axis <= AXIS_Y; axis++)
   {
-    long cappedY = targetY + skewY;
-    long maxY = lround(xyTravelCmOf(AXIS_Y) * xyStepsPerCmOf(AXIS_Y));
-    if (cappedY < 0)
-      cappedY = 0;
-    else if (cappedY > maxY)
-      cappedY = maxY;
+    long skew = buildSkewSteps(axis, col, row);
+    if (skew == 0)
+      continue;
 
-    // Log it so a live build shows the correction being applied per cell.
-    Serial.print(F("  X-rail skew: Y "));
-    Serial.print(targetY);
+    long original = *targets[axis];
+    long capped = original + skew;
+    long maximum = lround(xyTravelCmOf(axis) * xyStepsPerCmOf(axis));
+    if (capped < 0)
+      capped = 0;
+    else if (capped > maximum)
+      capped = maximum;
+
+    Serial.print(F("  Dynamic skew: "));
+    Serial.print((axis == AXIS_X) ? F("X ") : F("Y "));
+    Serial.print(original);
     Serial.print(F(" -> "));
-    Serial.print(cappedY);
+    Serial.print(capped);
     Serial.print(F(" steps ("));
-    Serial.print((float)(cappedY - targetY) / xyStepsPerCmOf(AXIS_Y), 3);
-    Serial.println(F(" cm, col skew)"));
-
-    targetY = cappedY;
+    Serial.print((float)(capped - original) / xyStepsPerCmOf(axis), 3);
+    Serial.println(F(" cm)"));
+    *targets[axis] = capped;
   }
 
   if (!goToOrigin())
@@ -5004,23 +5023,40 @@ void printGridConfig()
   Serial.print(GRID_SHIFT_Y_CM[gridMode], 3);
   Serial.println(F(" cm  (shiftX/shiftY; whole lattice, pick-up excluded)"));
 
-  // X-rail skew compensation. Printed here so a flash can be confirmed from the
-  // serial console: if these coefficients are missing, the board is running old
-  // firmware. BUILD motion only - it never touches the grid model above.
-  Serial.print(F("X-rail skew: Y += "));
-  Serial.print(SKEW_Y_PER_COL_CM, 3);
-  Serial.print(F("*col + "));
-  Serial.print(SKEW_Y_PER_ROW_CM, 3);
-  Serial.print(F("*row + "));
-  Serial.print(SKEW_Y_PER_COLROW_CM, 3);
-  Serial.println(F("*col*row  cm   (BUILD only, +Y = away from home)"));
-  Serial.print(F("             e.g. col "));
-  Serial.print(gridColsNow());
-  Serial.print(F(" row 0 -> Y += "));
-  Serial.print((float)buildYSkewSteps(gridColsNow(), 0) / xyStepsPerCmOf(AXIS_Y), 3);
-  Serial.print(F(" cm ("));
-  Serial.print(buildYSkewSteps(gridColsNow(), 0));
-  Serial.println(F(" steps)"));
+  // Per-mode dynamic X/Y skew compensation. Printed here so a flash can be
+  // confirmed from the serial console. BUILD motion only - it never touches
+  // the grid model above.
+  for (uint8_t axis = AXIS_X; axis <= AXIS_Y; axis++)
+  {
+    const char *name = (axis == AXIS_X) ? "X" : "Y";
+    float perCol = (axis == AXIS_X) ? SKEW_X_PER_COL_CM[gridMode]
+                                    : SKEW_Y_PER_COL_CM[gridMode];
+    float perRow = (axis == AXIS_X) ? SKEW_X_PER_ROW_CM[gridMode]
+                                    : SKEW_Y_PER_ROW_CM[gridMode];
+    float perColRow = (axis == AXIS_X) ? SKEW_X_PER_COLROW_CM[gridMode]
+                                       : SKEW_Y_PER_COLROW_CM[gridMode];
+    Serial.print(F("Dynamic skew ["));
+    Serial.print(gridModeName(gridMode));
+    Serial.print(F("]: "));
+    Serial.print(name);
+    Serial.print(F(" += "));
+    Serial.print(perCol, 3);
+    Serial.print(F("*col + "));
+    Serial.print(perRow, 3);
+    Serial.print(F("*row + "));
+    Serial.print(perColRow, 3);
+    Serial.println(F("*col*row cm   (BUILD only, + = away from home)"));
+    Serial.print(F("             e.g. col "));
+    Serial.print(gridColsNow());
+    Serial.print(F(" row 0 -> "));
+    Serial.print(name);
+    Serial.print(F(" += "));
+    Serial.print((float)buildSkewSteps(axis, gridColsNow(), 0)
+                 / xyStepsPerCmOf(axis), 3);
+    Serial.print(F(" cm ("));
+    Serial.print(buildSkewSteps(axis, gridColsNow(), 0));
+    Serial.println(F(" steps)"));
+  }
 
   Serial.print(F("Edge budget: X "));
   Serial.print(gridMaxEdgeOverhangCmOf(AXIS_X), 3);
