@@ -12,6 +12,167 @@ file is the list of them.
 
 ---
 
+## The calibration knobs — the complete reference
+
+Read this before changing **any** offset, trim, shift, margin, skew or error
+value, and before acting on a user's report that a block landed in the wrong
+place. Several of these knobs look interchangeable and are not. Picking the
+wrong one produces a rig that is right in one mode, wrong in another, and a
+Studio drawing that disagrees with reality.
+
+The firmware's own copy of this index lives at the top of SECTION 6C in
+`arduino/build_test_v1/build_test_v1.ino`. The two must agree.
+
+### Rule 0 — one sign convention, no exceptions
+
+**Every** calibration number in the firmware is a **magnitude measured from
+that axis' home switch**, in centimetres, and every one uses the same sign:
+
+> **`+` = AWAY from that axis' home switch**
+> **`−` = TOWARD that axis' home switch**
+
+For Z, "home" is the **ground switch**, so `+` = higher/taller, `−` = lower.
+
+There are no per-variable sign quirks. If a knob seems to need the opposite
+sign to what you expect, you have the **wrong knob** or a **wrong
+measurement** — do not "fix" it by flipping a sign somewhere.
+
+### Rule 0a — magnitudes are not machine positions
+
+The machine's **signed positions** (`axisPos[]`, what `moveAxisTo()` takes)
+are a *different number space* and do **not** share that sign:
+
+| Axis | Home switch at | `axisPos[]` runs | Agrees with the `+`/`−` rule? |
+| --- | --- | --- | --- |
+| X | `DIR_POS` | **NEGATIVE** away from home | **No — inverted** |
+| Y | `DIR_NEG` | positive away from home | yes |
+| Z | `DIR_NEG` (ground) | positive upward | yes |
+
+So on X the two spaces have opposite signs. **Anything tested only on Y or Z
+proves nothing.** This asymmetry has already caused one live bug: adding a
+magnitude straight onto a signed X position both inverted the offset and turned
+a `if (capped < 0) capped = 0;` clamp into "discard the target and drive to the
+origin", which silently collapsed every horizontal column onto X = 0.
+
+The rules, which are not optional:
+
+1. Do all calibration arithmetic — offsets, skews, margins, clamping to travel
+   — in **magnitude space**.
+2. Convert to a signed position **once**, at the end, with
+   `axisPosFromHomeSteps()`. Convert back with `axisStepsFromHome()`.
+3. **Never** add a magnitude onto a signed position, and never test a signed
+   position against `0` as though it were a distance.
+
+Those two named helpers are the *only* places in the firmware that multiply by
+a travel direction. A `grep` for a bare `* (long)travelEndOf` or
+`* (long)gridDirOf` outside them must return nothing.
+
+### The master table
+
+"Web UI" means `web/src/studio` — `coords.ts`, `MachineGrid`, the 3D Twin.
+"Python" means `python/rig/grid.py` and everything downstream of it: the
+camera overlay, `gridded_camera_feed`, `block_grid_calibrate`, `rig_console`.
+
+| Knob | What it moves | Sign: `+` means | Config? | Web UI? | Python? |
+| --- | --- | --- | --- | --- | --- |
+| `GRID_TRIM_*_CM` | the whole grid **model** (layout) | grid away from home | `trim_*_cm` | **yes** | **yes** |
+| `GRID_ERROR_OFFSET_*_CM` | the whole grid **model** (calibration) | placements away from home | `error_offset_*_cm` | **yes** | **yes** |
+| `GRID_SHIFT_*_CM` | the whole grid **model** (live shift) | grid away from home | `shift_*_cm` | **yes** | **yes** |
+| `GRID_MAX_EDGE_OVERHANG_*_CM` | **nothing** — a fit budget | *(not a direction)* | `max_edge_overhang_*_cm` | **yes** | **yes** |
+| `TOOL_OFFSET_*_X/Y_CM` | the **holder** only | block centre sits farther from home | `tool_offsets.*` (flash-only) | no | no |
+| `Z_MARGIN_PER_LEVEL_CM` | Z height, **cumulative** per level | taller each level | no | no | no |
+| `Z_MARGIN_FIXED_CM` | Z height, **once** at level ≥ 1 | taller | no | no | no |
+| `Z_MARGIN_FIXED_STEPS` | Z height, raw steps, applied last | taller | no | no | no |
+| `SKEW_{X,Y}_PER_{COL,ROW,COLROW}_CM` | **build motion** only, grows with index | away from home as index rises | no | no | no |
+| `BUILD_PLACEMENT_OFFSET_{X,Y}_CM` | **build motion** only, constant | placements away from home | no | no | no |
+
+Two groupings matter more than the individual rows:
+
+- **Model knobs** (`GRID_TRIM_*`, `GRID_ERROR_OFFSET_*`, `GRID_SHIFT_*`) move
+  the lattice. Everything that *draws* the grid follows them, because they all
+  enter one line: `centre(i) = trim + error_offset + shift + i * pitch`.
+- **Motion knobs** (`SKEW_*`, `BUILD_PLACEMENT_OFFSET_*`) bend where the arm
+  actually goes and leave every drawing perfectly rectangular, deliberately.
+  They are firmware-only and applied **only** inside `gotoBuildTarget()` — the
+  `B` command. Not in `G`, not in the grid map, not in `positionToIndex()`,
+  not in the camera overlay, the Studio or the Twin.
+
+Decide which of those two you want *before* choosing a knob.
+
+### Which knob do I want?
+
+Work down this list; the first match is the answer.
+
+1. **Does the error change with which cell you build on?** (bigger at column 5
+   than column 1) → `SKEW_*`. That is a slope, and no constant can fix it.
+2. **Does it appear only after a claw rotation, and differ per rotation?** →
+   `TOOL_OFFSET_CW/CCW_*` — **but only with a fresh physical measurement of the
+   grip-to-rotation-axis geometry.** Never as a free nudge.
+3. **Is it a constant error in one mode, and should the drawings stay put?** →
+   `BUILD_PLACEMENT_OFFSET_*`. **This is the default choice** for "the block
+   landed N cm off".
+4. **Is it a constant error, and should the drawings move with it** (because
+   the grid model itself is wrong)? → `GRID_ERROR_OFFSET_*`, and update
+   `config/rig.json` in the same commit.
+5. **Is the whole grid in the wrong place because the layout changed?** →
+   `GRID_TRIM_*`. Rare.
+6. **Is it an operator re-registration for this run only?** → `GRID_SHIFT_*`
+   via the `shiftX` / `shiftY` commands, never a firmware edit.
+7. **Is it a height error?** → `Z_MARGIN_FIXED_CM` if every level is off by the
+   same amount, `Z_MARGIN_PER_LEVEL_CM` if the error grows with the stack.
+
+### Translating a measurement into a value
+
+This is where inputs get misread, so it is written out. The user reports where
+the block **actually landed** relative to where it **should** have landed:
+
+| The user says | The error is | The correction is |
+| --- | --- | --- |
+| "it's 0.4 cm **closer to home** than it should be" | −0.4 | **`+0.4`** (push it away) |
+| "it's 0.4 cm **too far from home**" | +0.4 | **`−0.4`** (pull it back) |
+| "I want it to sit 0.4 cm **toward home**" | *(not an error — a target)* | **`−0.4`** |
+| "I want it 0.4 cm **further out**" | *(a target)* | **`+0.4`** |
+
+Note rows 1 and 3 produce **opposite** values from superficially similar
+sentences. A *reported error* is corrected by the **opposite** sign; a
+*requested placement* is applied with the **same** sign. If the sentence is
+ambiguous, **ask** — do not guess, and do not silently pick one.
+
+Also: before trusting any measurement, check that the motion path was not
+already broken. A measurement taken while a clamp was discarding the target
+describes the bug, not the rig.
+
+### Shipped values, and what they mean
+
+| Knob | vertical | horizontal | Meaning |
+| --- | --- | --- | --- |
+| `GRID_TRIM_X_CM` | `0.0` | `1.9` | horizontal's pickup-cell registration |
+| `GRID_TRIM_Y_CM` | `0.0` | `1.9` | same, other axis |
+| `GRID_ERROR_OFFSET_*` | `0.0` | `0.0` | no model-level correction in either mode |
+| `SKEW_Y_PER_COL_CM` | `0.115` | `0.13` | X-rail twist pulls Y as X travels out |
+| `SKEW_X_*`, `SKEW_Y_PER_ROW/COLROW` | `0.0` | `0.0` | unmeasured, stay zero |
+| `BUILD_PLACEMENT_OFFSET_X_CM` | **`0.0`** | **`−0.4`** | horizontal placements sit 0.4 cm **toward** the X home switch |
+| `BUILD_PLACEMENT_OFFSET_Y_CM` | **`0.0`** | `0.0` | no fixed Y correction in either mode |
+
+**`BUILD_PLACEMENT_OFFSET_*` is `0.0` for vertical on both axes, and that is a
+real statement, not a placeholder.** It means vertical builds get **no fixed
+placement correction at all**: the correction is exactly zero, so
+`gotoBuildTarget()` skips its whole correction body for that axis and commands
+the raw lattice target. Vertical still receives its `SKEW_Y_PER_COL_CM`
+(`0.115` cm/column) nudge, which is a separate, index-dependent knob. A zero
+here means "vertical placement has never needed a constant trim" — leave it at
+zero until a vertical placement is actually measured off.
+
+`test_grid.py` pins every one of these against the sketch and, where a partner
+exists, against `config/rig.json`. It fails on a mismatch, so it is the check
+to run after any edit here:
+
+```bash
+python3 python/tests/test_grid.py
+```
+
+---
+
 ## The shared values
 
 ### 1. Serial baud — must match exactly or nothing works
