@@ -27,7 +27,7 @@
 | Item                                | Qty      | Note                                  |
 | ----------------------------------- | -------- | ------------------------------------- |
 | Linear Rail + Linear Motion Bearing | 1        | 1.5m x 15mm                           |
-| Aluminum Profile                    | 1        | 6m                                    |
+| Aluminum Profile                    | 1        | 3.6m used (4x15cm legs, 3x30cm X, 2x60cm Y, 2x30cm feeder, ~30cm Z); cut from 6m stock |
 | Timing Pulley                       | ~9       | 14mm, 3mm, conveyor bearings          |
 | Belt sheet                          | 1        | for conveyor                          |
 | 3D Printed Parts                    | multiple | conveyor belt parts, misc prints      |
