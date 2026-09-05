@@ -54,7 +54,10 @@ export function RigOrbitControls({
       ref={controls}
       makeDefault
       enableDamping={false}
-      enableZoom={enabled}
+      // Zoom is handled entirely by the wheel listener above via dollyIn/dollyOut;
+      // three-stdlib's own state-gated wheel handler would otherwise race it on
+      // the same canvas element regardless of listener registration order.
+      enableZoom={false}
       enabled={enabled}
       maxPolarAngle={MAX_POLAR_ANGLE}
       target={target}

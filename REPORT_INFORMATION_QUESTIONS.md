@@ -248,7 +248,7 @@ NOT SURE WHAT IS THIS QUESTION
 
 **Q2.4.4 [NEEDED]** Describe the **end effector (claw)**. The reference design
 used an electromagnet; you use a mechanical gripper driven by one hobby servo
-(OPEN 0°, CLOSE 52°) plus a **28BYJ-48 rotation stepper** for 90° claw rotation.
+(OPEN 0°, CLOSE 54°) plus a **28BYJ-48 rotation stepper** for 90° claw rotation.
 Questions:
 
 - Why a gripper instead of an electromagnet (blocks aren't magnetised / 3D
@@ -263,8 +263,8 @@ Questions:
 **Q2.4.5 [NEEDED]** Describe the **feeder module** physically: the hopper/
 container (a servo-driven gate that opens in two stages, 20°→90°→160°), the
 conveyor belt (belt sheet + 3D-printed parts + a stepper via A4988), the
-alignment servo that nudges the block square, and where the two HC-SR04
-ultrasonic sensors sit (one at the container exit, one at the pickup/stage
+alignment servo that nudges the block square, and where the exit HC-SR04 and
+digital stage IR sensor sit (one at the container exit, one at the pickup/stage
 point). How big is it, how does it mount relative to the gantry, and where is
 the fixed pickup point (firmware cell `[0,0]`)?
 
@@ -391,8 +391,8 @@ YES SLAVED DONMT COMMUNICATE
 **Q2.6.1 [CONFIRM]** End-to-end flow: (1) human designs the structure in the 3D
 Build Studio and compiles it to an ordered list of `B col row level` commands
 separated by `R`/`RR` mode latches; (2) for each block the Pi sends `FEED` to
-the Uno, which opens the container in two stages, runs the belt, and confirms
-the block at the pickup point with the two ultrasonic sensors; (3) on the Uno's
+the Uno, which opens the container in two stages, runs the belt, confirms exit
+with the HC-SR04, and confirms the pickup point with the stage IR sensor; (3) on the Uno's
 terminal staged-OK the Pi sends `B col row level` to the Mega, which runs its
 14-phase pick/rotate/place/park cycle and narrates each phase back over serial;
 (4) the overhead camera (optionally) verifies; (5) repeat until the structure
@@ -455,7 +455,8 @@ firmware trusts the operator to start neutral)?
 serving + orchestration + all safety = master. MEGA 2560 = gantry motion + claw
 
 - rotation + the 14-phase build + the `@`-line ack/step protocol. Uno = feeder
-  state machine + dual ultrasonic staging + protocol-2 serial. Correct division?
+  state machine + ultrasonic exit confirmation + IR stage confirmation +
+  protocol-2 serial. Correct division?
 
 **Answer:** YES
 
@@ -563,7 +564,7 @@ YES
 **Q4.1.1 [CONFIRM]** Control is hierarchical and entirely open-loop at the motor
 level (no encoders; steppers trusted, re-homed often to prevent accumulation);
 "closed-loop" in this project means _sensor- and vision-confirmed sequencing_
-(ultrasonic staging, camera verification, the acknowledged phase protocol), not
+(sensor-confirmed staging, camera verification, the acknowledged phase protocol), not
 servo position control. Correct framing?
 
 **Answer:**
@@ -701,7 +702,7 @@ stack)?
 **Answer:**
 
 **Q5.3.2 [EVIDENCE]** Stacking: highest level successfully stacked, and how
-placement accuracy / stability degrades with height. Did the +0.10 cm fixed Z
+placement accuracy / stability degrades with height. Did the +0.12 cm fixed Z
 margin at levels ≥1 work?
 
 **Answer:**

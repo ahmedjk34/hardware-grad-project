@@ -29,7 +29,7 @@ One `FEED` request runs this sequence:
 5. Wait up to 10 seconds for the **exit sensor** to see a block leave the
    container and enter the belt.
 6. Close the container immediately after that confirmation, then run the belt
-   counter-clockwise.
+   forward.
 7. Wait up to 15 seconds for the **stage sensor** at the pickup point to see
    the block. Detection stops the belt.
 8. Move the alignment servo briefly to nudge the block square, return it to
@@ -48,7 +48,7 @@ that did not arrive at the pickup point.
 | A4988 belt driver | `DIR 2`, `STEP 3` | Tie `ENABLE` low if it is not controlled separately. |
 | Exit HC-SR04 | `TRIG 4`, `ECHO 5` | Confirms that a block left the container. |
 | Alignment servo | `6` | Rests at 90° and nudges to 120°; tune mechanically. |
-| Stage HC-SR04 | `TRIG 8`, `ECHO 9` | Confirms that the pickup position contains a block. |
+| Stage IR obstacle sensor | `OUT 8` | Confirms that the pickup position contains a block. The default logic is active-low; change `STAGE_IR_DETECTED_LEVEL` if the installed sensor is inverted. |
 | Container servo | `12` | Closed 20°, first opening 90°, final opening 160°. |
 
 The sketch uses 9600 baud. All serial commands must end with a newline.
@@ -56,9 +56,9 @@ The sketch uses 9600 baud. All serial commands must end with a newline.
 Servos and the A4988 should use power supplies sized for their load; do not
 assume the Uno's 5 V pin can power them. The Uno, motor driver, servo supply,
 sensors and Pi serial adapter must share a common ground. Verify the belt
-direction while unloaded: `BELT_CCW_DIRECTION_LEVEL` is the one firmware
-constant intended to be inverted if the installed belt moves physically the
-wrong way.
+direction while unloaded: swap `BELT_FORWARD_DIRECTION_LEVEL` and
+`BELT_REVERSE_DIRECTION_LEVEL` if the installed belt moves physically the wrong
+way.
 
 ## Serial protocol
 
@@ -91,7 +91,7 @@ Every protocol response has this envelope:
 | `RECV` | `@id` | The Uno received a `FEED` line and assigned it this transaction ID. |
 | `ACK` | `@id` or `@0` | A command was accepted. For a feed, `accepted=1` means the stage was empty and the cycle has started. |
 | `STATE` | `@id` | A feed-state transition. It is the authoritative current state. |
-| `SENSOR` | `@id` or `@0` | A named HC-SR04 observation. `detected=1` means the value is below the configured threshold. |
+| `SENSOR` | `@id` or `@0` | A named sensor observation. The exit HC-SR04 includes `distance_cm`; the digital stage IR sensor reports `detected=0` or `1`. |
 | `EVENT` | `@id` | A meaningful physical milestone within the current state. |
 | `STATUS` | `@0` | A requested snapshot of state, active flag, belt, container and speed. It is followed by two `SENSOR` lines. |
 | `CONFIG` | `@0` | A manual setting change, currently the belt speed. |
@@ -108,7 +108,7 @@ For `FEED 42`, a normal transaction is:
 
 ```text
 @42 RECV cmd=FEED
-@42 SENSOR sensor=stage distance_cm=32.6 detected=0
+@42 SENSOR sensor=stage detected=0
 @42 ACK cmd=FEED accepted=1
 @42 STATE state=closing
 @42 EVENT phase=container_closing
@@ -122,12 +122,13 @@ For `FEED 42`, a normal transaction is:
 @42 SENSOR sensor=exit distance_cm=7.4 detected=1
 @42 EVENT phase=exit_detected_container_closed_belt_running distance_cm=7.4
 @42 STATE state=aligning
-@42 SENSOR sensor=stage distance_cm=8.2 detected=1
-@42 EVENT phase=stage_detected_aligning distance_cm=8.2
+@42 SENSOR sensor=stage detected=1
+@42 EVENT phase=stage_detected_aligning
 @42 STATE state=verifying_stage
 @42 EVENT phase=verifying_stage
 @42 STATE state=block_ready
-@42 EVENT phase=block_ready distance_cm=8.1
+@42 SENSOR sensor=stage detected=1
+@42 EVENT phase=block_ready
 @42 OK state=block_ready result=staged
 ```
 
@@ -136,12 +137,14 @@ Only the final `OK` is permission to pick the block up. `ACK`, `STATE`,
 controller should wait for exactly one `OK` or `ERROR` for its active request
 and should not send the Mega a build/pick command after an error.
 
-`SENSOR` values are reported in centimetres, rounded to one decimal place.
+Exit `SENSOR` values are reported in centimetres, rounded to one decimal place.
 `distance_cm=no_echo` means the HC-SR04 received no echo before its 30 ms
-firmware timeout; it is never treated as a detected block. The detection rule
-is `distance_cm < 10.0` and is represented explicitly by `detected=0` or `1`.
-The firmware reports sensor readings at cycle admission and on detections;
-it does not flood the serial port with its 100 ms polling reads.
+firmware timeout; it is never treated as a detected block. Its detection rule
+is `distance_cm < 10.0`. The digital stage IR sensor has no distance value and
+reports only `detected=0` or `1`; its active level is configured by
+`STAGE_IR_DETECTED_LEVEL`. The firmware reports readings at cycle admission,
+on stage detection, and during final stage verification; it does not flood the
+serial port with its 100 ms polling reads.
 
 ### Status and manual acknowledgement
 
@@ -149,9 +152,9 @@ it does not flood the serial port with its 100 ms polling reads.
 feed request is running:
 
 ```text
-@0 STATUS state=moving_to_stage active=1 belt=running container=closed speed_steps_s=150
+@0 STATUS state=moving_to_stage active=1 belt=running container=closed speed_steps_s=325
 @0 SENSOR sensor=exit distance_cm=21.7 detected=0
-@0 SENSOR sensor=stage distance_cm=14.3 detected=0
+@0 SENSOR sensor=stage detected=0
 ```
 
 Manual operations also acknowledge their completion on the device channel.
@@ -179,14 +182,14 @@ results. A controller should reject malformed input locally before sending it.
 | Command | Effect |
 | --- | --- |
 | `STOP` / `OFF` / `X` | Stop the belt and cancel an active feed cycle. |
-| `STATUS` / `P` | Print state, belt/container status and fresh readings from both sensors. |
+| `STATUS` / `P` | Print state, belt/container status, exit distance, and stage IR state (`detected` or `clear`). |
 | `US` | Same sensor/status snapshot as `STATUS`. |
 | `OPEN` / `O` | Test-only manual two-stage container opening. It cancels an active cycle. |
 | `CLOSE` / `C` | Close the container and stop the belt. |
-| `ON` | Run belt in configured CCW direction without a sensor-controlled cycle. |
+| `ON` | Run belt forward without a sensor-controlled cycle. |
 | `F` | Run belt forward for bench testing. |
-| `B`, `R`, `REVERSE` | Run belt in configured backward/CCW direction for bench testing. |
-| `S <steps/s>` | Set belt rate; constrained to 10–3000 steps/s. Default: 150. |
+| `B`, `R`, `REVERSE` | Run belt backward for bench testing. |
+| `S <steps/s>` | Set belt rate; constrained to 10–3000 steps/s. Default: 325. |
 | `HELP`, `H`, `?` | Print the command summary. |
 
 Manual motion commands are for commissioning only. They cancel a live feed
@@ -196,10 +199,9 @@ request, so an automated controller must not mix them into a production cycle.
 
 The firmware uses a state machine rather than a multi-second `delay()` belt
 run. It continues accepting serial input while a cycle is active, so `STOP` is
-available during an exit wait, belt movement, or alignment. HC-SR04 reads use a
-30 ms echo timeout, therefore a sensor read can briefly delay belt pulse
-generation; this is acceptable for feeder staging but is not precision motion
-control.
+available during an exit wait, belt movement, or alignment. The exit HC-SR04
+uses a 30 ms echo timeout, so its reads can briefly delay belt pulse generation;
+this is acceptable for feeder staging but is not precision motion control.
 
 | State | Belt | Exit sensor | Stage sensor | Exit condition |
 | --- | --- | --- | --- | --- |
@@ -207,15 +209,17 @@ control.
 | `opening_stage_1` | stopped | — | — | 500 ms elapsed |
 | `opening_stage_2` | stopped | — | — | 500 ms elapsed |
 | `waiting_for_exit` | stopped | sampled every 100 ms | — | block detected or 10 s timeout |
-| `moving_to_stage` | running CCW | — | sampled every 100 ms | block detected or 15 s timeout |
+| `moving_to_stage` | running forward | — | sampled every 100 ms | block detected or 15 s timeout |
 | `aligning` | stopped | — | — | 350 ms elapsed |
 | `verifying_stage` | stopped | — | read once after settling | block ready or resume belt |
 | `block_ready` | stopped | — | — | terminal success |
 
-A sensor detects an object when it returns a valid distance below `10.0 cm`.
-No echo is treated as no detection. The values are installation calibrations:
-adjust `DETECT_DISTANCE_CM`, the three servo-angle groups, belt rate, and
-timeouts only after testing with the actual hopper and pickup fixture.
+The exit sensor detects an object when it returns a valid distance below
+`10.0 cm`; no echo is treated as no detection. The stage sensor reports a
+digital presence signal, active-low by default. The values are installation
+calibrations: adjust `DETECT_DISTANCE_CM`, `STAGE_IR_DETECTED_LEVEL`, the three
+servo-angle groups, belt rate, and timeouts only after testing with the actual
+hopper and pickup fixture.
 
 ## Pi orchestration contract
 
@@ -277,12 +281,15 @@ commissioning where a person is responsible for staging.
 4. Stop the web service, then run
    `.venv/bin/python python/feeder_console.py status` and confirm the validated
    `READY` identity and structured status.
-5. With clear sensors, `status` should report distances/no echo rather
-   than a false nearby block. Position a block at each sensor separately and
-   confirm its reading crosses the 10 cm threshold only where intended.
-6. With the belt unloaded, use the CLI's `on`, `off`, and manual controls to verify direction
-   and stop behaviour. If CCW is physically wrong, invert
-   `BELT_CCW_DIRECTION_LEVEL`, recompile and reflash.
+5. With clear sensors, `status` should report exit distance/no echo and
+   `sensor=stage detected=0`. Position a block at each sensor separately and
+   confirm the exit reading crosses the 10 cm threshold and the stage sensor
+   changes to `detected=1` only where intended.
+6. With the belt unloaded, use the CLI's `on`, `off`, `forward`, and `reverse`
+   controls to verify direction and stop behaviour. If forward is physically
+   wrong, swap
+   `BELT_FORWARD_DIRECTION_LEVEL` and `BELT_REVERSE_DIRECTION_LEVEL`, then
+   recompile and reflash.
 7. Use `open` and `close` to confirm container travel. Adjust only the named
    container angles after checking for mechanical interference.
 8. Run `.venv/bin/python python/feeder_console.py feed` with one block. Confirm the exit event, automatic container

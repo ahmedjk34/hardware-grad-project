@@ -241,11 +241,9 @@ def chapter_5(rep):
         ["Effect", "Measured", "Corrected by", "Residual after correction"],
         [
             ["X-rail skew: Y drift with X travel",
-             "0.10 cm of Y per column of X; linear in the column index; no row dependence",
-             "A firmware Y nudge applied only to the build motion (Section 4.2.5), flashed and re-tuned "
-             "on the rig from 0.15 to 0.10 cm per column",
-             "[[VALUE NEEDED: re-measure the Y error at columns 1..6 with the compensation "
-              "active]]"],
+             "0.115 cm per vertical column and 0.13 cm per horizontal column on Y; no row dependence",
+             "Per-mode firmware skew applied only to build motion (Section 4.2.5)",
+             "[[VALUE NEEDED: re-measure both modes with the current coefficients active]]"],
             ["Pickup-rotate swing",
              "A horizontal placement landing 1.4 cm too far from the X home switch, with Y dead "
              "on",
@@ -272,7 +270,7 @@ def chapter_5(rep):
         "Across all sixteen logged builds and the commissioning runs that preceded them, "
         "**no block was dropped, crushed or lost from the claw during a carry**. Every build "
         "reached its phase-11 release and its terminal `OK`. The grip is a single fixed closed "
-        "angle of 52 degrees on the jaw servo, tuned on the rig until the jaws held a block "
+        "angle of 54 degrees in the current source, tuned until the jaws hold a block "
         "firmly without marking it, and it is not adjusted per block or per level.")
     rep.p(
         "The failure mode the design guards against is not a weak grip but a **mistimed** one: "
@@ -324,10 +322,10 @@ def chapter_5(rep):
         "per level as far as the Z axis is concerned, and not by whatever the blocks happen "
         "to settle to.")
     rep.p(
-        "The fixed Z margin of +0.10 cm at levels of 1 and above was introduced **after** this "
+        "The fixed Z margin of +0.12 cm at levels of 1 and above was introduced **after** this "
         "session, so these five placements ran with no margin at all and still completed. "
         "[[VALUE NEEDED: the highest level actually stacked successfully on the delivered "
-        "machine, and whether the +0.10 cm fixed margin improved or worsened placement at "
+        "machine, and whether the +0.12 cm fixed margin improved or worsened placement at "
         "levels 1 and above. Also worth recording: how the stack's own lean or wobble develops "
         "with height, since this was only taken to level 4.]] The firmware's own ceiling is "
         "level 16 at 24.0 cm, leaving 2.5 cm of headroom to fly a block over the tallest "
@@ -479,28 +477,26 @@ def chapter_5(rep):
     # ------------------------------------------------------------------
     rep.h2("5.5 Sensor Testing")
 
-    rep.h3("5.5.1 Ultrasonic sensors")
+    rep.h3("5.5.1 Feeder sensors")
     rep.p(
-        "Both HC-SR04 sensors were commissioned against the documented checklist: with the "
-        "sensors clear, a status snapshot must report a real distance or `no_echo` and not a "
-        "false nearby block; a block placed at each sensor in turn must cross the 10 cm "
-        "threshold only at that sensor; and each of the four terminal failures must be "
+        "The current feeder uses an exit HC-SR04 and a digital IR sensor at the pickup stage. "
+        "The documented commissioning checklist requires the exit sensor to report a real "
+        "distance or `no_echo`, the stage sensor to change cleanly between `detected=0` and "
+        "`detected=1`, and each of the four terminal failures to be "
         "provokable on purpose: start with the stage occupied, leave the hopper empty, obstruct "
         "the belt, and cancel a running feed, with the right reason reported and the belt "
         "stopped in every case.")
     rep.p(
-        "The 10 cm threshold proved reliable at both positions and did not need re-tuning from "
-        "its installed value. The design detail that made it reliable is a small one: a sensor "
+        "The 10 cm threshold applies only to the exit sensor. A small but important firmware "
+        "detail is that an ultrasonic "
         "timeout returns -1 and is reported on the wire as `distance_cm=no_echo`, and that is "
         "**never** treated as a detection. 'I heard nothing' and 'nothing is there' are "
         "different statements, and a feeder that collapsed them would decide an empty belt was "
         "fine.")
     rep.p(
-        "[[VALUE NEEDED: measured distance readings, in cm, from each sensor with the belt empty "
-        "and with a block correctly staged, plus the number of feed cycles the threshold was "
-        "confirmed over and any false positives or negatives seen. Environmental effects worth "
-        "noting if you observed them: belt vibration while running, and an angled block face "
-        "returning a weak echo.]]")
+        "[[VALUE NEEDED: measured exit distances, the installed IR sensor's active level and "
+        "sensitivity setting, plus the number of complete feed cycles and any false positives "
+        "or negatives observed with the current hardware.]]")
 
     rep.h3("5.5.2 Limit switches")
     rep.p(
@@ -667,8 +663,8 @@ def chapter_5(rep):
          "column index. Diagnosing it as a rail out of square rather than as a calibration error "
          "took a measurement per column: a constant offset and a proportional one look identical "
          "at a single cell. **Solved** by a firmware Y nudge applied only to the build motion "
-         "(Section 4.2.5), flashed and re-tuned on the rig from 0.15 to 0.10 cm per column. The "
-         "residual has not been re-measured."),
+         "(Section 4.2.5). Logged trials used 0.15 then 0.10 cm per column; the current source "
+         "ships 0.115 vertical and 0.13 horizontal. The current residual has not been re-measured."),
         ("A correction applied to the wrong quantity",
          "Horizontal placements landed 1.4 cm too far from the X home switch. The grid's "
          "per-mode error offset was reached for first, and it absorbed the symptom while hiding "

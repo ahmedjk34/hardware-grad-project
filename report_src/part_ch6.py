@@ -238,7 +238,8 @@ def appendices(rep):
             ["ULN2003 driver board", "1", "For the 28BYJ-48"],
             ["Hobby servo", "3", "Gripper, container gate, aligner"],
             ["Micro limit switch", "4", "X home, Y home, Z bottom, Z top"],
-            ["HC-SR04 ultrasonic sensor", "2", "Container exit, pickup stage"],
+            ["HC-SR04 ultrasonic sensor", "1", "Container exit"],
+            ["IR obstacle sensor", "1", "Pickup stage, active-low by default"],
         ],
         widths=[8.4, 1.4, 5.2], size=9)
     rep.table(
@@ -290,7 +291,7 @@ def appendices(rep):
             ["2", "output", "TB6600 #1 DIR", "Motor 1 direction (CoreXY)"],
             ["3", "output", "TB6600 #1 STEP", "Motor 1 step pulse"],
             ["4", "output", "TB6600 #1 EN", "Motor 1 enable, **active LOW**"],
-            ["6", "output", "Gripper servo signal", "Claw jaws: OPEN 0 deg, CLOSE 52 deg"],
+            ["6", "output", "Gripper servo signal", "Claw jaws: OPEN 0 deg, CLOSE 54 deg"],
             ["8", "output", "TB6600 #2 DIR", "Motor 2 direction (CoreXY)"],
             ["9", "output", "TB6600 #2 STEP", "Motor 2 step pulse"],
             ["10", "output", "TB6600 #2 EN", "Motor 2 enable, active LOW"],
@@ -322,8 +323,7 @@ def appendices(rep):
             ["4", "output", "Exit HC-SR04 TRIG", "Container-exit sensor trigger"],
             ["5", "input", "Exit HC-SR04 ECHO", "Container-exit sensor echo"],
             ["6", "output", "Alignment servo signal", "Rest 90 deg, nudge 120 deg"],
-            ["8", "output", "Stage HC-SR04 TRIG", "Pickup-point sensor trigger"],
-            ["9", "input", "Stage HC-SR04 ECHO", "Pickup-point sensor echo"],
+            ["8", "input", "Stage IR OUT", "Pickup-point presence sensor, active-low by default"],
             ["12", "output", "Container servo signal",
              "Closed 20 deg, stage 1 at 90 deg, open 160 deg"],
             ["USB", "serial", "Raspberry Pi", "9600 8N1, protocol 2"],
@@ -383,7 +383,7 @@ def appendices(rep):
         "\n"
         "> FEED 42\n"
         "@42 RECV   cmd=FEED\n"
-        "@42 SENSOR sensor=stage distance_cm=32.6 detected=0\n"
+        "@42 SENSOR sensor=stage detected=0\n"
         "@42 ACK    cmd=FEED accepted=1\n"
         "@42 STATE  state=closing\n"
         "@42 EVENT  phase=container_closing\n"
@@ -394,10 +394,11 @@ def appendices(rep):
         "@42 SENSOR sensor=exit distance_cm=7.4 detected=1\n"
         "@42 EVENT  phase=exit_detected_container_closed_belt_running distance_cm=7.4\n"
         "@42 STATE  state=aligning\n"
-        "@42 SENSOR sensor=stage distance_cm=8.2 detected=1\n"
+        "@42 SENSOR sensor=stage detected=1\n"
         "@42 STATE  state=verifying_stage\n"
         "@42 STATE  state=block_ready\n"
-        "@42 EVENT  phase=block_ready distance_cm=8.1\n"
+        "@42 SENSOR sensor=stage detected=1\n"
+        "@42 EVENT  phase=block_ready\n"
         "@42 OK     state=block_ready result=staged")
     rep.p(
         "Only the final `OK` is permission to pick the block up. `ACK`, `STATE`, `SENSOR` and "
@@ -420,18 +421,19 @@ def appendices(rep):
             ["`Z_TRAVEL_CM`", "26.5 cm", "Switch to switch, tape-measured"],
             ["`BLOCK_HEIGHT_CM`", "1.5 cm", "One stack level"],
             ["`MAX_BUILD_HEIGHT_CM`", "25.0 cm", "Build ceiling; highest level 16"],
-            ["`Z_MARGIN_FIXED_CM`", "+0.10 cm", "Added once at any level >= 1"],
+            ["`Z_MARGIN_FIXED_CM`", "+0.12 cm", "Added once at any level >= 1"],
             ["`Z_MARGIN_PER_LEVEL_CM`", "0.00 cm", "Cumulative per-level trim"],
             ["`STEP_DELAY` / `STEP_DELAY_Z`", "575 us / 950 us", "Step half-periods"],
             ["`DIR_SETTLE_MS`", "5 ms", "After a direction change"],
             ["`LIMIT_CONFIRM_US`", "200 us", "Switch confirmation time"],
-            ["`SERVO_OPEN_ANGLE` / `SERVO_CLOSE_ANGLE`", "0 deg / 52 deg", "Claw jaws"],
+            ["`SERVO_OPEN_ANGLE` / `SERVO_CLOSE_ANGLE`", "0 deg / 54 deg", "Claw jaws"],
             ["`SERVO_SETTLE_MS`", "600 ms", "After every commanded servo move in a build"],
             ["`AUX_STEPPER_STEPS_PER_REV`", "2,048", "28BYJ-48 output revolution"],
             ["`AUX_STEPPER_SPEED_RPM`", "10", "Claw rotation speed"],
             ["`BUILD_PHASE_PAUSE_MS`", "250 ms", "Settle between build phases"],
             ["`BUILD_STEP_COUNT`", "14", "Phases per build"],
-            ["`SKEW_Y_PER_COL_CM`", "0.1 cm", "X-rail skew compensation, build motion only"],
+            ["`SKEW_Y_PER_COL_CM`", "0.115 / 0.13 cm", "Vertical / horizontal Y skew per column, build motion only"],
+            ["`BUILD_PLACEMENT_OFFSET_X_CM`", "0.0 / -0.4 cm", "Vertical / horizontal fixed X correction, build motion only"],
             ["`TOOL_OFFSET_CW_*`", "(+0.9, -0.3) cm", "The pickup-rotate swing"],
             ["`EN_ACTIVE_LEVEL`", "LOW", "TB6600 enable polarity in this wiring"],
         ],
@@ -449,7 +451,10 @@ def appendices(rep):
         "target_cm    = level * (BLOCK_HEIGHT_CM + Z_MARGIN_PER_LEVEL_CM) + Z_MARGIN_FIXED_CM\n"
         "target_steps = round(target_cm * zStepsPerCm()) + Z_MARGIN_FIXED_STEPS\n"
         "\n"
-        "yNudge_cm = SKEW_Y_PER_COL_CM * col      (build motion only)")
+        "axisCorrection_cm = BUILD_PLACEMENT_OFFSET_<AXIS>_CM[mode]\n"
+        "                  + SKEW_<AXIS>_PER_COL_CM[mode] * col\n"
+        "                  + SKEW_<AXIS>_PER_ROW_CM[mode] * row\n"
+        "                  + SKEW_<AXIS>_PER_COLROW_CM[mode] * col * row")
     rep.table(
         "Complete grid geometry, both modes, at the shipped calibration.",
         ["Mode", "Axis", "Block (cm)", "Gap (cm)", "Pitch (cm)", "Trim (cm)", "Cells",
@@ -530,6 +535,6 @@ def appendices(rep):
         "   +29.84s  build finished, total 29.84s")
     rep.p(
         "[[VALUE NEEDED: any measured data tables you take after this report is drafted, "
-        "placement accuracy trials, homing repeatability trials, ultrasonic distance readings, "
+        "placement accuracy trials, homing repeatability trials, feeder-sensor readings, "
         "and a pick-and-place success count) belong here as additional tables in this "
         "appendix.]]")

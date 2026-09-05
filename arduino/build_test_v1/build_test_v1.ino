@@ -240,7 +240,7 @@ const int SERVO_PIN = 6;
 // O/openServo() runs.
 const int SERVO_HOME_OPEN_ANGLE = 0;
 const int SERVO_OPEN_ANGLE = 0;
-const int SERVO_CLOSE_ANGLE = 52;
+const int SERVO_CLOSE_ANGLE = 54;
 
 // The servo is commanded and then forgotten - nothing reports back
 // when it has actually arrived. The build sequence must not start
@@ -548,13 +548,263 @@ const bool SOFT_LIMIT_VERBOSE = true;
 // SECTION 6C - GRID CONFIGURATION
 // ============================================================
 //
+// ------------------------------------------------------------
+//   AI-FACING INDEX - EVERY CORRECTION / OFFSET / SHIFT / ERROR
+//   VARIABLE IN THIS FILE: WHAT IT CHANGES, WHEN TO TOUCH IT,
+//   WHAT ITS SIGN MEANS, AND WHAT ELSE IT MOVES
+// ------------------------------------------------------------
+// This is a map, not the full explanation - each variable still has its own
+// detailed comment at its declaration. Read this first so you pick the RIGHT
+// knob; there is exactly one correct variable for any given symptom, and they
+// are easy to confuse because most of them are "a constant cm nudge on an
+// axis". Full cross-reference (config keys, firmware constants, worked
+// examples): AGENTS.md, sections on the grid / tool offsets / skew.
+//
+// ============================================================
+//   RULE 0 - THE SIGN CONVENTION, WHICH IS THE SAME FOR ALL OF THEM
+// ============================================================
+// EVERY calibration number below is a MAGNITUDE measured from that axis' home
+// switch, in centimetres, and every one of them uses the same sign:
+//
+//        + = AWAY from that axis' home switch
+//        - = TOWARD that axis' home switch
+//
+// For Z, "home" is the GROUND switch, so + = higher / taller, - = lower.
+// There are NO exceptions and no per-variable sign quirks. If a knob seems to
+// need the opposite sign to what you expect, you have the wrong knob or a
+// wrong measurement - do not "fix" it by flipping a sign somewhere.
+//
+// The machine's SIGNED positions are a different space and do NOT share this
+// sign: X's home switch is at DIR_POS, so X's axisPos[] runs NEGATIVE away
+// from home, while Y and Z run positive. Nothing in this list is ever added
+// to a signed position directly; the crossing happens in exactly two named
+// functions, axisPosFromHomeSteps() / axisStepsFromHome(). See "THE ONE SIGN
+// RULE" beside them, and gotoBuildTarget(), which is where getting this wrong
+// once silently collapsed every horizontal column onto X = 0.
+//
+// ============================================================
+//   RULE 0a - TURNING A REPORTED MEASUREMENT INTO A VALUE
+// ============================================================
+// A reported ERROR and a requested PLACEMENT take OPPOSITE signs. This is the
+// single easiest way to misread an instruction, so it is spelled out:
+//
+//   "it landed 0.4 cm too CLOSE to home" -> error -0.4 -> write +0.4 (push out)
+//   "it landed 0.4 cm too FAR from home" -> error +0.4 -> write -0.4 (pull in)
+//   "I want it 0.4 cm TOWARD home"       -> a target   -> write -0.4
+//   "I want it 0.4 cm FURTHER OUT"       -> a target   -> write +0.4
+//
+// The first and third lines are superficially similar sentences that produce
+// OPPOSITE values. If a request is ambiguous, ASK - never guess a sign, and
+// never silently pick one.
+//
+// And before trusting any measurement at all: check the motion path was not
+// already broken. A number measured while a clamp was discarding the target
+// describes the bug, not the rig.
+//
+// ============================================================
+//   RULE 0b - THE SHIPPED VALUES, IN ONE PLACE
+// ============================================================
+//                                    { vertical, horizontal }
+//   GRID_TRIM_X_CM                     0.0    1.9   (registration, not error)
+//   GRID_TRIM_Y_CM                     0.0    1.9
+//   GRID_ERROR_OFFSET_X_CM / _Y_CM     0.0    0.0   (no model correction)
+//   GRID_SHIFT_X_CM / _Y_CM            0.0    0.0   (runtime only)
+//   SKEW_Y_PER_COL_CM                  0.115  0.13  (X-rail twist pulls Y)
+//   SKEW_X_* and all ROW/COLROW terms  0.0    0.0   (unmeasured)
+//   BUILD_PLACEMENT_OFFSET_X_CM        0.0   -0.4   (horiz sits 0.4 toward home)
+//   BUILD_PLACEMENT_OFFSET_Y_CM        0.0    0.0
+//   TOOL_OFFSET_NEUTRAL_X/Y_CM         0.0 / 0.0    (not per mode)
+//   TOOL_OFFSET_CW_X/Y_CM             +0.9 / -0.3   (the pickup-rotate swing)
+//   TOOL_OFFSET_CCW_X/Y_CM             0.0 / 0.0    (never measured)
+//   Z_MARGIN_PER_LEVEL_CM              0.0          (not per mode)
+//   Z_MARGIN_FIXED_CM                  0.12
+//   Z_MARGIN_FIXED_STEPS               0
+//
+// A 0.0 is a real statement - "this mode/axis needs no correction of this
+// kind" - not a placeholder waiting to be filled in. Vertical carries no fixed
+// placement offset on either axis for exactly that reason.
+//
+// ============================================================
+//   RULE 1 - WHAT "AFFECTS" MEANS IN THE TABLE BELOW
+// ============================================================
+// "Affects config?"  = has a paired field in config/rig.json that must be kept
+//                      in sync BY HAND (nothing pushes these over serial
+//                      except GRID_SHIFT_*).
+// "Affects Studio?"  = changing the paired rig.json field moves what
+//                      web/src/studio (coords.ts, MachineGrid, the 3D Twin)
+//                      DRAWS. A firmware-only knob makes the Studio's picture
+//                      disagree with where blocks really land, ON PURPOSE.
+// "Affects Python?"  = python/rig/grid.py (rig_console, the camera overlay,
+//                      gridded_camera_feed, block_grid_calibrate) reads the
+//                      same rig.json field and moves identically to Studio.
+//
+// A knob that moves the LATTICE moves the model everything draws and reasons
+// about. A knob that moves only the MOTION bends where the arm actually goes
+// while leaving every drawing perfectly rectangular. Know which you want
+// before you touch anything.
+//
+// ============================================================
+//   THE LATTICE KNOBS - these move the grid MODEL, and everything
+//   that draws it. All three enter cellCentreCmOf() identically:
+//       centre(i) = trim + error_offset + shift + i * pitch
+// ============================================================
+//
+//   GRID_TRIM_X_CM / GRID_TRIM_Y_CM               (per mode)
+//     CHANGES:  where the whole lattice sits against the home switches - it
+//               moves cell 0 and every other cell with it. LAYOUT, not error.
+//     SIGN:     + pushes the entire grid AWAY from that home switch, - pulls
+//               it toward. Horizontal ships +1.9/+1.9, which is the pickup-
+//               cell registration, not a correction.
+//     TOUCH WHEN: the physical lattice LAYOUT changes (a different pickup-cell
+//               registration, re-anchoring the grid). Almost never for routine
+//               calibration - if you are cancelling a measured error, you want
+//               GRID_ERROR_OFFSET_* or BUILD_PLACEMENT_OFFSET_* instead.
+//     Affects config: yes, trim_x_cm / trim_y_cm.  Studio: yes.  Python: yes.
+//
+//   GRID_ERROR_OFFSET_X_CM / GRID_ERROR_OFFSET_Y_CM   (per mode)
+//     CHANGES:  the cell centres themselves - the CALIBRATION nudge. Same
+//               effect on the lattice as a trim; kept separate so a
+//               correction never masquerades as layout.
+//     SIGN:     + moves every placement AWAY from home, - moves it toward.
+//               So a block landing 0.3 cm TOO CLOSE to home wants +0.3.
+//     TOUCH WHEN: the whole grid is uniformly off in a way that is NOT
+//               explained by claw rotation geometry (TOOL_OFFSET_*), does NOT
+//               grow with column/row (SKEW_*), and you WANT the drawings to
+//               move with it. If the drawings should stay put, this is the
+//               wrong knob - use BUILD_PLACEMENT_OFFSET_*. Starts at 0.
+//     Affects config: yes, error_offset_x_cm / _y_cm.  Studio: yes.  Python: yes.
+//
+//   GRID_SHIFT_X_CM / GRID_SHIFT_Y_CM              (per mode)
+//     CHANGES:  the same lattice translation again, but as a LIVE operator
+//               registration shift (the shiftX / shiftY serial commands), not
+//               calibration. Cleared by shiftX 0 / shiftY 0 and by every board
+//               reset. Can clip the reachable grid; the REQUEST is kept, so
+//               clearing the shift restores the full grid with no re-S.
+//     SIGN:     + shifts the whole grid AWAY from home, - toward. Same rule.
+//     TOUCH WHEN: never by hand-editing the firmware default. It is driven at
+//               runtime from rig.json's shift_x_cm / shift_y_cm (pushed by
+//               rig/link.py after the mode latch, before S) or by the command.
+//     NOTE:     THE PICK-UP DOES NOT SEE THIS - a build picks up with a plain
+//               home to raw [0,0], so a shift only ever moves the PLACEMENT.
+//     Affects config: yes, shift_x_cm / shift_y_cm.  Studio: yes.  Python: yes.
+//
+// ============================================================
+//   THE GEOMETRY CONSTANTS - measured facts about the hardware,
+//   not free calibration knobs
+// ============================================================
+//
+//   TOOL_OFFSET_NEUTRAL/CW/CCW_X_CM / _Y_CM        (fixed, NOT per mode)
+//     CHANGES:  only where the HOLDER goes, never the lattice. It is the
+//               measured vector from the gantry holder's reference point to
+//               where the grip actually puts the block centre, per rotation.
+//               Applied as: holder target = desired block centre - tool offset.
+//     SIGN:     + means the BLOCK CENTRE sits FARTHER from home than the
+//               holder reference, so the firmware sends the holder that much
+//               closer to home to compensate. (It is subtracted - the one
+//               place a knob is subtracted rather than added, because it
+//               describes the tool, not the target.) CW ships (+0.9, -0.3).
+//     TOUCH WHEN: the physical claw/grip geometry changes AND you have a fresh
+//               rig measurement to fit. NEVER to cancel an observed placement
+//               error - that corrupts a derived geometric constant. Use
+//               BUILD_PLACEMENT_OFFSET_* for that. See AGENTS.md section 3a.
+//     Affects config: yes, tool_offsets.neutral/cw/ccw - but FLASH-ONLY
+//               (config.py: "consumed by the firmware only"): nothing reads it
+//               back into motion, it is kept as an editable record only.
+//     Studio: NO.  Python grid math: NO. It moves the HOLDER, never the grid.
+//
+//   GRID_MAX_EDGE_OVERHANG_X_CM / _Y_CM            (per mode)
+//     CHANGES:  NOTHING. It moves nothing at all. It is the BUDGET that
+//               gridGeometryFits() (and Studio's axisFits()) measures a placed
+//               block's EDGE against, which is what decides how many cells are
+//               reported reachable.
+//     SIGN:     not a direction - a NON-NEGATIVE allowance in cm. A negative
+//               value is rejected outright.
+//     TOUCH WHEN: the overhang a mode may hang past the travel genuinely
+//               changes. Rare; usually only when re-deriving grid geometry.
+//     Affects config: yes, max_edge_overhang_x_cm / _y_cm.  Studio: yes
+//               (changes the reachable-cell count).  Python: yes.
+//
+// ============================================================
+//   THE Z KNOBS - build height only. "Home" here is the GROUND
+//   switch, so + = taller, - = shorter.
+// ============================================================
+//
+//   Z_MARGIN_PER_LEVEL_CM / Z_MARGIN_FIXED_CM / Z_MARGIN_FIXED_STEPS  (SECTION 6E)
+//     CHANGES:  the commanded Z height of a build level:
+//                   target_cm    = level * (BLOCK_HEIGHT_CM + PER_LEVEL) + FIXED
+//                   target_steps = round(target_cm * stepsPerCm) + FIXED_STEPS
+//     SIGN:     + = HIGHER above the ground switch, - = lower. PER_LEVEL is
+//               the one that ACCUMULATES (use it when the error grows with
+//               stack height); FIXED is added ONCE to any level >= 1 (use it
+//               when every level is uniformly off by the same amount);
+//               FIXED_STEPS is the same idea in raw steps, applied last after
+//               the cm->step conversion.
+//     LEVEL 0 IGNORES ALL THREE, on purpose: ground is the physical switch,
+//               not a computed number, so it cannot drift. Do not try to make
+//               these apply to level 0.
+//     TOUCH WHEN: measured stack heights are uniformly high/low (FIXED) or
+//               drift progressively taller/shorter per level (PER_LEVEL).
+//     Affects config: NO - no rig.json counterpart exists today.
+//     Studio: NO - the Studio's block height (BLOCK_HEIGHT_CM in coords.ts) is
+//               a separate fixed constant, unrelated to these.  Python: NO.
+//
+// ============================================================
+//   THE BUILD-MOTION KNOBS - these bend the MOTION only. Every
+//   visualisation stays perfectly rectangular, deliberately.
+//   Applied ONLY inside gotoBuildTarget(), i.e. the B command.
+//   Not in the grid model, not in G, not in the grid map, not in
+//   positionToIndex(), not in the camera overlay, Studio or Twin.
+// ============================================================
+//
+//   SKEW_X_PER_COL_CM / _PER_ROW_CM / _PER_COLROW_CM   (per axis, per mode)
+//   SKEW_Y_PER_COL_CM / _PER_ROW_CM / _PER_COLROW_CM   (near gotoBuildTarget)
+//     CHANGES:  the build target by an amount that GROWS with the cell index -
+//               the only knob here that is not constant:
+//                   nudge_cm = PER_COL*col + PER_ROW*row + PER_COLROW*col*row
+//               Cancels a drift that scales with travel, e.g. a slightly
+//               twisted X rail pulling Y as the carriage runs out along X.
+//               Full write-up: docs/X_RAIL_SKEW_COMPENSATION.md.
+//     SIGN:     + = the target moves AWAY from that axis' home switch as the
+//               index rises, - = toward it. Ships +0.115 (vertical) / +0.13
+//               (horizontal) cm per column on Y; all X terms are 0.
+//     TOUCH WHEN: a re-measurement shows the placement error CHANGES with
+//               which cell is built on. If the error is the same everywhere,
+//               it is not skew - use BUILD_PLACEMENT_OFFSET_*.
+//     Affects config: NO.  Studio: NO.  Python: NO.
+//
+//   BUILD_PLACEMENT_OFFSET_X_CM / _Y_CM             (per mode)
+//     CHANGES:  the build target by a CONSTANT, independent of cell index.
+//               This is the general-purpose "the build lands N cm off in this
+//               mode" knob and the DEFAULT place for a placement correction,
+//               because unlike GRID_ERROR_OFFSET_* it does not drag the grid
+//               model, camera overlay, Studio, Twin or direct G along with it.
+//     SIGN:     + = every placement moves AWAY from that home switch,
+//               - = toward it. So a block that lands 0.4 cm too FAR from home
+//               wants -0.4, and one that lands 0.4 cm too CLOSE wants +0.4.
+//               Horizontal X ships -0.4: placements are deliberately 0.4 cm
+//               closer to the X home switch than the lattice says.
+//     TOUCH WHEN: a build placement is off by a constant amount in one mode
+//               and the cause is NOT claw rotation geometry (TOOL_OFFSET_*)
+//               and NOT index-dependent (SKEW_*).
+//     Affects config: NO.  Studio: NO.  Python: NO.
+//
+//   SIGN TRAP SHARED BY BOTH BUILD KNOBS - this one bit hard once:
+//     buildPlacementOffsetSteps() and buildSkewSteps() return MAGNITUDES from
+//     the home switch, with no travel-direction factor. They are the only
+//     cm->steps converters in this file that omit it. They may be combined
+//     ONLY in magnitude space. Adding either straight onto a signed position
+//     inverts its meaning on X and turns a `< 0` clamp into "drive to the
+//     origin". See the long note in gotoBuildTarget().
+//
+// ------------------------------------------------------------
+//
 // TWO GRIDS, BOTH REAL.  A block measures 2.2 x 6.0 cm in plan, and it can be
 // laid either way round.  Which way round it is laid decides how many cells
 // fit, where they sit, and how far the grid has to be trimmed - so it is not
 // one grid with a flag, it is two grids, each with its own complete geometry:
 //
 //   VERTICAL   (mode 0)  block 2.2 X x 6.0 Y      6 cols x  5 rows
-//   HORIZONTAL (mode 1)  block 6.0 X x 2.2 Y      2 cols x 10 rows
+//   HORIZONTAL (mode 1)  block 6.0 X x 2.2 Y      2 cols x  9 rows
 //
 // ------------------------------------------------------------
 //   COORDINATE 0 IS A REAL BLOCK, AND ITS CENTRE IS HOME
@@ -723,6 +973,7 @@ float GRID_GAP_Y_CM[GRID_MODE_COUNT] = {1.6, 1.6};
 // Signed whole-allocation shift, per mode. Not copied between modes. Vertical
 // is anchored on the home corner (0.0 / 0.0); horizontal carries the +1.9 cm
 // pickup-cell registration on both axes (see the block above).
+// SIGN: + = whole grid AWAY from that home switch, - = toward it.
 float GRID_TRIM_X_CM[GRID_MODE_COUNT] = {0.0, 1.9};
 float GRID_TRIM_Y_CM[GRID_MODE_COUNT] = {0.0, 1.9};
 
@@ -756,6 +1007,8 @@ float GRID_TRIM_Y_CM[GRID_MODE_COUNT] = {0.0, 1.9};
 // 1.9 / 9.5 / 17.1), which is where blocks physically land and therefore what
 // MachineGrid, the camera overlay and the Studio should draw.  An error offset
 // moves cell centres; a tool offset moves only the holder.
+// SIGN: + = placements AWAY from home, - = toward it. A block landing too
+// CLOSE to home wants a POSITIVE value here. Moves the drawn grid too.
 float GRID_ERROR_OFFSET_X_CM[GRID_MODE_COUNT] = {0.0, 0.0};
 float GRID_ERROR_OFFSET_Y_CM[GRID_MODE_COUNT] = {0.0, 0.0};
 
@@ -775,6 +1028,7 @@ float GRID_ERROR_OFFSET_Y_CM[GRID_MODE_COUNT] = {0.0, 0.0};
 // THE PICK-UP DOES NOT SEE THIS. A build picks up with a plain home to raw
 // [0,0] (goToFeeder -> goToOrigin), which touches no lattice math, so the shift
 // only ever moves the PLACEMENT. See SECTION 6C header and applyGridShift().
+// SIGN: + = whole lattice AWAY from home, - = toward it. Same rule as a trim.
 float GRID_SHIFT_X_CM[GRID_MODE_COUNT] = {0.0, 0.0};
 float GRID_SHIFT_Y_CM[GRID_MODE_COUNT] = {0.0, 0.0};
 
@@ -788,11 +1042,13 @@ float GRID_SHIFT_Y_CM[GRID_MODE_COUNT] = {0.0, 0.0};
 // centred grid it ships as.  Horizontal gets zero, because any overhang there
 // means the trims are wrong.
 // Keep paired with config/rig.json -> grid.modes.*.max_edge_overhang_*_cm.
+// NOT a direction: a non-negative allowance in cm. Moves nothing; it is only
+// the budget the fit checks measure a placed block's edge against.
 float GRID_MAX_EDGE_OVERHANG_X_CM[GRID_MODE_COUNT] = {1.1, 3.0};
 float GRID_MAX_EDGE_OVERHANG_Y_CM[GRID_MODE_COUNT] = {3.0, 1.1};
 
 // THE HIGHEST VALID INDEX, not a count: vertical addresses columns 0..6 and
-// rows 0..5, horizontal columns 0..2 and rows 0..10. gridSlotsOf() adds the
+// rows 0..5, horizontal columns 0..2 and rows 0..9. gridSlotsOf() adds the
 // one. Per mode, so that S applies to the grid the operator is looking at and
 // the other mode keeps whatever size it was given.
 //
@@ -863,6 +1119,9 @@ const char *gridModeName(uint8_t mode)
 // CCW stays zero: no grid or build route requests it, so it has never been
 // measured.  The recorded (3.75, 1.40) CCW trial predates the centre-anchored
 // lattice and must NOT be copied here.
+// SIGN: + = the BLOCK CENTRE sits farther from home than the holder reference.
+// SUBTRACTED (holder target = block centre - tool offset), so a positive value
+// sends the holder that much closer to home. The only knob that is subtracted.
 float TOOL_OFFSET_NEUTRAL_X_CM = 0.0;
 float TOOL_OFFSET_NEUTRAL_Y_CM = 0.0;
 float TOOL_OFFSET_CW_X_CM = 0.9;
@@ -989,8 +1248,10 @@ float BLOCK_HEIGHT_CM = 1.5;
 //   Level 0 ignores all of these on purpose: ground is the physical
 //   switch, not a computed number, so it cannot drift.
 
+// SIGN for all three: + = HIGHER above the ground switch, - = lower.
+// Level 0 ignores all three - ground is the physical switch, not a number.
 float Z_MARGIN_PER_LEVEL_CM = 0.0; // cm added to EACH level (cumulative)
-float Z_MARGIN_FIXED_CM = 0.10;    // cm added ONCE to any level >= 1
+float Z_MARGIN_FIXED_CM = 0.12;    // cm added ONCE to any level >= 1
 long Z_MARGIN_FIXED_STEPS = 0;     // raw step trim, applied last
 
 // ------------------------------------------------------------
@@ -2566,6 +2827,51 @@ long gridTravelOf(uint8_t axis)
   return axisTravelOf(axis);
 }
 
+// ------------------------------------------------------------
+//   THE ONE SIGN RULE - MAGNITUDES vs SIGNED POSITIONS
+// ------------------------------------------------------------
+// There are exactly TWO number spaces in this firmware, and every calibration
+// bug this file has ever had came from mixing them.
+//
+//   MAGNITUDE  ("steps from home" / "cm from home")
+//       Always >= 0 inside the travel. Counts UP as you move AWAY from that
+//       axis' home switch (for Z: away from the ground switch, i.e. upward).
+//       EVERY calibration constant in this file lives here: + = away from
+//       home, - = toward home, on every axis, with no exceptions.
+//
+//   SIGNED POSITION  (what axisPos[] holds, what moveAxisTo() takes)
+//       magnitude * travelEndOf(axis). The two axes travel OPPOSITE ways:
+//       X's home switch sits at DIR_POS so X positions run NEGATIVE away from
+//       home, while Y's sits at DIR_NEG so Y runs positive. Z runs positive.
+//
+// So on X the two spaces have OPPOSITE signs, and on Y/Z they agree. Anything
+// that "works" when tested only on Y is not evidence of anything.
+//
+// RULES, and they are not optional:
+//   1. Do all calibration arithmetic - adding offsets, skews, margins,
+//      clamping to travel - in MAGNITUDE space.
+//   2. Convert to a signed position ONCE, at the end, with
+//      axisPosFromHomeSteps(). Convert back with axisStepsFromHome().
+//   3. NEVER add a magnitude straight onto a signed position, and never test a
+//      signed position against 0 as if it were a distance. On X that inverts
+//      the offset and turns a `< 0` clamp into "drive to the origin" - which
+//      is exactly the bug that collapsed every horizontal column onto X = 0.
+//
+// The two conversions are one multiply each and are deliberately named rather
+// than inlined, so every crossing between the spaces is visible at the callsite.
+
+// steps measured from the home switch  ->  signed machine position
+long axisPosFromHomeSteps(uint8_t axis, long stepsFromHome)
+{
+  return stepsFromHome * (long)travelEndOf(axis);
+}
+
+// signed machine position  ->  steps measured from the home switch
+long axisStepsFromHome(uint8_t axis, long signedPos)
+{
+  return signedPos * (long)travelEndOf(axis);
+}
+
 int8_t gridDirOf(uint8_t axis)
 {
   return travelEndOf(axis);
@@ -2870,7 +3176,7 @@ bool cellTargetPosition(uint8_t axis, long index, int8_t rotation,
     return false;
   }
 
-  *targetPosition = mag * (long)gridDirOf(axis);
+  *targetPosition = axisPosFromHomeSteps(axis, mag);
   return true;
 }
 
@@ -2896,7 +3202,7 @@ float gridPitchStepsOf(uint8_t axis)
 long positionToIndex(uint8_t axis, long pos, int8_t rotation)
 {
   long count = gridCountOf(axis);
-  long mag = pos * (long)gridDirOf(axis); // distance from origin
+  long mag = axisStepsFromHome(axis, pos); // distance from home
   float scale = xyStepsPerCmOf(axis);
 
   if (mag < 0 || mag > gridTravelOf(axis) || scale <= 0.0)
@@ -3406,7 +3712,7 @@ bool gotoCell(long col, long row)
 }
 
 // ------------------------------------------------------------
-// X-RAIL SKEW COMPENSATION  -  Y AXIS ONLY, BUILD MOTION ONLY
+// DYNAMIC X/Y SKEW COMPENSATION  -  PER MODE, BUILD MOTION ONLY
 // ------------------------------------------------------------
 //
 // Full write-up: docs/X_RAIL_SKEW_COMPENSATION.md
@@ -3429,30 +3735,34 @@ bool gotoCell(long col, long row)
 //
 // WHAT WE MEASURED
 // ----------------
-// Moving one cell along X pulls the arm ~0.1 cm along Y. It is linear in the
-// column index and there is no row dependence (a pure-Y move - same column -
-// has no error at all):
+// The current measurement finds that moving one cell along X pulls the arm
+// ~0.115 cm along Y. It is linear in the column index and there is no
+// row dependence (a pure-Y move - same column - has no error at all):
 //
 //     column 0  ->  +0.00 cm Y   (reference, no X travel)
-//     column 1  ->  +0.10 cm Y
-//     column 2  ->  +0.20 cm Y
-//     column 3  ->  +0.30 cm Y
-//     column k  ->  +0.10 * k cm Y
+//     column 1  ->  +0.115 cm Y
+//     column 2  ->  +0.230 cm Y
+//     column 3  ->  +0.345 cm Y
+//     column k  ->  +0.115 * k cm Y
 //
-// So SKEW_Y_PER_COL_CM = 0.1, and the row / cross terms stay 0 until a
-// measurement says otherwise.
+// This is now stored separately for EACH target axis and EACH grid mode.  A
+// physical error is allowed to have an X and a Y component, and the vertical
+// and horizontal grids have distinct pitches and can be calibrated separately.
+//
+// Both modes presently use the same measured Y/column setting. The horizontal
+// slot remains independent: measure horizontal placements before retuning it.
 //
 // SIGN - "forward" = +Y = further from the Y home switch (row 0 side). The
 // nudge is ADDED to the Y target, so selecting cell [1,0] drives the rig
-// ~0.10 cm forward, [2,0] ~0.20 cm forward, and so on.
+// ~0.115 cm forward, [2,0] ~0.230 cm forward, and so on.
 //
-//   yNudge_cm = SKEW_Y_PER_COL_CM    * col
-//             + SKEW_Y_PER_ROW_CM    * row
-//             + SKEW_Y_PER_COLROW_CM * col * row
+//   axisNudge_cm = SKEW_<AXIS>_PER_COL_CM[gridMode]    * col
+//                + SKEW_<AXIS>_PER_ROW_CM[gridMode]    * row
+//                + SKEW_<AXIS>_PER_COLROW_CM[gridMode] * col * row
 //
 // This is STATIC in firmware. Nothing supplies it over serial - it is computed
-// from the cell indices on every build. The three coefficients below are the
-// ONLY knob; re-fit them if the rig is re-measured.
+// from the cell indices on every build. The six per-axis tables below are the
+// ONLY knobs; re-fit the active mode if the rig is re-measured.
 //
 // SCOPE - this correction lives here and ONLY here:
 //   * It is applied in gotoBuildTarget() alone. The B (BUILD) motion is the
@@ -3464,20 +3774,89 @@ bool gotoCell(long col, long row)
 //   * It does not exist in the Python link, the camera grid, the Studio grid,
 //     or the 3D grid - every VISUALISATION stays perfectly rectangular. This
 //     bends the MOTION so the real bricks come out straight and level.
-//   * X is never touched.
-float SKEW_Y_PER_COL_CM = 0.1f;    // measured: ~0.1 cm Y pull per column of X travel
-float SKEW_Y_PER_ROW_CM = 0.0f;    // no row dependence measured (pure-Y is clean)
-float SKEW_Y_PER_COLROW_CM = 0.0f; // cross term, if the pull ever grows with row
+//   * Either X or Y may be corrected; a zero table leaves that axis unchanged.
+//
+//                                         { vertical, horizontal }
+// SIGN: + = target moves AWAY from that axis' home switch as the index rises,
+// - = toward it. These are MAGNITUDES from home - see gotoBuildTarget().
+float SKEW_X_PER_COL_CM[GRID_MODE_COUNT]    = {0.0, 0.0};
+float SKEW_X_PER_ROW_CM[GRID_MODE_COUNT]    = {0.0, 0.0};
+float SKEW_X_PER_COLROW_CM[GRID_MODE_COUNT] = {0.0, 0.0};
+float SKEW_Y_PER_COL_CM[GRID_MODE_COUNT]    = {0.115, 0.13};
+float SKEW_Y_PER_ROW_CM[GRID_MODE_COUNT]    = {0.0, 0.0};
+float SKEW_Y_PER_COLROW_CM[GRID_MODE_COUNT] = {0.0, 0.0};
 
-// Y step offset to add to a build target for cell [col,row]. Positive = further
-// from the Y home switch ("forward"). With the measured 0.1 cm/col this is
-// +0.1 cm at col 1, +0.2 cm at col 2, ... and exactly 0 anywhere in col 0.
-long buildYSkewSteps(long col, long row)
+// A fixed build-placement correction, independent of cell index. This is
+// deliberately firmware-only: unlike GRID_ERROR_OFFSET_* and GRID_SHIFT_*, it
+// does not move the grid model, camera overlay, Studio, Twin, or direct G.
+// Positive is away from the relevant home switch, NEGATIVE is toward it. That
+// sign is honoured on both axes only because gotoBuildTarget() applies this in
+// magnitude space; see the long note there before changing how it is consumed.
+//
+// THE SHIPPED VALUES, AND WHAT EACH ONE MEANS - the tables read
+// { vertical, horizontal }:
+//
+//   X vertical    0.0   no fixed X correction in vertical mode
+//   X horizontal -0.4   horizontal placements are commanded 0.4 cm CLOSER to
+//                       the X home switch than the lattice says
+//   Y vertical    0.0   no fixed Y correction in vertical mode
+//   Y horizontal  0.0   no fixed Y correction in horizontal mode
+//
+// A 0.0 HERE IS A REAL STATEMENT, NOT A PLACEHOLDER. It means that mode/axis
+// gets NO fixed placement correction: the correction comes out exactly zero,
+// gotoBuildTarget() skips its whole correction body for that axis, and the raw
+// lattice target is commanded unmodified. Vertical is deliberately in that
+// state on both axes - vertical placement has never been measured off by a
+// constant - so leave it at zero until a vertical build actually is.
+//
+// Note that "no FIXED correction" is not "no correction": vertical still gets
+// its SKEW_Y_PER_COL_CM nudge (0.115 cm per column), which is the separate,
+// index-dependent knob above. The two are added together per build.
+//
+// TURNING A MEASUREMENT INTO A VALUE - a reported ERROR and a requested
+// PLACEMENT take OPPOSITE signs, and this is where inputs get misread:
+//   "it landed 0.4 cm too CLOSE to home"  -> error is -0.4 -> write +0.4
+//   "it landed 0.4 cm too FAR from home"  -> error is +0.4 -> write -0.4
+//   "I want it 0.4 cm TOWARD home"        -> a target     -> write -0.4
+//   "I want it 0.4 cm FURTHER OUT"        -> a target     -> write +0.4
+// If the request is ambiguous, ASK. Do not guess a sign here.
+//
+// Keep these paired with the values documented in AGENTS.md; test_grid.py pins
+// every slot against this sketch and fails on any drift.
+float BUILD_PLACEMENT_OFFSET_X_CM[GRID_MODE_COUNT] = {0.0, -0.4};
+float BUILD_PLACEMENT_OFFSET_Y_CM[GRID_MODE_COUNT] = {0.0, 0.0};
+
+// Returns a MAGNITUDE in steps - "this far away from the home switch" - with no
+// travel-direction factor applied. Only gotoBuildTarget() consumes it, and it
+// converts to a signed position itself. Do not add this straight onto an
+// axisPos / cellTargetPosition value: on X, whose positions count negative away
+// from home, that inverts the sign of every offset in the table above.
+long buildPlacementOffsetSteps(uint8_t axis)
 {
-  float cm = SKEW_Y_PER_COL_CM * (float)col
-           + SKEW_Y_PER_ROW_CM * (float)row
-           + SKEW_Y_PER_COLROW_CM * (float)col * (float)row;
-  return lround(cm * xyStepsPerCmOf(AXIS_Y));
+  float cm = (axis == AXIS_X) ? BUILD_PLACEMENT_OFFSET_X_CM[gridMode]
+                               : BUILD_PLACEMENT_OFFSET_Y_CM[gridMode];
+  return lround(cm * xyStepsPerCmOf(axis));
+}
+
+// Step offset to add to an X or Y build target for cell [col,row]. Positive
+// means farther from that axis's home switch. At the shipped calibration only
+// vertical/horizontal Y get +0.115 cm at col 1, +0.230 cm at col 2, etc.; all
+// X terms and all row/cross terms are zero until measured.
+//
+// Like buildPlacementOffsetSteps(), this is a MAGNITUDE from the home switch,
+// not a signed axis position - same warning applies, and it is why the X skew
+// terms staying at zero hid the direction bug until a fixed X offset appeared.
+long buildSkewSteps(uint8_t axis, long col, long row)
+{
+  float perCol = (axis == AXIS_X) ? SKEW_X_PER_COL_CM[gridMode]
+                                  : SKEW_Y_PER_COL_CM[gridMode];
+  float perRow = (axis == AXIS_X) ? SKEW_X_PER_ROW_CM[gridMode]
+                                  : SKEW_Y_PER_ROW_CM[gridMode];
+  float perColRow = (axis == AXIS_X) ? SKEW_X_PER_COLROW_CM[gridMode]
+                                     : SKEW_Y_PER_COLROW_CM[gridMode];
+  float cm = perCol * (float)col + perRow * (float)row
+           + perColRow * (float)col * (float)row;
+  return lround(cm * xyStepsPerCmOf(axis));
 }
 
 // Kept separate from gotoCellForRotation() because BUILD has its own range and
@@ -3494,29 +3873,87 @@ bool gotoBuildTarget(long col, long row, int8_t rotation)
       !cellTargetPosition(AXIS_Y, row, rotation, &targetY))
     return false;
 
-  // X-rail skew compensation: nudge Y (only) so the physical brick lands
-  // straight. Clamped to the Y travel so a bad coefficient can never drive the
-  // carriage past a soft limit; moveAxisTo() still enforces the limit too.
-  long skewY = buildYSkewSteps(col, row);
-  if (skewY != 0)
+  // Dynamic skew compensation: independently nudge X and Y so the physical
+  // brick lands on the rectangular grid. Clamp each target to its own travel
+  // so a bad calibration coefficient cannot command beyond a soft limit.
+  //
+  // ALL OF THIS IS DONE IN MAGNITUDE SPACE - "steps from the home switch" -
+  // and only converted back to a signed axis position at the end. That is not
+  // a style choice; doing it on the signed position was wrong twice over.
+  //
+  // Axis positions are SIGNED BY TRAVEL DIRECTION: cellTargetPosition() returns
+  // `magnitude * gridDirOf(axis)`, and the two axes travel opposite ways. X's
+  // home switch is at DIR_POS, so X counts NEGATIVE away from home; Y's is at
+  // DIR_NEG, so Y counts positive. Meanwhile buildPlacementOffsetSteps() and
+  // buildSkewSteps() both return a magnitude in "cm away from home" with NO
+  // direction factor - they are the only cm->steps converters in this file
+  // that omit it. Mixing those two conventions produced two separate bugs:
+  //
+  //   1. `if (capped < 0) capped = 0;` reads as "clamp to the near end" on Y,
+  //      but as "discard the target and drive to the origin" on EVERY X target,
+  //      because they are all negative. Every horizontal column collapsed onto
+  //      X = 0 and the column index stopped mattering at all.
+  //   2. Adding a positive magnitude to a negative position moves the holder
+  //      TOWARD home, so on X a positive BUILD_PLACEMENT_OFFSET_X_CM /
+  //      SKEW_X_* did the exact opposite of the "+ = away from home" both
+  //      tables document.
+  //
+  // Vertical was spared both only because its X correction is exactly zero and
+  // skips the loop body; Y was spared both because its direction is +1, which
+  // is the one case where the two conventions happen to agree.
+  //
+  // Converting to a distance from home first fixes both at once and makes the
+  // clamp mean what it says: keep the corrected target on the machine.
+  long *targets[AXIS_COUNT] = {&targetX, &targetY};
+  for (uint8_t axis = AXIS_X; axis <= AXIS_Y; axis++)
   {
-    long cappedY = targetY + skewY;
-    long maxY = lround(xyTravelCmOf(AXIS_Y) * xyStepsPerCmOf(AXIS_Y));
-    if (cappedY < 0)
-      cappedY = 0;
-    else if (cappedY > maxY)
-      cappedY = maxY;
+    long correction = buildPlacementOffsetSteps(axis) + buildSkewSteps(axis, col, row);
+    if (correction == 0)
+      continue;
 
-    // Log it so a live build shows the correction being applied per cell.
-    Serial.print(F("  X-rail skew: Y "));
-    Serial.print(targetY);
+    // Into MAGNITUDE space (steps from the home switch), where the correction
+    // and the clamp both already speak the same language, and back out once.
+    long original = *targets[axis];
+    long wantedFromHome = axisStepsFromHome(axis, original) + correction;
+    long maximum = gridTravelOf(axis); // the soft cap, also steps from home
+
+    long magnitude = wantedFromHome;
+    if (magnitude < 0)
+      magnitude = 0;
+    else if (magnitude > maximum)
+      magnitude = maximum;
+    long capped = axisPosFromHomeSteps(axis, magnitude);
+
+    Serial.print(F("  Build correction: "));
+    Serial.print((axis == AXIS_X) ? F("X ") : F("Y "));
+    Serial.print(original);
     Serial.print(F(" -> "));
-    Serial.print(cappedY);
+    Serial.print(capped);
     Serial.print(F(" steps ("));
-    Serial.print((float)(cappedY - targetY) / xyStepsPerCmOf(AXIS_Y), 3);
-    Serial.println(F(" cm, col skew)"));
+    // Reported in the convention BUILD_PLACEMENT_OFFSET_* / SKEW_* are written
+    // in: + is AWAY from the home switch, never the raw signed step delta,
+    // which reads inverted on X.
+    Serial.print((float)(magnitude - axisStepsFromHome(axis, original))
+                 / xyStepsPerCmOf(axis), 3);
+    Serial.println(F(" cm from home)"));
 
-    targetY = cappedY;
+    // The clamp biting means the correction pushed the target off the machine,
+    // so the block is about to be placed somewhere other than the cell that was
+    // asked for. cellTargetPosition() validated the UNCORRECTED target, so only
+    // this check can catch it - say so loudly rather than misplacing in silence.
+    if (magnitude != wantedFromHome)
+    {
+      Serial.print(F("  !! Build correction clamped on "));
+      Serial.print((axis == AXIS_X) ? F("X") : F("Y"));
+      Serial.print(F(": wanted "));
+      Serial.print(wantedFromHome);
+      Serial.print(F(" steps from home, travel allows 0.."));
+      Serial.println(maximum);
+      Serial.println(F("  !! The block will NOT land on the requested cell."));
+      Serial.println(F("  !! Check BUILD_PLACEMENT_OFFSET_* / SKEW_* for this mode."));
+    }
+
+    *targets[axis] = capped;
   }
 
   if (!goToOrigin())
@@ -3609,7 +4046,7 @@ long levelToZSteps(long level)
   }
 
   // Z counts UP from its bottom switch, in the travelEndOf direction.
-  return steps * (long)travelEndOf(AXIS_Z);
+  return axisPosFromHomeSteps(AXIS_Z, steps);
 }
 
 // There is deliberately no zTopPosition() any more. The top of Z is
@@ -3650,7 +4087,7 @@ long zEtaMs(long steps)
 // case (a full travel) rather than reporting a confident wrong number.
 long zStepsFromGround()
 {
-  long here = axisPos[AXIS_Z] * (long)travelEndOf(AXIS_Z);
+  long here = axisStepsFromHome(AXIS_Z, axisPos[AXIS_Z]);
   if (here < 0)
   {
     here = 0;
@@ -3690,7 +4127,7 @@ long zEtaToLevelMs(long level)
   {
     return zEtaMs(Z_TRAVEL_STEPS);
   }
-  long target = levelToZSteps(level) * (long)travelEndOf(AXIS_Z);
+  long target = axisPosFromHomeSteps(AXIS_Z, levelToZSteps(level));
   return zEtaMs(zStepsFromGround() - target);
 }
 
@@ -4501,7 +4938,7 @@ void applyLimitReference(int8_t idx)
   {
     // We climbed here from a true zero, so the count IS the real
     // switch-to-switch distance. Keep it (see SECTION 6).
-    zTravelMeasured = axisPos[axis] * (long)travelEndOf(axis);
+    zTravelMeasured = axisStepsFromHome(axis, axisPos[axis]);
 
     if (!Z_TOP_REFERENCES_POSITION)
     {
@@ -4513,7 +4950,7 @@ void applyLimitReference(int8_t idx)
   // trust the constant over the count. Adopt the configured travel -
   // and remember that this position is a constant, not a measurement,
   // so resting here cannot be mistaken for measuring the travel.
-  axisPos[axis] = axisTravelOf(axis) * (long)travelEndOf(axis);
+  axisPos[axis] = axisPosFromHomeSteps(axis, axisTravelOf(axis));
   axisHomed[axis] = true;
   axisRefAtHome[axis] = false;
 }
@@ -5004,23 +5441,54 @@ void printGridConfig()
   Serial.print(GRID_SHIFT_Y_CM[gridMode], 3);
   Serial.println(F(" cm  (shiftX/shiftY; whole lattice, pick-up excluded)"));
 
-  // X-rail skew compensation. Printed here so a flash can be confirmed from the
-  // serial console: if these coefficients are missing, the board is running old
-  // firmware. BUILD motion only - it never touches the grid model above.
-  Serial.print(F("X-rail skew: Y += "));
-  Serial.print(SKEW_Y_PER_COL_CM, 3);
-  Serial.print(F("*col + "));
-  Serial.print(SKEW_Y_PER_ROW_CM, 3);
-  Serial.print(F("*row + "));
-  Serial.print(SKEW_Y_PER_COLROW_CM, 3);
-  Serial.println(F("*col*row  cm   (BUILD only, +Y = away from home)"));
-  Serial.print(F("             e.g. col "));
-  Serial.print(gridColsNow());
-  Serial.print(F(" row 0 -> Y += "));
-  Serial.print((float)buildYSkewSteps(gridColsNow(), 0) / xyStepsPerCmOf(AXIS_Y), 3);
-  Serial.print(F(" cm ("));
-  Serial.print(buildYSkewSteps(gridColsNow(), 0));
-  Serial.println(F(" steps)"));
+  // Per-mode dynamic X/Y skew compensation. Printed here so a flash can be
+  // confirmed from the serial console. BUILD motion only - it never touches
+  // the grid model above.
+  for (uint8_t axis = AXIS_X; axis <= AXIS_Y; axis++)
+  {
+    const char *name = (axis == AXIS_X) ? "X" : "Y";
+    float perCol = (axis == AXIS_X) ? SKEW_X_PER_COL_CM[gridMode]
+                                    : SKEW_Y_PER_COL_CM[gridMode];
+    float perRow = (axis == AXIS_X) ? SKEW_X_PER_ROW_CM[gridMode]
+                                    : SKEW_Y_PER_ROW_CM[gridMode];
+    float perColRow = (axis == AXIS_X) ? SKEW_X_PER_COLROW_CM[gridMode]
+                                       : SKEW_Y_PER_COLROW_CM[gridMode];
+    Serial.print(F("Dynamic skew ["));
+    Serial.print(gridModeName(gridMode));
+    Serial.print(F("]: "));
+    Serial.print(name);
+    Serial.print(F(" += "));
+    Serial.print(perCol, 3);
+    Serial.print(F("*col + "));
+    Serial.print(perRow, 3);
+    Serial.print(F("*row + "));
+    Serial.print(perColRow, 3);
+    Serial.println(F("*col*row cm   (BUILD only, + = away from home)"));
+    float fixed = (axis == AXIS_X) ? BUILD_PLACEMENT_OFFSET_X_CM[gridMode]
+                                   : BUILD_PLACEMENT_OFFSET_Y_CM[gridMode];
+    Serial.print(F("Build placement offset ["));
+    Serial.print(gridModeName(gridMode));
+    Serial.print(F("]: "));
+    Serial.print(name);
+    Serial.print(F(" += "));
+    Serial.print(fixed, 3);
+    Serial.println(F(" cm   (BUILD only, + = away from home)"));
+    // The worked example is the TOTAL a build actually applies - skew plus the
+    // fixed offset. It used to print the skew alone while sitting directly
+    // under the fixed-offset line, which read as the total and understated
+    // every horizontal X correction by the whole placement offset.
+    long exampleSteps = buildSkewSteps(axis, gridColsNow(), 0)
+                        + buildPlacementOffsetSteps(axis);
+    Serial.print(F("             e.g. col "));
+    Serial.print(gridColsNow());
+    Serial.print(F(" row 0 -> "));
+    Serial.print(name);
+    Serial.print(F(" += "));
+    Serial.print((float)exampleSteps / xyStepsPerCmOf(axis), 3);
+    Serial.print(F(" cm ("));
+    Serial.print(exampleSteps);
+    Serial.println(F(" steps, skew + fixed offset)"));
+  }
 
   Serial.print(F("Edge budget: X "));
   Serial.print(gridMaxEdgeOverhangCmOf(AXIS_X), 3);
@@ -5207,7 +5675,7 @@ void printLevelTable()
 
   for (long L = 0; L <= maxLevel; L++)
   {
-    long steps = levelToZSteps(L) * (long)travelEndOf(AXIS_Z);
+    long steps = axisPosFromHomeSteps(AXIS_Z, levelToZSteps(L));
 
     if (L < 10)
       Serial.print(F(" "));
@@ -5545,7 +6013,7 @@ void printPositionTable()
   for (uint8_t a = 0; a < AXIS_COUNT; a++)
   {
     long travel = axisTravelOf(a);
-    long used = axisPos[a] * (long)travelEndOf(a); // distance from home
+    long used = axisStepsFromHome(a, axisPos[a]); // distance from home
     long left = travel - used;
 
     Serial.print(F("  "));

@@ -1270,6 +1270,43 @@ first in the diff.
 Newest first. One entry per landed change; note anything that contradicts the
 plan or that a future reader could not infer.
 
+### A settled build stopped freezing the runner on "14/14 park the claw"
+
+Two independent bugs made the runner look stuck after a block that had, in
+fact, been placed and parked.
+
+- **A settled command kept advertising its last phase.** `web/progress.py`'s
+  `on_result` deliberately leaves `build_step`/`build_phase` alone — for a
+  FAILED build, where the rig stopped is the last thing anyone knows — but it
+  re-stamps the snapshot with the **result's** event id. Every state snapshot
+  after a build therefore carried `14 / park_rotation / "Return the claw to
+  neutral"` under an id higher than any of that command's own steps.
+  `RunnerPanel` replayed each one as a `build-step`, and because the id always
+  won the reducer's staleness check, the phase readout was pinned to
+  "14/14 · Return the claw to neutral" over whatever ran next — most visibly a
+  mode latch, which announces no phases of its own to displace it. The panel
+  now only replays a phase that is actually in flight (`phaseInFlight` in
+  `store.ts`: any of `idle`/`placed`/`rejected`/`aborted`/`locked` means no
+  phase is executing). `issueMode` and `mode-settled` also clear `progress`
+  now, exactly as `issueBuild` and a placed `build-settled` already did.
+- **`POST /api/mode` blocked the event loop.** It was an `async def` calling
+  `BuildController.set_mode(home_before_horizontal=True)`, which homes X/Y over
+  the serial cable — many seconds of blocking I/O on the loop that owns the
+  WebSocket fan-out, its heartbeats, the MJPEG stream and `_drive_pipeline`.
+  `_drive_pipeline` is the only thing that polls `BuildJob` and publishes
+  `build_result`, so a latch froze the whole console and then let it catch up
+  in a burst. It is now a plain `def` (FastAPI runs those on a worker thread),
+  which is the rule `routes_calibration.py` already states and follows. Since
+  the loop no longer serialises latches by accident, one takes
+  `app.state.mode_latch_lock`, and `require_mutable` refuses every other
+  mutation while it is held.
+- **The BUILD button contradicted the result above it.** `build_result` is
+  durable and `web/events.py` drains durable events before the coalesced state
+  slot, so between the two the raw snapshot still says `RUNNING` for a rig that
+  has finished. `RunnerPanel` already bridged that for transport; it now
+  renders from the same bridged snapshot, so STEP's BUILD button no longer sits
+  disabled on "Rig is unavailable" after a placed block.
+
 ### The pickup-rotate swing moved out of `error_offset` and into `tool_offsets.cw`
 
 - **The 56% bridge in the Studio was real, and it was a firmware calibration

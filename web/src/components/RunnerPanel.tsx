@@ -6,7 +6,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { StateModel } from "../types";
-import { emptyProgress, type BuildProgress, type ConsoleSnapshot } from "../store";
+import { emptyProgress, phaseInFlight, type BuildProgress, type ConsoleSnapshot } from "../store";
 import { compile, formatDuration } from "../studio/compile";
 import { fromFileRig, shiftsOf, structureOf } from "../studio/rigmodel";
 import { BLOCK_CYCLE_SECONDS, DEFAULT_STUDIO_SETTINGS, LATCH_HOMING_SECONDS } from "../studio/settings";
@@ -94,6 +94,13 @@ export function RunnerPanel({ state, connected, modelId, api, delay, onActiveCha
   serverRef.current = terminalState !== null && state.build_state === "RUNNING"
     ? { ...state, build_state: terminalState }
     : state;
+  // Everything this panel DRAWS reads the bridged snapshot too, not the raw
+  // prop. `build_result` is durable and is always delivered ahead of the state
+  // snapshot behind it (`web/events.py` drains durable events first), so
+  // between the two the raw prop still says RUNNING for a rig that has
+  // finished and parked — and a BUILD button disabled with "Rig is
+  // unavailable" is then the console contradicting the result it just showed.
+  const server = serverRef.current;
 
   const modelDocument = useMemo(() => modelId ? loadTwinModel(modelId) : null, [modelId]);
   const compiled = useMemo(() => modelDocument ? compile(structureOf(modelDocument), {
@@ -133,6 +140,14 @@ export function RunnerPanel({ state, connected, modelId, api, delay, onActiveCha
   // deduplicates by event id, so a replayed reconnect costs nothing.
   useEffect(() => {
     if (progress.phase === null || progress.step === null) return;
+    // A SETTLED command still advertises the phase it stopped on: the server
+    // keeps `build_step`/`build_phase` across `on_result` on purpose, and
+    // stamps the snapshot with the RESULT's event id. Replaying that as a
+    // phase would be this panel inventing motion the rig is not making — and
+    // because the result's id is higher than any of that command's steps, it
+    // would pin the readout to "14/14 park the claw" over whatever came next,
+    // a mode latch most visibly. Only a phase in flight is news.
+    if (!phaseInFlight(progress)) return;
     applyEvent({
       type: "build-step", commandSeq: progress.commandSeq, step: progress.step,
       total: progress.total ?? progress.step, phaseId: progress.phase,
@@ -204,7 +219,7 @@ export function RunnerPanel({ state, connected, modelId, api, delay, onActiveCha
   const op = currentOp(run);
   const operation = currentOperationText(run);
   const canStart = !!modelDocument && !!compiled?.valid && connected
-    && state.hardware_ready && state.build_state === "READY";
+    && server.hardware_ready && server.build_state === "READY";
 
   // ── toasts for building mode ────────────────────────────────────────────
   // Purely a mirror of state this panel already derives. The console mounts
@@ -305,7 +320,7 @@ export function RunnerPanel({ state, connected, modelId, api, delay, onActiveCha
       )}
 
       {run.phase === "awaiting-confirm" && run.pendingConfirm === "build" && (
-        <BuildButton state={state} connected={connected}
+        <BuildButton state={server} connected={connected}
                      onBuild={() => applyEvent({ type: "confirm", now: Date.now() })} />
       )}
 

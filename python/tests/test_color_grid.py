@@ -148,14 +148,14 @@ horizontal_spec = ColorGridSpec.from_config(rig_config, mode="horizontal")
 # already feeder-adjacent. The old -4.55/-5.0 override existed only to undo the
 # centring the geometry used to apply, and would now push the grid off the rig.
 horizontal_grid = MachineGrid.from_config(rig_config, mode="horizontal")
-H_COLS, H_ROWS = horizontal_spec.cols, horizontal_spec.rows       # 3 x 11
-H_CELLS = H_COLS * H_ROWS                                         # 33
+H_COLS, H_ROWS = horizontal_spec.cols, horizontal_spec.rows       # 3 x 10
+H_CELLS = H_COLS * H_ROWS                                         # 30
 check("horizontal sheet maps the complete 3x10 coordinate grid",
       (horizontal_spec.mode, horizontal_spec.cols, horizontal_spec.rows)
       == ("horizontal", 3, 10), horizontal_spec.describe())
 
 # The real horizontal paper has spare width.  Five long-side columns gives the
-# detector that same window-search problem while retaining the 3x11 mapped
+# detector that same window-search problem while retaining the 3x10 mapped
 # extent; thirteen short-side rows give overlapping choices there too.
 horizontal_image, horizontal_centres = render_sheet(
     horizontal_spec, 6, 16, clip_cm=(0.6, 0.0), margin_cm=2.0)
@@ -743,7 +743,7 @@ else:
 # --- 9. older training captures, when they are there ------------------------
 #
 # These JPEGs are photographs of the PRE-6cm printed sheet (2.2 x 7.5 cm blocks,
-# 0.5 cm gaps, many more coordinates). They cannot match the current 7x6 / 3x11
+# 0.5 cm gaps, many more coordinates). They cannot match the current 7x6 / 3x10
 # specs and are kept only as a skip until a new sheet is printed and shot. When
 # a new capture lands, drop this guard and restore the fit/refuse assertions.
 

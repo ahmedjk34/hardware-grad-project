@@ -26,8 +26,8 @@ def chapter_2(rep):
         "**Dose exactly one block at a time to a fixed pickup point.** A hopper gate that opens "
         "in two stages releases the bottom block of a queued column on its own, and shuts behind "
         "it before the belt starts so a second block cannot follow.",
-        "**Confirm the block at both ends of the feed path.** One ultrasonic sensor proves a "
-        "block physically left the container; a second proves it arrived at the pickup point, "
+        "**Confirm the block at both ends of the feed path.** An ultrasonic sensor proves a "
+        "block physically left the container; a digital IR sensor proves it arrived at the pickup point, "
         "and is read again after the aligner moves. A feed request arriving while the pickup "
         "point is already occupied is refused before anything opens.",
         "**Find the blocks on the surface from overhead, and know which cell each one is in.** "
@@ -232,8 +232,8 @@ def chapter_2(rep):
          "the grid geometry and the fourteen-phase build cycle. It answers on its own serial "
          "link at 9600 8N1 with `@`-prefixed acknowledgement lines."),
         ("Arduino Uno (the feeder)",
-         "The hopper gate servo, the belt stepper, the alignment servo and the two ultrasonic "
-         "sensors, together with the complete feed state machine. It answers on a second, "
+         "The hopper gate servo, the belt stepper, the alignment servo, the exit ultrasonic "
+         "sensor and the stage IR sensor, together with the complete feed state machine. It answers on a second, "
          "entirely separate serial link at 9600 8N1, speaking protocol 2."),
         ("The vision system",
          "An OV5647 fisheye camera on the Pi's CSI bus. Colour correction, lens correction, "
@@ -357,7 +357,7 @@ def chapter_2(rep):
     rep.defs([
         ("What it is", "A 3D-printed two-jaw gripper driven by a single hobby servo on Mega "
                        "pin 6, with exactly two commanded positions: OPEN at 0 degrees and "
-                       "CLOSE at 52 degrees. The jaws close on the middle of the block, across "
+                       "CLOSE at 54 degrees. The jaws close on the middle of the block, across "
                        "its 2.2 cm face."),
         ("Rotation", "A 28BYJ-48 stepper through a ULN2003 driver turns the whole claw a "
                      "quarter turn, 512 of its 2,048 steps per output revolution, at 10 rpm. "
@@ -409,10 +409,10 @@ def chapter_2(rep):
         "container is shut again, so a second block cannot follow the first out.",
         "**The belt.** A GT2-driven conveyor about 30 x 10 cm, built from a belt sheet on "
         "3D-printed rollers and driven by a NEMA17 through an A4988 (DIR 2, STEP 3), running at "
-        "a configurable 150 steps/s by default. The belt carries the block from the container "
+        "a configurable 325 steps/s by default. The belt carries the block from the container "
         "toward the pickup point.",
-        "**The stage sensor and the aligner.** A second HC-SR04 at the pickup point (TRIG 8, "
-        "ECHO 9) stops the belt the moment the block arrives, and an alignment servo on pin 6 "
+        "**The stage sensor and the aligner.** A digital IR obstacle sensor at the pickup point "
+        "(OUT 8, active-low by default) stops the belt the moment the block arrives, and an alignment servo on pin 6 "
         "nudges the block square, moving from its 90-degree rest to 120 degrees and back after "
         "350 ms. The stage sensor is then read again: only if the block is still there does the "
         "feeder report success.",
@@ -424,9 +424,8 @@ def chapter_2(rep):
         "additional positioning. The feeder never rotates: it always presents a block standing, "
         "whichever grid mode the gantry is latched into.")
     rep.figure("The feeder module: hopper with its two-stage servo gate, the conveyor belt, "
-               "the alignment servo, and the two HC-SR04 sensors at the container exit and at "
-               "the pickup point.",
-               placeholder="Photograph of the feeder alongside the gantry, with both ultrasonic "
+               "the alignment servo, the exit HC-SR04 and the pickup-stage IR sensor.",
+               placeholder="Photograph of the feeder alongside the gantry, with the exit and stage "
                            "sensors and the gate servo labelled, and the pickup point marked.")
 
     rep.h3("2.4.6 The workpiece and the build surface")
@@ -489,7 +488,8 @@ def chapter_2(rep):
         ("The slanted X rail",
          "The asymmetrically loaded arm holder leaves the X rail slightly out of square with Y, "
          "so a placement that involves X travel lands off along Y by an amount proportional to "
-         "the column index, measured at about 0.1 cm per column and with no row dependence at "
+         "the column index, measured at 0.115 cm per vertical column and 0.13 cm per horizontal "
+         "column, with no row dependence at "
          "all. It is corrected by a firmware nudge applied only to the build motion (Section 4.2.5)."),
         ("The pickup-rotate swing",
          "The claw's grip centre is offset from the rotation stepper's axis, so a 90-degree turn "
@@ -525,7 +525,7 @@ def chapter_2(rep):
         "CoreXY NEMA17s and the Z NEMA17) and the A4988 driving the feeder belt motor.",
         "**The 5 V rail**, from the LM2596 buck converter, feeds the gripper servo, the "
         "container and alignment servos, the 28BYJ-48 rotation stepper through its ULN2003, "
-        "both HC-SR04 ultrasonic sensors, and the A4988's logic and reference supply.",
+        "exit HC-SR04, stage IR sensor, and the A4988's logic and reference supply.",
         "**Both Arduinos are powered over USB from the Pi**, which is also how they communicate.",
         "**The Raspberry Pi runs from its own official USB-C supply**, deliberately not from the "
         "buck converter.",
@@ -541,7 +541,7 @@ def chapter_2(rep):
         "draws. A NEMA17 of the size used here takes on the order of 1.5 A per phase, the "
         "28BYJ-48 through its ULN2003 takes well under 0.3 A, a hobby servo draws a few "
         "hundred milliamperes while it is moving and almost nothing once it has arrived, and "
-        "the two ultrasonic sensors are a few milliamperes each. Adding the worst case of "
+        "the feeder sensors draw only a few tens of milliamperes together. Adding the worst case of "
         "every one of those together still leaves most of the supply unused.")
     rep.p(
         "In practice the machine never comes close even to that sum, because **the build "
@@ -584,7 +584,7 @@ def chapter_2(rep):
          "Turns those commands into motion. The Mega owns step generation, direction polarity, "
          "homing, limit enforcement, the grid-to-steps arithmetic, the servo and stepper timing "
          "and the phase sequence. The Uno owns the feed state machine, the servo angles, the "
-         "belt rate and the ultrasonic thresholds."),
+         "belt rate, exit-ultrasonic threshold and stage-IR polarity."),
         ("The reason for the split",
          "The firmware owns everything that cannot change without reflashing, which is exactly "
          "the set of numbers that would be dangerous if the Pi held a stale copy: the step "

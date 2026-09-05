@@ -258,9 +258,8 @@ for mode, want in SECTION_3.items():
     check(f"{mode}: build cell count", m.cols * m.rows == want["cells"])
     check(f"{mode}: matches its own config entry", m.matches(config), m.describe())
 
-# The shipped counts are the grids currently printed on paper, not geometric
-# maxima. Against the 24.3 x 40.0 cm travel and each mode's overhang
-# budget, one more cell on the tightest axis is still refused.
+# The shipped counts are the geometric maxima against the 22.8 x 38.0 cm
+# holder travel and each mode's overhang budget; one more cell is refused.
 def fits(mode, cols, rows):
     m = MachineGrid.from_config(config, mode=mode)
     try:
@@ -283,7 +282,7 @@ check("an 8th vertical column cannot fit", not fits("vertical", 8, 6))
 check("the 7th vertical column still fits", fits("vertical", 7, 6))
 check("a 7th vertical row cannot fit", not fits("vertical", 7, 7))
 
-# Addressable extents including the zero lanes: 7 x 6 and 3 x 11.
+# Addressable extents including the zero lanes: 7 x 6 and 3 x 10.
 vertical_grid = MachineGrid.from_config(config, mode="vertical")
 horizontal_grid = MachineGrid.from_config(config, mode="horizontal")
 check("vertical addresses a 7 x 6 coordinate grid",
@@ -415,14 +414,14 @@ sketch = sketch_path.read_text()
 
 def firmware_number(name):
     match = re.search(
-        rf"^\s*(?:float|long)\s+{re.escape(name)}\s*=\s*([-+]?\d+(?:\.\d+)?)\s*;",
+        rf"^\s*(?:const\s+)?(?:int|float|long)\s+{re.escape(name)}\s*=\s*([-+]?\d+(?:\.\d+)?)\s*;",
         sketch,
         re.MULTILINE,
     )
     return float(match.group(1)) if match else None
 
 
-def firmware_mode_numbers(name):
+def firmware_mode_numbers(name, source=None):
     """Read one per-mode table, e.g. `float GRID_TRIM_X_CM[...] = {1.1, 0.0};`.
 
     Returned keyed by mode NAME, not by index, so a test can never silently
@@ -430,7 +429,7 @@ def firmware_mode_numbers(name):
     """
     match = re.search(
         rf"^\s*(?:float|long)\s+{re.escape(name)}\s*\[[^\]]*\]\s*=\s*\{{([^}}]*)\}}\s*;",
-        sketch,
+        sketch if source is None else source,
         re.MULTILINE,
     )
     if match is None:
@@ -492,6 +491,66 @@ for constant, json_key in per_mode_pairs.items():
         check(f"firmware/config pair {constant}[{mode_name}]",
               actual[mode_name] == expected,
               f"firmware {actual[mode_name]}, JSON {expected}")
+
+# Dynamic build-motion compensation is deliberately firmware-only: it bends
+# the holder path, not the rectangular grid that the Pi/camera draw.  It must
+# nevertheless stay split by target axis AND grid mode, so a vertical tuning
+# cannot silently become horizontal's calibration (or vice versa).
+dynamic_skew_defaults = {
+    "SKEW_X_PER_COL_CM": {"vertical": 0.0, "horizontal": 0.0},
+    "SKEW_X_PER_ROW_CM": {"vertical": 0.0, "horizontal": 0.0},
+    "SKEW_X_PER_COLROW_CM": {"vertical": 0.0, "horizontal": 0.0},
+    "SKEW_Y_PER_COL_CM": {"vertical": 0.115, "horizontal": 0.13},
+    "SKEW_Y_PER_ROW_CM": {"vertical": 0.0, "horizontal": 0.0},
+    "SKEW_Y_PER_COLROW_CM": {"vertical": 0.0, "horizontal": 0.0},
+}
+placement_offset_defaults = {
+    "BUILD_PLACEMENT_OFFSET_X_CM": {"vertical": 0.0, "horizontal": -0.4},
+    "BUILD_PLACEMENT_OFFSET_Y_CM": {"vertical": 0.0, "horizontal": 0.0},
+}
+for constant, expected_by_mode in dynamic_skew_defaults.items():
+    actual = firmware_mode_numbers(constant)
+    if actual is None:
+        check(f"dynamic skew table {constant}", False, "no readable per-mode table")
+        continue
+    for mode_name, expected in expected_by_mode.items():
+        check(f"dynamic skew {constant}[{mode_name}]", actual[mode_name] == expected,
+              f"firmware {actual[mode_name]}, expected {expected}")
+for constant, expected_by_mode in placement_offset_defaults.items():
+    actual = firmware_mode_numbers(constant)
+    if actual is None:
+        check(f"build placement-offset table {constant}", False, "no readable per-mode table")
+        continue
+    for mode_name, expected in expected_by_mode.items():
+        check(f"build placement offset {constant}[{mode_name}]", actual[mode_name] == expected,
+              f"firmware {actual[mode_name]}, expected {expected}")
+check("live gripper close angle is 54 degrees", firmware_number("SERVO_CLOSE_ANGLE") == 54)
+
+# The supervised vertical/horizontal fill sketches must use the same dynamic
+# correction tables as the configured rig sketch. They are not flashed by
+# scripts/flash.sh, but leaving their old Y-only implementation behind makes a
+# manual standalone run physically disagree with the live calibration.
+for standalone_name in ("build_vertical_grid", "build_horizontal_grid"):
+    standalone_path = sketch_path.parents[1] / standalone_name / f"{standalone_name}.ino"
+    standalone = standalone_path.read_text()
+    for constant, expected_by_mode in {**dynamic_skew_defaults,
+                                       **placement_offset_defaults}.items():
+        actual = firmware_mode_numbers(constant, standalone)
+        if actual is None:
+            check(f"{standalone_name} dynamic skew table {constant}", False,
+                  "no readable per-mode table")
+            continue
+        for mode_name, expected in expected_by_mode.items():
+            check(f"{standalone_name} dynamic skew {constant}[{mode_name}]",
+                  actual[mode_name] == expected,
+                  f"firmware {actual[mode_name]}, expected {expected}")
+    check(f"{standalone_name} uses shared X/Y build skew helper",
+          "buildSkewSteps(axis, col, row)" in standalone
+          and "buildYSkewSteps" not in standalone
+          and "buildPlacementOffsetSteps(axis)" in standalone)
+    close = re.search(r"const int SERVO_CLOSE_ANGLE = (\d+);", standalone)
+    check(f"{standalone_name} close angle is 54 degrees",
+          close is not None and int(close.group(1)) == 54)
 
 paired_values = {
     "X_TRAVEL_CM": from_cfg.workspace_width_cm,
@@ -557,8 +616,8 @@ check("workspace projective round-trip",
 check("workspace rejects outside click",
       workspace.cell_at((0, 0), (640, 480)) is None)
 
-# Physical mapping uses the 24.3x40 cm holder-motion rectangle. The lattice is
-# anchored on the home corner: cell [0,0]'s outer edge sits exactly on it.
+# Physical mapping uses the 22.8 x 38.0 cm holder-motion rectangle. The lattice
+# is centre-anchored on home, so cell [0,0] extends half a block behind it.
 physical_workspace = WorkspaceMap.from_grid(from_cfg, corners, (640, 480))
 check("physical workspace matches grid JSON", physical_workspace.matches_grid(from_cfg))
 w_cm, h_cm = from_cfg.workspace_width_cm, from_cfg.workspace_height_cm

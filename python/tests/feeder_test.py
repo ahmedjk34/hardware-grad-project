@@ -41,8 +41,8 @@ def test_committed_config_and_uno_firmware_identity_stay_paired():
     ("@42 RECV cmd=FEED", 42, "RECV", ("cmd", "FEED")),
     ("@42 ACK cmd=FEED accepted=1", 42, "ACK", ("accepted", "1")),
     ("@42 STATE state=moving_to_stage", 42, "STATE", ("state", "moving_to_stage")),
-    ("@42 SENSOR sensor=stage distance_cm=8.2 detected=1", 42, "SENSOR", ("detected", "1")),
-    ("@42 EVENT phase=stage_detected_aligning distance_cm=8.2", 42, "EVENT", ("phase", "stage_detected_aligning")),
+    ("@42 SENSOR sensor=stage detected=1", 42, "SENSOR", ("detected", "1")),
+    ("@42 EVENT phase=stage_detected_aligning", 42, "EVENT", ("phase", "stage_detected_aligning")),
     ("@42 OK state=block_ready result=staged", 42, "OK", ("result", "staged")),
     ("@42 ERROR state=fault reason=stage_timeout", 42, "ERROR", ("reason", "stage_timeout")),
 ])

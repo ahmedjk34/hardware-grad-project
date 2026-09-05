@@ -263,7 +263,7 @@ def chapter_4(rep):
         "exactly one cell per mode and no more: `B 0 0 <level>` is an inert no-op, while "
         "`B 0 3` and `B 4 0` are ordinary placements.")
 
-    rep.h3("4.2.4 The horizontal registration, and four kinds of offset")
+    rep.h3("4.2.4 The horizontal registration and offset families")
     rep.p(
         "The horizontal grid ships with a trim of **+1.9 cm on both axes**, and the reason is "
         "geometric rather than empirical. The block is picked up standing at the vertical [0,0] "
@@ -284,7 +284,7 @@ def chapter_4(rep):
         "what makes calibration falsifiable: two knobs that both look like 'shift everything' "
         "cannot be told apart by any measurement.")
     rep.table(
-        "The four offset families.",
+        "The offset families.",
         ["Family", "What it is", "Moves", "Shipped value"],
         [
             ["`block` / `gap`", "The physical lattice itself.", "the cell spacing",
@@ -299,6 +299,11 @@ def chapter_4(rep):
             ["`tool_offset`", "Purely mechanical: how far the claw's grip centre sits from the "
                               "holder centre, per rotation state.",
              "the **holder**, not the cells", "neutral (0, 0); CW (+0.9, -0.3)"],
+            ["build placement offset", "A constant per-mode correction confined to physical "
+                                        "`B` placement motion.",
+             "the build target, not the lattice", "X: vertical 0.0; horizontal -0.4 cm"],
+            ["build skew", "A per-mode placement correction that grows with column and/or row.",
+             "the build target, not the lattice", "Y/column: vertical 0.115; horizontal 0.13 cm"],
         ],
         widths=[2.8, 6.4, 3.0, 3.8], size=9)
     rep.p(
@@ -307,16 +312,15 @@ def chapter_4(rep):
         "overlay, the Studio and the digital twin can all draw the truth without carrying a "
         "correction of their own.")
 
-    rep.h3("4.2.5 X-rail skew compensation")
+    rep.h3("4.2.5 Build-motion compensation")
     rep.p(
         "A placement made with pure Y motion (the same column, for example `B 0 3 0`) lands "
         "exactly where the grid says. A placement that involves X motion lands off along **Y**, "
         "and the error grows with how far along X the rig travels. It is not a constant offset.")
     rep.p(
-        "Measured on the rig, the introduced Y error is **0.10 cm per column of X travel**, and "
-        "it is linear in the column index with no row dependence at all: 0.00 cm at column 0 "
-        "where there is no X travel, 0.10 cm at column 1, 0.20 cm at column 2, and 0.10 x k cm "
-        "at column k.")
+        "The shipped per-mode coefficients are **0.115 cm per vertical column** and **0.13 cm "
+        "per horizontal column** on Y. All X, row and column-row terms remain zero because no "
+        "measurement justifies changing them.")
     rep.p(
         "The cause is mechanical and is described in Section 2.2.1: the arm holder's asymmetric loading "
         "leaves the X rail very slightly out of square with Y, so the further the carriage is "
@@ -326,33 +330,33 @@ def chapter_4(rep):
         "right.")
     rep.p(
         "Re-machining or re-bracing the rail was out of scope, so the drift is cancelled in "
-        "firmware. For a build the Y target is deliberately offset by exactly the drift the "
-        "rail will add, so that the two cancel:")
+        "firmware. For each build target, each axis can receive a constant per-mode placement "
+        "offset plus a per-mode skew term that grows with the cell indices:")
     rep.code(
-        "yNudge_cm = SKEW_Y_PER_COL_CM    * col        // 0.1, measured\n"
-        "          + SKEW_Y_PER_ROW_CM    * row        // 0.0, no row dependence\n"
-        "          + SKEW_Y_PER_COLROW_CM * col * row  // 0.0, cross term, unused\n"
+        "correction_cm = BUILD_PLACEMENT_OFFSET_<AXIS>_CM[mode]\n"
+        "              + SKEW_<AXIS>_PER_COL_CM[mode] * col\n"
+        "              + SKEW_<AXIS>_PER_ROW_CM[mode] * row\n"
+        "              + SKEW_<AXIS>_PER_COLROW_CM[mode] * col * row\n"
         "\n"
-        "targetY  = cellTargetPosition(AXIS_Y, row, rot) + lround(yNudge_cm * stepsPerCm_Y)")
+        "target_magnitude = cell_target_magnitude + round(correction_cm * stepsPerCm)")
     rep.p(
         "The scope of that correction is as important as the correction itself. It is applied in "
         "**`gotoBuildTarget()` alone**, and the `B` motion is the only path that gets it. It is not "
         "in the cell-centre arithmetic, not in the `G` command, not in the grid map, not in the "
         "Python link, and not in the camera grid, the Studio grid or the 3D lattice. **Every "
         "representation of the grid stays a perfectly rectangular, level lattice**; this bends "
-        "only the physical motion, so that the real blocks come out straight. X is never "
-        "touched, and the result is clamped to the Y travel so that a bad coefficient cannot "
-        "drive the carriage past a soft limit.")
+        "only the physical motion, so that the real blocks come out straight. Corrections are "
+        "applied in unsigned distance-from-home space on both axes, then converted once to the "
+        "firmware's signed position. The result is clamped to the relevant travel limit.")
     rep.p(
         "The correction was flashed and tuned on the rig rather than left on paper: the serial "
-        "log shows it running at 0.150 cm per column in the morning session of 3 September 2026 "
-        "and re-tuned to **0.100 cm per column** for the afternoon session, with the per-cell "
+        "log shows an earlier version running at 0.150 cm per column in the morning session of "
+        "3 September 2026 and re-tuned to **0.100 cm per column** for the afternoon session, with the per-cell "
         "correction logged as it is applied "
-        "(`X-rail skew: Y 0 -> 20 steps (0.100 cm, col skew)`). "
-        "[[VALUE NEEDED: the residual Y error re-measured AFTER the 0.10 cm/column compensation "
-        "was applied. The figures in the table above were taken before it; the residual has "
-        "never been measured, and it is the single most valuable missing number in this "
-        "report.]]")
+        "(`X-rail skew: Y 0 -> 20 steps (0.100 cm, col skew)`). The source was subsequently "
+        "generalised and calibrated to 0.115/0.13 cm per column, with a separate horizontal "
+        "X placement offset of -0.4 cm. [[VALUE NEEDED: re-measure the residual per mode with "
+        "the current coefficients flashed.]]")
 
     rep.h3("4.2.6 Z heights and block levels")
     rep.p(
@@ -367,7 +371,7 @@ def chapter_4(rep):
             ["Z travel, cm", "26.5", "Tape-measured."],
             ["Scale", "50.9434 steps/cm", "1,350 / 26.5, computed at run time"],
             ["Block height", "1.5 cm = 76.42 steps", "One stack level"],
-            ["Fixed margin", "+0.10 cm", "Added once to any level >= 1. Level 0 ignores every "
+            ["Fixed margin", "+0.12 cm", "Added once to any level >= 1. Level 0 ignores every "
                                          "margin, because ground is a physical switch and "
                                          "cannot drift."],
             ["Per-level margin", "0.00 cm", "For an error that accumulates up the stack. Not "
@@ -386,15 +390,15 @@ def chapter_4(rep):
         "ends up 1.52 cm high instead of 1.50, the error is **per level** and accumulates up the "
         "stack. If every level is uniformly a little low or high because of claw geometry, a "
         "switch tripping early or a lip on the block, that is a **constant** error. The shipped "
-        "calibration carries +0.10 cm of fixed margin and no per-level term, which says that the "
+        "calibration carries +0.12 cm of fixed margin and no per-level term, which says that the "
         "block height itself is right and the whole stack sits slightly low.")
     rep.note(
-        "The firmware source now carries `Z_MARGIN_FIXED_CM = 0.10`, while the machine's own "
+        "The firmware source now carries `Z_MARGIN_FIXED_CM = 0.12`, while the machine's own "
         "boot report from the logged 3 September session prints `fixed 0.000 cm`. The margin was "
         "introduced after that session and the board has not been re-flashed since the log was "
         "taken. **The sixteen builds analysed in Chapter 5 ran with no fixed Z "
         "margin.** The same log shows the gripper closing at 50 degrees where the source now "
-        "says 52, and the tool offsets all reading 0.000 where the source now carries "
+        "says 54, and the tool offsets all reading 0.000 where the source now carries "
         "(+0.9, -0.3) for CW. Every one of those is a source change made after the log; none of "
         "them affects the timings the chapter reports.")
 

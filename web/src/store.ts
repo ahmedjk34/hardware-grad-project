@@ -51,6 +51,21 @@ export interface BuildProgress {
   eventId: number;
 }
 
+/**
+ * Statuses in which NO phase is executing: the command settled, or none has
+ * started. A settled command's snapshot still carries the phase it stopped on
+ * — `web/progress.py` deliberately keeps it, because "where it got to" is the
+ * last thing anyone knows about a FAILED build — so the status, not the
+ * presence of a phase, is what says whether the rig is mid-command.
+ */
+const SETTLED_STATUSES: ReadonlySet<BuildPhaseStatus> =
+  new Set<BuildPhaseStatus>(["idle", "placed", "rejected", "aborted", "locked"]);
+
+/** True while the rig is working on a command. False once one has settled. */
+export function phaseInFlight(progress: BuildProgress): boolean {
+  return !SETTLED_STATUSES.has(progress.status);
+}
+
 export function emptyProgress(): BuildProgress {
   return {
     commandSeq: null, step: null, total: null, phase: null, label: null,

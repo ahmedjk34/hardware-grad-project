@@ -74,7 +74,7 @@ network.*
 > - Right box: `Arduino MEGA 2560 — GANTRY`, firmware `build_test_v1`, sub-label `motion, limits, 14-phase build cycle`
 >
 > **Band 4 (bottom): the hardware each controller owns.**
-> - Under the Uno: `Container servo`, `Belt stepper (A4988)`, `Alignment servo`, `2 x HC-SR04`
+> - Under the Uno: `Container servo`, `Belt stepper (A4988)`, `Alignment servo`, `Exit HC-SR04`, `Stage IR sensor`
 > - Under the Mega: `2 x NEMA17 CoreXY (TB6600)`, `NEMA17 Z (TB6600)`, `Gripper servo`, `28BYJ-48 (ULN2003)`, `4 x limit switch`
 >
 > **Connections, drawn as labelled arrows:**
@@ -354,7 +354,8 @@ LM2596 buck converter, the two rails and the common ground.*
 > - `Container gate servo` (on the Uno)
 > - `Alignment servo` (on the Uno)
 > - `ULN2003 → 28BYJ-48 claw rotation stepper`
-> - `2 x HC-SR04 ultrasonic sensors`
+> - `Exit HC-SR04 ultrasonic sensor`
+> - `Stage IR obstacle sensor`
 > - `A4988 logic / reference supply`
 >
 > **The two Arduinos are NOT on either rail.** Draw them fed from the Pi:
@@ -364,7 +365,7 @@ LM2596 buck converter, the two rails and the common ground.*
 >
 > **Ground.** Draw a single common ground rail along the bottom, tied to: the 12 V
 > PSU negative, the buck converter ground, both Arduino grounds, all four motor
-> drivers, and both ultrasonic sensors. Label it
+> drivers, the exit ultrasonic sensor, and the stage IR sensor. Label it
 > `COMMON GROUND — all supplies, drivers and sensors share one ground`.
 >
 > **Annotation, placed as a note box:** `Sequential operation: the build cycle
@@ -491,7 +492,7 @@ convert -density 130 -background white fig-wiring-uno.svg fig-wiring-uno.png
 | 10 | TB6600 #2 ENABLE | active LOW |
 | 11 | TB6600 #3 DIR | Z axis |
 | 12 | TB6600 #3 STEP | **no ENABLE line fitted** |
-| 6 | Gripper servo signal | OPEN 0°, CLOSE 52° |
+| 6 | Gripper servo signal | OPEN 0°, CLOSE 54° |
 | 28 | Z bottom limit switch | NC + pull-up, Z zero / GROUND reference |
 | 29 | Z top limit switch | NC + pull-up, far-end stop, does not redefine zero |
 | 30 | X limit switch | NC + pull-up, X home / zero |
@@ -511,18 +512,18 @@ convert -density 130 -background white fig-wiring-uno.svg fig-wiring-uno.png
 | pin | connects to | note |
 |---|---|---|
 | 2 | A4988 DIR | belt direction |
-| 3 | A4988 STEP | NEMA17 conveyor, 150 steps/s default |
+| 3 | A4988 STEP | NEMA17 conveyor, 325 steps/s default |
 | 4 | Exit HC-SR04 TRIG | container exit |
 | 5 | Exit HC-SR04 ECHO | proves a block left the hopper |
-| 8 | Stage HC-SR04 TRIG | pickup point |
-| 9 | Stage HC-SR04 ECHO | proves a block reached [0,0] |
+| 8 | Stage IR OUT | active-low by default; proves a block reached [0,0] |
 | 6 | Alignment servo signal | rest 90°, nudge 120° |
 | 12 | Container servo signal | closed 20°, stage 1 at 90°, open 160° |
 | USB | Raspberry Pi 5 | 9600 8N1, protocol 2, also powers the board |
 
 > A4988 **ENABLE is tied directly to ground**, not driven by the Arduino — there is
-> no enable pin in the firmware. Detection threshold is **< 10.0 cm**, with a 30 ms
-> echo timeout reported as `no_echo` and never treated as a detection.
+> no enable pin in the firmware. The exit ultrasonic detection threshold is
+> **< 10.0 cm**, with a 30 ms echo timeout reported as `no_echo` and never treated
+> as a detection. The stage sensor is a digital IR input, not a distance sensor.
 
 **Both boards:** motor supplies come off the **12 V** rail; servos, the ULN2003 and
 the sensors come off the **5 V** rail from the LM2596 — **not** from either
@@ -613,7 +614,7 @@ of the machine.** Draw it as an annotated side elevation with the tool path trac
 > height. Mark three horizontal reference lines:
 > - Top: `Z TOP SWITCH (pin 29) — carry height, ~26.5 cm` (dashed)
 > - Bottom: `Z GROUND SWITCH (pin 28) — Z = 0, the level datum` (solid)
-> - A mid line at the target: `target block level = level x 1.5 cm + 0.10 cm fixed margin`
+> - A mid line at the target: `target block level = level x 1.5 cm + 0.12 cm fixed margin`
 >
 > On the left of the X axis mark `[0,0] THE FEEDER — its centre IS the home corner`.
 > On the right mark `TARGET CELL [col, row]`.
@@ -671,7 +672,7 @@ No prompt will produce these. This is a shot list.
 | **F1** | 1.1 | The completed rig, three-quarter view | The CoreXY gantry, the Z column and claw, the feeder module on the left, and the overhead camera on its wooden support frame — all in one shot. This is the report's opening image, so shoot it clean: clear the bench, even lighting, plain background if you can. |
 | **F3** | 2.4.2 | The X/Y stage from directly above | The belt path (trace it in an image editor afterwards with a coloured line), both frame-mounted NEMA17s, the castor-wheel carriages, and the X and Y limit switches. Label the two switches. |
 | **F4** | 2.4.4 | The claw, close up | The 3D-printed jaws, the gripper servo, and the 28BYJ-48 rotation stepper. Mark the grip axis and, if you can, the ≈(−0.3, +0.6) cm offset between the grip centre and the rotation axis — that offset is discussed in the text. |
-| **F5** | 2.4.5 | The feeder module alongside the gantry | The hopper with its gate servo, the conveyor belt, the alignment servo, and **both** HC-SR04 sensors. Label the exit sensor, the stage sensor, and the pickup point at cell [0,0]. |
+| **F5** | 2.4.5 | The feeder module alongside the gantry | The hopper with its gate servo, the conveyor belt, the alignment servo, the exit HC-SR04, and the stage IR sensor. Label both sensors and the pickup point at cell [0,0]. |
 | **F10** | 3.4.1 | The overhead camera mount | The camera on its wooden support structure with the whole rig underneath, so the ~50 cm working distance is legible. A tape measure in shot would make the distance verifiable. |
 | **F24** | 5.6.3 | A completed structure | A finished multi-level structure on the rig. **Ideally paired side by side with a screenshot of the same model in the Studio** — the report explicitly calls this the single best possible figure, because it closes the design-to-build loop visually. Record the block count, level count and modes used; the caption has a placeholder for them. |
 

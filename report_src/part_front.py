@@ -102,7 +102,7 @@ def front_matter(rep):
         "gantry, a CoreXY X/Y stage with an added Z axis, a servo claw and a 28BYJ-48 "
         "rotation stepper, and executes a fourteen-phase pick-place-park cycle for every "
         "block. An Arduino Uno runs a separate feeder module, a two-stage hopper gate, a "
-        "belt and an alignment servo, and confirms with two HC-SR04 ultrasonic sensors that "
+        "belt and an alignment servo, and confirms with an exit HC-SR04 and a stage IR sensor that "
         "exactly one block left the hopper and arrived at the fixed pickup point. The two "
         "Arduinos never talk to each other; the Pi is the only thing that couples them, and "
         "it does so over two independent USB serial links.")
@@ -267,7 +267,7 @@ def chapter_1(rep):
         "second, separately calibrated grid for the rotated footprint.",
         "**Deliver** a feeder module that doses exactly one block at a time from a hopper to a "
         "fixed pickup point, and that confirms the block both leaving the container and arriving "
-        "at the pickup point with independent ultrasonic sensors, so that no placement is ever "
+        "at the pickup point with independent exit and stage sensors, so that no placement is ever "
         "started on an assumption that a block is there.",
         "**Support** an overhead vision system that detects the wooden blocks on the build "
         "surface and converts camera pixels into physical centimetres and then into grid cells, "
@@ -302,7 +302,8 @@ def chapter_1(rep):
         "A Cartesian gantry with CoreXY X/Y motion, an added Z axis, a servo-driven mechanical "
         "claw, and a stepper that rotates the claw 90 degrees, giving two block orientations.",
         "A separate feeder module: a two-stage hopper gate, a conveyor belt, an alignment servo "
-        "and two ultrasonic sensors, presenting one block at a time at a fixed pickup point.",
+        "with an exit ultrasonic sensor and a stage IR sensor, presenting one block at a time "
+        "at a fixed pickup point.",
         "An overhead fisheye camera with lens correction, software colour correction, block "
         "detection, and camera-to-machine grid calibration.",
         "A browser operator console served from the Pi, with a live camera view and "

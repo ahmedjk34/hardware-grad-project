@@ -164,7 +164,7 @@ mega_right = [
     {"pin": "31", "to": "LIMIT SW  Y",      "note": "NC, pull-up  |  Y home / zero"},
     {"pin": "28", "to": "LIMIT SW  Z bottom","note": "NC, pull-up  |  Z zero, GROUND ref"},
     {"pin": "29", "to": "LIMIT SW  Z top",  "note": "NC, pull-up  |  far-end stop only"},
-    {"pin": "6",  "to": "GRIPPER SERVO",    "note": "OPEN 0 deg / CLOSE 52 deg", "col": PWR5},
+    {"pin": "6",  "to": "GRIPPER SERVO",    "note": "OPEN 0 deg / CLOSE 54 deg", "col": PWR5},
     {"pin": "38", "to": "ULN2003  IN1",     "note": "black", "col": PWR5},
     {"pin": "36", "to": "ULN2003  IN2",     "note": "green", "col": PWR5},
     {"pin": "39", "to": "ULN2003  IN3",     "note": "blue",  "col": PWR5},
@@ -201,13 +201,12 @@ draw(
 # arduino/belt_v1/belt_v1.ino
 uno_left = [
     {"pin": "2",  "to": "A4988  DIR",  "note": "belt direction"},
-    {"pin": "3",  "to": "A4988  STEP", "note": "NEMA17 conveyor, 150 steps/s"},
+    {"pin": "3",  "to": "A4988  STEP", "note": "NEMA17 conveyor, 325 steps/s"},
 ]
 uno_right = [
     {"pin": "4",  "to": "EXIT HC-SR04  TRIG", "note": "container exit"},
     {"pin": "5",  "to": "EXIT HC-SR04  ECHO", "note": "block left the hopper"},
-    {"pin": "8",  "to": "STAGE HC-SR04  TRIG","note": "pickup point"},
-    {"pin": "9",  "to": "STAGE HC-SR04  ECHO","note": "block reached [0,0]"},
+    {"pin": "8",  "to": "STAGE IR  OUT", "note": "block reached [0,0]"},
     {"pin": "6",  "to": "ALIGNMENT SERVO",    "note": "rest 90 deg / nudge 120 deg", "col": PWR5},
     {"pin": "12", "to": "CONTAINER SERVO",    "note": "closed 20 / stage 90 / open 160", "col": PWR5},
 ]
@@ -218,7 +217,7 @@ draw(
     uno_left, uno_right,
     rails=[
         ("12 V", PWR12, "A4988 motor supply"),
-        ("5 V",  PWR5,  "from LM2596 — both servos, both HC-SR04, A4988 logic / Vref"),
+        ("5 V",  PWR5,  "from LM2596 — both servos, exit HC-SR04, stage IR, A4988 logic / Vref"),
         ("GND",  GND,   "common ground, shared with the Mega side"),
     ],
     notes=[
@@ -226,8 +225,9 @@ draw(
             "A4988 ENABLE is tied directly to GROUND, not driven by the Arduino. There is no enable pin in the firmware.",
         ]},
         {"lines": [
-            "ULTRASONIC SENSORS: detection threshold is distance < 10.0 cm. The echo timeout is 30 ms and reports",
+            "EXIT ULTRASONIC SENSOR: detection threshold is distance < 10.0 cm. The echo timeout is 30 ms and reports",
             "\"no echo\", which is never treated as a detection — 'I heard nothing' and 'nothing is there' are different.",
+            "The stage IR sensor is a digital active-low input by default; it reports detected/not detected, not distance.",
         ]},
         {"lines": [
             "SERVO POWER comes from the 5 V rail, not the Uno's 5 V pin. USB to the Raspberry Pi carries both the",

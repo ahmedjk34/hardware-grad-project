@@ -149,7 +149,7 @@ def chapter_3(rep):
         ("What it does", "Holds one block through the carry, the traverse and the descent, and "
                          "releases it on command."),
         ("Inputs", "One PWM channel on Mega pin 6. Two commanded positions only: `O` opens to 0 "
-                   "degrees, `C` closes to 52 degrees. `V <angle>` sets an arbitrary angle from "
+                   "degrees, `C` closes to 54 degrees. `V <angle>` sets an arbitrary angle from "
                    "0 to 180 for bench work."),
         ("Outputs", "None. The servo is commanded and forgotten; nothing reports when the jaws "
                     "have arrived."),
@@ -245,7 +245,7 @@ def chapter_3(rep):
                               "fourteen-phase build cycle and the acknowledgement protocol."),
         ("Arduino Uno", "An ATmega328P with 2 KB of SRAM and 32 KB of flash, on its own USB "
                         "serial link at 9600. It owns the feed state machine, the container and "
-                        "alignment servos, the belt driver, both HC-SR04 sensors and the "
+                        "alignment servos, the belt driver, exit HC-SR04, stage IR sensor and the "
                         "correlated protocol-2 serial interface."),
     ])
 
@@ -448,10 +448,10 @@ def chapter_3(rep):
             ["HC-SR04 ultrasonic", "1", "Feeder container exit (TRIG 4, ECHO 5)",
              "That exactly one block has physically left the hopper onto the belt.",
              "Trigger pulse and echo width, 30 ms timeout, detection below 10.0 cm"],
-            ["HC-SR04 ultrasonic", "1", "Feeder pickup point (TRIG 8, ECHO 9)",
+            ["IR obstacle sensor", "1", "Feeder pickup point (OUT 8)",
              "That a block has arrived at the pickup point, and, read again after the aligner "
              "moves, that it is still there.",
-             "As above"],
+             "Digital presence, active-low by default"],
             ["Overhead camera", "1", "Approximately 50 cm above the build surface",
              "Which blocks are on the surface, where, and what colour.",
              "1296 x 972 frames over CSI through Picamera2"],
@@ -464,9 +464,9 @@ def chapter_3(rep):
         "every move, and the only thing that would catch a stall is the camera noticing the "
         "block did not arrive, which is designed but not implemented (Section 5.7.2).")
 
-    rep.h3("3.5.1 Ultrasonic signal acquisition")
+    rep.h3("3.5.1 Feeder sensor acquisition")
     rep.p(
-        "Each HC-SR04 is read by the standard method: hold the trigger low, pulse it high for "
+        "The exit HC-SR04 is read by the standard method: hold the trigger low, pulse it high for "
         "10 us, then measure the echo pulse width with a 30 ms timeout and convert at 343 m/s.")
     rep.code(
         "duration    = pulseIn(echoPin, HIGH, 30000);   // us, 0 on timeout\n"
@@ -475,17 +475,18 @@ def chapter_3(rep):
         "detected    = distance_cm >= 0.0f\n"
         "           && distance_cm < DETECT_DISTANCE_CM;   // 10.0 cm")
     rep.p(
-        "Two details in that are deliberate. A timeout returns -1 and is reported on the wire as "
+        "Two details in that path are deliberate. A timeout returns -1 and is reported on the wire as "
         "`distance_cm=no_echo`, which is **never** treated as a detection: 'I heard nothing' and "
         "'nothing is there' are different statements and collapsing them is how a feeder decides "
-        "an empty belt is fine. And the sensors are sampled every 100 ms only while a feed cycle "
-        "is actually running, with readings reported at cycle admission and on detections and not continuously, so the serial link is not flooded with polling.")
+        "an empty belt is fine. The stage sensor is instead read as a digital presence signal; "
+        "`STAGE_IR_DETECTED_LEVEL` records whether the installed module is active-low or active-high. "
+        "The sensors are sampled every 100 ms only while a feed cycle is actually running, with "
+        "structured readings reported at admission, detection and verification rather than continuously.")
     rep.p(
-        "The 10 cm threshold was set from the physical installation and proved reliable at both "
-        "positions in bench testing, distinguishing a staged block from an empty belt without "
-        "false detections from the belt surface or the container walls. "
-        "[[VALUE NEEDED: measured distance readings at each sensor with and without a block, "
-        "and the number of feed cycles the threshold was verified over.]]")
+        "The 10 cm threshold applies only to the exit ultrasonic sensor. The stage IR module's "
+        "sensitivity and active level must be commissioned at the pickup fixture. "
+        "[[VALUE NEEDED: measured exit distances, stage-IR false-positive/negative observations, "
+        "and the number of complete feed cycles verified on the current sensor pair.]]")
 
     rep.h3("3.5.2 Limit switch acquisition")
     rep.p(
@@ -504,7 +505,7 @@ def chapter_3(rep):
     rep.p(
         "The power architecture is described in Section 2.5.1: a 12 V / 15 A supply feeding the four "
         "stepper drivers directly, an LM2596 buck converter producing a 5 V rail for the three "
-        "servos, the 28BYJ-48 through its ULN2003, both ultrasonic sensors and the A4988's "
+        "servos, the 28BYJ-48 through its ULN2003, both feeder sensors and the A4988's "
         "logic supply, both Arduinos powered over USB from the Pi, the Pi on its own official "
         "supply, and one common ground across all of it.")
     rep.p(
@@ -605,7 +606,7 @@ def chapter_3(rep):
                "stepper. Every pin is transcribed from the firmware source.",
                image="fig-wiring-mega.png", width_cm=15.5)
     rep.figure("Complete wiring diagram: Arduino Uno feeder controller, the A4988 belt driver, "
-               "the container and alignment servos, and the two HC-SR04 ultrasonic sensors.",
+               "the container and alignment servos, exit HC-SR04 and stage IR sensor.",
                image="fig-wiring-uno.png", width_cm=15.5)
     rep.p(
         "The complete pin assignments for both controllers are tabulated in Appendix B, taken "

@@ -25,8 +25,8 @@ Three controllers, one brain:
    the container's exit confirms a block actually left the container onto the
    belt — not just that the container is open.
 2. **Stage.** The belt carries the block toward the pickup area. A second
-   servo nudges it square as it arrives. A second ultrasonic sensor at the
-   pickup area detects the block is in position and stops the belt. The Uno
+   servo nudges it square as it arrives. A digital IR sensor at the pickup
+   area detects the block is in position and stops the belt. The Uno
    reports "block ready" back to the Pi. This closes the loop at both ends of
    the feed path instead of guessing on a timer.
 3. **Place.** The Pi hands off to the Mega. The claw picks the staged block up
@@ -60,17 +60,17 @@ of open-loop timing.
   Arduino Uno (feeder, protocol 2)
 - **Motion:** gantry X / Y / Z, plus a claw servo and an auxiliary rotation
   stepper, driven by the Mega
-- **Feed:** A4988-driven belt, container and alignment servos, and two HC-SR04
-  ultrasonic sensors, driven by the Uno
+- **Feed:** A4988-driven belt, container and alignment servos, an exit HC-SR04
+  and a pickup-stage IR sensor, driven by the Uno
 - **Camera:** DORHEA Raspberry Pi Camera Module — OV5647 sensor, 5 MP, 160°
   fisheye lens, mounted ~50 cm above the surface, pointing straight down
-- **Controlled holder displacement:** 24.3 cm X × 40 cm Y
-- **Observed build displacement:** 24.3 cm X × 43 cm Y; extra Y reach is not
-  yet modelled
+- **Controlled holder displacement:** 22.8 cm X × 38.0 cm Y
+- **Observed build footprint:** 24.3 cm X × 43 cm, retained as a separate
+  physical measurement rather than used as the motion cap
 - **Block:** 2.2 × 6.0 × 1.5 cm, placeable either way round — which is why
   there are two calibrated grids, not one:
   - **vertical** (2.2 X × 6.0 Y cm block): 6 × 5 positive cells
-  - **horizontal** (6.0 X × 2.2 Y cm block): 2 × 10 positive cells
+  - **horizontal** (6.0 X × 2.2 Y cm block): 2 × 9 positive cells
 
 ## Repository layout
 
@@ -91,7 +91,7 @@ of open-loop timing.
 | Web operator console | **built** — all ten build steps (see [docs/CONSOLE.md](docs/CONSOLE.md)) |
 | 3D Build Studio (design/validate/compile/twin/run) | **built** through Milestone 7 (see [docs/STUDIO.md](docs/STUDIO.md)); Milestone 8 ("wow pass") not started |
 | Placement supervision (verify placements, notice human interference) | **designed, not started** — full design at [docs/feature-ideas.md](docs/feature-ideas.md) Appendix A |
-| Feeder module — container + belt + dual ultrasonic staging (Uno) | **protocol-2 firmware and Pi client built; physical commissioning still required.** The Uno reports correlated progress and exactly one terminal result per feed |
+| Feeder module — container + belt + ultrasonic exit / IR staging (Uno) | **protocol-2 firmware and Pi client built; physical commissioning still required.** The Uno reports correlated progress and exactly one terminal result per feed |
 | Pi-owned feeder → gantry orchestration | **built and mock-tested** — two USB serial links; only matching `OK state=block_ready result=staged` authorizes Mega `B`; failures lock out unsafe continuation |
 | Autonomous block-to-target planning | **not implemented**, and out of scope — the human designs the structure |
 
@@ -125,9 +125,9 @@ cd python
 ../.venv/bin/python camera/camera_feed.py
 ```
 
-To see the physical 6×5 (or 2×10) positive-cell grid on that same feed, run
+To see the physical 6×5 (or 2×9) positive-cell grid on that same feed, run
 `camera/gridded_camera_feed.py`. It shows an amber approximation initially;
-press `c` and click the four prompted 24.3×40 cm holder-envelope corners to save
+press `c` and click the four prompted 22.8×38.0 cm holder-envelope corners to save
 the calibrated overlay.
 
 `camera/camera_studio.py` also owns the camera's **colour**. Its COLOUR section

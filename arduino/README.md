@@ -8,13 +8,13 @@ Flash `belt_v1/belt_v1.ino` to an **Arduino Uno** for the feeder. Its wiring is:
 - A4988 `ENABLE` is not used; connect it to GND
 - Exit HC-SR04: `TRIG = 4`, `ECHO = 5`
 - Alignment-servo signal: pin `6`
-- Pickup/stage HC-SR04: `TRIG = 8`, `ECHO = 9`
+- Pickup/stage IR obstacle sensor: `OUT = 8` (default active-low)
 - Container-servo signal: pin `12`
 
 `FEED [id]` (or its `RUN [id]` alias) performs one complete feeder cycle:
 close the container to 20°, open it in stages (90° then 160°), wait for the
 exit sensor to see a block below 10 cm, run the belt, and stop it only when the
-stage sensor sees the block. The alignment servo then nudges the block square
+stage IR sensor sees the block. The alignment servo then nudges the block square
 and the stage sensor verifies that it remained present.
 
 Every controller command must end in a newline. A feed cycle is identified by
@@ -28,9 +28,9 @@ the optional numeric `id` and reports structured telemetry:
 @42 STATE state=moving_to_stage
 @42 SENSOR sensor=exit distance_cm=7.4 detected=1
 @42 EVENT phase=exit_detected_container_closed_belt_running distance_cm=7.4
-@42 SENSOR sensor=stage distance_cm=8.2 detected=1
-@42 EVENT phase=stage_detected_aligning distance_cm=8.2
-@42 EVENT phase=block_ready distance_cm=8.1
+@42 SENSOR sensor=stage detected=1
+@42 EVENT phase=stage_detected_aligning
+@42 EVENT phase=block_ready
 @42 OK state=block_ready result=staged
 ```
 
@@ -45,9 +45,10 @@ message type and controller recovery rule.
 
 Use `STOP` to cancel a cycle safely. Manual commands are `STATUS` (or `P`),
 `OPEN`, `CLOSE`, `ON`, `OFF`, `F`, `B`, `S <speed>`, `US`, and `HELP`. The
-default belt speed is 150 steps per second. `US`/`STATUS` read both sensors.
-If the belt turns the wrong physical direction, invert
-`BELT_CCW_DIRECTION_LEVEL` in the sketch.
+default belt speed is 325 steps per second. `US`/`STATUS` read the exit distance
+and report the stage IR sensor as `detected` or `clear`.
+If the belt turns the wrong physical direction, swap the forward and reverse
+direction-level constants in the sketch.
 
 ## `build_test_v1/` is the sketch on the rig
 
@@ -56,8 +57,8 @@ it accepts and the text it prints back.
 
 `build_vertical_grid/` and `build_horizontal_grid/` are supervised standalone
 level-0 grid-fill sketches. They carry the same gripper, Z-margin, and build
-rotation settings as `build_test_v1/`: close **52°**, fixed placement margin
-**+0.10 cm**, and a horizontal build turn of **90° CW**.
+rotation settings as `build_test_v1/`: close **54°**, fixed placement margin
+**+0.12 cm**, and a horizontal build turn of **90° CW**.
 
 ```
 ./scripts/flash.sh                    # Mega: compile, then upload
@@ -75,11 +76,11 @@ Board is an Arduino MEGA 2560. Serial is **9600 baud**. Multi-character
 commands need a newline; single digits do not. `V <angle>` sets the gripper
 servo to an arbitrary angle from 0 to 180 degrees. The `O` command checks the
 X/Y home switches and opens to **0 degrees**. `C` closes it at
-52 degrees.
+54 degrees.
 
 The firmware keeps the physical block height at **1.5 cm**. Its fixed Z
-placement margin is **+0.10 cm**, raising releases at levels 1 and above by
-1 mm so the claw does not press a block into the stack; level 0 still seats on
+placement margin is **+0.12 cm**, raising releases at levels 1 and above by
+1.2 mm so the claw does not press a block into the stack; level 0 still seats on
 the physical ground switch.
 
 The auxiliary 28BYJ-48 stepper uses these ULN2003 connections:
@@ -127,15 +128,14 @@ The live sketch calibrates motor scale from holder displacement between home
 and the active software cap. These are displacement measurements, not arm or
 block dimensions:
 
-- X: `24.3 cm = 4750 steps`, so `4750 / 24.3 = 195.4733 steps/cm`
-- Y: `40 cm = 8250 steps`, so `8250 / 40 = 206.25 steps/cm`
+- X: `22.8 cm = 4550 steps`, so `4550 / 22.8 = 199.56 steps/cm`
+- Y: `38.0 cm = 7600 steps`, so `7600 / 38.0 = 200.0 steps/cm`
 
 Firmware derives both ratios; neither is hard-coded. The separately observed
-physical build footprint is `24.3 × 43 cm`; it does not change the `24.3 × 40
-cm` holder span. The horizontal build turns 90° CW. Its existing grid
-registration and error-offset calibration remain unchanged; re-measure the CW
-tool offset before entering a non-zero value. Neutral, CW, and CCW tool
-offsets currently remain zero.
+physical build footprint is `24.3 × 43 cm`; it does not change the `22.8 × 38.0
+cm` holder span. The horizontal build turns 90° CW and uses the measured
+`(+0.9, -0.3) cm` CW tool offset. Neutral and CCW remain zero; CCW is not a
+build orientation and must remain uncalibrated until physically measured.
 
 A block is `2.2 × 6.0 × 1.5 cm`, and it can be laid either way round. Which
 way round decides how many cells fit, so **there are two grids**, each with its
@@ -144,22 +144,18 @@ own complete geometry, its own trims and its own calibration:
 | mode | block | grid | coordinate map | select with |
 | --- | --- | --- | --- | --- |
 | vertical | 2.2 X × 6.0 Y cm | `6 × 5` = 30 cells | `7 × 6` | `R` |
-| horizontal | 6.0 X × 2.2 Y cm | `2 × 10` = 20 cells | `3 × 11` | `RR` |
+| horizontal | 6.0 X × 2.2 Y cm | `2 × 9` = 18 cells | `3 × 10` | `RR` |
 
-Adjacent positive cells are separated by `1.6 cm` along X and `0.8 cm` along Y
-in both modes, and `[0,0]` is the feeder-block centre where the claw picks
-up. There is no trailing outer margin inside a grid span:
+Adjacent cells are separated by a uniform `1.6 cm` gap on both axes in both
+modes, and `[0,0]` is the feeder-block centre where the claw picks up. The
+lattice is centre-anchored:
 
 ```text
-vertical    X pitch = 2.2 + 1.6 = 3.8 cm;  6 × 3.8 = 22.8 cm
-            Y pitch = 6.0 + 0.8 = 6.8 cm;  5 × 6.8 = 34.0 cm
-horizontal  X pitch = 6.0 + 1.6 = 7.6 cm;  2 × 7.6 = 15.2 cm
-            Y pitch = 2.2 + 0.8 = 3.0 cm; 10 × 3.0 = 30.0 cm
+pitch     = block + gap
+centre(i) = trim + error_offset + shift + i * pitch
 
-positive footprint  vertical    X: 6 × 2.2 + 5 × 1.6 = 21.2 cm
-                                Y: 5 × 6.0 + 4 × 0.8 = 33.2 cm
-                    horizontal  X: 2 × 6.0 + 1 × 1.6 = 13.6 cm
-                                Y: 10 × 2.2 + 9 × 0.8 = 29.2 cm
+vertical    centres: X 0.00 → 22.80 cm; Y 0.00 → 38.00 cm
+horizontal  centres: X 1.90 → 17.10 cm; Y 1.90 → 36.10 cm
 ```
 
 Vertical's `GRID_TRIM_*` ship at `0.0` on both axes. Horizontal ships at
@@ -172,9 +168,8 @@ vertical's and must not be copied.** Each mode also declares
 vertical allows half a block (`1.1` / `3.0`), horizontal allows `3.0` / `1.1`
 (the +1.9 cm registration's `−1.1 cm` X near edge sits inside it).
 
-Vertical sits exactly on its cap; horizontal keeps ~1.9 cm of far-end slack on
-each axis after the registration — but measure a real stack before trusting the
-last row of horizontal's 10.
+Vertical sits exactly on its cap. Horizontal keeps far-end slack after the
+registration — but measure a real stack before trusting its last row.
 
 Commands address col `0..cols` and row `0..rows`: `[0,0]` home, `[col,0]`
 X-only, and `[0,row]` Y-only. `GRID_TRIM_X_CM[]` and `GRID_TRIM_Y_CM[]` shift
@@ -197,22 +192,11 @@ positive cell, and `#` the current machine position):
       0 1 2 3 4 5 6
 ```
 
-For the vertical grid at trim `0`, cell-centre formulas measured from the
-feeder/home centre are:
-
-```text
-X centre(col) = 0.75 + 1.6 + 2.2/2 + (col - 1) × 3.8
-              = 3.45 + (col - 1) × 3.8
-
-Y centre(row) = 3.0 + 0.8 + 6.0/2 + (row - 1) × 6.8
-              = 6.8 + (row - 1) × 6.8
-```
-
-Thus first/last centres are X `3.45..22.45 cm` and Y `6.8..34.0 cm`. Final block
-edges are X `23.55 cm` and Y `37.0 cm` from the feeder centre; holder caps
-apply to placement centres, not to the held block's far edge.
-Firmware converts each absolute centre once with `round(cm × steps/cm)`; it
-does not accumulate rounded pitch steps from one cell to the next.
+Cell zero is a real centre on the home corner, so its block extends half a
+block behind the switches. The per-mode edge-overhang budgets make that legal
+without weakening the holder-motion cap. Firmware converts each absolute
+centre once with `round(cm × steps/cm)`; it does not accumulate rounded pitch
+steps from one cell to the next.
 
 ## `archive/`
 

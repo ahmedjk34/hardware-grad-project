@@ -109,10 +109,9 @@ serial port, and shuts down the camera executor (`web/app.py:328-360`).
 * **Archived:** everything under `arduino/archive/`; plans under
   `plans/archive/` describe earlier or proposed states and are not runtime code.
 
-`arduino/README.md` contains stale geometry values after line 111 (old travel,
-gaps, counts, and zero tool offsets) that disagree with `AGENTS.md`, JSON, and
-the live sketch. It is useful for identifying the sketch and serial basics but
-must not be treated as current geometry documentation.
+`arduino/README.md`, `AGENTS.md`, JSON, and the live sketch now agree on the
+holder travel, gaps, counts, trims, and tool offsets. `python/tests/test_grid.py`
+checks the machine-readable pairs; documentation changes still require review.
 
 ## 2. Physical and serial connection
 

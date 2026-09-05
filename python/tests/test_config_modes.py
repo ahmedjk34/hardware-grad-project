@@ -60,7 +60,7 @@ vertical = grid_geometry(config, "vertical")
 horizontal = grid_geometry(config, "horizontal")
 
 # Counts, not highest indices: coordinate 0 is a real block, so vertical
-# addresses 0..6 x 0..5 and horizontal 0..2 x 0..10. The firmware's S command
+# addresses 0..6 x 0..5 and horizontal 0..2 x 0..9. The firmware's S command
 # speaks in highest indices; rig/link.py is the one place that converts.
 check("vertical is 7 x 6 (D1)",
       (vertical["cols"], vertical["rows"]) == (7, 6))

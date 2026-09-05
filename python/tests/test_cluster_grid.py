@@ -227,7 +227,7 @@ check("C3 the tolerance is an actual knob (loose keeps >= strict)",
 
 himage, _ = render_cluster_sheet(HORIZONTAL, 6, 14, clip_cm=(0.5, 0.0))
 hcal = detect_cluster_grid(himage, HORIZONTAL, process_width=0)
-check("C6 horizontal sheet maps the whole 3x11 coordinate grid",
+check("C6 horizontal sheet maps the whole 3x10 coordinate grid",
       len(hcal.found_cells) == HORIZONTAL.cols * HORIZONTAL.rows,
       str(len(hcal.found_cells)))
 check("C6 horizontal layout string is x-along-block-length",

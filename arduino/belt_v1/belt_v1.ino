@@ -5,7 +5,7 @@
     A4988 belt:       DIR 2, STEP 3 (ENABLE tied to GND)
     Exit HC-SR04:      TRIG 4, ECHO 5
     Alignment servo:   6
-    Stage HC-SR04:     TRIG 8, ECHO 9
+    Stage IR sensor:   OUT 8 (VCC and GND to the sensor supply)
     Container servo:   12
 
   Controller protocol (all commands are newline terminated):
@@ -27,11 +27,14 @@ const uint8_t STEP_PIN = 3;
 const uint8_t EXIT_TRIG_PIN = 4;
 const uint8_t EXIT_ECHO_PIN = 5;
 const uint8_t ALIGN_SERVO_PIN = 6;
-const uint8_t STAGE_TRIG_PIN = 8;
-const uint8_t STAGE_ECHO_PIN = 9;
+const uint8_t STAGE_IR_PIN = 8;
+// Most LM393 IR obstacle sensors drive OUT LOW when an object is detected.
+// Change this to HIGH if the installed sensor has inverted output logic.
+const uint8_t STAGE_IR_DETECTED_LEVEL = LOW;
 const uint8_t CONTAINER_SERVO_PIN = 12;
 
-const uint8_t BELT_CCW_DIRECTION_LEVEL = LOW;
+const uint8_t BELT_FORWARD_DIRECTION_LEVEL = HIGH;
+const uint8_t BELT_REVERSE_DIRECTION_LEVEL = LOW;
 const uint8_t CONTAINER_CLOSED_ANGLE = 20;
 const uint8_t CONTAINER_STAGE_1_ANGLE = 90;
 const uint8_t CONTAINER_OPEN_ANGLE = 160;
@@ -69,10 +72,9 @@ unsigned long commandId = 0;
 bool cycleActive = false;
 bool beltRunning = false;
 bool containerOpen = false;
-int motorSpeed = 150;
-unsigned long stepIntervalUs = 1000000UL / 150;
+int motorSpeed = 325;
+unsigned long stepIntervalUs = 1000000UL / 325;
 float exitDistanceCm = -1.0;
-float stageDistanceCm = -1.0;
 
 char commandBuffer[48];
 uint8_t commandLength = 0;
@@ -97,6 +99,10 @@ bool detected(float distanceCm) {
 }
 
 const __FlashStringHelper *stateName();
+
+bool stageDetected() {
+  return digitalRead(STAGE_IR_PIN) == STAGE_IR_DETECTED_LEVEL;
+}
 
 void protocolPrefixFor(unsigned long id) {
   Serial.print('@');
@@ -123,6 +129,12 @@ void sensorReportFor(unsigned long id, const __FlashStringHelper *sensor,
   else Serial.print(distanceCm, 1);
   Serial.print(F(" detected="));
   Serial.println(detected(distanceCm) ? 1 : 0);
+}
+
+void stageSensorReportFor(unsigned long id, bool detectedNow) {
+  protocolPrefixFor(id);
+  Serial.print(F(" SENSOR sensor=stage detected="));
+  Serial.println(detectedNow ? 1 : 0);
 }
 
 void acknowledgeManual(const __FlashStringHelper *command) {
@@ -225,9 +237,9 @@ void startFeed(unsigned long id) {
   stopBelt();
   closeContainer();
   restAligner();
-  stageDistanceCm = readDistanceCm(STAGE_TRIG_PIN, STAGE_ECHO_PIN);
-  sensorReportFor(commandId, F("stage"), stageDistanceCm);
-  if (detected(stageDistanceCm)) {
+  const bool stagePresent = stageDetected();
+  stageSensorReportFor(commandId, stagePresent);
+  if (stagePresent) {
     setState(FAULT);
     failure(F("stage_occupied"));
     return;
@@ -293,14 +305,15 @@ void updateFeedCycle() {
       break;
     case VERIFYING_STAGE:
       if (elapsed(stateStartedAtMs, SENSOR_INTERVAL_MS)) {
-        stageDistanceCm = readDistanceCm(STAGE_TRIG_PIN, STAGE_ECHO_PIN);
-        if (detected(stageDistanceCm)) {
+        const bool stagePresent = stageDetected();
+        stageSensorReportFor(commandId, stagePresent);
+        if (stagePresent) {
           setState(BLOCK_READY);
           cycleActive = false;
-          eventDistance(F("block_ready"), stageDistanceCm);
+          event(F("block_ready"));
           success();
         } else {
-          startBelt(BELT_CCW_DIRECTION_LEVEL);
+          startBelt(BELT_FORWARD_DIRECTION_LEVEL);
           setState(MOVING_TO_STAGE);
           event(F("stage_lost_resuming_belt"));
         }
@@ -321,19 +334,18 @@ void updateSensors() {
       // One block has left the hopper.  Shut the gate before transporting it
       // so a second block cannot follow it onto the belt.
       closeContainer();
-      startBelt(BELT_CCW_DIRECTION_LEVEL);
+      startBelt(BELT_FORWARD_DIRECTION_LEVEL);
       setState(MOVING_TO_STAGE);
       sensorReportFor(commandId, F("exit"), exitDistanceCm);
       eventDistance(F("exit_detected_container_closed_belt_running"), exitDistanceCm);
     }
   } else if (feedState == MOVING_TO_STAGE) {
-    stageDistanceCm = readDistanceCm(STAGE_TRIG_PIN, STAGE_ECHO_PIN);
-    if (detected(stageDistanceCm)) {
+    if (stageDetected()) {
       stopBelt();
       alignmentServo.write(ALIGN_NUDGE_ANGLE);
       setState(ALIGNING);
-      sensorReportFor(commandId, F("stage"), stageDistanceCm);
-      eventDistance(F("stage_detected_aligning"), stageDistanceCm);
+      stageSensorReportFor(commandId, true);
+      event(F("stage_detected_aligning"));
     }
   }
 }
@@ -355,7 +367,6 @@ const __FlashStringHelper *stateName() {
 
 void printStatus() {
   exitDistanceCm = readDistanceCm(EXIT_TRIG_PIN, EXIT_ECHO_PIN);
-  stageDistanceCm = readDistanceCm(STAGE_TRIG_PIN, STAGE_ECHO_PIN);
   protocolPrefixFor(0);
   Serial.print(F(" STATUS state=")); Serial.print(stateName());
   Serial.print(F(" active=")); Serial.print(cycleActive ? 1 : 0);
@@ -363,7 +374,7 @@ void printStatus() {
   Serial.print(F(" container=")); Serial.print(containerOpen ? F("open") : F("closed"));
   Serial.print(F(" speed_steps_s=")); Serial.println(motorSpeed);
   sensorReportFor(0, F("exit"), exitDistanceCm);
-  sensorReportFor(0, F("stage"), stageDistanceCm);
+  stageSensorReportFor(0, stageDetected());
 }
 
 void printHelp() {
@@ -410,11 +421,11 @@ void handleCommand(char *line) {
   } else if (!strcmp(line, "CLOSE") || !strcmp(line, "C")) {
     cancelCycle(true); stopBelt(); closeContainer(); acknowledgeManual(F("CLOSE"));
   } else if (!strcmp(line, "ON")) {
-    cancelCycle(true); startBelt(BELT_CCW_DIRECTION_LEVEL); acknowledgeManual(F("ON"));
+    cancelCycle(true); startBelt(BELT_FORWARD_DIRECTION_LEVEL); acknowledgeManual(F("ON"));
   } else if (!strcmp(line, "F")) {
-    cancelCycle(true); startBelt(HIGH); acknowledgeManual(F("F"));
+    cancelCycle(true); startBelt(BELT_FORWARD_DIRECTION_LEVEL); acknowledgeManual(F("F"));
   } else if (!strcmp(line, "B") || !strcmp(line, "R") || !strcmp(line, "REVERSE")) {
-    cancelCycle(true); startBelt(BELT_CCW_DIRECTION_LEVEL); acknowledgeManual(F("B"));
+    cancelCycle(true); startBelt(BELT_REVERSE_DIRECTION_LEVEL); acknowledgeManual(F("B"));
   } else if (!strcmp(line, "S") && argument) {
     setMotorSpeed(strtol(argument, NULL, 10));
     protocolPrefixFor(0);
@@ -459,8 +470,8 @@ void readSerialCommands() {
 void setup() {
   pinMode(DIR_PIN, OUTPUT); pinMode(STEP_PIN, OUTPUT);
   pinMode(EXIT_TRIG_PIN, OUTPUT); pinMode(EXIT_ECHO_PIN, INPUT);
-  pinMode(STAGE_TRIG_PIN, OUTPUT); pinMode(STAGE_ECHO_PIN, INPUT);
-  digitalWrite(STEP_PIN, LOW); digitalWrite(EXIT_TRIG_PIN, LOW); digitalWrite(STAGE_TRIG_PIN, LOW);
+  pinMode(STAGE_IR_PIN, INPUT);
+  digitalWrite(STEP_PIN, LOW); digitalWrite(EXIT_TRIG_PIN, LOW);
   containerServo.attach(CONTAINER_SERVO_PIN); alignmentServo.attach(ALIGN_SERVO_PIN);
   closeContainer(); restAligner();
   Serial.begin(9600);
