@@ -990,7 +990,7 @@ float BLOCK_HEIGHT_CM = 1.5;
 //   switch, not a computed number, so it cannot drift.
 
 float Z_MARGIN_PER_LEVEL_CM = 0.0; // cm added to EACH level (cumulative)
-float Z_MARGIN_FIXED_CM = 0.10;    // cm added ONCE to any level >= 1
+float Z_MARGIN_FIXED_CM = 0.12;    // cm added ONCE to any level >= 1
 long Z_MARGIN_FIXED_STEPS = 0;     // raw step trim, applied last
 
 // ------------------------------------------------------------
@@ -3483,7 +3483,7 @@ float SKEW_Y_PER_COLROW_CM[GRID_MODE_COUNT] = {0.0, 0.0};
 // does not move the grid model, camera overlay, Studio, Twin, or direct G.
 // Positive is away from the relevant home switch. Keep every slot zero until
 // that mode and axis have been measured.
-float BUILD_PLACEMENT_OFFSET_X_CM[GRID_MODE_COUNT] = {0.0, -0.4};
+float BUILD_PLACEMENT_OFFSET_X_CM[GRID_MODE_COUNT] = {0.0, 0.4};
 float BUILD_PLACEMENT_OFFSET_Y_CM[GRID_MODE_COUNT] = {0.0, 0.0};
 
 long buildPlacementOffsetSteps(uint8_t axis)
