@@ -11,6 +11,7 @@ it, and confusing them is the main way to get a wrong answer.
 | Layer | Module | Answers | Runs | May write `workspace_map.json` |
 | --- | --- | --- | --- | --- |
 | 1 · segmentation | `vision/block_detector.py` | what warm block-shaped things are here | every analysed frame | no |
+| 1.5 · levels | `vision/block_levels.py` | which of those is on top of which | deliberately, on a stacked scene | no |
 | 2 · live overlay | `vision/block_outline.py` | which of those are really blocks, and where to draw them | every analysed frame | no |
 | 3 · calibration | `vision/block_grid.py` | where the machine's grid is, in pixels | once, deliberately | **yes** |
 
@@ -494,3 +495,141 @@ this work and unchanged by it.
 - **Widening `WorkspaceMap`?** That is the one change that removes the 0.27 cm
   in §4, and it touches every consumer of the format.
 - **Touching `AnalysisWorker` wrappers?** Keep `**kwargs`. See §2.
+
+---
+
+## 6. Layer 1.5 — `block_levels`, which block is on top
+
+Layer 1 has no concept of height. On a single-layer board that is right; on a
+stack it fails three ways at once. The side faces of a tower weld neighbouring
+blocks into one component with no concavity — the input `_split_touching`
+cannot cut. A raised block images further from the optical axis than its true
+footprint, so it is reported in the wrong cell, silently, and worse the further
+it sits from frame centre. And nothing says which of two overlapping rectangles
+is the one a rig could actually pick.
+
+`block_levels` fixes all three from software alone. No second camera, no depth
+sensor, no extra lighting.
+
+### The cue: the visible side face is a ruler
+
+The rig's camera is wide and close (a 168° lens rectified to 120°), so a raised
+block shows a sliver of its vertical side. That sliver is both the segmentation
+fix — remove it and stacked blocks stop being connected — and the height
+measurement.
+
+For an overhead pinhole at height `H`, a ground point at radius `R` images at
+`r = f·R/H`, while the top face of a block whose top surface is at height `h`
+images at `r_top = f·R/(H − h)`. The visible band runs between them:
+
+```
+h        = H · s / r_top                      (1)  height of a top face
+p_ground = axis + (p_top − axis)·(H − h)/H    (2)  its true footprint
+```
+
+Neither focal length nor pixels-per-centimetre appears — they cancel. The only
+extrinsic needed is `H`. And `s/r_top` is a **ratio**, so it is scale-free and
+can be measured at the bounded working resolution against a full-resolution
+detection with no conversion.
+
+### The side you can see is the inward one
+
+This is the one thing here that is easy to get backwards, and the first draft
+did. The intuition that says "you see the far side" is wrong. The top face is
+nearer the lens, so it images at a *larger* radius than the base, and the
+exposed band therefore lies **between** them — on the side facing the optical
+axis. An overhead camera looks down and outward at an off-axis block, so what
+it sees past the top face is the block's near side.
+
+Equation (1) does not care. A ray cast the wrong way does: it walks straight
+off the block into the background and measures nothing. The synthetic renderer
+in `tests/test_block_levels.py` is what caught this, which is the reason that
+renderer is written from forward geometry and never from the module's algebra.
+
+### The pipeline
+
+1. **Split the warm mask** into bright top faces and shaded sides, by Otsu on
+   LAB lightness within a colour-relaxed union mask. Sides are the same wood at
+   a glancing angle, so their red-minus-blue can fall under the threshold that
+   finds tops — hence the relaxed union.
+2. **Suppress the thick side bands** and hand the result to layer 1 unmodified.
+   Neutralising a pixel to its own grey makes red-minus-blue exactly zero, so
+   it fails any positive threshold while leaving local contrast for the Canny
+   support inside `_decompose_compound`. Blacking it out would forge an edge.
+3. **Measure each top face** by marching rays inward from `inset` px inside its
+   inward-facing edges, finding the top→side transition per ray.
+4. **Share heights across plateaus** — top faces connected in the mask have no
+   side face between them, so they are coplanar by construction and a measured
+   member lends its height to neighbours that cannot see their own side.
+5. **Resolve stacks** by footprint overlap, keeping the highest; falling back to
+   completeness when no height is known, since the block on top is the only one
+   whose rectangle is whole.
+
+### `SIDE_MIN_HALF_THICKNESS_PX` — the number that decides it
+
+Only bands at least this thick are suppressed. Neutralising *every* dark pixel
+ate ~4 px off each block's short side, dropping the aspect ratio to 3.24 against
+a true 6.0/2.2 = 2.73 and collapsing 10 detections to 6. Measured:
+
+| capture | raw layer 1 | guarded suppression |
+| --- | --- | --- |
+| 165930 (3 blocks) | 3, aspect 2.72 | 3, aspect 2.74 |
+| 122957 (29 board) | 32, aspect 3.13 | 28, aspect 3.05 |
+| 123235 (multi-level) | 10, aspect 2.29 | **14, aspect 2.50** |
+
+Neutral on a flat scene, a clear win where blocks are stacked, slightly lossy on
+the dense single-layer board — the one case where levels do not matter anyway.
+Values from 1.01 to 1.3 are identical on all three; 1.6 gives ground back.
+
+### Two outputs, and they are NOT equally trustworthy
+
+**Which block is on top of which — solid.** This needs only the *relative*
+ordering of two measurements in the same stack, never their absolute size, so it
+needs no camera height and no calibration. It is what `on_top`, `covered_by` and
+`detect_top_layer` report.
+
+**Which numbered level a block is on — not validated on real frames.** On the
+29-block reference board, which is *entirely flat*, the measured ratios scatter
+with a coefficient of variation of **0.54** — higher than the genuinely
+multi-level capture's 0.37. Fitting a height to that scatter puts eleven blocks
+on level 0, one on level 1 and three on level 2, on a board where every block is
+on the table. Synthetic scenes with exact ground truth do not show this (CV 0.07
+flat, 0.43 across three levels), so the gap is real-world noise — touching
+blocks occluding each other's sides, and the grooves between them reading as
+sides — not an error in the algebra.
+
+Hence `self_calibrate` defaults **False**, and levels require a *measured*
+`camera_height_cm`. `estimate_camera_height` remains available for a rough
+starting value: it fits `H·q_i ≈ k_i·t` over integers by search, handling the
+alias (if `H` fits with levels `k`, `2H` fits with `2k` always, so take the
+smallest within tolerance) and pinning the scale on the shallowest block resting
+on the table. Over 400 randomised scenes at 10% noise, roughly one fit in six
+still lands >25% from truth and the confidence barely predicts which.
+
+### Where it cannot work
+
+- **At the optical axis** no side face is visible on any block at any height.
+  This is the projection, not a tuning problem. Covered by completeness ordering.
+  `minimum_measurable_radius_px` states the envelope: `r ≥ s_min·H/h`.
+- **Inside a plateau** interior blocks hide each other's sides — covered by the
+  plateau sharing in step 4.
+- **Fully buried** — a block hidden under a same-orientation block reflects no
+  light to this camera. Not recoverable, by any software. The planner knows it
+  is there; this module's job is to disagree loudly when the planner is wrong.
+
+### Block thickness is not defined here
+
+`BLOCK_HEIGHT_CM` is firmware-owned — `tests/test_link.py` states the Pi is
+forbidden a copy — so every entry point takes `block_height_cm` explicitly and
+raises without it. Pass the value from the sketch that is actually flashed.
+
+### Cost
+
+~500 ms on a 433 px capture at the 384 px working width, almost all of it
+`flatten_illumination`, run once in the split and once inside layer 1. That is
+deliberate-analysis territory, **not** a 30 fps overlay — the same reason §2
+says not to borrow layer 3's settings for the live feed. `flatten` cannot simply
+be turned off: separability barely moves (0.63 vs 0.64) but the multi-level
+capture drops from 13 detections to 7, because a wide lens leaves a brightness
+gradient that shifts *where* the threshold lands even when the histogram looks
+the same.

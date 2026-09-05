@@ -91,7 +91,7 @@ of open-loop timing.
 | Web operator console | **built** — all ten build steps (see [docs/CONSOLE.md](docs/CONSOLE.md)) |
 | 3D Build Studio (design/validate/compile/twin/run) | **built** through Milestone 7 (see [docs/STUDIO.md](docs/STUDIO.md)); Milestone 8 ("wow pass") not started |
 | Placement supervision (verify placements, notice human interference) | **designed, not started** — full design at [docs/feature-ideas.md](docs/feature-ideas.md) Appendix A |
-| Feeder module — container + belt + dual ultrasonic staging (Uno) | **firmware prototype complete.** `belt_v1.ino` implements two-stage container release, exit confirmation, sensor-stopped belt staging, alignment, timeouts, and structured serial results. It is not yet wired to the Pi or Mega; no orchestration doc yet |
+| Feeder module — container + belt + ultrasonic exit / IR staging (Uno) | **firmware prototype complete.** `belt_v1.ino` implements two-stage container release, exit confirmation, sensor-stopped belt staging, alignment, timeouts, and structured serial results. It is not yet wired to the Pi or Mega; no orchestration doc yet |
 | Feeder ↔ Pi ↔ Mega orchestration | **not started** — the Pi does not yet talk to a second serial device, and the Studio's runner assumes a block is already staged at `[0,0]` |
 | Autonomous block-to-target planning | **not implemented**, and out of scope — the human designs the structure |
 

@@ -25,7 +25,7 @@ One `FEED` request runs this sequence:
 5. Wait up to 10 seconds for the **exit sensor** to see a block leave the
    container and enter the belt.
 6. Close the container immediately after that confirmation, then run the belt
-   counter-clockwise.
+   forward.
 7. Wait up to 15 seconds for the **stage sensor** at the pickup point to see
    the block. Detection stops the belt.
 8. Move the alignment servo briefly to nudge the block square, return it to
@@ -44,7 +44,7 @@ that did not arrive at the pickup point.
 | A4988 belt driver | `DIR 2`, `STEP 3` | Tie `ENABLE` low if it is not controlled separately. |
 | Exit HC-SR04 | `TRIG 4`, `ECHO 5` | Confirms that a block left the container. |
 | Alignment servo | `6` | Rests at 90° and nudges to 120°; tune mechanically. |
-| Stage HC-SR04 | `TRIG 8`, `ECHO 9` | Confirms that the pickup position contains a block. |
+| Stage IR obstacle sensor | `OUT 8` | Confirms that the pickup position contains a block. The default logic is active-low; change `STAGE_IR_DETECTED_LEVEL` if the installed sensor is inverted. |
 | Container servo | `12` | Closed 20°, first opening 90°, final opening 160°. |
 
 The sketch uses 9600 baud. All serial commands must end with a newline.
@@ -52,9 +52,9 @@ The sketch uses 9600 baud. All serial commands must end with a newline.
 Servos and the A4988 should use power supplies sized for their load; do not
 assume the Uno's 5 V pin can power them. The Uno, motor driver, servo supply,
 sensors and Pi serial adapter must share a common ground. Verify the belt
-direction while unloaded: `BELT_CCW_DIRECTION_LEVEL` is the one firmware
-constant intended to be inverted if the installed belt moves physically the
-wrong way.
+direction while unloaded: swap `BELT_FORWARD_DIRECTION_LEVEL` and
+`BELT_REVERSE_DIRECTION_LEVEL` if the installed belt moves physically the wrong
+way.
 
 ## Serial protocol
 
@@ -83,9 +83,9 @@ For `FEED 42`, a normal transaction is:
 @42 EVENT phase=container_opening_stage_2
 @42 EVENT phase=waiting_for_exit
 @42 EVENT phase=exit_detected_container_closed_belt_running distance_cm=7.4
-@42 EVENT phase=stage_detected_aligning distance_cm=8.2
+@42 EVENT phase=stage_detected_aligning
 @42 EVENT phase=verifying_stage
-@42 EVENT phase=block_ready distance_cm=8.1
+@42 EVENT phase=block_ready
 @42 OK state=block_ready
 ```
 
@@ -111,14 +111,14 @@ error and is not a feed transaction result.
 | Command | Effect |
 | --- | --- |
 | `STOP` / `OFF` / `X` | Stop the belt and cancel an active feed cycle. |
-| `STATUS` / `P` | Print state, belt/container status and fresh readings from both sensors. |
+| `STATUS` / `P` | Print state, belt/container status, exit distance, and stage IR state (`detected` or `clear`). |
 | `US` | Same sensor/status snapshot as `STATUS`. |
 | `OPEN` / `O` | Test-only manual two-stage container opening. It cancels an active cycle. |
 | `CLOSE` / `C` | Close the container and stop the belt. |
-| `ON` | Run belt in configured CCW direction without a sensor-controlled cycle. |
+| `ON` | Run belt forward without a sensor-controlled cycle. |
 | `F` | Run belt forward for bench testing. |
-| `B`, `R`, `REVERSE` | Run belt in configured backward/CCW direction for bench testing. |
-| `S <steps/s>` | Set belt rate; constrained to 10–3000 steps/s. Default: 150. |
+| `B`, `R`, `REVERSE` | Run belt backward for bench testing. |
+| `S <steps/s>` | Set belt rate; constrained to 10–3000 steps/s. Default: 325. |
 | `HELP`, `H`, `?` | Print the command summary. |
 
 Manual motion commands are for commissioning only. They cancel a live feed
@@ -128,10 +128,9 @@ request, so an automated controller must not mix them into a production cycle.
 
 The firmware uses a state machine rather than a multi-second `delay()` belt
 run. It continues accepting serial input while a cycle is active, so `STOP` is
-available during an exit wait, belt movement, or alignment. HC-SR04 reads use a
-30 ms echo timeout, therefore a sensor read can briefly delay belt pulse
-generation; this is acceptable for feeder staging but is not precision motion
-control.
+available during an exit wait, belt movement, or alignment. The exit HC-SR04
+uses a 30 ms echo timeout, so its reads can briefly delay belt pulse generation;
+this is acceptable for feeder staging but is not precision motion control.
 
 | State | Belt | Exit sensor | Stage sensor | Exit condition |
 | --- | --- | --- | --- | --- |
@@ -139,15 +138,17 @@ control.
 | `opening_stage_1` | stopped | — | — | 500 ms elapsed |
 | `opening_stage_2` | stopped | — | — | 500 ms elapsed |
 | `waiting_for_exit` | stopped | sampled every 100 ms | — | block detected or 10 s timeout |
-| `moving_to_stage` | running CCW | — | sampled every 100 ms | block detected or 15 s timeout |
+| `moving_to_stage` | running forward | — | sampled every 100 ms | block detected or 15 s timeout |
 | `aligning` | stopped | — | — | 350 ms elapsed |
 | `verifying_stage` | stopped | — | read once after settling | block ready or resume belt |
 | `block_ready` | stopped | — | — | terminal success |
 
-A sensor detects an object when it returns a valid distance below `10.0 cm`.
-No echo is treated as no detection. The values are installation calibrations:
-adjust `DETECT_DISTANCE_CM`, the three servo-angle groups, belt rate, and
-timeouts only after testing with the actual hopper and pickup fixture.
+The exit sensor detects an object when it returns a valid distance below
+`10.0 cm`; no echo is treated as no detection. The stage sensor reports a
+digital presence signal, active-low by default. The values are installation
+calibrations: adjust `DETECT_DISTANCE_CM`, `STAGE_IR_DETECTED_LEVEL`, the three
+servo-angle groups, belt rate, and timeouts only after testing with the actual
+hopper and pickup fixture.
 
 ## Controller integration contract
 
@@ -190,12 +191,14 @@ trying to combine two devices on one serial port.
    ```
 
 3. Open a 9600-baud serial monitor and confirm the `READY` line.
-4. Run `STATUS`; with clear sensors it should report distances/no echo rather
-   than a false nearby block. Position a block at each sensor separately and
-   confirm its reading crosses the 10 cm threshold only where intended.
+4. Run `STATUS`; with clear sensors it should report exit distance/no echo and
+   `STAGE_IR=clear`. Position a block at each sensor separately and confirm the
+   exit reading crosses the 10 cm threshold and the stage sensor reports
+   `STAGE_IR=detected` only where intended.
 5. With the belt unloaded, use `F`, `B`, `ON`, and `OFF` to verify direction
-   and stop behaviour. If CCW is physically wrong, invert
-   `BELT_CCW_DIRECTION_LEVEL`, recompile and reflash.
+   and stop behaviour. If forward is physically wrong, swap
+   `BELT_FORWARD_DIRECTION_LEVEL` and `BELT_REVERSE_DIRECTION_LEVEL`, then
+   recompile and reflash.
 6. Use `OPEN` and `CLOSE` to confirm container travel. Adjust only the named
    container angles after checking for mechanical interference.
 7. Run `FEED 1` with one block. Confirm the exit event, automatic container

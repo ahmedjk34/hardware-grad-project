@@ -911,12 +911,13 @@ count-only assertion would pass on a board shifted by one cell.
 
 #### 3d-ter. Block detection — the three layers, and which to use
 
-There are now three things that find blocks, and they are easy to confuse. They
+There are now four things that find blocks, and they are easy to confuse. They
 share a segmentation front end and diverge completely after it.
 
 | Layer | Module | Answers | Runs |
 | --- | --- | --- | --- |
 | **segmentation** | `vision/block_detector.py` | "what warm block-shaped things are in this frame" | every analysed frame |
+| **levels** | `vision/block_levels.py` | "which of those is on top of which" | deliberately, on a stacked scene |
 | **live overlay** | `vision/block_outline.py` | "which of those are really blocks, and where do I draw them" | every analysed frame |
 | **calibration** | `vision/block_grid.py` | "where is the machine's grid, in pixels" | once, deliberately |
 
@@ -945,6 +946,39 @@ live feed keeps the behaviour it was tuned for:
 
 It knows nothing about grids, and it cannot: a rail and a block are the same
 shape. **What it returns is a hypothesis, not an answer.**
+
+##### Layer 1.5 — `block_levels`, which block is on top
+
+Layer 1 has no concept of height, and on a stack that costs three things at
+once: side faces weld neighbouring blocks into one uncuttable component, a
+raised block is reported in the wrong cell because it images further from the
+optical axis than its footprint, and nothing says which of two overlapping
+rectangles a rig could actually pick.
+
+`block_levels` splits the warm mask into bright top faces and shaded sides,
+hides the thick side bands from layer 1 so a stack stops reading as one blob,
+and measures each block's height from the width of its visible side band —
+`h = H·s/r_top`, in which neither focal length nor px-per-cm appears.
+
+Rules that must survive an edit:
+
+- **The visible side face is the INWARD one**, facing the optical axis, because
+  the top face images at a larger radius than the base. This is the module's one
+  genuine sign trap and the first draft got it wrong; `tests/test_block_levels.py`
+  renders from forward geometry precisely so the algebra cannot self-cancel.
+- **`BLOCK_HEIGHT_CM` is not defined in Python.** It is firmware-owned (see
+  §"Layer 1" callers and `tests/test_link.py`), so every entry point takes
+  `block_height_cm` as an argument and raises without it. Do not add a default.
+- **`self_calibrate` defaults OFF, and must stay off.** With it on, the flat
+  29-block reference board reports eleven blocks on level 0, one on level 1 and
+  three on level 2. Ordering blocks by height needs no camera height; *naming a
+  level* does, and that number has to be measured, not fitted.
+- **Only `solid_side` is ever neutralised, never `side`.** The thickness guard is
+  what stops suppression eating the top faces it exists to isolate; without it
+  the multi-level capture drops from 14 detections to 6.
+
+`docs/BLOCK-VISION.md` §6 carries the geometry, the measured tables and the
+failure modes.
 
 ##### Layer 2 — `block_outline.detect_aligned_blocks`
 

@@ -8,13 +8,13 @@ Flash `belt_v1/belt_v1.ino` to an **Arduino Uno** for the feeder. Its wiring is:
 - A4988 `ENABLE` is not used; connect it to GND
 - Exit HC-SR04: `TRIG = 4`, `ECHO = 5`
 - Alignment-servo signal: pin `6`
-- Pickup/stage HC-SR04: `TRIG = 8`, `ECHO = 9`
+- Pickup/stage IR obstacle sensor: `OUT = 8` (default active-low)
 - Container-servo signal: pin `12`
 
 `FEED [id]` (or its `RUN [id]` alias) performs one complete feeder cycle:
 close the container to 20°, open it in stages (90° then 160°), wait for the
 exit sensor to see a block below 10 cm, run the belt, and stop it only when the
-stage sensor sees the block. The alignment servo then nudges the block square
+stage IR sensor sees the block. The alignment servo then nudges the block square
 and the stage sensor verifies that it remained present.
 
 Every controller command must end in a newline. A feed cycle is identified by
@@ -23,8 +23,8 @@ the optional numeric `id` and reports structured telemetry:
 ```text
 @42 EVENT phase=waiting_for_exit
 @42 EVENT phase=exit_detected_container_closed_belt_running distance_cm=7.4
-@42 EVENT phase=stage_detected_aligning distance_cm=8.2
-@42 EVENT phase=block_ready distance_cm=8.1
+@42 EVENT phase=stage_detected_aligning
+@42 EVENT phase=block_ready
 @42 OK state=block_ready
 ```
 
@@ -35,9 +35,10 @@ prints `@0 READY firmware=belt_v1 protocol=1 board=uno` at boot.
 
 Use `STOP` to cancel a cycle safely. Manual commands are `STATUS` (or `P`),
 `OPEN`, `CLOSE`, `ON`, `OFF`, `F`, `B`, `S <speed>`, `US`, and `HELP`. The
-default belt speed is 150 steps per second. `US`/`STATUS` read both sensors.
-If the belt turns the wrong physical direction, invert
-`BELT_CCW_DIRECTION_LEVEL` in the sketch.
+default belt speed is 325 steps per second. `US`/`STATUS` read the exit distance
+and report the stage IR sensor as `detected` or `clear`.
+If the belt turns the wrong physical direction, swap the forward and reverse
+direction-level constants in the sketch.
 
 ## `build_test_v1/` is the sketch on the rig
 
