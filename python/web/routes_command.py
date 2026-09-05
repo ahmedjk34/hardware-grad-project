@@ -56,10 +56,22 @@ class BuildRequest(BaseModel):
     command: str
 
 
+#: Held while a mode latch is homing X/Y. Read as "the rig is moving" by
+#: everything that must not send down the same cable meanwhile.
+MODE_BUSY_MESSAGE = "a grid-mode latch is homing X/Y; wait for it to finish"
+
+
+def _latching(app) -> bool:
+    lock = getattr(app.state, "mode_latch_lock", None)
+    return bool(lock is not None and lock.locked())
+
+
 def require_mutable(app) -> None:
     """Reject actions that could queue behind motion or a locked machine."""
     if app.state.job.running:
         raise HTTPException(status_code=409, detail=BUSY_MESSAGE)
+    if _latching(app):
+        raise HTTPException(status_code=409, detail=MODE_BUSY_MESSAGE)
     if app.state.controller.locked:
         raise HTTPException(status_code=409,
                             detail=app.state.controller.locked_reason)
@@ -140,10 +152,24 @@ async def level(request: LevelRequest, http: Request) -> StateModel:
     return _state(app)
 
 
+# A plain `def`, not `async def`, for the same reason every route in
+# routes_calibration.py is one: selecting the horizontal grid homes X and Y,
+# which is many seconds of BLOCKING serial motion. On the event loop that
+# stalls everything the loop owns for the whole move — the WebSocket fan-out
+# and its heartbeats, the MJPEG stream, and `_drive_pipeline`, which is the
+# only thing that polls the build job and publishes `build_result`. The
+# console then looks frozen mid-latch and catches up in a burst afterwards.
+# FastAPI runs a sync handler on a worker thread instead.
 @router.post("/mode", response_model=StateModel)
-async def mode(request: ModeRequest, http: Request) -> StateModel:
+def mode(request: ModeRequest, http: Request) -> StateModel:
     app = http.app
     require_mutable(app)
+    # The event loop used to serialise these by accident. Now that the latch
+    # runs on a worker thread, take the lock explicitly: two overlapping
+    # latches would interleave commands on one serial cable.
+    lock = app.state.mode_latch_lock
+    if not lock.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail=MODE_BUSY_MESSAGE)
     try:
         app.state.controller.set_mode(request.mode, home_before_horizontal=True)
         # The controller latches the serial rig first; only then may the
@@ -151,6 +177,8 @@ async def mode(request: ModeRequest, http: Request) -> StateModel:
         app.state.pipeline.set_grid_mode(request.mode, app.state.rig.grid)
     except (BuildStateError, RigError, ValueError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    finally:
+        lock.release()
     _signal(app)
     return _state(app)
 

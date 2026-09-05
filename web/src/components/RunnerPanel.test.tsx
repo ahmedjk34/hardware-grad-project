@@ -118,6 +118,49 @@ describe("RunnerPanel", () => {
     expect(screen.queryByText("RUN PAUSED")).not.toBeInTheDocument();
   });
 
+  it("does not replay a SETTLED command's last phase onto the next command", async () => {
+    // The server keeps `build_step`/`build_phase` across `on_result` — for a
+    // failed build, where it stopped is the last thing anyone knows — and
+    // stamps the following snapshot with the RESULT's event id. That id is
+    // higher than any of that command's steps, so replaying it as a phase
+    // pins the readout to "14/14 · Return the claw to neutral" over whatever
+    // the rig does next.
+    const api = mockedApi();
+    let selection = 0;
+    api.select = vi.fn(async () => readyState({
+      selected: [3, 2], command: `B 3 2 ${selection++}`,
+    }));
+    const running = readyState({ build_state: "RUNNING", selected: [3, 2], command: "B 3 2 0" });
+    const { rerender } = render(<RunnerPanel state={readyState()} connected modelId="example-tower" api={api} />);
+    fireEvent.click(screen.getByRole("button", { name: "RUN" }));
+    fireEvent.click(screen.getByRole("button", { name: "START RUN" }));
+    await waitFor(() => expect(api.build).toHaveBeenCalledWith("B 3 2 0"));
+
+    rerender(<RunnerPanel state={running} connected modelId="example-tower" api={api}
+                          progress={phaseAt(14, "park_rotation", "Return the claw to neutral",
+                                            { action: "park", status: "parking" })} />);
+    await waitFor(() =>
+      expect(screen.getByText("14/14 · Return the claw to neutral")).toBeInTheDocument());
+
+    // The durable result settles the build and the next one goes out.
+    rerender(<RunnerPanel state={running} connected modelId="example-tower" api={api}
+                          progress={phaseAt(14, "park_rotation", "Return the claw to neutral",
+                                            { action: "park", status: "parking" })}
+                          lastResult={settled("placed", null)} />);
+    await waitFor(() => expect(api.build).toHaveBeenCalledWith("B 3 2 1"));
+
+    // The snapshot that follows the result: the SAME phase, now stamped
+    // `placed` and carrying the result's (higher) event id. Block 2 is in
+    // flight and the rig has not announced anything about it.
+    rerender(<RunnerPanel state={running} connected modelId="example-tower" api={api}
+                          progress={phaseAt(14, "park_rotation", "Return the claw to neutral",
+                                            { action: "park", status: "placed", eventId: 900 })}
+                          lastResult={settled("placed", null)} />);
+
+    await waitFor(() => expect(screen.getByText("WAITING FOR THE RIG")).toBeInTheDocument());
+    expect(screen.queryByText("14/14 · Return the claw to neutral")).not.toBeInTheDocument();
+  });
+
   it("preserves an aborted program read-only with no recovery control", async () => {
     const api = mockedApi();
     const { rerender } = render(<RunnerPanel state={readyState()} connected modelId="example-tower" api={api} />);

@@ -222,6 +222,11 @@ def create_app(options: ConsoleAppOptions | None = None) -> FastAPI:
         # builds at a rig that is deaf to the second one.
         app.state.block_calibration = None
         app.state.block_calibration_lock = threading.Lock()
+        # Held for the whole of one `/api/mode` latch. That route runs on a
+        # worker thread (it homes X/Y over the serial cable), so the event loop
+        # no longer serialises two of them for us, and nothing else may touch
+        # the cable while one is moving the rig.
+        app.state.mode_latch_lock = threading.Lock()
         app.state.hub = EventHub()
         app.state.progress = BuildProgressTracker()
         app.state.state_signature = None

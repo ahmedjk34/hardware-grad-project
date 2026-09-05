@@ -194,7 +194,13 @@ function issueMode(state: RunState, now: number): Turn {
   const op = state.program[state.cursor];
   if (!op || op.op !== "mode") return noEffects(state);
   return {
-    state: { ...state, phase: "building", pendingConfirm: null, inFlight: true, opStartedAt: now },
+    state: {
+      ...state, phase: "building", pendingConfirm: null, inFlight: true,
+      opStartedAt: now,
+      // As in `issueBuild`: the last block's phases describe the last block.
+      // A latch is its own command and the rig has said nothing about it yet.
+      progress: noProgress(),
+    },
     effects: [{ kind: "mode", mode: op.mode, command: op.text, dry: state.style === "dry" }],
   };
 }
@@ -354,7 +360,7 @@ export function step(state: RunState, event: RunEvent): Turn {
     if (!state.inFlight || !op || op.op !== "mode") return noEffects(state);
     const next = {
       ...state, inFlight: false, buildState: "READY" as const, cursor: state.cursor + 1,
-      log: logResult(state, "switched", event.now),
+      log: logResult(state, "switched", event.now), progress: noProgress(),
     };
     return advance(next, event.now);
   }
