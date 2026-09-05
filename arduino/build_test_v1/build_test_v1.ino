@@ -240,7 +240,7 @@ const int SERVO_PIN = 6;
 // O/openServo() runs.
 const int SERVO_HOME_OPEN_ANGLE = 0;
 const int SERVO_OPEN_ANGLE = 0;
-const int SERVO_CLOSE_ANGLE = 52;
+const int SERVO_CLOSE_ANGLE = 54;
 
 // The servo is commanded and then forgotten - nothing reports back
 // when it has actually arrived. The build sequence must not start
@@ -3474,9 +3474,24 @@ bool gotoCell(long col, long row)
 float SKEW_X_PER_COL_CM[GRID_MODE_COUNT]    = {0.0, 0.0};
 float SKEW_X_PER_ROW_CM[GRID_MODE_COUNT]    = {0.0, 0.0};
 float SKEW_X_PER_COLROW_CM[GRID_MODE_COUNT] = {0.0, 0.0};
-float SKEW_Y_PER_COL_CM[GRID_MODE_COUNT]    = {0.115, 0.115};
+float SKEW_Y_PER_COL_CM[GRID_MODE_COUNT]    = {0.115, 0.13};
 float SKEW_Y_PER_ROW_CM[GRID_MODE_COUNT]    = {0.0, 0.0};
 float SKEW_Y_PER_COLROW_CM[GRID_MODE_COUNT] = {0.0, 0.0};
+
+// A fixed build-placement correction, independent of cell index. This is
+// deliberately firmware-only: unlike GRID_ERROR_OFFSET_* and GRID_SHIFT_*, it
+// does not move the grid model, camera overlay, Studio, Twin, or direct G.
+// Positive is away from the relevant home switch. Keep every slot zero until
+// that mode and axis have been measured.
+float BUILD_PLACEMENT_OFFSET_X_CM[GRID_MODE_COUNT] = {0.0, -0.4};
+float BUILD_PLACEMENT_OFFSET_Y_CM[GRID_MODE_COUNT] = {0.0, 0.0};
+
+long buildPlacementOffsetSteps(uint8_t axis)
+{
+  float cm = (axis == AXIS_X) ? BUILD_PLACEMENT_OFFSET_X_CM[gridMode]
+                               : BUILD_PLACEMENT_OFFSET_Y_CM[gridMode];
+  return lround(cm * xyStepsPerCmOf(axis));
+}
 
 // Step offset to add to an X or Y build target for cell [col,row]. Positive
 // means farther from that axis's home switch. At the shipped calibration only
@@ -3515,19 +3530,19 @@ bool gotoBuildTarget(long col, long row, int8_t rotation)
   long *targets[AXIS_COUNT] = {&targetX, &targetY};
   for (uint8_t axis = AXIS_X; axis <= AXIS_Y; axis++)
   {
-    long skew = buildSkewSteps(axis, col, row);
-    if (skew == 0)
+    long correction = buildPlacementOffsetSteps(axis) + buildSkewSteps(axis, col, row);
+    if (correction == 0)
       continue;
 
     long original = *targets[axis];
-    long capped = original + skew;
+    long capped = original + correction;
     long maximum = lround(xyTravelCmOf(axis) * xyStepsPerCmOf(axis));
     if (capped < 0)
       capped = 0;
     else if (capped > maximum)
       capped = maximum;
 
-    Serial.print(F("  Dynamic skew: "));
+    Serial.print(F("  Build correction: "));
     Serial.print((axis == AXIS_X) ? F("X ") : F("Y "));
     Serial.print(original);
     Serial.print(F(" -> "));
@@ -5046,6 +5061,15 @@ void printGridConfig()
     Serial.print(F("*row + "));
     Serial.print(perColRow, 3);
     Serial.println(F("*col*row cm   (BUILD only, + = away from home)"));
+    float fixed = (axis == AXIS_X) ? BUILD_PLACEMENT_OFFSET_X_CM[gridMode]
+                                   : BUILD_PLACEMENT_OFFSET_Y_CM[gridMode];
+    Serial.print(F("Build placement offset ["));
+    Serial.print(gridModeName(gridMode));
+    Serial.print(F("]: "));
+    Serial.print(name);
+    Serial.print(F(" += "));
+    Serial.print(fixed, 3);
+    Serial.println(F(" cm   (BUILD only, + = away from home)"));
     Serial.print(F("             e.g. col "));
     Serial.print(gridColsNow());
     Serial.print(F(" row 0 -> "));

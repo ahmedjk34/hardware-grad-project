@@ -46,7 +46,7 @@ it accepts and the text it prints back.
 
 `build_vertical_grid/` and `build_horizontal_grid/` are supervised standalone
 level-0 grid-fill sketches. They carry the same gripper, Z-margin, and build
-rotation settings as `build_test_v1/`: close **52°**, fixed placement margin
+rotation settings as `build_test_v1/`: close **54°**, fixed placement margin
 **+0.10 cm**, and a horizontal build turn of **90° CW**.
 
 ```
@@ -62,7 +62,7 @@ Board is an Arduino MEGA 2560. Serial is **9600 baud**. Multi-character
 commands need a newline; single digits do not. `V <angle>` sets the gripper
 servo to an arbitrary angle from 0 to 180 degrees. The `O` command checks the
 X/Y home switches and opens to **0 degrees**. `C` closes it at
-52 degrees.
+54 degrees.
 
 The firmware keeps the physical block height at **1.5 cm**. Its fixed Z
 placement margin is **+0.10 cm**, raising releases at levels 1 and above by

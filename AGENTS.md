@@ -128,6 +128,13 @@ pushes the far block past the travel cap CLIPS the reachable grid
 while keeping the request, so clearing it restores the full grid with no re-`S`.
 The pick-up never rides it — that is a plain home to raw `[0,0]`.
 
+**Do not change `GRID_ERROR_OFFSET_*` / `error_offset_*` or `GRID_SHIFT_*` /
+`shift_{x,y}_cm` without the user's explicit permission.** Both are part of the
+shared grid model: they move what the camera overlay, Studio, Twin and Pi regard
+as a cell. A build-only physical-placement correction belongs in a separate
+firmware-only `BUILD_PLACEMENT_OFFSET_*` table instead; it must never be folded
+into the lattice or copied into `rig.json`.
+
 **Each mode declares both block extents outright.** Nothing in this project
 swaps a width for a length. A swap would have to be performed identically in
 the firmware, in `MachineGrid` and in the camera overlay — three chances to get
@@ -324,9 +331,10 @@ are both `+1.9 cm` for the pickup-cell-to-horizontal-grid registration
 described above.
 **Both modes ship `error_offset_x_cm = error_offset_y_cm = 0.0`**
 (`config/rig.json` and `GRID_ERROR_OFFSET_*_CM[]` alike). Start any new error
-calibration from zero. For any user-marked **error offsetting**, use
-`error_offset_x_cm` and `error_offset_y_cm` (and the paired firmware variables)
-as an additional signed shift exactly like the grid trim.
+calibration from zero. These are UI-visible grid shifts, not a general physical
+placement knob: do not change either `error_offset_*` or `shift_*` without the
+user's explicit permission. A build-only constant physical residual belongs in
+the firmware-only `BUILD_PLACEMENT_OFFSET_*` tables instead.
 
 ### 3b. Grid NUMBERING — the convention, not the count
 

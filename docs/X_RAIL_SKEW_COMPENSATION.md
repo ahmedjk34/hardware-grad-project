@@ -1,4 +1,4 @@
-# Dynamic X/Y skew compensation (per mode, build motion only)
+# Build-motion compensation: dynamic X/Y skew and fixed placement offset
 
 ## Symptom
 
@@ -48,9 +48,12 @@ just above `gotoBuildTarget()`:
 float SKEW_X_PER_COL_CM[GRID_MODE_COUNT]    = {0.0f, 0.0f};
 float SKEW_X_PER_ROW_CM[GRID_MODE_COUNT]    = {0.0f, 0.0f};
 float SKEW_X_PER_COLROW_CM[GRID_MODE_COUNT] = {0.0f, 0.0f};
-float SKEW_Y_PER_COL_CM[GRID_MODE_COUNT]    = {0.115f, 0.115f};
+float SKEW_Y_PER_COL_CM[GRID_MODE_COUNT]    = {0.115f, 0.130f};
 float SKEW_Y_PER_ROW_CM[GRID_MODE_COUNT]    = {0.0f, 0.0f};
 float SKEW_Y_PER_COLROW_CM[GRID_MODE_COUNT] = {0.0f, 0.0f};
+
+float BUILD_PLACEMENT_OFFSET_X_CM[GRID_MODE_COUNT] = {0.0f, -0.4f};
+float BUILD_PLACEMENT_OFFSET_Y_CM[GRID_MODE_COUNT] = {0.0f, 0.0f};
 
 long buildSkewSteps(uint8_t axis, long col, long row)
 {
@@ -62,6 +65,13 @@ long buildSkewSteps(uint8_t axis, long col, long row)
                                      : SKEW_Y_PER_COLROW_CM[gridMode];
   float cm = perCol * (float)col + perRow * (float)row
            + perColRow * (float)col * (float)row;
+  return lround(cm * xyStepsPerCmOf(axis));
+}
+
+long buildPlacementOffsetSteps(uint8_t axis)
+{
+  float cm = (axis == AXIS_X) ? BUILD_PLACEMENT_OFFSET_X_CM[gridMode]
+                               : BUILD_PLACEMENT_OFFSET_Y_CM[gridMode];
   return lround(cm * xyStepsPerCmOf(axis));
 }
 ```
@@ -81,9 +91,16 @@ from the cell indices on every build. There are now separate coefficient tables
 for X and Y, with one slot each for vertical and horizontal. Re-fit only the
 mode and axis that were measured.
 
-The shipped values use the same measured setting in both modes: `Y += 0.115 * col`;
-all X, row, and cross terms are zero. Horizontal has its own table slot but has
-not yet been independently measured.
+The shipped skew values are `vertical Y += 0.115 * col` and `horizontal Y +=
+0.130 * col`; all X, row, and cross terms are zero.
+
+`BUILD_PLACEMENT_OFFSET_*` is the separate fixed-error correction. It is per
+axis and per mode, defaults to zero, and is added once to a `B` target before
+the dynamic skew. Use it only for a measured constant release-position error;
+The current measured fixed residual is horizontal X: placements land 0.4 cm
+too far from the X home switch, so `BUILD_PLACEMENT_OFFSET_X_CM[horizontal]`
+is `-0.4`. The negative command moves the holder toward home and cancels that
+away-from-home error. The other three slots remain zero until measured.
 
 ## Scope — where this lives, and where it must never leak
 
@@ -117,6 +134,10 @@ Look for the four per-mode lines (two coefficient lines and two examples):
 Dynamic skew [vertical]: X += 0.000*col + 0.000*row + 0.000*col*row cm   (BUILD only, + = away from home)
 Dynamic skew [vertical]: Y += 0.115*col + 0.000*row + 0.000*col*row cm   (BUILD only, + = away from home)
              e.g. col 6 row 0 -> Y += 0.690 cm (<steps> steps)
+Build placement offset [vertical]: Y += 0.000 cm   (BUILD only, + = away from home)
+Dynamic skew [horizontal]: Y += 0.130*col + 0.000*row + 0.000*col*row cm   (BUILD only, + = away from home)
+             e.g. col 2 row 0 -> Y += 0.260 cm (<steps> steps)
+Build placement offset [horizontal]: X += -0.400 cm   (BUILD only, + = away from home)
 ```
 
 If those lines are **absent**, the board is still running old firmware — re-flash.
@@ -125,10 +146,10 @@ During an actual build, `gotoBuildTarget()` also logs the correction per cell as
 it is applied:
 
 ```
-  Dynamic skew: Y 1234 -> 1257 steps (0.115 cm)
+  Build correction: Y 1234 -> 1257 steps (0.115 cm)
 ```
 
-(no line is printed for column 0, where the nudge is exactly 0).
+(No correction line is printed when both the fixed offset and dynamic skew are zero.)
 
 ## Verification status
 
