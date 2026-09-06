@@ -1252,44 +1252,62 @@ svg.grid-overlay.selectable { cursor: crosshair; }
 }
 .studio-gridshift-axis { margin-left: auto; color: var(--text-dim); font: var(--t-xs); letter-spacing: .06em; }
 .studio-gridshift-body { padding: var(--s2) var(--s3); display: grid; gap: var(--s2); }
-.studio-gridshift-hint { margin: 0; color: var(--text-faint); font: var(--t-xs); line-height: 1.5; }
-.studio-gridshift-stepper {
+/* The incrementer: two step buttons flanking a big cm readout. */
+.studio-gridshift-inc {
   display: grid;
-  grid-template-columns: auto 1fr auto auto;
-  align-items: center;
+  grid-template-columns: auto 1fr auto;
+  align-items: stretch;
   gap: var(--s1);
 }
-.studio-gridshift-stepper button {
-  min-width: 2.2ch;
-  padding: 2px var(--s1);
+.studio-gridshift-inc button {
+  padding: var(--s1) var(--s2);
   border: 1px solid var(--line);
   border-radius: var(--r-sm);
   background: var(--surface);
   color: var(--text);
   font-family: var(--font-mono);
+  font-size: 12px;
   cursor: pointer;
 }
-.studio-gridshift-stepper button:hover:not(:disabled) { border-color: var(--line-strong); }
-.studio-gridshift-stepper button:disabled { opacity: .35; cursor: default; }
-.studio-gridshift-stepper button:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
-.studio-gridshift-value {
-  color: var(--text-dim);
+.studio-gridshift-inc button:hover:not(:disabled) { border-color: var(--line-strong); }
+.studio-gridshift-inc button:disabled { opacity: .35; cursor: default; }
+.studio-gridshift-inc button:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+.studio-gridshift-amount {
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--plate);
+  color: var(--text);
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
-  font-size: 12px;
+  font-size: 14px;
+  letter-spacing: .04em;
 }
-.studio-gridshift-preset {
-  padding: 3px var(--s2);
-  border: 1px solid color-mix(in srgb, var(--signal) 40%, var(--line));
+.studio-gridshift-actions { display: flex; gap: var(--s2); }
+.studio-gridshift-apply {
+  flex: 1;
+  padding: 4px var(--s2);
+  border: 1px solid color-mix(in srgb, var(--signal) 45%, var(--line));
   border-radius: var(--r-sm);
   background: var(--wash-signal);
   color: var(--signal);
   font: var(--t-xs);
-  letter-spacing: .06em;
+  letter-spacing: .1em;
   cursor: pointer;
 }
-.studio-gridshift-preset:disabled { opacity: .35; cursor: default; }
-.studio-gridshift-preset:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+.studio-gridshift-apply:disabled { opacity: .4; cursor: default; }
+.studio-gridshift-apply:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+.studio-gridshift-reset {
+  padding: 4px var(--s2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--text-dim);
+  font: var(--t-xs);
+  cursor: pointer;
+}
+.studio-gridshift-reset:disabled { opacity: .4; cursor: default; }
 .studio-gridshift-summary { margin: 0; color: var(--text-dim); font: var(--t-xs); }
 .studio-gridshift-orphans { margin: 0; color: var(--danger); font: var(--t-xs); line-height: 1.5; }
 

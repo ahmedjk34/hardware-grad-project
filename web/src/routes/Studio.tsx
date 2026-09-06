@@ -126,14 +126,21 @@ export default function Studio() {
     () => compile(model, { mode, settings, shifts, bondShifts, rigSnapshot }),
     [model, mode, settings, shifts, bondShifts, rigSnapshot],
   );
-  // The lattice preview follows the level being edited: hold a level and its
-  // running-bond course offset shows, so a bonded structure is drawn brick-laid
-  // as it is designed. Unheld ⇒ the base course (no bond).
-  const previewShift = useMemo(
-    () => resolveShift({ mode, level: heldLevel ?? 0 }, { [mode]: shifts[mode] }, bondShifts)
-      ?? shifts[mode],
-    [mode, heldLevel, shifts, bondShifts],
-  );
+  // While the GRID SHIFT panel's incrementer is being turned, its pending
+  // (not-yet-applied) course + offset drives the lattice preview so the grid
+  // moves live. Cleared on Apply / Reset. Otherwise the preview follows the
+  // level held on the scrubber and the committed bond map.
+  const [pendingShift, setPendingShift] = useState<{ level: number; cm: number } | null>(null);
+  const previewShift = useMemo(() => {
+    if (pendingShift) {
+      const offset: [number, number] = mode === "horizontal"
+        ? [pendingShift.cm, 0] : [0, pendingShift.cm];
+      return resolveShift({ mode, level: pendingShift.level },
+        { [mode]: shifts[mode] }, { [mode]: { [pendingShift.level]: offset } }) ?? shifts[mode];
+    }
+    return resolveShift({ mode, level: heldLevel ?? 0 }, { [mode]: shifts[mode] }, bondShifts)
+      ?? shifts[mode];
+  }, [mode, heldLevel, shifts, bondShifts, pendingShift]);
   const placementDiagnostics = useMemo(() => target ? validatePlacement(model, {
     id: "ghost", mode, col: target.col, row: target.row, level: target.level, colour: "white",
   }, validationContext) : [], [model, mode, target, validationContext]);
@@ -435,7 +442,11 @@ export default function Studio() {
                      maxLevel={model.blocks.reduce((m, b) => Math.max(m, b.level), 0)}
                      ceiling={THEORETICAL_LEVEL_CEILING}
                      orphanCount={diagnostics.filter(d => d.code === "CLIPPED_BY_SHIFT").length}
-                     onSetBond={(level, offsetCm) => commit({ type: "setBond", mode, level, offsetCm })} />
+                     onPreview={(level, cm) => setPendingShift(cm === null ? null : { level, cm })}
+                     onSetBond={(level, offsetCm) => {
+                       setPendingShift(null);
+                       commit({ type: "setBond", mode, level, offsetCm });
+                     }} />
           <Settings value={settings} onChange={setSettings} />
         </div>
 
