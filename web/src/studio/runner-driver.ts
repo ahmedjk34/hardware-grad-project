@@ -17,6 +17,7 @@ export interface RunnerApi {
   selectAxis(axis: "col" | "row", value: number): Promise<StateModel>;
   build(command: string): Promise<StateModel>;
   mode(next: "vertical" | "horizontal"): Promise<StateModel>;
+  shift(mode: "vertical" | "horizontal", x_cm: number, y_cm: number): Promise<StateModel>;
   stop?(): Promise<StateModel>;
 }
 
@@ -76,6 +77,11 @@ export async function executeEffect(effect: Effect, context: DriverContext): Pro
     context.dispatch({ type: "mode-settled", now: now() });
     return;
   }
+  if (effect.kind === "shift" && effect.dry) {
+    await delay(DRY_EFFECT_MS);
+    context.dispatch({ type: "shift-settled", now: now() });
+    return;
+  }
 
   let snapshot = context.state();
   assertTransportReady(snapshot);
@@ -107,6 +113,22 @@ export async function executeEffect(effect: Effect, context: DriverContext): Pro
       throw new Error(`runner expected build_state RUNNING, got ${response.build_state}`);
     }
     context.dispatch({ type: "build-running", now: now() });
+    return;
+  }
+
+  if (effect.kind === "shift") {
+    // The composed absolute value is on the effect; only the run axis moves, so
+    // the other axis carries whatever the operator's live shift already had.
+    const other = effect.axis === "x" ? snapshot.shift_cm[1] : snapshot.shift_cm[0];
+    const response = await api.shift(
+      effect.mode,
+      effect.axis === "x" ? effect.cm : other,
+      effect.axis === "y" ? effect.cm : other,
+    );
+    if (response.build_state !== "READY") {
+      throw new Error(`runner expected shift response READY, got ${response.build_state}`);
+    }
+    context.dispatch({ type: "shift-settled", now: now() });
     return;
   }
 

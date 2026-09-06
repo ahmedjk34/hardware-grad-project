@@ -14,6 +14,9 @@ export interface StudioSettings {
   levelCeiling: number;
   blockCycleSeconds: number;
   latchHomingSeconds: number;
+  /** A `shiftX` / `shiftY` latch moves nothing — it re-clips the grid. A short
+   *  guess for the running-bond courses; measure it if it ever matters. */
+  shiftLatchSeconds: number;
 }
 
 export const SUPPORT_RATIO = 0.55;
@@ -23,6 +26,8 @@ export const LEVEL_CEILING = 6;
 export const BLOCK_CYCLE_SECONDS = 2.115;
 /** A latch homes X and Y — a whole-machine seek. A guess until M7 times it. */
 export const LATCH_HOMING_SECONDS = 16;
+/** A grid-shift latch moves nothing. Comfortably over the serial round-trip. */
+export const SHIFT_LATCH_SECONDS = 1;
 export const STUDIO_SETTINGS_KEY = "rig.studio.settings.v1";
 
 export const DEFAULT_STUDIO_SETTINGS: StudioSettings = Object.freeze({
@@ -31,6 +36,7 @@ export const DEFAULT_STUDIO_SETTINGS: StudioSettings = Object.freeze({
   levelCeiling: LEVEL_CEILING,
   blockCycleSeconds: BLOCK_CYCLE_SECONDS,
   latchHomingSeconds: LATCH_HOMING_SECONDS,
+  shiftLatchSeconds: SHIFT_LATCH_SECONDS,
 });
 
 export interface SettingsStorage {
@@ -57,6 +63,7 @@ function parsedSettings(value: unknown): StudioSettings | null {
     levelCeiling: Math.floor(settings.levelCeiling),
     blockCycleSeconds: positive(settings.blockCycleSeconds, BLOCK_CYCLE_SECONDS),
     latchHomingSeconds: positive(settings.latchHomingSeconds, LATCH_HOMING_SECONDS),
+    shiftLatchSeconds: positive(settings.shiftLatchSeconds, SHIFT_LATCH_SECONDS),
   };
 }
 

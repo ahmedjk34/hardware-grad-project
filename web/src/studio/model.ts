@@ -6,7 +6,7 @@
  * Every mutation passes through `applyEdit`, leaving one small, pure boundary
  * where either invariant could be broken and one place for the tests to guard.
  */
-import type { ModeName } from "./coords";
+import type { BondShifts, ModeName } from "./coords";
 
 export type BlockColour = "white" | "red" | "orange" | "yellow" | "green" | "blue";
 
@@ -22,6 +22,13 @@ export interface ModelBlock {
 export interface Model {
   blocks: ModelBlock[];
   order: string[];
+  /**
+   * Running-bond course offsets: per mode, per level, an `[x_cm, y_cm]` the
+   * lattice is shifted by ON TOP OF the rig's live shift. Author intent, not a
+   * geometry snapshot, so it lives beside `blocks` / `order` and is undo-tracked.
+   * Absent ⇒ no bond, and every reader treats it that way.
+   */
+  bondShifts?: BondShifts;
 }
 
 export type Edit =
@@ -30,7 +37,9 @@ export type Edit =
   | { type: "remove"; id: string }
   | { type: "move"; id: string; mode: ModeName; col: number; row: number; level: number }
   | { type: "recolour"; id: string; colour: BlockColour }
-  | { type: "reorder"; id: string; toIndex: number };
+  | { type: "reorder"; id: string; toIndex: number }
+  /** Set (or clear, with `offsetCm: null`) one mode+level bond offset. */
+  | { type: "setBond"; mode: ModeName; level: number; offsetCm: [number, number] | null };
 
 export function emptyModel(): Model { return { blocks: [], order: [] }; }
 
@@ -49,7 +58,42 @@ function placeMany(model: Model, candidates: ModelBlock[]): Model {
   };
 }
 
+/** Drop levels whose offset is `[0, 0]` and modes with no levels left. */
+function pruneBond(bond: BondShifts): BondShifts | undefined {
+  const out: BondShifts = {};
+  for (const mode of Object.keys(bond) as ModeName[]) {
+    const levels = bond[mode];
+    if (!levels) continue;
+    const kept: Record<number, [number, number]> = {};
+    for (const [level, offset] of Object.entries(levels)) {
+      if (offset[0] !== 0 || offset[1] !== 0) kept[Number(level)] = offset;
+    }
+    if (Object.keys(kept).length > 0) out[mode] = kept;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 export function applyEdit(model: Model, edit: Edit): Model {
+  // `bondShifts` is author intent carried through every structural edit; only
+  // `setBond` changes it, and the switch below returns fresh `{blocks, order}`
+  // objects, so it is re-attached here rather than in every branch.
+  if (edit.type === "setBond") {
+    const next: BondShifts = {};
+    for (const mode of Object.keys(model.bondShifts ?? {}) as ModeName[]) {
+      next[mode] = { ...(model.bondShifts?.[mode] ?? {}) };
+    }
+    const levels = next[edit.mode] ?? (next[edit.mode] = {});
+    if (edit.offsetCm === null) delete levels[edit.level];
+    else levels[edit.level] = edit.offsetCm;
+    return { blocks: model.blocks, order: model.order, bondShifts: pruneBond(next) };
+  }
+  const next = applyStructuralEdit(model, edit);
+  return next === model ? model
+    : model.bondShifts === undefined ? next
+    : { ...next, bondShifts: model.bondShifts };
+}
+
+function applyStructuralEdit(model: Model, edit: Exclude<Edit, { type: "setBond" }>): Model {
   switch (edit.type) {
     case "place":
       return placeMany(model, [edit.block]);

@@ -61,7 +61,8 @@ class MockFeeder:
         self._emit(f"@{request_id} RECV cmd=FEED")
         self._emit(f"@{request_id} ACK cmd=FEED accepted=1")
         for state in ("pre_closing_belt_run", "closing", "waiting_for_exit",
-                      "moving_to_stage", "aligning", "verifying_stage"):
+                      "waiting_to_close_after_exit", "moving_to_stage",
+                      "stage_belt_settling", "aligning", "verifying_stage"):
             if self._cancel.wait(self.feed_seconds / 6):
                 self._emit(f"@{request_id} STATE state=idle")
                 self._emit(f"@{request_id} ERROR state=idle reason=cancelled")

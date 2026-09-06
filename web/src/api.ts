@@ -15,6 +15,11 @@ export const setLevel = (value: number) => post<StateModel>("level", { value: Ma
 export const deselect = () => post<StateModel>("deselect");
 export const view = (changes: Record<string, boolean>) => post<StateModel>("view", changes);
 export const mode = (next: "vertical" | "horizontal") => post<StateModel>("mode", { mode: next });
+/** Set the active mode's grid shift (running-bond course / re-registration).
+ *  `x_cm` / `y_cm` are absolute, `+` away from each home switch. Moves nothing;
+ *  re-validates the saved workspace map against the new lattice. */
+export const shift = (mode: "vertical" | "horizontal", x_cm: number, y_cm: number) =>
+  post<StateModel>("shift", { mode, x_cm, y_cm });
 export const select = (x: number, y: number, img_w: number, img_h: number) => post<StateModel>("select", { x, y, img_w, img_h });
 export const selectAxis = (axis: "col" | "row", value: number) => post<StateModel>("select/axis", { axis, value });
 export const build = (command: string) => post<StateModel>("build", { confirm: true, command });

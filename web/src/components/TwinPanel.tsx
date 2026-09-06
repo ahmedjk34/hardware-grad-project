@@ -100,7 +100,11 @@ export function TwinPanel({ state, connected, lastUpdateAt, modelId: controlledM
   // only in the camera's frame age. `twinSignature` is the pure statement of
   // what the twin actually depends on; re-rendering the canvas for anything
   // else would cost the video stream frames for no picture change at all.
-  const signature = twinSignature(state, progress, options, build);
+  // The running-bond plan is part of the picture: a model with course offsets
+  // draws its blocks brick-laid. It cannot change without the model changing,
+  // but naming it keeps the signature an honest statement of what is drawn.
+  const bondSignature = useMemo(() => JSON.stringify(model.bondShifts ?? null), [model]);
+  const signature = twinSignature(state, progress, options, build, bondSignature);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const scene = useMemo(() => twinScene(state, model, progress, options, build),
                         [signature, model]);

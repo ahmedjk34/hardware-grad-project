@@ -7,8 +7,8 @@
  * testable without React, three.js, a browser or a GPU.
  */
 import {
-  MM_PER_CM, cellCount, modeGeometry, rigConfig, type ModeName,
-  type RigConfig, type Shift,
+  MM_PER_CM, cellCount, modeGeometry, resolveShift, rigConfig, type BondShifts,
+  type ModeName, type RigConfig, type Shift,
 } from "./coords";
 import {
   EPS_MM, aabbOf, clippedCells, contacts, descentPrism, footprintArea,
@@ -56,6 +56,8 @@ export interface ValidationContext {
   /** The lattice the operator is authoring in; every block still owns its mode. */
   mode: ModeName;
   shifts?: Partial<Record<ModeName, Shift>>;
+  /** Per-level running-bond offsets, composed with `shifts` per block. */
+  bondShifts?: BondShifts;
   settings: StudioSettings;
   rigSnapshot?: RigGeometrySnapshot;
   travelHeightMm?: number;
@@ -70,7 +72,8 @@ type RuleRun = (model: Model, block: ModelBlock | undefined, ctx: ValidationCont
 const defineRule = (code: DiagnosticCode, run: RuleRun): Rule =>
   Object.assign(run, { code });
 
-const shiftFor = (block: ModelBlock, ctx: ValidationContext): Shift | undefined => ctx.shifts?.[block.mode];
+const shiftFor = (block: ModelBlock, ctx: ValidationContext): Shift | undefined =>
+  resolveShift(block, ctx.shifts, ctx.bondShifts);
 const boxOf = (block: ModelBlock, ctx: ValidationContext) => aabbOf(block, shiftFor(block, ctx));
 const indexOf = (model: Model, block: ModelBlock) => model.blocks.findIndex(item => item === block || item.id === block.id);
 const earlierBlocks = (model: Model, block: ModelBlock): ModelBlock[] => {

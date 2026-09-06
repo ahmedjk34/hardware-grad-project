@@ -46,7 +46,10 @@
  */
 import { emptyProgress, type BuildProgress } from "../store";
 import { commandText } from "./compile";
-import { MM_PER_CM, SCENE_UNITS_PER_MM, type ModeName } from "./coords";
+import {
+  MM_PER_CM, SCENE_UNITS_PER_MM, resolveShift,
+  type BondShifts, type ModeName, type Shift,
+} from "./coords";
 import { EXAMPLES, exampleById } from "./examples";
 import { listModels, readModel, type LibraryOptions } from "./library";
 import type { Model, ModelBlock } from "./model";
@@ -159,6 +162,9 @@ export interface TwinBlock {
   label: string | null;
   /** The server's own words, on a rejected block only. */
   reason: string | null;
+  /** This block's placement shift — its running-bond course offset composed
+   *  with the live rig shift. Absent ⇒ plain cell. Applied by `Twin.tsx`. */
+  shift?: Shift;
 }
 
 export interface TwinScene {
@@ -170,6 +176,9 @@ export interface TwinScene {
   desaturate: boolean;
   /** A READ-ONLY mirror of `state.mode`. The twin never latches anything. */
   mode: ModeName | null;
+  /** The live rig grid shift, for the base-course lattice. A READ-ONLY mirror
+   *  of `state.shift_cm`; the twin never sets it. */
+  shift?: Shift;
   targetId: string | null;
 
   // ── What the rig said it is doing ───────────────────────────────────────
@@ -467,12 +476,30 @@ function bannerOf(state: StateModel | null, progress: TwinProgress,
   return "none";
 }
 
+/** `state.shift_cm` as a `Shift`, or undefined when it is the zero default. */
+export function liveShiftOf(state: StateModel | null): Shift | undefined {
+  const pair = state?.shift_cm;
+  if (!pair || (pair[0] === 0 && pair[1] === 0)) return undefined;
+  return { x_cm: pair[0], y_cm: pair[1] };
+}
+
 export function twinScene(state: StateModel | null, model: Model, progress: TwinProgress,
                           options: TwinOptions,
                           build: BuildProgress = emptyProgress()): TwinScene {
   const banner = bannerOf(state, progress, options);
   const locked = banner === "locked";
   const confirmed = new Set(progress.confirmed);
+  // Two shift sources, and they answer different questions (see
+  // docs/features/running-bond-grid-shift.md §4). `liveShift` is what the rig
+  // is on RIGHT NOW — it draws the base-course lattice and any off-model rig
+  // block. `bondShifts` is the model's course plan — it places every model
+  // block, so a bonded structure is drawn brick-laid even mid-build while the
+  // live shift is oscillating between courses.
+  const liveShift = liveShiftOf(state);
+  const bondShifts: BondShifts | undefined = model.bondShifts;
+  const shiftForModelBlock = (block: { mode: ModeName; level: number }): Shift | undefined =>
+    bondShifts ? resolveShift(block, undefined, bondShifts)
+      : block.mode === state?.mode ? liveShift : undefined;
   // After an abort there is no next block: the plan the target belonged to no
   // longer describes anything anybody knows.
   const target = locked ? null : targetBlock(state, model);
@@ -509,6 +536,7 @@ export function twinScene(state: StateModel | null, model: Model, progress: Twin
         ? commandText({ op: "build", id: block.id, col: block.col, row: block.row, level: block.level })
         : null,
       reason: appearance === "rejected" ? progress.rejectedReason : null,
+      shift: shiftForModelBlock(block),
     };
   });
 
@@ -525,6 +553,9 @@ export function twinScene(state: StateModel | null, model: Model, progress: Twin
       mode: cell.mode, col: cell.col, row: cell.row, level: cell.level,
       appearance, token: locked ? DESATURATE_TOKEN : "--block-white",
       mix: locked ? LOCKED_MIX : 0, opacity: OPACITY[appearance], label: null, reason: null,
+      // A block the model does not describe: no course plan to place it by, so
+      // the live rig shift is the best the twin has.
+      shift: cell.mode === state?.mode ? liveShift : undefined,
     });
   }
   // The off-model block in flight: same `building` appearance and the same
@@ -540,6 +571,7 @@ export function twinScene(state: StateModel | null, model: Model, progress: Twin
         row: offModelBuilding.row, level: offModelBuilding.level,
       }),
       reason: null,
+      shift: offModelBuilding.mode === state?.mode ? liveShift : undefined,
     });
   }
 
@@ -559,6 +591,7 @@ export function twinScene(state: StateModel | null, model: Model, progress: Twin
     animating: moving,
     desaturate: locked,
     mode: state?.mode ?? null,
+    shift: liveShift,
     targetId: target?.id ?? null,
     phase,
     phaseLabel: phase === "idle" || phase === "target" ? null : build.label,
@@ -589,10 +622,15 @@ export function twinScene(state: StateModel | null, model: Model, progress: Twin
  */
 export function twinSignature(state: StateModel | null, progress: TwinProgress,
                               options: TwinOptions,
-                              build: BuildProgress = emptyProgress()): string {
+                              build: BuildProgress = emptyProgress(),
+                              modelSignature = ""): string {
   const stale = !state || !options.connected;
   return [
     state?.mode, state?.build_state, state?.selected?.join(","), state?.level,
+    // The live grid shift is part of the picture now (the lattice moves with
+    // it), so it has to be part of what says the picture changed. `modelSignature`
+    // carries the running-bond plan the caller hashes from `model.bondShifts`.
+    state?.shift_cm?.join(","), modelSignature,
     state?.last_result, state?.last_result_reason, state?.locked_reason, state?.command,
     options.connected, options.reducedMotion,
     // The age only shows while the socket is down, where it is the whole point.

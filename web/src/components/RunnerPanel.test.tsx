@@ -37,6 +37,7 @@ function mockedApi(command = "B 3 2 0"): RunnerApi {
     selectAxis: vi.fn(async () => readyState({ selected: [3, 2], command })),
     build: vi.fn(async sent => readyState({ selected: [3, 2], command: sent, build_state: "RUNNING" })),
     mode: vi.fn(async next => readyState({ mode: next })),
+    shift: vi.fn(async (mode, x_cm, y_cm) => readyState({ mode, shift_cm: [x_cm, y_cm] })),
     stop: vi.fn(async () => readyState({ build_state: "RUNNING", cell_phase: "feeding" })),
   };
 }

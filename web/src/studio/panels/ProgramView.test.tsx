@@ -10,7 +10,7 @@ const program: Op[] = [
   { op: "mode", mode: "horizontal", cost: "homes X and Y", text: "RR" },
   { op: "build", id: "b4", col: 0, row: 2, level: 2, text: "B 0 2 2" },
 ];
-const stats: Stats = { blocks: 3, latches: 1, modeSwitches: 1, levels: 2, estimateSeconds: 136 };
+const stats: Stats = { blocks: 3, latches: 1, modeSwitches: 1, shifts: 0, levels: 2, estimateSeconds: 136 };
 
 const writeText = vi.fn().mockResolvedValue(undefined);
 beforeEach(() => vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } }));
@@ -52,7 +52,7 @@ describe("ProgramView — the compiled program as a serial log", () => {
 
   it("emits no lines and a plain message when the model is invalid", () => {
     render(<ProgramView program={[]} valid={false}
-                        stats={{ blocks: 0, latches: 0, modeSwitches: 0, levels: 0, estimateSeconds: 0 }} />);
+                        stats={{ blocks: 0, latches: 0, modeSwitches: 0, shifts: 0, levels: 0, estimateSeconds: 0 }} />);
     expect(screen.getByText("MODEL HAS ERRORS")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^line / })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "COPY" })).toBeDisabled();

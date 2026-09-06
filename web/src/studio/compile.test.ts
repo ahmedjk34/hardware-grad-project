@@ -189,7 +189,7 @@ describe("summarise + estimates", () => {
   it("counts blocks, latches, levels and derives ~duration from the visible settings", () => {
     const { stats } = compile(flatFourWithOneLatch(), options());
     expect(stats).toEqual({
-      blocks: 4, latches: 1, modeSwitches: 1, levels: 1,
+      blocks: 4, latches: 1, modeSwitches: 1, shifts: 0, levels: 1,
       estimateSeconds: Math.round(4 * DEFAULT_STUDIO_SETTINGS.blockCycleSeconds
         + 1 * DEFAULT_STUDIO_SETTINGS.latchHomingSeconds),
     });
@@ -256,7 +256,7 @@ describe("compile — model to program", () => {
     const feeder = compile(modelOf([block("bad", "vertical", 0, 0, 0)]), options());
     expect(feeder.valid).toBe(false);
     expect(feeder.program).toEqual([]);
-    expect(feeder.stats).toEqual({ blocks: 0, latches: 0, modeSwitches: 0, levels: 0, estimateSeconds: 0 });
+    expect(feeder.stats).toEqual({ blocks: 0, latches: 0, modeSwitches: 0, shifts: 0, levels: 0, estimateSeconds: 0 });
     expect(feeder.diagnostics.some(d => d.code === "FEEDER_CELL" && d.severity === "error")).toBe(true);
 
     const floating = compile(modelOf([block("air", "vertical", 1, 1, 2)]), options());
@@ -278,7 +278,7 @@ describe("compile — model to program", () => {
   it("an empty model is a valid, empty program", () => {
     expect(compile({ blocks: [], order: [] }, options())).toEqual({
       valid: true, program: [],
-      stats: { blocks: 0, latches: 0, modeSwitches: 0, levels: 0, estimateSeconds: 0 },
+      stats: { blocks: 0, latches: 0, modeSwitches: 0, shifts: 0, levels: 0, estimateSeconds: 0 },
       diagnostics: [],
     });
   });

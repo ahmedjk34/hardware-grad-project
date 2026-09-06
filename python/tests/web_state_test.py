@@ -67,6 +67,11 @@ def test_mock_lifespan_serves_state_and_closes_rig(tmp_path):
                 assert data["cols"] == grid["cols"]
                 assert data["rows"] == grid["rows"]
                 assert data["camera"] in {"WAITING", "LIVE"}
+                # The live grid shift the Twin draws from. Shipped default is
+                # zero, and with no shift `reachable` == `requested` == the grid.
+                assert data["shift_cm"] == [0.0, 0.0]
+                assert data["reachable"] == [grid["cols"], grid["rows"]]
+                assert data["requested"] == [grid["cols"], grid["rows"]]
 
                 live = await wait_for_state(client, lambda state: state["camera"] == "LIVE")
                 assert live["camera_age_ms"] is not None

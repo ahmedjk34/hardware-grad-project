@@ -28,6 +28,21 @@ class StateModel(BaseModel):
     mode: str
     cols: int
     rows: int
+    #: The ACTIVE mode's live grid shift (`shiftX` / `shiftY`), in cm, as it
+    #: stands on the board right now. `(0.0, 0.0)` is the shipped default; the
+    #: Studio's running-bond courses and a manual re-registration both land
+    #: here. The Twin draws its lattice from this, not from the build-time
+    #: `config/rig.json`, so a shift set at runtime is not a lie on screen.
+    shift_cm: tuple[float, float]
+    #: `(cols, rows)` after the firmware's `gridColsNow()` / `gridRowsNow()`
+    #: clipping — i.e. what a `B` can actually reach under `shift_cm`. Equal to
+    #: `cols` / `rows` above (those are already clipped); published separately
+    #: so the client can assert the two agree rather than assume it.
+    reachable: tuple[int, int]
+    #: `(cols, rows)` as asked for before any shift clipped them. Equal to
+    #: `reachable` whenever no shift trims the grid; the Twin draws the
+    #: difference as the amber out-of-reach cells.
+    requested: tuple[int, int]
     calibrated: bool
     selected: tuple[int, int] | None
     command: str | None
@@ -97,10 +112,14 @@ def build_state(app) -> StateModel:
 
     result = controller.last_result
     progress = app.state.progress.progress
+    grid = rig.grid
     return StateModel(
-        mode=rig.grid.mode,
-        cols=rig.grid.cols,
-        rows=rig.grid.rows,
+        mode=grid.mode,
+        cols=grid.cols,
+        rows=grid.rows,
+        shift_cm=(grid.shift_x_cm, grid.shift_y_cm),
+        reachable=(grid.cols, grid.rows),
+        requested=(grid.requested_cols or grid.cols, grid.requested_rows or grid.rows),
         calibrated=calibrated,
         selected=controller.selected,
         command=controller.command,

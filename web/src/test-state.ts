@@ -8,7 +8,9 @@
 import type { StateModel } from "./types";
 
 export const BASE_STATE: StateModel = {
-  mode: "vertical", cols: 7, rows: 6, calibrated: true, selected: null,
+  mode: "vertical", cols: 7, rows: 6,
+  shift_cm: [0, 0], reachable: [7, 6], requested: [7, 6],
+  calibrated: true, selected: null,
   command: null, level: 0, build_state: "READY", locked_reason: null,
   camera: "LIVE", camera_age_ms: 10, last_result: null,
   last_result_reason: null,

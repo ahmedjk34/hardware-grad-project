@@ -44,6 +44,16 @@ class ModeRequest(BaseModel):
     mode: Literal["vertical", "horizontal"]
 
 
+class ShiftRequest(BaseModel):
+    """A runtime grid shift — an operator re-registration or a running-bond
+    course change from the Studio. `x_cm` / `y_cm` are absolute, `+` away from
+    each home switch (AGENTS.md Rule 0)."""
+
+    mode: Literal["vertical", "horizontal"]
+    x_cm: float
+    y_cm: float
+
+
 class ViewRequest(BaseModel):
     grid: bool | None = None
     detect: bool | None = None
@@ -195,6 +205,41 @@ def mode(request: ModeRequest, http: Request) -> StateModel:
         # camera switch its per-mode workspace/specification state.
         app.state.pipeline.set_grid_mode(request.mode, app.state.rig.grid)
     except (BuildStateError, RigError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    finally:
+        lock.release()
+    _signal(app)
+    return _state(app)
+
+
+# Sync, on a worker thread, for the same reason as `/mode`: `set_shift` blocks
+# on serial round-trips and `set_grid_mode` re-reads the workspace map from
+# disk. A grid shift moves NOTHING on the rig (`applyGridShift` re-clips its
+# reachable range in place, no homing, no `S` re-sent) — but it does change
+# what a camera pixel maps to, so the saved workspace map is re-validated and,
+# if it no longer matches this lattice, dropped with a rejection sentence.
+@router.post("/shift", response_model=StateModel)
+def shift(request: ShiftRequest, http: Request) -> StateModel:
+    app = http.app
+    require_mutable(app)
+    rig = app.state.rig
+    if request.mode != rig.grid.mode:
+        raise HTTPException(
+            status_code=409,
+            detail=f"latch the {request.mode} grid before shifting it "
+                   f"(the board is in the {rig.grid.mode} grid)",
+        )
+    lock = app.state.mode_latch_lock
+    if not lock.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail=MODE_BUSY_MESSAGE)
+    try:
+        rig.set_shift(x_cm=request.x_cm, y_cm=request.y_cm)
+        # Re-sync the camera's per-mode state to the now-shifted grid and
+        # re-validate the saved map against it. A mismatch leaves
+        # `workspace_rejection` set and `calibrated` false rather than pairing
+        # old pixels with new cells.
+        app.state.pipeline.set_grid_mode(rig.grid.mode, rig.grid)
+    except (RigError, ValueError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     finally:
         lock.release()

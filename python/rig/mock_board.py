@@ -98,6 +98,8 @@ class MockBoard:
         self.emitted: list[str] = []
         self._grid = str(grid)
         self._mode = mode
+        #: The active mode's grid shift in cm, as `shiftX` / `shiftY` set it.
+        self._shift: dict[str, float] = {"X": 0.0, "Y": 0.0}
         self._build_seconds = float(build_seconds)
         self._out: queue.Queue[bytes] = queue.Queue()
         self._read_buffer = bytearray()
@@ -195,6 +197,8 @@ class MockBoard:
                         "FULL RESET COMPLETE - X/Y at origin, Z on its top switch."))
         elif upper in {"R", "RR"}:
             self._handle_mode(upper)
+        elif upper.startswith("SHIFTX ") or upper.startswith("SHIFTY "):
+            self._handle_shift(command)
         elif upper.startswith("B "):
             self._handle_build(command)
         elif upper.startswith("G "):
@@ -214,6 +218,29 @@ class MockBoard:
             except ValueError:
                 pass
         self._emit(("GRID RESIZED", f"Division : {self._grid} highest indices"))
+
+    def _handle_shift(self, command: str) -> None:
+        """`shiftX <cm>` / `shiftY <cm>` — the firmware's grid-shift latch.
+
+        The real board translates the active mode's placement lattice by <cm>,
+        re-clips its reachable range and moves nothing. The mock only needs to
+        echo the `GRID SHIFT` line `Rig.set_shift()` waits for; the reachable
+        clip and the geometry check are `MachineGrid`'s job on the Pi side.
+        """
+        parts = command.split()
+        axis = parts[0][-1].upper()
+        try:
+            value = float(parts[1])
+        except (IndexError, ValueError):
+            self._emit(("  ERROR - use:  shiftX <cm>   or   shiftY <cm>",))
+            return
+        with self._lock:
+            previous = self._shift.get(axis, 0.0)
+            self._shift[axis] = value
+        self._emit((
+            f"GRID SHIFT [{self._mode}] {axis}  {previous:.3f} -> {value:.3f} cm"
+            "   (pick-up NOT shifted; applied from [0,0])",
+        ))
 
     def _handle_mode(self, command: str) -> None:
         wanted = "horizontal" if command == "RR" else "vertical"

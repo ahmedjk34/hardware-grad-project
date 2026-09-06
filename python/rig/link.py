@@ -866,16 +866,35 @@ class Rig:
         An axis whose target is ``0.0`` is skipped unless it was passed
         explicitly: ``0`` is the board's compiled default, so a freshly-reset
         board already agrees and a needless ``shiftX 0`` would only add noise.
+
+        When an axis IS passed explicitly - a runtime re-registration or a
+        running-bond course change from the Studio - ``self.grid`` is rebuilt
+        with the new shift so the state snapshot the Twin reads is truthful.
+        The candidate grid is built BEFORE the wire is touched (as ``set_mode``
+        does): a shift that leaves no cell on the travel envelope fails with the
+        machine untouched rather than half-applied. The firmware's own
+        ``applyGridShift`` re-clips its reachable range internally and needs no
+        ``S`` re-sent.
         """
         self._require_not_reset()
+        target_x = self.grid.shift_x_cm if x_cm is None else float(x_cm)
+        target_y = self.grid.shift_y_cm if y_cm is None else float(y_cm)
+        explicit = x_cm is not None or y_cm is not None
+        candidate = None
+        if explicit:
+            try:
+                candidate = MachineGrid.from_config(
+                    self._cfg, mode=self.grid.mode,
+                    shift_x_cm=target_x, shift_y_cm=target_y,
+                )
+            except ValueError as exc:
+                raise RigError(f"the rig cannot take that grid shift: {exc}") from exc
         targets = (
-            ("shiftX", self.grid.shift_x_cm if x_cm is None else float(x_cm),
-             x_cm is not None),
-            ("shiftY", self.grid.shift_y_cm if y_cm is None else float(y_cm),
-             y_cm is not None),
+            ("shiftX", target_x, x_cm is not None),
+            ("shiftY", target_y, y_cm is not None),
         )
-        for command, value, explicit in targets:
-            if value == 0.0 and not explicit:
+        for command, value, was_explicit in targets:
+            if value == 0.0 and not was_explicit:
                 continue
             out = self._send_and_settle(
                 f"{command} {value:g}",
@@ -885,9 +904,12 @@ class Rig:
             )
             if not any("GRID SHIFT" in line for line in out):
                 raise RigError(
-                    f"the rig refused {command} {value:g} from config/rig.json:\n  "
+                    f"the rig refused {command} {value:g}:\n  "
                     + "\n  ".join(line.strip() for line in out if line.strip())
                 )
+        if candidate is not None:
+            self.grid = candidate
+            self.cols, self.rows = candidate.cols, candidate.rows
 
     def set_mode(self, mode: str, timeout: float = 20.0,
                  push_grid: bool = True) -> None:

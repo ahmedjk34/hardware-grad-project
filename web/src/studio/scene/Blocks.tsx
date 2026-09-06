@@ -55,7 +55,7 @@ function nativeHit(event: ThreeEvent<PointerEvent>, target: SurfacePointer["targ
 }
 
 export function BlockBatch<T extends BatchBlock>({
-  blocks, animateIds, mode, activeMode, shift, opacity, reduced, handlers,
+  blocks, animateIds, mode, activeMode, shift, shiftOf, opacity, reduced, handlers,
   colourOf, quality = "full",
 }: {
   blocks: T[];
@@ -63,6 +63,10 @@ export function BlockBatch<T extends BatchBlock>({
   mode: ModeName;
   activeMode: ModeName;
   shift?: Shift;
+  /** Per-instance placement shift — the twin's running-bond course offset, so a
+   *  bonded structure is drawn brick-laid. Absent ⇒ every block at its plain
+   *  cell (the Studio's authored geometry, which a preview shift must not drag). */
+  shiftOf?: (block: T) => Shift | undefined;
   opacity: number;
   reduced: boolean;
   handlers: SurfaceHandlers;
@@ -111,8 +115,10 @@ export function BlockBatch<T extends BatchBlock>({
     arrivingBlocks.current = [];
     blocks.forEach(block => {
       // The block keeps the shift of its own stored mode. `shift` above is the
-      // active lattice preview and must not drag already-authored geometry.
-      const rest = cellToScene(block.mode, block.col, block.row, block.level);
+      // active lattice preview and must not drag already-authored geometry;
+      // `shiftOf` is the opposite — a per-block placement offset the caller
+      // wants applied, which the twin uses to draw running-bond courses.
+      const rest = cellToScene(block.mode, block.col, block.row, block.level, shiftOf?.(block));
       const arrival = settling.current.get(block.id);
       let y = rest.y;
       let isArriving = false;

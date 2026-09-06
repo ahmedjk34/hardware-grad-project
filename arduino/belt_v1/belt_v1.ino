@@ -50,6 +50,10 @@ const unsigned long CLOSE_SETTLE_MS = SERVO_MOVEMENT_DELAY_MS;
 const unsigned long ALIGN_SETTLE_MS = SERVO_MOVEMENT_DELAY_MS;
 // Every FEED/RUN starts by advancing the belt before the container is closed.
 const unsigned long PRE_CLOSE_BELT_RUN_MS = 1000;
+// After the exit IR sees a block, keep the gate open while the belt starts.
+const unsigned long EXIT_DETECTED_TO_CLOSE_DELAY_MS = 1250;
+// Let the block travel past the stage IR slightly before stopping the belt.
+const unsigned long STAGE_DETECTED_BELT_SETTLE_MS = 250;
 const unsigned long EXIT_TIMEOUT_MS = 10000;
 const unsigned long STAGE_TIMEOUT_MS = 15000;
 const unsigned long SENSOR_INTERVAL_MS = 100;
@@ -64,7 +68,9 @@ enum FeedState {
   OPENING_STAGE_1,
   OPENING_STAGE_2,
   WAITING_FOR_EXIT,
+  WAITING_TO_CLOSE_AFTER_EXIT,
   MOVING_TO_STAGE,
+  STAGE_BELT_SETTLING,
   ALIGNING,
   VERIFYING_STAGE,
   BLOCK_READY,
@@ -283,9 +289,24 @@ void updateFeedCycle() {
         fault(F("exit_timeout"));
       }
       break;
+    case WAITING_TO_CLOSE_AFTER_EXIT:
+      if (elapsed(stateStartedAtMs, EXIT_DETECTED_TO_CLOSE_DELAY_MS)) {
+        closeContainer();
+        setState(MOVING_TO_STAGE);
+        event(F("exit_delay_elapsed_container_closed"));
+      }
+      break;
     case MOVING_TO_STAGE:
       if (elapsed(stateStartedAtMs, STAGE_TIMEOUT_MS)) {
         fault(F("stage_timeout"));
+      }
+      break;
+    case STAGE_BELT_SETTLING:
+      if (elapsed(stateStartedAtMs, STAGE_DETECTED_BELT_SETTLE_MS)) {
+        stopBelt();
+        alignmentServo.write(ALIGN_NUDGE_ANGLE);
+        setState(ALIGNING);
+        event(F("stage_settled_aligning"));
       }
       break;
     case ALIGNING:
@@ -323,21 +344,20 @@ void updateSensors() {
   if (feedState == WAITING_FOR_EXIT) {
     exitDetected = exitSensorDetected();
     if (exitDetected) {
-      // One block has left the hopper.  Shut the gate before transporting it
-      // so a second block cannot follow it onto the belt.
-      closeContainer();
+      // One block has left the hopper. Start transport immediately, then wait
+      // 1.25 seconds before shutting the gate so the block can clear it.
       startBelt(BELT_FORWARD_DIRECTION_LEVEL);
-      setState(MOVING_TO_STAGE);
+      setState(WAITING_TO_CLOSE_AFTER_EXIT);
       sensorReportFor(commandId, F("exit"), exitDetected);
-      event(F("exit_detected_container_closed_belt_running"));
+      event(F("exit_detected_belt_running_waiting_to_close"));
     }
   } else if (feedState == MOVING_TO_STAGE) {
     if (stageDetected()) {
-      stopBelt();
-      alignmentServo.write(ALIGN_NUDGE_ANGLE);
-      setState(ALIGNING);
+      // Keep the belt moving briefly after stage detection so the block can
+      // settle into the building/pickup area before the alignment nudge.
+      setState(STAGE_BELT_SETTLING);
       stageSensorReportFor(commandId, true);
-      event(F("stage_detected_aligning"));
+      event(F("stage_detected_belt_settling"));
     }
   }
 }
@@ -352,7 +372,10 @@ const __FlashStringHelper *stateName() {
     case IDLE: return F("idle"); case PRE_CLOSING_BELT_RUN: return F("pre_closing_belt_run");
     case CLOSING: return F("closing");
     case OPENING_STAGE_1: return F("opening_stage_1"); case OPENING_STAGE_2: return F("opening_stage_2");
-    case WAITING_FOR_EXIT: return F("waiting_for_exit"); case MOVING_TO_STAGE: return F("moving_to_stage");
+    case WAITING_FOR_EXIT: return F("waiting_for_exit");
+    case WAITING_TO_CLOSE_AFTER_EXIT: return F("waiting_to_close_after_exit");
+    case MOVING_TO_STAGE: return F("moving_to_stage");
+    case STAGE_BELT_SETTLING: return F("stage_belt_settling");
     case ALIGNING: return F("aligning"); case VERIFYING_STAGE: return F("verifying_stage");
     case BLOCK_READY: return F("block_ready"); default: return F("fault");
   }

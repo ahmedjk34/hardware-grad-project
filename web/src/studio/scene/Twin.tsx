@@ -89,8 +89,8 @@ function Building({ block, offset, indicator, descent }: {
   const { invalidate } = useThree();
   const size = useMemo(() => blockSceneSize(block.mode), [block.mode]);
   const rest = useMemo(
-    () => cellToScene(block.mode, block.col, block.row, block.level),
-    [block.mode, block.col, block.row, block.level],
+    () => cellToScene(block.mode, block.col, block.row, block.level, block.shift),
+    [block.mode, block.col, block.row, block.level, block.shift],
   );
 
   /** The block's height right now: the phase's resting height, less however
@@ -132,7 +132,7 @@ function Building({ block, offset, indicator, descent }: {
 
 /** `NEXT · B 3 2 1`, beside the block it names. Mono, per DESIGN.md §2. */
 function TargetLabel({ block }: { block: TwinBlock }) {
-  const at = cellToScene(block.mode, block.col, block.row, block.level);
+  const at = cellToScene(block.mode, block.col, block.row, block.level, block.shift);
   const size = blockSceneSize(block.mode);
   return (
     <Html position={[at.x, at.y + size.y, at.z]} center distanceFactor={40}
@@ -190,6 +190,7 @@ function OnSceneChange({ scene }: { scene: TwinScene }) {
 function TwinScene3D({ scene, synced, mode }: {
   scene: TwinScene; synced: boolean; mode: ModeName;
 }) {
+  const shiftOf = (block: TwinBlock) => block.shift;
   const box = useMemo(() => envelopeBoxScene(), []);
   const centre = boxCentre(box);
   const groups = useMemo(() => {
@@ -215,7 +216,7 @@ function TwinScene3D({ scene, synced, mode }: {
       <directionalLight intensity={1.4} position={[centre.x + 18, centre.y + 34, centre.z + 22]} />
 
       <Envelope box={box} />
-      <Lattice mode={mode} />
+      <Lattice mode={mode} shift={scene.shift} />
       <BlockShadows blocks={placed} />
       {BATCHED.flatMap(appearance => MODES.map(blockMode => {
         const blocks = groups[appearance][blockMode];
@@ -224,7 +225,7 @@ function TwinScene3D({ scene, synced, mode }: {
           <BlockBatch key={`${appearance}-${blockMode}`} blocks={blocks} mode={blockMode}
                       activeMode={blockMode} animateIds={NO_ANIMATION} reduced
                       opacity={blocks[0].opacity} handlers={NO_HANDLERS} quality="twin"
-                      colourOf={appearanceColour} />
+                      shiftOf={shiftOf} colourOf={appearanceColour} />
         );
       }))}
       {building ? <Building block={building} offset={scene.blockOffset}

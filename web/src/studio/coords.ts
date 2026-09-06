@@ -48,6 +48,49 @@ export interface Shift { x_cm: number; y_cm: number }
 /** A placed block in cell space. The only thing the model file stores. */
 export interface Block { mode: ModeName; col: number; row: number; level: number }
 
+/**
+ * Per-mode, per-level running-bond offsets in centimetres — `[x_cm, y_cm]`
+ * added ON TOP OF the rig's live shift for a block on that level. Absent level,
+ * or `level <= 0`, means no offset. Storing a map (not a parity rule) keeps
+ * corbels / leans possible without a schema change; the "Running bond" preset
+ * fills the alternating `1, 3, 5, …` pattern for the common case.
+ */
+export type BondShifts = Partial<Record<ModeName, Record<number, [number, number]>>>;
+
+/** The run axis of a mode: the one its 6.0 cm face lies along. */
+export function runAxisOf(mode: ModeName): "x" | "y" {
+  return mode === "horizontal" ? "x" : "y";
+}
+
+/**
+ * The running-bond increment for a mode: half the pitch on its run axis, so a
+ * shifted course's block centre lands on the midpoint of the two beneath it.
+ * Derived from the lattice, never a literal — `3.8 cm` on both modes today.
+ */
+export function bondIncrementCm(mode: ModeName): number {
+  const l = latticeOf(mode);
+  return (runAxisOf(mode) === "x" ? l.pitchXCm : l.pitchYCm) / 2;
+}
+
+/**
+ * The one place the two shift sources are combined: the rig's live shift
+ * (`shifts[mode]` — an operator re-registration or the connect-time value) plus
+ * this block's level bond offset (`bondShifts[mode][level]`). Returns
+ * `undefined` when the sum is zero so an unbonded, unshifted model produces
+ * byte-identical geometry to before this feature.
+ */
+export function resolveShift(
+  block: { mode: ModeName; level: number },
+  shifts?: Partial<Record<ModeName, Shift>>,
+  bondShifts?: BondShifts,
+): Shift | undefined {
+  const base = shifts?.[block.mode];
+  const bond = block.level > 0 ? bondShifts?.[block.mode]?.[block.level] : undefined;
+  const x = (base?.x_cm ?? 0) + (bond?.[0] ?? 0);
+  const y = (base?.y_cm ?? 0) + (bond?.[1] ?? 0);
+  return x === 0 && y === 0 ? undefined : { x_cm: x, y_cm: y };
+}
+
 export const MM_PER_CM = 10;
 /** arduino/build_test_v1: BLOCK_HEIGHT_CM. A level is one block high. */
 export const BLOCK_HEIGHT_CM = 1.5;

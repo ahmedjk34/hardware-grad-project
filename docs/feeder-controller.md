@@ -29,10 +29,11 @@ One `FEED` request runs this sequence:
    blocks more gently than one large movement.
 5. Wait up to 10 seconds for the **exit sensor** to see a block leave the
    container and enter the belt.
-6. Close the container immediately after that confirmation, then run the belt
-   forward.
+6. Start the belt forward at that confirmation, wait 1.25 seconds, then close
+   the container gate.
 7. Wait up to 15 seconds for the **stage sensor** at the pickup point to see
-   the block. Detection stops the belt.
+   the block. Keep the belt moving for 0.25 seconds after detection, then stop
+   it so the block settles in the pickup area.
 8. Move the alignment servo briefly to nudge the block square, return it to
    rest after one second, and read the stage sensor again. Every deliberate
    servo position change in the feed sequence is separated by this one-second
@@ -129,12 +130,16 @@ For `FEED 42`, a normal transaction is:
 @42 EVENT phase=container_opening_stage_2
 @42 STATE state=waiting_for_exit
 @42 EVENT phase=waiting_for_exit
-@42 STATE state=moving_to_stage
+@42 STATE state=waiting_to_close_after_exit
 @42 SENSOR sensor=exit detected=1
-@42 EVENT phase=exit_detected_container_closed_belt_running
-@42 STATE state=aligning
+@42 EVENT phase=exit_detected_belt_running_waiting_to_close
+@42 STATE state=moving_to_stage
+@42 EVENT phase=exit_delay_elapsed_container_closed
+@42 STATE state=stage_belt_settling
 @42 SENSOR sensor=stage detected=1
-@42 EVENT phase=stage_detected_aligning
+@42 EVENT phase=stage_detected_belt_settling
+@42 STATE state=aligning
+@42 EVENT phase=stage_settled_aligning
 @42 STATE state=verifying_stage
 @42 EVENT phase=verifying_stage
 @42 STATE state=block_ready
@@ -218,7 +223,9 @@ precision motion control.
 | `opening_stage_1` | stopped | — | — | 1 s elapsed |
 | `opening_stage_2` | stopped | — | — | 1 s elapsed |
 | `waiting_for_exit` | stopped | sampled every 100 ms | — | block detected or 10 s timeout |
+| `waiting_to_close_after_exit` | running forward | — | — | 1.25 s elapsed, then close the container |
 | `moving_to_stage` | running forward | — | sampled every 100 ms | block detected or 15 s timeout |
+| `stage_belt_settling` | running forward | — | — | 0.25 s elapsed, then stop the belt |
 | `aligning` | stopped | — | — | 1 s elapsed |
 | `verifying_stage` | stopped | — | read once after settling | block ready or resume belt |
 | `block_ready` | stopped | — | — | terminal success |

@@ -8,13 +8,13 @@
  */
 import { memo, useLayoutEffect, useMemo, useRef } from "react";
 import { CircleGeometry, Matrix4, type InstancedMesh } from "three";
-import { blockSceneSize, cellToScene, type ModeName } from "../coords";
+import { blockSceneSize, cellToScene, type ModeName, type Shift } from "../coords";
 import type { BatchBlock } from "./Blocks";
 import { tokenColor } from "./theme";
 
 const MODES: ModeName[] = ["vertical", "horizontal"];
 
-function ShadowBatch({ blocks, mode }: { blocks: BatchBlock[]; mode: ModeName }) {
+function ShadowBatch({ blocks, mode }: { blocks: (BatchBlock & { shift?: Shift })[]; mode: ModeName }) {
   const mesh = useRef<InstancedMesh>(null);
   const matrix = useMemo(() => new Matrix4(), []);
   const size = useMemo(() => blockSceneSize(mode), [mode]);
@@ -28,7 +28,7 @@ function ShadowBatch({ blocks, mode }: { blocks: BatchBlock[]; mode: ModeName })
   useLayoutEffect(() => {
     if (!mesh.current) return;
     blocks.forEach((block, index) => {
-      const position = cellToScene(block.mode, block.col, block.row, block.level);
+      const position = cellToScene(block.mode, block.col, block.row, block.level, block.shift);
       matrix.makeTranslation(position.x, 0.024, position.z);
       mesh.current?.setMatrixAt(index, matrix);
     });
@@ -46,7 +46,7 @@ function ShadowBatch({ blocks, mode }: { blocks: BatchBlock[]; mode: ModeName })
   );
 }
 
-export const BlockShadows = memo(function BlockShadows({ blocks }: { blocks: BatchBlock[] }) {
+export const BlockShadows = memo(function BlockShadows({ blocks }: { blocks: (BatchBlock & { shift?: Shift })[] }) {
   const groups = useMemo(() => ({
     vertical: blocks.filter(block => block.mode === "vertical"),
     horizontal: blocks.filter(block => block.mode === "horizontal"),

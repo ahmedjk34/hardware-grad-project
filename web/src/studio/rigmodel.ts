@@ -28,7 +28,7 @@
  * would have to invent them — reporting drift on every model the moment anyone
  * sets a non-zero trim.
  */
-import type { ModeName } from "./coords";
+import type { BondShifts, ModeName } from "./coords";
 import type { BlockColour, Model, ModelBlock } from "./model";
 import { snapshotRigGeometry, type RigGeometrySnapshot } from "./validate";
 
@@ -72,6 +72,13 @@ export interface StudioModel {
   rig: FileRig;
   blocks: ModelBlock[];
   order: string[];
+  /**
+   * Running-bond course offsets: per mode, per level, `[x_cm, y_cm]` added on
+   * top of the rig's live shift. Author intent — beside `blocks` / `order`, not
+   * in the `rig` snapshot. Absent, or an empty map, means no bond; an older
+   * Studio's files simply omit it. On disk: `{"vertical":{"1":[0,3.8]}, …}`.
+   */
+  bondShifts?: BondShifts;
   /** Rendered from the viewport on save. Absent until a save with a GPU. */
   thumbnail?: string;
 }
@@ -140,7 +147,9 @@ export function shiftsOf(rig: FileRig): Record<ModeName, { x_cm: number; y_cm: n
 // ── Document ⇄ editable structure ──────────────────────────────────────────
 
 export function structureOf(document: StudioModel): Model {
-  return { blocks: document.blocks, order: document.order };
+  return document.bondShifts
+    ? { blocks: document.blocks, order: document.order, bondShifts: document.bondShifts }
+    : { blocks: document.blocks, order: document.order };
 }
 
 export function newModelId(): string {
@@ -160,6 +169,8 @@ export function documentOf(model: Model, meta: Partial<StudioModel> = {}): Studi
     rig: meta.rig ?? snapshotFileRig(),
     blocks: model.blocks,
     order: model.order,
+    ...(model.bondShifts && Object.keys(model.bondShifts).length > 0
+      ? { bondShifts: model.bondShifts } : {}),
     ...(meta.thumbnail === undefined ? {} : { thumbnail: meta.thumbnail }),
   };
 }
@@ -255,6 +266,31 @@ function overhangPair(value: unknown): [number | null, number | null] {
     ? [each(value[0]), each(value[1])] : [null, null];
 }
 
+/**
+ * Lenient, like `repairOrder`: a malformed entry is dropped, never a refusal —
+ * a hand-edited or older file must not lose its geometry over a bad bond map.
+ * Levels are kept as numbers; `level <= 0` and `[0, 0]` offsets are discarded
+ * because the resolver ignores them anyway.
+ */
+export function parseBondShifts(value: unknown): BondShifts | undefined {
+  if (!isObject(value)) return undefined;
+  const out: BondShifts = {};
+  for (const mode of MODES) {
+    const levels = value[mode];
+    if (!isObject(levels)) continue;
+    const kept: Record<number, [number, number]> = {};
+    for (const [key, offset] of Object.entries(levels)) {
+      const level = Number(key);
+      const pair = numberPair(offset);
+      if (!Number.isInteger(level) || level <= 0 || !pair) continue;
+      if (pair[0] === 0 && pair[1] === 0) continue;
+      kept[level] = pair;
+    }
+    if (Object.keys(kept).length > 0) out[mode] = kept;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 function parseBlock(value: unknown, index: number): Result<ModelBlock> {
   const at = `block ${index + 1}`;
   if (!isObject(value)) return fail(`${at} is not an object`);
@@ -324,6 +360,8 @@ export function parseModelDocument(value: unknown): Result<StudioModel> {
     rig: rig.value,
     blocks,
     order: repairOrder(blocks, document.order),
+    ...(parseBondShifts(document.bondShifts)
+      ? { bondShifts: parseBondShifts(document.bondShifts) } : {}),
     ...(typeof document.thumbnail === "string" ? { thumbnail: document.thumbnail } : {}),
   });
 }

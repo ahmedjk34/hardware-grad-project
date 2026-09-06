@@ -14,10 +14,11 @@ Flash `belt_v1/belt_v1.ino` to an **Arduino Uno** for the feeder. Its wiring is:
 `FEED [id]` (or its `RUN [id]` alias) performs one complete feeder cycle:
 run the belt forward for one second, close the container to 20°, open it in
 stages (90° then 160°), wait for the
-exit IR sensor to see a block, run the belt, and stop it only when the
-stage IR sensor sees the block. The alignment servo then nudges the block square
-and the stage sensor verifies that it remained present. Each servo position
-change is followed by a one-second settling interval.
+exit IR sensor to see a block, run the belt, wait 1.25 seconds before closing
+the gate, and stop the belt 0.25 seconds after the stage IR sensor sees the
+block. The alignment servo then nudges the block square and the stage sensor
+verifies that it remained present. Each servo position change is followed by a
+one-second settling interval.
 
 Every controller command must end in a newline. A feed cycle is identified by
 the optional numeric `id` and reports structured telemetry:
@@ -29,9 +30,11 @@ the optional numeric `id` and reports structured telemetry:
 @42 EVENT phase=waiting_for_exit
 @42 STATE state=moving_to_stage
 @42 SENSOR sensor=exit detected=1
-@42 EVENT phase=exit_detected_container_closed_belt_running
+@42 EVENT phase=exit_detected_belt_running_waiting_to_close
+@42 STATE state=stage_belt_settling
 @42 SENSOR sensor=stage detected=1
-@42 EVENT phase=stage_detected_aligning
+@42 EVENT phase=stage_detected_belt_settling
+@42 EVENT phase=stage_settled_aligning
 @42 EVENT phase=block_ready
 @42 OK state=block_ready result=staged
 ```

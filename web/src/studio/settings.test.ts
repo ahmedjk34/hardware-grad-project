@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   BLOCK_CYCLE_SECONDS, DEFAULT_STUDIO_SETTINGS, LATCH_HOMING_SECONDS,
-  STUDIO_SETTINGS_KEY, loadStudioSettings, saveStudioSettings,
+  SHIFT_LATCH_SECONDS, STUDIO_SETTINGS_KEY, loadStudioSettings, saveStudioSettings,
 } from "./settings";
 
 describe("versioned Studio validation settings", () => {
@@ -12,8 +12,9 @@ describe("versioned Studio validation settings", () => {
       levelCeiling: 6,
       blockCycleSeconds: BLOCK_CYCLE_SECONDS,
       latchHomingSeconds: LATCH_HOMING_SECONDS,
+      shiftLatchSeconds: SHIFT_LATCH_SECONDS,
     });
-    expect([BLOCK_CYCLE_SECONDS, LATCH_HOMING_SECONDS]).toEqual([2.115, 16]);
+    expect([BLOCK_CYCLE_SECONDS, LATCH_HOMING_SECONDS, SHIFT_LATCH_SECONDS]).toEqual([2.115, 16, 1]);
   });
 
   it("persists under rig.studio.settings.v1", () => {
@@ -24,7 +25,7 @@ describe("versioned Studio validation settings", () => {
     };
     const settings = {
       supportRatio: 0.7, clawMarginMm: 12, levelCeiling: 4,
-      blockCycleSeconds: 33, latchHomingSeconds: 9,
+      blockCycleSeconds: 33, latchHomingSeconds: 9, shiftLatchSeconds: 2,
     };
     saveStudioSettings(settings, adapter);
     expect(STUDIO_SETTINGS_KEY).toBe("rig.studio.settings.v1");
@@ -37,6 +38,7 @@ describe("versioned Studio validation settings", () => {
     expect(loadStudioSettings(adapter)).toEqual({
       supportRatio: 0.6, clawMarginMm: 10, levelCeiling: 5,
       blockCycleSeconds: BLOCK_CYCLE_SECONDS, latchHomingSeconds: LATCH_HOMING_SECONDS,
+      shiftLatchSeconds: SHIFT_LATCH_SECONDS,
     });
   });
 

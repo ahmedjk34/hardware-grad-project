@@ -28,6 +28,10 @@ function mockApi(): { api: RunnerApi; calls: string[] } {
     }),
     build: vi.fn(async command => { calls.push(`build:${command}`); return state({ build_state: "RUNNING", command }); }),
     mode: vi.fn(async next => { calls.push(`mode:${next}`); return state({ mode: next }); }),
+    shift: vi.fn(async (mode, x_cm, y_cm) => {
+      calls.push(`shift:${mode}:${x_cm},${y_cm}`);
+      return state({ mode, shift_cm: [x_cm, y_cm] });
+    }),
   };
   return { api, calls };
 }

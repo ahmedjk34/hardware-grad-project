@@ -26,7 +26,7 @@
  */
 import { aabbOf, footprintOverlapArea } from "./geometry";
 import type { Model, ModelBlock } from "./model";
-import type { ModeName, Shift } from "./coords";
+import { resolveShift, runAxisOf, type BondShifts, type ModeName, type Shift } from "./coords";
 import type { StudioSettings } from "./settings";
 import {
   validateModel, type Diagnostic, type RigGeometrySnapshot, type ValidationContext,
@@ -51,13 +51,30 @@ export interface ModeOp {
   text: string;
 }
 
-export type Op = BuildOp | ModeOp;
+/**
+ * A `shiftX` / `shiftY` latch: the running-bond course change. `cm` is the
+ * ABSOLUTE value the firmware is set to — the operator's live shift for this
+ * mode plus the level's bond offset, composed. It moves nothing and does not
+ * re-home; it re-clips the reachable grid. Emitted only when the run-axis shift
+ * actually changes, and re-asserted after a mode latch (which resets it to 0).
+ */
+export interface ShiftOp {
+  op: "shift";
+  mode: ModeName;
+  axis: "x" | "y";
+  cm: number;
+  text: string;
+}
+
+export type Op = BuildOp | ModeOp | ShiftOp;
 
 export interface Stats {
   blocks: number;
   latches: number;
   /** Alias of `latches`, kept for the Plan 4 §6.1 output shape. */
   modeSwitches: number;
+  /** `shiftX` / `shiftY` latches — the running-bond course changes. */
+  shifts: number;
   levels: number;
   estimateSeconds: number;
 }
@@ -73,12 +90,18 @@ export interface CompileOptions {
   /** The live board mode when there is one, `vertical` otherwise (boot state). */
   mode?: ModeName;
   settings: StudioSettings;
+  /** The rig's live shift per mode — an operator re-registration or the
+   *  connect-time value. Composed with `bondShifts` per block. */
   shifts?: Partial<Record<ModeName, Shift>>;
+  /** Per-level running-bond offsets, added on top of `shifts`. */
+  bondShifts?: BondShifts;
   rigSnapshot?: RigGeometrySnapshot;
   travelHeightMm?: number;
 }
 
-const ZERO_STATS: Stats = { blocks: 0, latches: 0, modeSwitches: 0, levels: 0, estimateSeconds: 0 };
+const ZERO_STATS: Stats = {
+  blocks: 0, latches: 0, modeSwitches: 0, shifts: 0, levels: 0, estimateSeconds: 0,
+};
 
 // ── Step 1: the support graph ───────────────────────────────────────────────
 
@@ -93,16 +116,16 @@ const ZERO_STATS: Stats = { blocks: 0, latches: 0, modeSwitches: 0, levels: 0, e
  * model order; the `Set` values are only ever asked `has` / `size`.
  */
 export function supportGraph(
-  model: Model, shifts?: Partial<Record<ModeName, Shift>>,
+  model: Model, shifts?: Partial<Record<ModeName, Shift>>, bondShifts?: BondShifts,
 ): Map<string, Set<string>> {
   const graph = new Map<string, Set<string>>();
   for (const block of model.blocks) graph.set(block.id, new Set<string>());
   for (const block of model.blocks) {
     if (block.level <= 0) continue;
-    const box = aabbOf(block, shifts?.[block.mode]);
+    const box = aabbOf(block, resolveShift(block, shifts, bondShifts));
     for (const other of model.blocks) {
       if (other.id === block.id) continue;
-      const otherBox = aabbOf(other, shifts?.[other.mode]);
+      const otherBox = aabbOf(other, resolveShift(other, shifts, bondShifts));
       if (Math.abs(otherBox.max.z - box.min.z) > 1e-6) continue;
       if (footprintOverlapArea(otherBox, box) > 1e-6) graph.get(block.id)!.add(other.id);
     }
@@ -227,8 +250,16 @@ export function orderBlocks(
  * consume `op.text`; a second formatter is how a project ends up sending
  * `B 3 2 1 ccw` to a firmware that reads a fourth word as a parse error.
  */
-export function commandText(op: Omit<BuildOp, "text"> | Omit<ModeOp, "text">): string {
+/** `%g`-style: `3.8`, `0`, `-3.8` — never `3.80`, matching the firmware's parse. */
+export function cmWord(cm: number): string {
+  return Number(cm.toFixed(4)).toString();
+}
+
+export function commandText(
+  op: Omit<BuildOp, "text"> | Omit<ModeOp, "text"> | Omit<ShiftOp, "text">,
+): string {
   if (op.op === "mode") return op.mode === "horizontal" ? "RR" : "R";
+  if (op.op === "shift") return `shift${op.axis.toUpperCase()} ${cmWord(op.cm)}`;
   return `B ${op.col} ${op.row} ${op.level}`;
 }
 
@@ -239,15 +270,46 @@ export function commandText(op: Omit<BuildOp, "text"> | Omit<ModeOp, "text">): s
  * one. Initial state is the caller's `startingMode` (the live `state.mode` when
  * there is one, `vertical` otherwise, because a board reset returns to vertical).
  */
-export function emitOps(ordered: ModelBlock[], startingMode: ModeName): Op[] {
+export function emitOps(
+  ordered: ModelBlock[], startingMode: ModeName,
+  shifts?: Partial<Record<ModeName, Shift>>, bondShifts?: BondShifts,
+): Op[] {
   const ops: Op[] = [];
   let mode = startingMode;
+
+  // The firmware's shift is per mode and a mode latch resets the latched mode
+  // to its compiled 0. `baseline[m]` is the operator's live shift for mode `m`;
+  // `applied[m]` is what a `shiftX` / `shiftY` has actually set on the board so
+  // far. The board starts on `startingMode` already carrying its baseline; the
+  // other mode's slot is only ever touched after a latch, which zeroes it.
+  const baseline = (m: ModeName): [number, number] =>
+    [shifts?.[m]?.x_cm ?? 0, shifts?.[m]?.y_cm ?? 0];
+  const applied: Record<ModeName, [number, number]> = {
+    vertical: baseline("vertical"),
+    horizontal: baseline("horizontal"),
+  };
+
+  const emitShiftIfNeeded = (block: ModelBlock) => {
+    const axis = runAxisOf(block.mode);
+    const want = resolveShift(block, shifts, bondShifts) ?? { x_cm: 0, y_cm: 0 };
+    const wantAxis = axis === "x" ? want.x_cm : want.y_cm;
+    const haveAxis = axis === "x" ? applied[block.mode][0] : applied[block.mode][1];
+    if (Math.abs(wantAxis - haveAxis) < 1e-9) return;
+    if (axis === "x") applied[block.mode][0] = wantAxis;
+    else applied[block.mode][1] = wantAxis;
+    const spec = { op: "shift" as const, mode: block.mode, axis, cm: wantAxis };
+    ops.push({ ...spec, text: commandText(spec) });
+  };
+
   for (const block of ordered) {
     if (block.mode !== mode) {
       mode = block.mode;
       const spec = { op: "mode" as const, mode, cost: "homes X and Y" as const };
       ops.push({ ...spec, text: commandText(spec) });
+      // `R` / `RR` resets this mode's shift to the compiled 0.
+      applied[mode] = [0, 0];
     }
+    emitShiftIfNeeded(block);
     const spec = {
       op: "build" as const, id: block.id, col: block.col, row: block.row, level: block.level,
     };
@@ -260,12 +322,15 @@ export function emitOps(ordered: ModelBlock[], startingMode: ModeName): Op[] {
 
 export function summarise(ops: Op[], settings: StudioSettings): Stats {
   const builds = ops.filter((op): op is BuildOp => op.op === "build");
-  const latches = ops.length - builds.length;
+  const shifts = ops.filter((op): op is ShiftOp => op.op === "shift").length;
+  const latches = ops.length - builds.length - shifts;
   const levels = new Set(builds.map(op => op.level)).size;
   const estimateSeconds = Math.round(
-    builds.length * settings.blockCycleSeconds + latches * settings.latchHomingSeconds,
+    builds.length * settings.blockCycleSeconds
+    + latches * settings.latchHomingSeconds
+    + shifts * settings.shiftLatchSeconds,
   );
-  return { blocks: builds.length, latches, modeSwitches: latches, levels, estimateSeconds };
+  return { blocks: builds.length, latches, modeSwitches: latches, shifts, levels, estimateSeconds };
 }
 
 /** `M:SS`. Callers prepend `~` — this is an estimate, and it says so every time. */
@@ -290,10 +355,14 @@ export function estimateLabel(stats: Stats): string {
  */
 export function compile(model: Model, options: CompileOptions): Program {
   const startingMode: ModeName = options.mode ?? "vertical";
+  // The bond map is author intent carried on the model; a caller may still
+  // override it (a preview of "what would this bond do"). Model wins by default.
+  const bondShifts = options.bondShifts ?? model.bondShifts;
   const context: ValidationContext = {
     mode: startingMode,
     settings: options.settings,
     shifts: options.shifts,
+    bondShifts,
     rigSnapshot: options.rigSnapshot,
     travelHeightMm: options.travelHeightMm,
   };
@@ -302,9 +371,9 @@ export function compile(model: Model, options: CompileOptions): Program {
     return { valid: false, program: [], stats: { ...ZERO_STATS }, diagnostics };
   }
 
-  const graph = supportGraph(model, options.shifts);
+  const graph = supportGraph(model, options.shifts, bondShifts);
   const ordered = orderBlocks(model, graph, startingMode);
-  const program = emitOps(ordered, startingMode);
+  const program = emitOps(ordered, startingMode, options.shifts, bondShifts);
   const stats = summarise(program, options.settings);
   return { valid: true, program, stats, diagnostics };
 }

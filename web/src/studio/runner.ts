@@ -32,9 +32,9 @@ export type ServerBuildState = "READY" | "RUNNING" | "LOCKED";
 
 export interface RunLogEntry {
   index: number;
-  kind: "build" | "mode";
+  kind: "build" | "mode" | "shift";
   command: string;
-  result: "placed" | "rejected" | "aborted" | "switched";
+  result: "placed" | "rejected" | "aborted" | "switched" | "shifted";
   startedAt: number;
   finishedAt: number;
   reason?: string | null;
@@ -94,6 +94,9 @@ export type Effect =
   | { kind: "verify"; expect: string; actual: string | null }
   | { kind: "build"; command: string; dry: boolean }
   | { kind: "mode"; mode: ModeName; command: string; dry: boolean }
+  /** A `shiftX` / `shiftY` latch — the running-bond course change. Moves
+   *  nothing; the reducer issues it without a confirm gate in every style. */
+  | { kind: "shift"; mode: ModeName; axis: "x" | "y"; cm: number; command: string; dry: boolean }
   | { kind: "warn"; text: string };
 
 export type RunEvent =
@@ -107,6 +110,7 @@ export type RunEvent =
       status: "begin" | "done"; eventId: number; now: number }
   | { type: "build-settled"; result: "placed" | "rejected" | "aborted"; reason: string | null; now: number; thumbnail?: string; verification?: string }
   | { type: "mode-settled"; now: number }
+  | { type: "shift-settled"; now: number }
   | { type: "stop-after"; now: number }
   | { type: "continue"; now: number }
   | { type: "end"; now: number }
@@ -161,6 +165,11 @@ function advance(state: RunState, now: number): Turn {
       effects: [{ kind: "warn", text }],
     };
   }
+  if (op.op === "shift") {
+    // A `shiftX` / `shiftY` latch moves nothing — it re-clips the reachable
+    // grid for the running-bond course. No confirm gate, in any style.
+    return issueShift(state, now);
+  }
   const effect: Effect = {
     kind: "select", col: op.col, row: op.row, level: op.level,
     ...(state.style === "dry" ? { dry: true as const } : {}),
@@ -202,6 +211,23 @@ function issueMode(state: RunState, now: number): Turn {
       progress: noProgress(),
     },
     effects: [{ kind: "mode", mode: op.mode, command: op.text, dry: state.style === "dry" }],
+  };
+}
+
+function issueShift(state: RunState, now: number): Turn {
+  const blocked = guarded(state);
+  if (blocked) return blocked;
+  const op = state.program[state.cursor];
+  if (!op || op.op !== "shift") return noEffects(state);
+  return {
+    state: {
+      ...state, phase: "building", pendingConfirm: null, inFlight: true,
+      opStartedAt: now, progress: noProgress(),
+    },
+    effects: [{
+      kind: "shift", mode: op.mode, axis: op.axis, cm: op.cm,
+      command: op.text, dry: state.style === "dry",
+    }],
   };
 }
 
@@ -365,6 +391,16 @@ export function step(state: RunState, event: RunEvent): Turn {
     return advance(next, event.now);
   }
 
+  if (event.type === "shift-settled") {
+    const op = state.program[state.cursor];
+    if (!state.inFlight || !op || op.op !== "shift") return noEffects(state);
+    const next = {
+      ...state, inFlight: false, buildState: "READY" as const, cursor: state.cursor + 1,
+      log: logResult(state, "shifted", event.now), progress: noProgress(),
+    };
+    return advance(next, event.now);
+  }
+
   if (event.type === "stop-after") {
     if (state.phase === "done" || state.phase === "idle") return noEffects(state);
     if (state.inFlight) return noEffects({ ...state, stopAfterCurrent: true });
@@ -435,15 +471,18 @@ export function runTiming(
   now: number,
   blockCycleSeconds: number,
   latchHomingSeconds: number,
+  shiftLatchSeconds = 1,
 ): { elapsedSeconds: number; etaSeconds: number } {
   const started = state.startedAt ?? now;
   const finished = state.finishedAt ?? now;
   const remaining = state.program.slice(state.cursor);
   const builds = remaining.filter(op => op.op === "build").length;
-  const latches = remaining.length - builds;
+  const shifts = remaining.filter(op => op.op === "shift").length;
+  const latches = remaining.length - builds - shifts;
   return {
     elapsedSeconds: Math.max(0, (finished - started) / 1000),
-    etaSeconds: builds * blockCycleSeconds + latches * latchHomingSeconds,
+    etaSeconds: builds * blockCycleSeconds + latches * latchHomingSeconds
+      + shifts * shiftLatchSeconds,
   };
 }
 

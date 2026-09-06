@@ -29,6 +29,12 @@ export interface StateModel {
   mode: "vertical" | "horizontal";
   cols: number;
   rows: number;
+  /** The ACTIVE mode's live grid shift (`shiftX` / `shiftY`), in cm. */
+  shift_cm: [number, number];
+  /** `[cols, rows]` a `B` can actually reach under `shift_cm`. Equals `[cols, rows]`. */
+  reachable: [number, number];
+  /** `[cols, rows]` asked for before a shift clipped them. */
+  requested: [number, number];
   calibrated: boolean;
   selected: Point | null;
   command: string | null;

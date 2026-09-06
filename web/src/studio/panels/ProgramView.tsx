@@ -41,6 +41,16 @@ export function ProgramView({ program, valid, stats, selectedId, onSelect }: Pro
         </div>
       );
     }
+    if (op.op === "shift") {
+      return (
+        <div key={`shift-${index}`} className="studio-program-latch studio-program-shift"
+             role="separator" aria-label={`grid shift ${op.text} — running bond course`}>
+          <span className="studio-program-chip">{op.text}</span>
+          <span className="studio-program-rule" aria-hidden="true" />
+          <span className="studio-program-cost">running-bond course</span>
+        </div>
+      );
+    }
     built += 1;
     const selected = selectedId != null && selectedId === op.id;
     const select = () => onSelect?.(op.id);
