@@ -433,6 +433,7 @@ export default function Studio() {
                        selectedId={selectedId} onSelect={selectDiagnostic} />
           <GridShift mode={mode} level={heldLevel} bondShifts={bondShifts}
                      maxLevel={model.blocks.reduce((m, b) => Math.max(m, b.level), 0)}
+                     ceiling={THEORETICAL_LEVEL_CEILING}
                      orphanCount={diagnostics.filter(d => d.code === "CLIPPED_BY_SHIFT").length}
                      onSetBond={(level, offsetCm) => commit({ type: "setBond", mode, level, offsetCm })} />
           <Settings value={settings} onChange={setSettings} />

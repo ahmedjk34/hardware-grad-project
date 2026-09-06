@@ -247,7 +247,9 @@ button:disabled { cursor: not-allowed; }
 .chip.is-motion { color: var(--motion); border-color: color-mix(in srgb, var(--motion) 45%, var(--line)); background: var(--motion-deep); }
 .chip.is-danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); background: var(--danger-deep); }
 .chip.is-idle   { color: var(--text-faint); }
+.chip.is-signal { color: var(--signal); border-color: color-mix(in srgb, var(--signal) 45%, var(--line)); background: var(--wash-signal); }
 .chip.is-ready .value, .chip.is-motion .value, .chip.is-danger .value { color: inherit; }
+.twin-shift { letter-spacing: .1em; font-variant-numeric: tabular-nums; }
 
 /* ── banners ──────────────────────────────────────────────────────────── */
 
@@ -1290,6 +1292,45 @@ svg.grid-overlay.selectable { cursor: crosshair; }
 .studio-gridshift-preset:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
 .studio-gridshift-summary { margin: 0; color: var(--text-dim); font: var(--t-xs); }
 .studio-gridshift-orphans { margin: 0; color: var(--danger); font: var(--t-xs); line-height: 1.5; }
+
+.studio-gridshift-course {
+  display: flex;
+  align-items: center;
+  gap: var(--s1);
+}
+.studio-gridshift-courselabel {
+  color: var(--text-faint);
+  font: var(--t-xs);
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.studio-gridshift-course button {
+  padding: 1px var(--s1);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+.studio-gridshift-course button:hover:not(:disabled) { border-color: var(--line-strong); }
+.studio-gridshift-course button:disabled { opacity: .35; cursor: default; }
+.studio-gridshift-course button:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+.studio-gridshift-coursenum {
+  min-width: 8ch;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+}
+.studio-gridshift-clear {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--signal);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
 
 /* No infinite checkerboard — a vignette instead, so the model reads as lit
    from above (DESIGN.md §8.2) and nothing on the floor competes with it. */

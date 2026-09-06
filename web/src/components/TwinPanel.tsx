@@ -115,6 +115,13 @@ export function TwinPanel({ state, connected, lastUpdateAt, modelId: controlledM
         <span className="chip is-idle twin-mode" aria-label="Rig grid mode">
           <Icon name="axes" size={13} />{scene.mode ? scene.mode.toUpperCase() : "—"}
         </span>
+        {scene.shift && (
+          <span className="chip is-signal twin-shift" aria-label="Live grid shift"
+                title="The running-bond course the rig is on. Read-only — set it in the Studio.">
+            SHIFT {scene.shift.x_cm !== 0 ? `X ${scene.shift.x_cm > 0 ? "+" : "−"}${Math.abs(scene.shift.x_cm).toFixed(1)}` : ""}
+            {scene.shift.y_cm !== 0 ? ` Y ${scene.shift.y_cm > 0 ? "+" : "−"}${Math.abs(scene.shift.y_cm).toFixed(1)}` : ""} cm
+          </span>
+        )}
         <select className="twin-model" aria-label="Model shown in the twin" disabled={modelSelectionDisabled}
                 value={modelId}
                 onChange={event => {
