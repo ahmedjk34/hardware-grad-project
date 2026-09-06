@@ -62,7 +62,7 @@ that did not arrive at the pickup point.
 | Exit IR obstacle sensor | `OUT 4` | Confirms that a block left the container. The default logic is active-low; pin 5 is unused. |
 | Alignment servo | `6` | Rests at 90° and nudges to 120°; tune mechanically. |
 | Stage IR obstacle sensor | `OUT 8` | Confirms that the pickup position contains a block. The default logic is active-low; change `STAGE_IR_DETECTED_LEVEL` if the installed sensor is inverted. |
-| Container servo | `12` | Closed 23°, first opening 80°, final opening 150°. |
+| Container servo | `12` | Closed 23°, staged at 65° then 108°, fully open at 150°. |
 
 The sketch uses 9600 baud. All serial commands must end with a newline.
 

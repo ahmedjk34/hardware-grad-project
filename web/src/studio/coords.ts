@@ -60,8 +60,16 @@ export interface Block { mode: ModeName; col: number; row: number; level: number
  * or `level <= 0`, means no offset. Storing a map (not a parity rule) keeps
  * corbels / leans possible without a schema change; the "Running bond" preset
  * fills the alternating `1, 3, 5, …` pattern for the common case.
+ *
+ * **Only the horizontal grid is shifted.** The vertical grid never carries a
+ * bond offset — `BOND_MODE` gates it in one place (`resolveShift`) so the
+ * compiler, the validator, the Twin and the Studio all agree. A vertical entry
+ * in this map is simply ignored.
  */
 export type BondShifts = Partial<Record<ModeName, Record<number, [number, number]>>>;
+
+/** The one grid the running-bond course shift applies to. */
+export const BOND_MODE: ModeName = "horizontal";
 
 /** The run axis of a mode: the one its 6.0 cm face lies along. */
 export function runAxisOf(mode: ModeName): "x" | "y" {
@@ -91,7 +99,10 @@ export function resolveShift(
   bondShifts?: BondShifts,
 ): Shift | undefined {
   const base = shifts?.[block.mode];
-  const bond = block.level > 0 ? bondShifts?.[block.mode]?.[block.level] : undefined;
+  // Bond courses are a HORIZONTAL-grid feature only. The vertical grid is never
+  // shifted, whatever a stray map entry says.
+  const bond = block.mode === BOND_MODE && block.level > 0
+    ? bondShifts?.[block.mode]?.[block.level] : undefined;
   const x = (base?.x_cm ?? 0) + (bond?.[0] ?? 0);
   const y = (base?.y_cm ?? 0) + (bond?.[1] ?? 0);
   return x === 0 && y === 0 ? undefined : { x_cm: x, y_cm: y };

@@ -205,6 +205,18 @@ void closeContainerStage2() {
   containerServo.write(CONTAINER_STAGE_1_ANGLE);
 }
 
+void closeContainerInStages() {
+  // Do not move a gate that is already closed. A known fully-open gate closes
+  // through the same three near-equal moves used by the FEED cycle.
+  if (containerOpen) {
+    closeContainerStage1();
+    delay(CLOSE_SETTLE_MS);
+    closeContainerStage2();
+    delay(CLOSE_SETTLE_MS);
+  }
+  closeContainer();
+}
+
 void openContainerStage1() {
   containerServo.write(CONTAINER_STAGE_1_ANGLE);
 }
@@ -511,7 +523,7 @@ void handleCommand(char *line) {
     delay(CONTAINER_STAGE_DELAY_MS); openContainerStage3();
     acknowledgeManual(F("OPEN"));
   } else if (!strcmp(line, "CLOSE") || !strcmp(line, "C")) {
-    cancelCycle(true); stopBelt(); closeContainer(); acknowledgeManual(F("CLOSE"));
+    cancelCycle(true); stopBelt(); closeContainerInStages(); acknowledgeManual(F("CLOSE"));
   } else if (!strcmp(line, "ON")) {
     cancelCycle(true); startBelt(BELT_FORWARD_DIRECTION_LEVEL); acknowledgeManual(F("ON"));
   } else if (!strcmp(line, "F")) {

@@ -12,7 +12,7 @@
  * and `CLIPPED_BY_SHIFT` blocks RUN until it moves.
  */
 import { useEffect, useState } from "react";
-import { bondIncrementCm, runAxisOf, type BondShifts, type ModeName } from "../coords";
+import { BOND_MODE, bondIncrementCm, runAxisOf, type BondShifts, type ModeName } from "../coords";
 
 export interface GridShiftProps {
   mode: ModeName;
@@ -32,7 +32,30 @@ export interface GridShiftProps {
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 const cm = (v: number) => `${v > 0 ? "+" : v < 0 ? "−" : ""}${Math.abs(v).toFixed(1)} cm`;
 
-export function GridShift({
+export function GridShift(props: GridShiftProps) {
+  // Running-bond courses are a HORIZONTAL-grid feature. In the vertical grid the
+  // panel is inert and says so — nothing here can shift that lattice. The real
+  // control is split out so the mode branch does not sit above its hooks.
+  if (props.mode !== BOND_MODE) {
+    return (
+      <section className="studio-gridshift" aria-label="Grid shift">
+        <header className="studio-panel-header">
+          <span>GRID SHIFT</span>
+          <span className="studio-gridshift-axis">horizontal only</span>
+        </header>
+        <div className="studio-gridshift-body">
+          <p className="studio-gridshift-summary">
+            Running-bond courses apply to the <b>horizontal</b> grid. Latch it
+            (<b>RR</b>) to shift a course.
+          </p>
+        </div>
+      </section>
+    );
+  }
+  return <GridShiftControl {...props} />;
+}
+
+function GridShiftControl({
   mode, level, bondShifts, maxLevel = 0, ceiling = 17, orphanCount = 0, onPreview, onSetBond,
 }: GridShiftProps) {
   const axis = runAxisOf(mode);
