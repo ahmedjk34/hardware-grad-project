@@ -579,7 +579,9 @@ remain useful only for count-only/legacy drawings without that homography.
 | `config/rig.json` → `grid.modes.<mode>.blocked_cells` | `[[col,row], …]`, **authoritative for the Pi and the Studio** |
 | `build_test_v1.ino` SECTION 6C | `GRID_BLOCKED_COL[][] / GRID_BLOCKED_ROW[][] / GRID_BLOCKED_COUNT[]` — the compiled copy, capacity `GRID_BLOCKED_MAX` |
 | `python/rig/grid.py` | `MachineGrid.blocked` / `.is_blocked()`; `contains_build_target()` excludes them |
-| `web/src/studio/coords.ts` | `blockedCells()` / `isBlocked()`; `validate.ts` rule `BLOCKED_CELL`; `lattice.ts` kind `"blocked"` |
+| `python/rig/workspace.py` | `WorkspaceMap` embeds `blocked_cells` in `physical_grid`, so a saved map draws them |
+| `python/camera/gridded_camera_feed.py` | `draw_machine_grid()` marks them on the live camera grid — red outline, struck through, hatched (the Studio's style) |
+| `web/src/studio/coords.ts` | `blockedCells()` / `isBlocked()`; `validate.ts` rule `BLOCKED_CELL`; `lattice.ts` kind `"blocked"`; `scene/Lattice.tsx` draws them |
 | `python/tests/test_grid.py` | parses the firmware tables and fails on any drift from `rig.json` |
 
 The feeder belt physically sits across a few cells next to the pick-up point,

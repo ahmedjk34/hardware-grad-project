@@ -19,19 +19,22 @@ start. Off by default; a toggle in the build UI.
 
 That is all. It is an **outlier repair**, not a calibration.
 
+There is **no hard level ceiling**, but stage 15 must run its own detection pass
+to avoid one — see D7.
+
 ---
 
 ## 1. Why this is simpler than the document it replaces
 
 The predecessor asked *"is the machine systematically off, and by how much?"*
-That question forces a windowed estimate, a deadband against the map's own
-noise floor, a bounded correction, a persistent bias with provenance, a decision
-about which of three interchangeable-looking knobs to write, and a new firmware
-verb to write it with.
+That question forces a windowed estimate, a deadband against the map's own noise
+floor, a bounded correction, a persistent bias with provenance, a decision about
+which of three interchangeable-looking knobs to write, and a new firmware verb to
+write it with.
 
-This asks *"is that one block in the wrong spot?"* — and the answer is a
-physical action, not a number. Everything the other design needed in order to
-**store** a correction disappears:
+This asks *"is that one block in the wrong spot?"* — and the answer is a physical
+action, not a number. Everything the other design needed in order to **store** a
+correction disappears:
 
 | Deleted | Why |
 | --- | --- |
@@ -41,6 +44,10 @@ physical action, not a number. Everything the other design needed in order to
 | An `errX` / `errY` firmware verb | not needed |
 | Windowed mean, drift deadband | one block is judged, not a population |
 | `WorkspaceMap.matches_grid` invalidation | the map never changes |
+
+What replaces them is **physical** risk. The predecessor only ever wrote a
+number; this design drives the claw down into a finished structure. Every hard
+part of this document is downstream of that one difference.
 
 ### 1a. Rule 1 is structural here, not a discipline
 
@@ -65,10 +72,10 @@ machine's own offset into its corners, so `commanded − observed` reads ≈ 0 b
 construction.
 
 **That is true, and it does not matter here.** It defeats a *drift* measurement.
-It is exactly right for an *outlier* measurement: a map fitted from placed
-blocks encodes "where this machine normally lands a block", which is precisely
-the yardstick for spotting one that did not. The existing block-calibration map
-is the correct reference. Nothing needs re-anchoring.
+It is exactly right for an *outlier* measurement: a map fitted from placed blocks
+encodes "where this machine normally lands a block", which is precisely the
+yardstick for spotting one that did not. The existing block-calibration map is
+the correct reference. Nothing needs re-anchoring.
 
 ---
 
@@ -82,8 +89,7 @@ the claw neutral. That is already the quiet, parked, out-of-frame state the
 measurement needs; no new interlock has to be invented.
 
 It does **not** run after every block. A per-block check adds a settle and a
-frame grab (~2 s) to every placement, and judges each block on a single
-observation.
+frame grab (~2 s) to every placement, and judges each block on one observation.
 
 ### D2 — It is stage 15 in the UI, and Pi-side in fact
 
@@ -102,53 +108,161 @@ explicitly not validated on real frames and is not used, and
 `estimate_camera_height` is not used either.
 
 The as-built memory answers "the top block at [2,2] is level 2, placed `ROT_CW`",
-and that is authoritative. Vision is asked one question only: *where is the
-block in the image?*
+and that is authoritative. Vision is asked one question only: *where is the block
+in the image?*
 
-### D4 — Camera height is needed for **position**, not for levels
+### D4 — Camera geometry: needed for **position**, not for levels
 
 This distinction caused real confusion and is worth stating flatly:
 
-> Memory tells us **which level** a block is on. Camera height tells us **how
-> much that level displaces the block in the image.** They are different
+> Memory tells us **which level** a block is on. The camera geometry tells us
+> **how much that level displaces the block in the image.** They are different
 > problems and the second one does not go away.
 
-The camera is 57 cm above the board. A block's top face at level `L` sits
-`(L+1) × 1.5 cm` up, so it projects **outward from the camera's nadir** by
-`r · h / (H − h)`, where `r` is its distance from the nadir. Level 0's share of
-this is already baked into the workspace map (the map was fitted from level-0
-blocks), so what matters is the excess over level 0. At a corner cell
-(`r ≈ 22 cm` on a 22.8 × 38.0 workspace, `H = 57`):
+**Measured on the bench:**
 
-| Level | Apparent outward shift | Excess over level 0 |
-| --- | --- | --- |
-| 0 | 0.60 cm | — (absorbed by the map) |
-| 1 | 1.23 cm | **0.63 cm** |
-| 2 | 1.90 cm | **1.30 cm** |
-| 3 | 2.61 cm | **2.01 cm** |
+| Quantity | Value |
+| --- | --- |
+| Camera height `H` above the board | **57 cm** |
+| Nadir, Y (from the Y home switch) | **32.5 cm** |
+| Nadir, X | **≈ 11.4 cm — centred** on the 22.8 cm width |
 
-**A perfectly placed level-2 corner block appears ~1.3 cm out of position** —
-over twice the error this feature exists to correct. Uncorrected, stage 15
-would confidently shove a good block 1.3 cm in the wrong direction, worst at the
-edges, near-zero in the middle, and looking nothing like a bug.
+The workspace map is a homography, so it exactly models one plane: the level-0
+top faces at `h₀ = 1.5 cm`. A block whose top sits at `h = (L+1)·1.5` is on a
+*different* plane, and the map therefore reports it displaced **away from the
+nadir** by
 
-So: `camera.height_cm: 57.0` goes in `config/rig.json` (there is no `camera`
-section today), and every observed centre is parallax-corrected using the level
-from memory before it is compared to anything.
+```
+excess = k(L) · d          k(L) = (h − h₀) / (H − h)
+```
 
-`r` is measured from the **nadir** — the point directly beneath the lens — not
-from the board centre. If the camera is not centred over the workspace, the
-nadir must be found; assuming board centre is an error of the same size as the
-thing being measured.
+where `d` is the block's distance from the nadir. Because `k` is a scalar, the
+components separate cleanly — the X error depends only on `|x − 11.4|` and the Y
+error only on `|y − 32.5|`:
+
+| Level | `k` | X excess at col 0/6 | Y excess at row 0 |
+| --- | --- | --- | --- |
+| 0 | 0.000 | — (the map's own plane) | — |
+| 1 | 0.028 | 0.32 cm | 0.90 cm |
+| 2 | 0.057 | 0.65 cm | 1.86 cm |
+| 3 | 0.088 | 1.01 cm | 2.87 cm |
+
+Two things follow, and the second is the dangerous one:
+
+1. **It is large.** A perfectly placed level-2 block on row 0 appears ~1.9 cm out
+   of position — larger than the whole correction band in D8.
+2. **It is directional and consistent.** The shift always points *away* from the
+   nadir, so every upper-level block on row 0 appears displaced toward −Y by a
+   similar amount. That does not look like noise; it looks like a real,
+   repeatable machine fault — and worst on row 0, which is exactly where a
+   genuine homing or backlash error would show up. Uncorrected, stage 15 would
+   systematically shove good row-0 blocks in +Y and the results would be
+   self-consistent enough to be believed.
+
+**The good news: with both numbers measured, the model is robust.** Being wrong
+by 2 cm in the nadir *or* in `H` moves the level-2 worst-case correction by at
+most 0.11 cm — comfortably inside the map's own 0.27 cm error. This stops being
+a risk and becomes arithmetic.
+
+`camera: { height_cm: 57.0, nadir_x_cm: 11.4, nadir_y_cm: 32.5 }` goes in
+`config/rig.json` (there is no `camera` section today), and every observed centre
+is parallax-corrected using the level from memory before it is compared to
+anything.
 
 ### D5 — Only the top block of a column may be corrected
 
 If [2,2] carries levels 0–2 and the *level-0* block is the one out of place, it
-is load-bearing and buried, and there is no correction. The as-built memory
-knows the column height, and stage 15 **refuses** — halts and asks for a human.
-This is a refusal, not a warning.
+is load-bearing and buried, and there is no correction. The as-built memory knows
+the column height, and stage 15 **refuses** — halts and asks for a human. This is
+a refusal, not a warning.
 
-### D6 — A correction band, not a threshold
+### D6 — The descent corridor must be clear of taller neighbours
+
+**The 14 build phases never face this problem, and stage 15 does.**
+
+`ORDER_TERMS` puts `level` first ([compile.ts:147](../../web/src/studio/compile.ts#L147)),
+so a job is built level-major, bottom-up. During a normal build the claw
+therefore never descends into a valley between taller neighbours — the taller
+neighbours do not exist yet.
+
+Stage 15 runs *after* the job, on a finished structure with arbitrary height
+variation. If [2,2]'s top block is at level 2 while [2,3] is stacked to level 5,
+gripping at level 2 drives the claw down a 1.6 cm slot flanked by a stack three
+blocks taller.
+
+So D5 is not sufficient. The target must be the top of its own column **and** no
+adjacent column may be taller than it. The as-built memory has everything needed
+to check this; it is a refusal like D5.
+
+This compounds with D7 — both bite hardest on tall, uneven structures, which is
+where placement errors are also most likely. The correctable set is smaller than
+it first appears, and that should be surfaced honestly in the UI.
+
+### D7 — No level ceiling, provided the detector is called correctly
+
+There *is* a ceiling on the obvious implementation, and it is worth understanding
+before designing around it.
+
+`detect_aligned_blocks` discards any detection sitting more than
+`MAX_INDEX_SNAP = 0.34` **cells** off the fitted lattice
+([block_grid.py:1747](../../python/vision/block_grid.py#L1747)) — the filter that
+stops the holder's wooden offcuts being taken for blocks. Parallax (D4) eats that
+budget as levels rise, and Y is the binding axis:
+
+| Row | L1 | L2 | L3 | L4 |
+| --- | --- | --- | --- | --- |
+| 0 | 0.12 | 0.24 | **0.38 dropped** | **0.52 dropped** |
+| 1 | 0.09 | 0.19 | 0.29 | **0.40 dropped** |
+| 2–5 | 0.08 | 0.17 | 0.26 | **0.36 dropped** |
+
+So if stage 15 simply consumed `ProcessedFrame.detections`, every block above
+level 2 would be **invisible — not misjudged, silently discarded** before stage
+15 ever saw it, and the feature would cover three of the rig's seventeen levels.
+
+**That ceiling is an artifact of passing a `grid`, not a property of the camera.**
+`_lattice_filter` opens with `if grid is None … return list(detections), [], None`
+— **with no grid there is no rejection at all.** And in both paths the centre is
+untouched: *"The centre stays exactly where it was measured"*
+([block_outline.py:181](../../python/vision/block_outline.py#L181)). `_rectify`
+only shares size and bearing.
+
+**So stage 15 runs its own detection pass with `grid=None`**, on the parked frame,
+between jobs. It costs one detector call (~84 ms per the module's own benchmark)
+once per job — nothing, at this cadence.
+
+It then does its own matching, which build memory makes *stronger* than the
+lattice filter it replaced:
+
+1. for each cell the as-built memory says holds a block, predict where it should
+   appear = commanded centre + `k(L)·d` parallax (D4);
+2. match each prediction to the nearest detection within a fixed radius;
+3. **ignore every unmatched detection.** Offcuts, the feeder, a dropped block —
+   none of them are at a predicted position.
+
+"Is it near where memory says a block should be" is a sharper test than "is it
+roughly on some lattice", and it is available here precisely because this feature
+has build memory and the live pipeline does not.
+
+The match radius is bounded on both sides: it must exceed the worst honest error
+(map 0.27 cm + parallax model 0.11 cm + the placement error being measured, up to
+D8's 1.2 cm refusal) and stay under half the tightest pitch (1.9 cm on X). **1.5 cm
+satisfies both**, though not by a wide margin — it is the number most likely to
+need adjusting on the bench.
+
+**What still limits height, and it is not much.** Occlusion is real but mild: at
+row 0 the view is 29.7° off vertical, so a neighbour must be **8 levels taller**
+to hide a block's centre in Y, and occlusion in X never hides a centre at all.
+D6 already refuses any block with a taller neighbour, so occlusion is excluded
+before it can matter.
+
+What genuinely remains is **untested**: the detector has not been exercised on
+tall stacks, where a block is up to 13% larger in frame and `_rectify`'s
+population median size is a poor fit for it. Centres — the only thing stage 15
+uses — should be unaffected, but that is reasoning, not measurement. Treat levels
+above 2 as working-but-unverified, and have the advisory pass report which levels
+it actually matched so the first session settles it.
+
+### D8 — A correction band, not a threshold
 
 The re-place uses the same claw and the same axes as the original place, so it
 carries the same placement error. "Correcting" an error comparable to the
@@ -157,17 +271,22 @@ machine's own repeatability is a coin flip that can make things worse.
 | Measured error | Action |
 | --- | --- |
 | `< 0.5 cm` | ignore — not worth physically disturbing a block for |
-| `0.5 – 1.0 cm` | correct |
-| `> 1.0 cm` | **refuse**, halt, flag for a human |
+| `0.5 – 1.2 cm` | correct |
+| `> 1.2 cm` | **refuse**, halt, flag for a human |
 
-The upper bound is geometric, not arbitrary: in vertical mode the gap is 1.6 cm,
-so a block 1.0 cm off has only 0.6 cm of clearance on its near side and the jaws
-descend into that gap. Beyond that the block is probably touching its neighbour
-and gripping it disturbs two blocks instead of one. **Both bounds are provisional
-and must be measured on the bench** — 0.5 cm needs to be confirmed as comfortably
-above placement repeatability, and 1.0 cm against actual jaw clearance.
+**Jaw clearance is not the binding constraint.** Measured on the bench: the jaws
+straddle the 2.2 cm block and pit into the gap on either side, and the clearance
+is proper. So the upper bound is set by **neighbour contact**: every gap on both
+axes of both modes is 1.6 cm, so a block offset by 1.6 cm has its edge against
+the neighbouring block, and gripping it disturbs two blocks instead of one.
+1.2 cm keeps a margin under that.
 
-### D7 — Re-verify, and never trust a silent grip
+The lower bound is still provisional and **must be measured**: 0.5 cm needs
+confirming as comfortably above the machine's placement repeatability. If
+repeatability turns out to be near 0.5 cm the band is effectively empty, and the
+honest conclusion is that this feature cannot help.
+
+### D9 — Re-verify, and never trust a silent grip
 
 The one genuinely new failure mode: **a claw that closes on nothing reports
 success.** The firmware cannot detect it — there is no grip sensor. So after a
@@ -176,13 +295,13 @@ it was sent. If it did not, that is a halt-and-inspect, not a retry.
 
 A correction that is not re-verified is a guess with extra steps.
 
-### D8 — One correction per stage-15 pass
+### D10 — One correction per stage-15 pass
 
 Find the worst offender, fix it, re-verify, stop. If several blocks are out of
 place, that is not a placement error — it is a knocked rail, a wrong mode latch
 or a stale map, and the answer is a human, not fifteen pick-and-places.
 
-### D9 — Off by default
+### D11 — Off by default
 
 A toggle in the build UI, defaulting **off**. It moves the machine without an
 explicit per-action operator command, which is reason enough for opt-in.
@@ -202,7 +321,8 @@ explicit per-action operator command, which is reason enough for opt-in.
   **plan**, not the as-built.
 
 So it is a prerequisite, not a detail. It holds, per cell: the top level, the
-rotation that placed it, and when.
+rotation that placed it, and when. D5, D6 and D7 are all enforced from it, which
+makes it the safety backbone of the feature and not merely bookkeeping.
 
 **In-process only, not persisted.** A server restart loses the board state, and
 stage 15 must then **refuse** — "no as-built memory; run a job first" — rather
@@ -248,8 +368,8 @@ P <col> <row> <level> <dx_cm> <dy_cm>
 The `(dx,dy)` injection point is the one already used by the X-rail skew
 compensation — `gotoBuildTarget()` at
 [:3521](../../arduino/build_vertical_grid/build_vertical_grid.ino#L3521) adds
-`buildPlacementOffsetSteps() + buildSkewSteps()` after `cellTargetPosition()`
-and before the move. A per-command offset is a third term in the same slot: a
+`buildPlacementOffsetSteps() + buildSkewSteps()` after `cellTargetPosition()` and
+before the move. A per-command offset is a third term in the same slot: a
 machine-space nudge that the grid model never sees. This is the established
 pattern for "move the machine without moving the grid" and it is why Rule 1
 survives contact with the firmware.
@@ -260,32 +380,46 @@ five-argument parser does not.
 
 **No local Arduino toolchain.** Per [AGENTS.md](../../AGENTS.md), syntax-check
 with the stub-Arduino `g++` harness, state plainly that the result is unflashed
-and unverified on hardware, and pair both sketches —
-`build_vertical_grid.ino` **and** `build_horizontal_grid.ino` — in the same
-commit, with `python/tests/test_grid.py` extended to cover the new verb.
+and unverified on hardware, and pair both sketches — `build_vertical_grid.ino`
+**and** `build_horizontal_grid.ino` (6,132 and 6,135 lines) — in the same commit,
+with `python/tests/test_grid.py` extended to cover the new verb.
 
 ---
 
 ## 5. What could still go wrong
 
-1. **The nadir is not the board centre.** Getting `r` wrong scales every
-   parallax correction. Worth measuring rather than assuming.
-2. **The grip descends into a narrowed gap.** A block 1.0 cm off leaves 0.6 cm
-   of clearance. Jaw width against that clearance is a bench measurement nobody
-   has taken.
-3. **The silent grip failure (D7)** — the only genuinely new failure mode.
-4. **The re-place is not more accurate than the place** (D6). If bench
+1. **The silent grip failure (D9)** — the only genuinely new failure mode, and
+   the largest single risk in the design. There is no sensor that can catch it;
+   only the re-look can.
+2. **Pick accuracy vs jaw capture range — unmeasured.** To grip a displaced block
+   the claw must arrive at its *observed* position, and our knowledge of that is
+   the map's error (0.27 cm mean, 2.07 px max) plus centroid noise plus parallax
+   model error: call it ±0.3–0.5 cm. Clearance being proper settles whether the
+   jaws *fit*; it does not settle how far off-centre they can close and still
+   grip rather than shove. `SERVO_CLOSE_ANGLE = 54` is calibrated for a block
+   presented squarely by the feeder, not one approached with 0.4 cm of slop.
+   **This is the cheapest high-value experiment available** — place a block
+   deliberately 0.5 cm off and see whether the claw grips it or knocks it.
+3. **The re-place is not more accurate than the place** (D8). If bench
    measurement shows repeatability near 0.5 cm, the correction band is empty and
    the honest answer is that this feature cannot help.
+4. **Detection on tall stacks is untested** (D7). Reasoning says centres survive;
+   nothing has measured it. Also the 1.5 cm match radius has under 0.4 cm of
+   headroom against half the X pitch — the likeliest number to need bench
+   adjustment.
 5. **A knocked block that memory still believes in.** The no-intervention
    assumption is load-bearing and undetectable when violated.
+6. **~~The nadir is unknown.~~** Resolved: measured at `(11.4, 32.5)`, and the
+   model is insensitive to ±2 cm (D4).
+7. **~~The grip descends into a narrowed gap.~~** Resolved: jaw clearance is
+   proper; neighbour contact at 1.6 cm is the real bound (D8).
 
 ---
 
 ## 6. Not doing
 
-- **Correcting more than one block per pass** (D8).
-- **Correcting a buried block** (D5).
+- **Correcting more than one block per pass** (D10).
+- **Correcting a buried block** (D5) **or one in a valley** (D6).
 - **Writing anything to the grid, the lattice origin, `error_offset_*`,
   `shift_*`, or `config/rig.json`'s geometry.** Ever. (§1a)
 - **Inferring levels from vision.** Memory is authoritative (D3).
@@ -295,18 +429,44 @@ commit, with `python/tests/test_grid.py` extended to cover the new verb.
 
 ---
 
-## 7. Difficulty
+## 7. Feasibility
+
+Split the feature in two, because the halves have very different risk.
+
+**The measurement half — high confidence.** As-built memory, observed-vs-commanded
+in cm, parallax correction, stage-15 orchestration, the UI toggle, advisory
+output. Every piece exists or is arithmetic; the parallax inputs are now measured
+and the model is robust to their error. Nothing here moves the machine.
+
+**The correction half — genuinely uncertain.** It drives the claw into a finished
+structure, it needs a new verb in two 6,100-line sketches that **cannot be
+compiled or tested locally**, and its viability rests on two numbers nobody has
+measured: jaw capture tolerance and placement repeatability. Each debug iteration
+is flash → run into a real structure → watch what breaks.
 
 | Piece | Difficulty |
 | --- | --- |
 | As-built memory (in-process) | **2 / 5** |
-| Observed-vs-commanded in cm, parallax-corrected | **2 / 5** |
-| Stage-15 orchestration + UI toggle | **2 / 5** |
-| The `P` verb in both sketches | **3 / 5** + unflashable locally |
-| The safety rules (D5–D8) and proving them | **4 / 5** |
-| Confirming the correction band is not empty (D6) | **bench work, unavoidable** |
+| Observed-vs-commanded, parallax-corrected | **2 / 5** |
+| Own detection pass (`grid=None`) + memory-driven matching (D7) | **3 / 5** |
+| Stage-15 orchestration + UI toggle + advisory output | **2 / 5** |
+| Safety rules D5 / D6 / D7 and proving them | **3 / 5** |
+| The `P` verb in both sketches | **4 / 5** — unflashable and untestable locally |
+| Confirming the band is not empty (D8) and the grip lands (§5.2) | **bench work, unavoidable** |
 
-**Overall: 3 / 5** — down from the predecessor's 4 / 5, because the knob-choice
-problem, the provenance surface and the sign-convention trap all disappear along
-with the stored correction. What replaces them is physical risk: this design
-moves the claw into a built structure, which the other one never did.
+**Overall: 3 / 5**, but unevenly distributed — most of the difficulty and nearly
+all of the risk sits in the last two rows.
+
+### The order this should be built in
+
+1. **Measurement half, advisory only.** Cheap, safe, independently useful, and it
+   answers the questions that decide everything else: are the errors real, are
+   they above 0.5 cm, and does the parallax model agree with a ruler at level 2?
+2. **Two bench measurements** (§5.2, §5.3). Twenty minutes each.
+3. **The `P` verb — only if 1 and 2 come back favourable.** If the parallax model
+   does not validate against a ruler, or the correction band turns out empty, the
+   correction half should not be built at all.
+
+Stopping after step 1 leaves a useful feature: the machine tells you which block
+is out of place and by how much. That is worth having even if the claw never
+touches it.

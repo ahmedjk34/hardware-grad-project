@@ -150,6 +150,9 @@ class WorkspaceMap:
                 error_offset_y_cm=float(geometry.get("error_offset_y_cm", 0.0)),
                 shift_x_cm=float(geometry.get("shift_x_cm", 0.0)),
                 shift_y_cm=float(geometry.get("shift_y_cm", 0.0)),
+                blocked=frozenset(
+                    (int(pair[0]), int(pair[1]))
+                    for pair in geometry.get("blocked_cells", [])),
                 mode=self.mode,
             )
 
@@ -185,6 +188,7 @@ class WorkspaceMap:
             "error_offset_y_cm": grid.error_offset_y_cm,
             "shift_x_cm": grid.shift_x_cm,
             "shift_y_cm": grid.shift_y_cm,
+            "blocked_cells": [list(pair) for pair in sorted(grid.blocked)],
         }
         return cls(grid.cols, grid.rows, [(x / w, y / h) for x, y in corners],
                    projection, geometry, grid.mode or DEFAULT_GRID_MODE)
