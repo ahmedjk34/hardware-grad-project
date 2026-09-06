@@ -62,7 +62,8 @@ one thing from this file, take that one.
 | A verify step already in the effect vocabulary | **exists** | `{ kind: "verify"; expect; actual }` — today it verifies the *selected command*, not the *board* |
 | Per-step camera thumbnails in the run report | **exists** | `run-report.ts`, `runner-driver.ts` — raw evidence images, **not** vision verification |
 | An optional `vision_verification` field the UI already reads | **exists, never populated** | [RunnerPanel.tsx](../../web/src/components/RunnerPanel.tsx) — the Python backend never sets it |
-| 10 Hz labelled detections off the live feed | **exists** | `ConsolePipeline`, `ProcessedFrame.detections`, `block_outline._lattice_filter` |
+| 10 Hz detections off the live feed, off-lattice ones rejected | **exists** | `ConsolePipeline`, `ProcessedFrame.detections`, `block_outline._lattice_filter` |
+| those detections **labelled with a cell** | **does not exist** — `_lattice_filter` discards its indices; pixel → cell is `WorkspaceMap.cell_at` and belongs to the supervisor. See [placement-supervision.md §2a](placement-supervision.md#2a-three-things-the-earlier-designs-got-wrong) |
 | Support / centre-of-mass maths over a model | **exists** | [web/src/studio/validate.ts](../../web/src/studio/validate.ts) — support ratio, toppling test, `levelCeiling` |
 | A twin that refuses to invent state | **exists** | [twin.ts](../../web/src/studio/twin.ts) — and its rules apply to anything built here |
 | Server-side record of what has been placed | **does not exist** | Appendix A M1, `PlacementLedger` |

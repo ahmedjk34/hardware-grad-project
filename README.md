@@ -106,6 +106,7 @@ of open-loop timing.
 - Uno commissioning CLI → `python/feeder_console.py`; dual-role flashing → `scripts/flash.sh feeder …`
 - Web operator console — how to run it → **[docs/server-guide.md](docs/server-guide.md)**, how it's built → **[docs/CONSOLE.md](docs/CONSOLE.md)**
 - 3D Build Studio, current state → **[docs/STUDIO.md](docs/STUDIO.md)**
+- What the camera does and where each capability appears in the UI → **[docs/CAMERA.md](docs/CAMERA.md)**; how the detector itself works → **[docs/BLOCK-VISION.md](docs/BLOCK-VISION.md)**
 - What's designed but not yet built → **[docs/feature-ideas.md](docs/feature-ideas.md)**
 
 ## Running the camera pipeline

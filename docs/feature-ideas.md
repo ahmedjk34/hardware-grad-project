@@ -74,8 +74,15 @@ or removing a block** — the board stops matching the plan, and the console say
 which cell.
 
 This closes the loop between the vision pipeline and the motion system, the most
-defensible engineering claim in the project, and it reuses the existing lattice
-labelling with no new detector and no extra frames.
+defensible engineering claim in the project, with no new detector and no extra
+frames.
+
+> **The build plan is [features/placement-supervision.md](features/placement-supervision.md).**
+> It merges and supersedes Appendix A below *and* Stage 15 §3's "as-built
+> memory" — they were one component described twice. Read it before Appendix A;
+> its §2a corrects three things the older designs assert about the code that
+> are not true (most importantly: **detections are not labelled with cells**,
+> so the pixel → cell step is real work, not an inherited input).
 
 **Not implemented.** No `rig/placement_ledger.py`, no `rig/supervisor.py`;
 `web/state.py` carries no cumulative occupancy record. The only related code
@@ -84,12 +91,13 @@ in the repo is the Studio runner's per-step camera-thumbnail capture
 the Markdown report, not vision-based verification — plus an optional
 `vision_verification` field read defensively in
 `web/src/components/RunnerPanel.tsx` that the Python backend never populates.
-That is the "single-shot half" this design supersedes (see below); it is not
-a partial implementation of the ledger/supervisor design.
+That field is **not** dead weight: the whole client path behind it (runner
+event → log row → run-report column) is already wired, so populating it from
+Python is the cheapest high-value step in the plan.
 
-The full design — every decision, the milestone breakdown and the known
-limits — is kept at [Appendix A](#appendix-a--placement-supervision-full-design)
-rather than left to rot in a separate plan file.
+Appendix A is kept below for its reasoning — the decisions and why they were
+made — but the milestones, the file list and the known limits now live in the
+plan file.
 
 ### 1.5 Colour-aware planning and next-block guidance — built in Studio
 
@@ -237,11 +245,19 @@ single-cell fit will always produce *a* number.
 Lay blocks on the board by hand. Press a button. The console reads the board and
 hands you a Studio model of it.
 
-Every piece exists: `detect_aligned_blocks` finds the blocks,
-`block_outline._lattice_filter` labels each one with an integer cell, and
+Nearly every piece exists: `detect_aligned_blocks` finds the blocks,
+`block_outline._lattice_filter` rejects the ones that are not on the board's
+lattice, `WorkspaceMap.cell_at` turns a pixel centre into an integer cell, and
 `studio/rigmodel.ts` already serialises a `rigmodel/1` document that the library,
 the compiler, the validator and the runner all consume. The feature is a
 translation between two formats the repo already speaks.
+
+**One correction to earlier drafts:** `_lattice_filter` does *not* hand you a
+labelled cell — it solves indices relative to `detections[0]` purely to decide
+keep/reject and then discards them. The pixel → cell step is the consumer's own
+work, via `WorkspaceMap.cell_at`, which also returns `None` for a block sitting
+in a gap between sites. See
+[features/placement-supervision.md §2a](features/placement-supervision.md#2a-three-things-the-earlier-designs-got-wrong).
 
 It inverts the project's whole interaction model — the camera stops being a
 monitor and becomes an **input device** — and it demonstrates the vision
@@ -296,13 +312,15 @@ index; the files hold the decisions.
 
 | # | Feature | Status | Difficulty |
 | --- | --- | --- | --- |
+| 4.0 | [Placement supervision](features/placement-supervision.md) — the memory, the observer, the classifier. **The build plan for §1.4**, merging Appendix A and Stage 15 §3 | not started — designed; **build M1 first, everything below needs it** | 4 / 5 |
 | 4.1 | [Running-bond grid shift](features/running-bond-grid-shift.md) — half-pitch course offsets, Studio + Twin + compiler + `POST /api/shift` (was "grid shift in the twin", now folded in) | **built**; firmware `shiftX`/`shiftY` unchanged | 3 / 5 |
-| 4.2 | [Stage 15 — between-job placement correction](features/stage-15-placement-correction.md) — find the one outlier block after a job parks, pick it up and re-place it, re-verify; never touches the grid | not started — design agreed; supersedes 4.4 | 3 / 5 |
-| 4.3 | [Removed-block compensation](features/removed-block-compensation.md) | not started — extends §1.4/Appendix A from idle-time to mid-program | 5 / 5 |
+| 4.2 | [Stage 15 — between-job placement correction](features/stage-15-placement-correction.md) — find the one outlier block after a job parks, pick it up and re-place it, re-verify; never touches the grid | not started — design agreed; supersedes 4.4; its as-built memory is 4.0 M1 | 3 / 5 |
+| 4.3 | [Removed-block compensation](features/removed-block-compensation.md) | not started — extends 4.0 from idle-time to mid-program | 5 / 5 |
 | 4.4 | [Between-build error calibration](features/between-build-error-calibration.md) — population-wide drift → a correction written to the grid origin | **DEFERRED (2026-09-06)** — superseded by 4.2 for outliers; measurement half exists in the code. Un-defer only if §3.1 shows a *systematic* bias, which per-block repair cannot fix | 4 / 5 |
+| 4.5 | [Camera parallax and levels](features/camera-parallax-and-levels.md) — a stacked block is reported displaced away from the camera, predictably | **future work** — ignored by 4.0 v1, at the cost of a hard detection ceiling at level 3 | 2 / 5 |
 
-4.2's as-built memory and 4.3 both need a server-side placement record
-(Appendix A's `PlacementLedger` / Stage 15 §3). Build it once.
+4.0's M1 memory is the shared substrate: 4.2, 4.3 and (if un-deferred) 4.4 all
+need a server-side record of what was placed. **Build it once**, in 4.0.
 
 ---
 
@@ -339,7 +357,8 @@ board should look like**, **knowing when you are allowed to look**, and
 
 | Piece | State |
 | --- | --- |
-| per-frame detections labelled to lattice cells | **exists** — `block_outline._lattice_filter`, `LATTICE_SNAP` 0.34 cells |
+| per-frame detections, off-lattice ones rejected | **exists** — `block_outline._lattice_filter`, `LATTICE_SNAP` 0.34 cells |
+| per-frame detections **labelled with an integer cell** | **does not exist** — `_lattice_filter` discards the indices it solves. Pixel → cell is `WorkspaceMap.cell_at`, and it is the supervisor's own work. See [features/placement-supervision.md §2a](features/placement-supervision.md#2a-three-things-the-earlier-designs-got-wrong) |
 | cell ⇄ pixel geometry | **exists** — `WorkspaceMap`, `rig/workspace.py` |
 | 10 Hz analysis off the live feed | **exists** — `ConsolePipeline`, `ProcessedFrame.detections` |
 | per-build text log | **exists** — `rig/build_log.py` (a stopwatch, not a state model) |

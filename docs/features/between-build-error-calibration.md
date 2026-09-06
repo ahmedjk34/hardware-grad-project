@@ -5,7 +5,7 @@ per-stage placement checkers instead — [stage-15-placement-correction.md](stag
 and the individual stage checkers — which judge and physically repair *one
 outlier block at a time* rather than estimating a population-wide drift and
 writing a calibration number back. Read
-[§0a — Why this is deferred, and when to un-defer it](#0a--why-this-is-deferred-and-when-to-un-defer-it)
+[§0a — Why this is deferred, and when to un-defer it](#0a-why-this-is-deferred-and-when-to-un-defer-it)
 before assuming the per-stage checkers make this redundant: **they cover
 outliers, not systematic bias.**
 
@@ -58,7 +58,7 @@ are chasing actually constant?"* — a constant offset across the whole board is
 exactly what a per-block repair cannot fix and what this feature was for.
 
 **The trigger to un-defer.**
-[feature-ideas.md §3.1 — placement repeatability and backlash](../feature-ideas.md#31-placement-repeatability-and-backlash--highest-value-per-line)
+[feature-ideas.md §3.1 — placement repeatability and backlash](../feature-ideas.md#31-placement-repeatability-and-backlash---highest-value-per-line)
 is the measurement that says whether a systematic bias exists. If 3.1 comes
 back showing a consistent directional offset (rather than symmetric scatter
 about the cell centre), this feature comes back off the shelf and **Approach A
@@ -77,7 +77,8 @@ placement-correction code.
 | The fit itself: homography / affine+curvature over placed blocks | **exists** | [python/vision/block_grid.py](../../python/vision/block_grid.py), `fit_block_grid`, `analyse_dense_lattice` |
 | Per-cell residuals in pixels | **exists** | `BlockGridReport.residuals`, `mean_residual_px`, `worst_cell` ([block_grid.py:171](../../python/vision/block_grid.py#L171)) |
 | Honest error of a *saved* map | **exists** | `workspace_map_error()` — **1.25 px mean / 2.07 px max = 0.27 cm** on the reference board ([block_grid.py:1054](../../python/vision/block_grid.py#L1054)) |
-| Per-frame detections labelled to lattice cells at 10 Hz | **exists** | `block_outline.detect_aligned_blocks`, `ProcessedFrame.detections` |
+| Per-frame detections at 10 Hz, off-lattice ones rejected | **exists** | `block_outline.detect_aligned_blocks`, `ProcessedFrame.detections` |
+| **detections labelled with an integer cell** | **does not exist** — earlier drafts of this table said it did. `_lattice_filter` solves indices *relative to `detections[0]`* only to decide keep/reject, then discards them; a `BlockDetection` carries a pixel centre and no cell. Pixel → cell is `WorkspaceMap.cell_at`, and it is the **consumer's** job. See [placement-supervision.md §2a](placement-supervision.md#2a-three-things-the-earlier-designs-got-wrong) |
 | Cell ⇄ pixel geometry | **exists** | `WorkspaceMap`, [python/rig/workspace.py](../../python/rig/workspace.py) |
 | Web routes for a calibration run | **exists** | `/api/calibration/block/{start,step,undo,cancel,save,status}` ([routes_calibration.py:179](../../python/web/routes_calibration.py#L179)) |
 | `error_offset_x_cm` / `_y_cm` per mode, folded into the lattice origin | **exists** | [rig.json](../../config/rig.json), [grid.py:353](../../python/rig/grid.py#L353), `GRID_ERROR_OFFSET_X_CM[]` in the sketch |
