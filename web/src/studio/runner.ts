@@ -114,6 +114,7 @@ export type RunEvent =
   | { type: "stop-after"; now: number }
   | { type: "continue"; now: number }
   | { type: "end"; now: number }
+  | { type: "reset"; now: number }
   | { type: "socket"; connected: boolean; now: number }
   | { type: "server-build-state"; buildState: ServerBuildState; now: number }
   | { type: "transport-error"; reason: string; now: number };
@@ -260,6 +261,21 @@ export function step(state: RunState, event: RunEvent): Turn {
       buildState: state.buildState,
     };
     return advance(next, event.now);
+  }
+
+  if (event.type === "reset") {
+    // A purely client-side clear: drop a finished or stuck run so another
+    // library build can be chosen without reloading the page. It issues no
+    // effect, so it sends nothing to the rig. It deliberately will NOT clear a
+    // locked session (that still needs a human and a service restart) and will
+    // NOT abandon a block in flight — Mega motion cannot be interrupted anyway.
+    if (state.inFlight || state.phase === "locked" || state.buildState === "LOCKED") {
+      return noEffects(state);
+    }
+    return noEffects({
+      ...initialRun(),
+      style: state.style, connected: state.connected, buildState: state.buildState,
+    });
   }
 
   if (event.type === "socket") {

@@ -190,6 +190,33 @@ describe("runner reducer", () => {
     expect(runTiming(turn.state, 3_100, 2.115, 16)).toEqual({ elapsedSeconds: 3, etaSeconds: 20.23 });
   });
 
+  it("CLEAR resets a finished or paused run to idle without touching the rig", () => {
+    let turn = start([build("a", 3, 2, 1)]);
+    turn = dispatch(turn.state, { type: "selected", command: "B 3 2 1", now: 110 });
+    turn = dispatch(turn.state, { type: "verified", actual: "B 3 2 1", now: 111 });
+    turn = dispatch(turn.state, { type: "build-settled", result: "rejected", reason: "no", now: 711 });
+    turn = dispatch(turn.state, { type: "end", now: 712 });
+    expect(turn.state.phase).toBe("done");
+
+    const cleared = dispatch(turn.state, { type: "reset", now: 800 });
+    expect(cleared.state.phase).toBe("idle");
+    expect(cleared.state.program).toEqual([]);
+    expect(cleared.state.log).toEqual([]);
+    expect(cleared.effects).toEqual([]);
+  });
+
+  it("CLEAR refuses while a block is in flight or the session is locked", () => {
+    let turn = start([build("a", 3, 2, 1)]);
+    turn = dispatch(turn.state, { type: "selected", command: "B 3 2 1", now: 110 });
+    turn = dispatch(turn.state, { type: "verified", actual: "B 3 2 1", now: 111 });
+    expect(turn.state.inFlight).toBe(true);
+    expect(dispatch(turn.state, { type: "reset", now: 200 }).state).toBe(turn.state);
+
+    turn = dispatch(turn.state, { type: "build-settled", result: "aborted", reason: "claw unknown", now: 711 });
+    expect(turn.state.phase).toBe("locked");
+    expect(dispatch(turn.state, { type: "reset", now: 800 }).state).toBe(turn.state);
+  });
+
   it("marks the reached op and every untouched op read-only after an abort", () => {
     let turn = start([build("a", 3, 2, 0), build("b", 3, 2, 1)], "run");
     turn = dispatch(turn.state, { type: "selected", command: "B 3 2 0", now: 110 });
@@ -213,6 +240,7 @@ const candidateEvents: RunEvent[] = [
   { type: "stop-after", now: 7 },
   { type: "continue", now: 8 },
   { type: "end", now: 8 },
+  { type: "reset", now: 8 },
   { type: "socket", connected: false, now: 9 },
   { type: "socket", connected: true, now: 10 },
   { type: "server-build-state", buildState: "RUNNING", now: 11 },

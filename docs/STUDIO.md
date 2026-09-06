@@ -1122,6 +1122,16 @@ rig cannot be interrupted`. Pressing it changes the disabled control to
 `STOPPING AFTER THIS BLOCK`; it does not alter the current effect. DRY RUN keeps
 `DRY RUN — no serial traffic` in `--motion` for the full session.
 
+Once a run has reached a terminal or paused phase, the header shows a `CLEAR`
+button. It dispatches a `reset` event — a purely client-side turn that emits no
+effect and returns the reducer to `idle`, so another library build can be
+chosen and started without reloading the page. It is disabled while a block is
+in flight (Mega motion cannot be interrupted) and is not shown at all while the
+runner phase or the server's `build_state` is `LOCKED`: an aborted session
+still needs a human and a service restart, exactly as before. The button
+appears in both places the panel is mounted — the console at `#/` and building
+mode at `#/build`.
+
 Mode ops always stop at `awaiting-confirm` and render the X/Y homing warning
 before the driver may call `/api/mode`, in all three styles. Amber is used for
 recoverable rejection/staleness and the dry label; red is reserved for command
@@ -1281,6 +1291,18 @@ first in the diff.
 
 Newest first. One entry per landed change; note anything that contradicts the
 plan or that a future reader could not infer.
+
+### `RunnerPanel` gains a `CLEAR` button
+
+`RunnerPanel`'s header shows a `CLEAR` button once a run reaches a terminal or
+paused phase. It dispatches a new `reset` reducer event: a client-only turn
+that emits no effect and returns the runner to `idle`, so an operator can pick
+and start another library build without reloading. It is disabled while a
+block is in flight and is withheld entirely while the runner phase or the
+server `build_state` is `LOCKED` — an aborted session still needs a service
+restart, and this is not a retry path. The panel is mounted on both the
+console (`#/`) and building mode (`#/build`), so the button appears in both.
+`candidateEvents` in the safety walk gained `reset`, plus two unit tests.
 
 ### `virtcal` — derive one grid mode's workspace map from the other's
 

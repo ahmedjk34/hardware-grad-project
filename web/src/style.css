@@ -1747,6 +1747,7 @@ svg.grid-overlay.selectable { cursor: crosshair; }
 }
 .runner.is-dry { border-color: var(--motion); }
 .runner-head { display: flex; align-items: center; gap: var(--s2); }
+.runner-clear { flex: none; padding: 2px var(--s2); font: var(--t-xs); letter-spacing: .06em; }
 .runner-count {
   color: var(--text-dim);
   font: var(--t-xs);

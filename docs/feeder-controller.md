@@ -32,7 +32,7 @@ One `FEED` request runs this sequence:
 6. Start the belt forward at that confirmation, wait 1.25 seconds, then close
    the container gate.
 7. Wait up to 15 seconds for the **stage sensor** at the pickup point to see
-   the block. Keep the belt moving for 0.25 seconds after detection, then stop
+   the block. Keep the belt moving for 0.20 seconds after detection, then stop
    it so the block settles in the pickup area.
 8. Move the alignment servo briefly to nudge the block square, return it to
    rest after one second, and read the stage sensor again. Every deliberate
@@ -225,7 +225,7 @@ precision motion control.
 | `waiting_for_exit` | stopped | sampled every 100 ms | — | block detected or 10 s timeout |
 | `waiting_to_close_after_exit` | running forward | — | — | 1.25 s elapsed, then close the container |
 | `moving_to_stage` | running forward | — | sampled every 100 ms | block detected or 15 s timeout |
-| `stage_belt_settling` | running forward | — | — | 0.25 s elapsed, then stop the belt |
+| `stage_belt_settling` | running forward | — | — | 0.20 s elapsed, then stop the belt |
 | `aligning` | stopped | — | — | 1 s elapsed |
 | `verifying_stage` | stopped | — | read once after settling | block ready or resume belt |
 | `block_ready` | stopped | — | — | terminal success |
