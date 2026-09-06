@@ -20,7 +20,7 @@ from rig.link import Rig, RigError  # noqa: E402
 
 
 CFG = {"feeder": {"port": "mock", "baud": 9600, "firmware": "belt_v1",
-                   "protocol": 2}}
+                   "protocol": 3}}
 
 
 def test_committed_config_and_uno_firmware_identity_stay_paired():
@@ -37,7 +37,7 @@ def test_committed_config_and_uno_firmware_identity_stay_paired():
 
 
 @pytest.mark.parametrize(("line", "request_id", "kind", "field"), [
-    ("@0 READY firmware=belt_v1 protocol=2 board=uno", 0, "READY", ("board", "uno")),
+    ("@0 READY firmware=belt_v1 protocol=3 board=uno", 0, "READY", ("board", "uno")),
     ("@42 RECV cmd=FEED", 42, "RECV", ("cmd", "FEED")),
     ("@42 ACK cmd=FEED accepted=1", 42, "ACK", ("accepted", "1")),
     ("@42 STATE state=moving_to_stage", 42, "STATE", ("state", "moving_to_stage")),
@@ -152,7 +152,7 @@ def test_ready_during_feed_is_unknown_reset():
 def test_unexpected_ready_while_idle_is_reported_and_poisoned():
     errors = []
     feeder, board = connected(on_error=errors.append)
-    board._emit("@0 READY firmware=belt_v1 protocol=2 board=uno")
+    board._emit("@0 READY firmware=belt_v1 protocol=3 board=uno")
     deadline = time.monotonic() + 1
     while not errors and time.monotonic() < deadline:
         time.sleep(0.005)

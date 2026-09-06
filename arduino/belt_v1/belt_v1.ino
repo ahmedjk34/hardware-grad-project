@@ -3,7 +3,7 @@
 
   Wiring
     A4988 belt:       DIR 2, STEP 3 (ENABLE tied to GND)
-    Exit HC-SR04:      TRIG 4, ECHO 5
+    Exit IR sensor:    OUT 4 (VCC and GND to the sensor supply)
     Alignment servo:   6
     Stage IR sensor:   OUT 8 (VCC and GND to the sensor supply)
     Container servo:   12
@@ -24,13 +24,15 @@
 
 const uint8_t DIR_PIN = 2;
 const uint8_t STEP_PIN = 3;
-const uint8_t EXIT_TRIG_PIN = 4;
-const uint8_t EXIT_ECHO_PIN = 5;
+const uint8_t EXIT_IR_PIN = 4;
 const uint8_t ALIGN_SERVO_PIN = 6;
 const uint8_t STAGE_IR_PIN = 8;
 // Most LM393 IR obstacle sensors drive OUT LOW when an object is detected.
 // Change this to HIGH if the installed sensor has inverted output logic.
 const uint8_t STAGE_IR_DETECTED_LEVEL = LOW;
+// Most LM393 IR obstacle sensors drive OUT LOW when an object is detected.
+// Change this to HIGH if the installed exit sensor has inverted output logic.
+const uint8_t EXIT_IR_DETECTED_LEVEL = LOW;
 const uint8_t CONTAINER_SERVO_PIN = 12;
 
 const uint8_t BELT_FORWARD_DIRECTION_LEVEL = HIGH;
@@ -41,19 +43,23 @@ const uint8_t CONTAINER_OPEN_ANGLE = 160;
 const uint8_t ALIGN_REST_ANGLE = 90;
 const uint8_t ALIGN_NUDGE_ANGLE = 120;
 
-const unsigned long CONTAINER_STAGE_DELAY_MS = 500;
-const unsigned long CLOSE_SETTLE_MS = 500;
-const unsigned long ALIGN_SETTLE_MS = 350;
+// Keep one second between the commanded positions of either servo.
+const unsigned long SERVO_MOVEMENT_DELAY_MS = 1000;
+const unsigned long CONTAINER_STAGE_DELAY_MS = SERVO_MOVEMENT_DELAY_MS;
+const unsigned long CLOSE_SETTLE_MS = SERVO_MOVEMENT_DELAY_MS;
+const unsigned long ALIGN_SETTLE_MS = SERVO_MOVEMENT_DELAY_MS;
+// Every FEED/RUN starts by advancing the belt before the container is closed.
+const unsigned long PRE_CLOSE_BELT_RUN_MS = 1000;
 const unsigned long EXIT_TIMEOUT_MS = 10000;
 const unsigned long STAGE_TIMEOUT_MS = 15000;
 const unsigned long SENSOR_INTERVAL_MS = 100;
-const float DETECT_DISTANCE_CM = 10.0;
 
 Servo containerServo;
 Servo alignmentServo;
 
 enum FeedState {
   IDLE,
+  PRE_CLOSING_BELT_RUN,
   CLOSING,
   OPENING_STAGE_1,
   OPENING_STAGE_2,
@@ -74,7 +80,7 @@ bool beltRunning = false;
 bool containerOpen = false;
 int motorSpeed = 325;
 unsigned long stepIntervalUs = 1000000UL / 325;
-float exitDistanceCm = -1.0;
+bool exitDetected = false;
 
 char commandBuffer[48];
 uint8_t commandLength = 0;
@@ -84,21 +90,11 @@ bool elapsed(unsigned long since, unsigned long duration) {
   return millis() - since >= duration;
 }
 
-float readDistanceCm(uint8_t trigPin, uint8_t echoPin) {
-  digitalWrite(trigPin, LOW);
-  delayMicroseconds(2);
-  digitalWrite(trigPin, HIGH);
-  delayMicroseconds(10);
-  digitalWrite(trigPin, LOW);
-  unsigned long duration = pulseIn(echoPin, HIGH, 30000);
-  return duration == 0 ? -1.0 : duration * 0.0343f / 2.0f;
-}
-
-bool detected(float distanceCm) {
-  return distanceCm >= 0.0f && distanceCm < DETECT_DISTANCE_CM;
-}
-
 const __FlashStringHelper *stateName();
+
+bool exitSensorDetected() {
+  return digitalRead(EXIT_IR_PIN) == EXIT_IR_DETECTED_LEVEL;
+}
 
 bool stageDetected() {
   return digitalRead(STAGE_IR_PIN) == STAGE_IR_DETECTED_LEVEL;
@@ -120,15 +116,12 @@ void stateChanged() {
 }
 
 void sensorReportFor(unsigned long id, const __FlashStringHelper *sensor,
-                     float distanceCm) {
+                     bool detectedNow) {
   protocolPrefixFor(id);
   Serial.print(F(" SENSOR sensor="));
   Serial.print(sensor);
-  Serial.print(F(" distance_cm="));
-  if (distanceCm < 0.0f) Serial.print(F("no_echo"));
-  else Serial.print(distanceCm, 1);
   Serial.print(F(" detected="));
-  Serial.println(detected(distanceCm) ? 1 : 0);
+  Serial.println(detectedNow ? 1 : 0);
 }
 
 void stageSensorReportFor(unsigned long id, bool detectedNow) {
@@ -147,14 +140,6 @@ void event(const __FlashStringHelper *phase) {
   protocolPrefix();
   Serial.print(F(" EVENT phase="));
   Serial.println(phase);
-}
-
-void eventDistance(const __FlashStringHelper *phase, float distanceCm) {
-  protocolPrefix();
-  Serial.print(F(" EVENT phase="));
-  Serial.print(phase);
-  Serial.print(F(" distance_cm="));
-  Serial.println(distanceCm, 1);
 }
 
 void success() {
@@ -235,7 +220,6 @@ void startFeed(unsigned long id) {
   protocolPrefix();
   Serial.println(F(" RECV cmd=FEED"));
   stopBelt();
-  closeContainer();
   restAligner();
   const bool stagePresent = stageDetected();
   stageSensorReportFor(commandId, stagePresent);
@@ -247,10 +231,10 @@ void startFeed(unsigned long id) {
   protocolPrefix();
   Serial.println(F(" ACK cmd=FEED accepted=1"));
   cycleActive = true;
-  closeContainer();
-  restAligner();
-  setState(CLOSING);
-  event(F("container_closing"));
+  // Advance the belt for one second before closing the gate, as requested.
+  startBelt(BELT_FORWARD_DIRECTION_LEVEL);
+  setState(PRE_CLOSING_BELT_RUN);
+  event(F("belt_running_before_container_close"));
 }
 
 void fault(const __FlashStringHelper *reason) {
@@ -266,6 +250,14 @@ void updateFeedCycle() {
   if (!cycleActive) return;
 
   switch (feedState) {
+    case PRE_CLOSING_BELT_RUN:
+      if (elapsed(stateStartedAtMs, PRE_CLOSE_BELT_RUN_MS)) {
+        stopBelt();
+        closeContainer();
+        setState(CLOSING);
+        event(F("container_closing_after_belt_run"));
+      }
+      break;
     case CLOSING:
       if (elapsed(stateStartedAtMs, CLOSE_SETTLE_MS)) {
         openContainerStage1();
@@ -329,15 +321,15 @@ void updateSensors() {
   lastSensorReadMs = millis();
 
   if (feedState == WAITING_FOR_EXIT) {
-    exitDistanceCm = readDistanceCm(EXIT_TRIG_PIN, EXIT_ECHO_PIN);
-    if (detected(exitDistanceCm)) {
+    exitDetected = exitSensorDetected();
+    if (exitDetected) {
       // One block has left the hopper.  Shut the gate before transporting it
       // so a second block cannot follow it onto the belt.
       closeContainer();
       startBelt(BELT_FORWARD_DIRECTION_LEVEL);
       setState(MOVING_TO_STAGE);
-      sensorReportFor(commandId, F("exit"), exitDistanceCm);
-      eventDistance(F("exit_detected_container_closed_belt_running"), exitDistanceCm);
+      sensorReportFor(commandId, F("exit"), exitDetected);
+      event(F("exit_detected_container_closed_belt_running"));
     }
   } else if (feedState == MOVING_TO_STAGE) {
     if (stageDetected()) {
@@ -357,7 +349,8 @@ void setMotorSpeed(long speed) {
 
 const __FlashStringHelper *stateName() {
   switch (feedState) {
-    case IDLE: return F("idle"); case CLOSING: return F("closing");
+    case IDLE: return F("idle"); case PRE_CLOSING_BELT_RUN: return F("pre_closing_belt_run");
+    case CLOSING: return F("closing");
     case OPENING_STAGE_1: return F("opening_stage_1"); case OPENING_STAGE_2: return F("opening_stage_2");
     case WAITING_FOR_EXIT: return F("waiting_for_exit"); case MOVING_TO_STAGE: return F("moving_to_stage");
     case ALIGNING: return F("aligning"); case VERIFYING_STAGE: return F("verifying_stage");
@@ -366,14 +359,14 @@ const __FlashStringHelper *stateName() {
 }
 
 void printStatus() {
-  exitDistanceCm = readDistanceCm(EXIT_TRIG_PIN, EXIT_ECHO_PIN);
+  exitDetected = exitSensorDetected();
   protocolPrefixFor(0);
   Serial.print(F(" STATUS state=")); Serial.print(stateName());
   Serial.print(F(" active=")); Serial.print(cycleActive ? 1 : 0);
   Serial.print(F(" belt=")); Serial.print(beltRunning ? F("running") : F("stopped"));
   Serial.print(F(" container=")); Serial.print(containerOpen ? F("open") : F("closed"));
   Serial.print(F(" speed_steps_s=")); Serial.println(motorSpeed);
-  sensorReportFor(0, F("exit"), exitDistanceCm);
+  sensorReportFor(0, F("exit"), exitDetected);
   stageSensorReportFor(0, stageDetected());
 }
 
@@ -469,13 +462,13 @@ void readSerialCommands() {
 
 void setup() {
   pinMode(DIR_PIN, OUTPUT); pinMode(STEP_PIN, OUTPUT);
-  pinMode(EXIT_TRIG_PIN, OUTPUT); pinMode(EXIT_ECHO_PIN, INPUT);
+  pinMode(EXIT_IR_PIN, INPUT);
   pinMode(STAGE_IR_PIN, INPUT);
-  digitalWrite(STEP_PIN, LOW); digitalWrite(EXIT_TRIG_PIN, LOW);
+  digitalWrite(STEP_PIN, LOW);
   containerServo.attach(CONTAINER_SERVO_PIN); alignmentServo.attach(ALIGN_SERVO_PIN);
   closeContainer(); restAligner();
   Serial.begin(9600);
-  Serial.println(F("@0 READY firmware=belt_v1 protocol=2 board=uno"));
+  Serial.println(F("@0 READY firmware=belt_v1 protocol=3 board=uno"));
   printHelp();
 }
 

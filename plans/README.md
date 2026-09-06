@@ -19,6 +19,7 @@ unchanged, since it was never a plan to begin with.
 | The `@`-line serial protocol | [docs/ack-protocol.md](../docs/ack-protocol.md) |
 | Lens/fisheye tuning, grid capture calibration | [docs/camera-fisheye-tuning-guide.md](../docs/camera-fisheye-tuning-guide.md), [docs/grid-capture-calibration-playbook.md](../docs/grid-capture-calibration-playbook.md) |
 | Designed but not yet built (placement supervision, the Studio's "wow pass") | [docs/feature-ideas.md](../docs/feature-ideas.md) |
+| A full design for one unbuilt feature (grid shift in the twin, between-build error calibration, removed-block compensation) | [docs/features/](../docs/features/) |
 
 `archive/` is untouched: two already-superseded early drafts, kept for the
 detail they hold that the docs above don't repeat (exact firmware strings,

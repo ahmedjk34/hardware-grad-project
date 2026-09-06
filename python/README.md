@@ -34,7 +34,7 @@ python/
 │   ├── build_controller.py     selection/confirmation outcome safety state
 │   ├── build_job.py            runs one build off the UI thread, one at a time
 │   ├── link.py                 independent Mega serial client
-│   ├── feeder.py               independent protocol-2 Uno serial client
+│   ├── feeder.py               independent protocol-3 Uno serial client
 │   ├── orchestrator.py         strict Uno terminal success → Mega B handoff
 │   ├── mock_feeder.py          deterministic pyserial-shaped feeder fake
 │   └── build_log.py            append-only logs/{build,serial}.log for a web run

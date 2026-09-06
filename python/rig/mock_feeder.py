@@ -1,4 +1,4 @@
-"""Pyserial-shaped protocol-2 Uno simulator used by feeder/web tests."""
+"""Pyserial-shaped protocol-3 Uno simulator used by feeder/web tests."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ class MockFeeder:
         self._reset = False
         self._cancel = threading.Event()
         self._active_id: int | None = None
-        self._rx.put(b"@0 READY firmware=belt_v1 protocol=2 board=uno\n")
+        self._rx.put(b"@0 READY firmware=belt_v1 protocol=3 board=uno\n")
 
     @property
     def in_waiting(self):
@@ -60,8 +60,8 @@ class MockFeeder:
     def _finish_feed(self, request_id: int):
         self._emit(f"@{request_id} RECV cmd=FEED")
         self._emit(f"@{request_id} ACK cmd=FEED accepted=1")
-        for state in ("closing", "waiting_for_exit", "moving_to_stage",
-                      "aligning", "verifying_stage"):
+        for state in ("pre_closing_belt_run", "closing", "waiting_for_exit",
+                      "moving_to_stage", "aligning", "verifying_stage"):
             if self._cancel.wait(self.feed_seconds / 6):
                 self._emit(f"@{request_id} STATE state=idle")
                 self._emit(f"@{request_id} ERROR state=idle reason=cancelled")
@@ -73,7 +73,7 @@ class MockFeeder:
             return
         if self._reset:
             self._reset = False
-            self._emit("@0 READY firmware=belt_v1 protocol=2 board=uno")
+            self._emit("@0 READY firmware=belt_v1 protocol=3 board=uno")
             return
         if self._failure:
             reason, self._failure = self._failure, None
@@ -92,4 +92,3 @@ class MockFeeder:
 
     def close(self):
         self.is_open = False
-

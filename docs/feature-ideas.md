@@ -130,6 +130,176 @@ rules do not change — one command at a time, never queued.
 
 ---
 
+## Tier 3 — the camera as an instrument
+
+Every idea above uses the camera the way it is used today: as a **monitor**. It
+watches the board, it calibrates the grid against printed sheets or placed
+blocks, and it draws overlays. Tier 1's supervision and plan-projection are more
+of the same lens — the camera looking at *blocks*.
+
+This tier is the other use, and nothing in the repo does it yet: **the camera as
+the only measuring device on the rig, pointed at the machine itself.**
+
+The reason it earns a tier is embarrassing and easy to fix. Almost every physical
+number in this project is a guess, and — to the codebase's credit — each one says
+so out loud:
+
+| Number | What it says about itself | Where |
+| --- | --- | --- |
+| `BLOCK_CYCLE_SECONDS = 2.115` | five `--mock` placements; *"rehearsal transport, not the physical arm"* | [studio/settings.ts](../web/src/studio/settings.ts) |
+| `LATCH_HOMING_SECONDS = 16` | *"A guess until M7 measures it"* | same |
+| `CLAW_MARGIN_MM = 8` | *"A guess about the claw's width. Measure the claw and change this."* | same |
+| `SUPPORT_RATIO = 0.55` | *"Nobody has measured this rig."* | same |
+| `SETTLE_SECONDS = 1.5` | *"belt-and-braces wait on top of the firmware's own confirmation"* | [rig/block_calibration.py](../python/rig/block_calibration.py) |
+| camera height `H` | the one extrinsic `block_levels` needs, and it is a tape measurement | [vision/block_levels.py](../python/vision/block_levels.py) |
+
+A camera is already pointed at the workspace at 10 Hz. **Every one of those is
+something it could measure instead.** That is the cheapest credibility available
+in the project, and it is the difference between a report that says "the system
+places blocks" and one that says "placement repeatability is ±0.4 mm, measured
+over sixty placements".
+
+Everything in this tier is **software only** — no firmware change, no new
+detector, no second camera, no extra frames beyond the ones `ConsolePipeline`
+already produces.
+
+### 3.1 Placement repeatability and backlash  ★ highest value per line
+
+Place the same cell repeatedly, alternating the approach — once from a far cell,
+once from a near cell — and record the observed centre each time through the
+`WorkspaceMap`. Two numbers fall out that the project currently cannot state:
+
+- **repeatability**, the spread of the observed centres in millimetres;
+- **directional backlash**, whether the two approach directions cluster apart,
+  and by how much on each axis.
+
+Nothing new is built. `detect_aligned_blocks` finds the block,
+`WorkspaceMap.pixel_at` converts, and `BlockCalibrationRun` already knows how to
+issue a placement, wait for the park and grab a settled frame. The whole feature
+is a loop and a standard deviation.
+
+Two things make it worth doing before anything else in this file:
+
+- It is the **noise floor for
+  [between-build error calibration](features/between-build-error-calibration.md)**.
+  That design deadbands corrections at 0.3 cm because that is the workspace map's
+  own flattening error; the machine's *own* scatter is a separate unknown, and
+  correcting a drift smaller than it is chasing noise.
+- It is a **Results-section number**, and the report has very few.
+
+Do not skip the alternating approach. A repeatability figure measured from one
+direction hides backlash completely, which is exactly the error a build program
+suffers from — every `B` arrives at its cell from wherever the last one left the
+gantry.
+
+**Difficulty: 2 / 5.**
+
+### 3.2 The rig measures its own camera height
+
+[block_levels.py](../python/vision/block_levels.py) derives a block's height from
+the sliver of its vertical side that an overhead camera sees:
+
+```
+h = H · s / r_top
+```
+
+Neither focal length nor pixels-per-centimetre appears — they cancel. **The only
+extrinsic the module needs is `H`, the camera's height above the board**, and
+today that is a tape measurement. Which is why the module's stack *ordering* is
+solid while its level *numbers* are not trustworthy.
+
+The rig can solve for `H` itself, using the one thing it is good at — putting
+blocks in known places:
+
+1. place a block at a cell (level 0), measure `s` and `r_top`;
+2. place a second block on top of it (level 1) at the same cell;
+3. `h` is now known exactly: one `BLOCK_HEIGHT_CM`, 1.5 cm, the firmware's own
+   constant;
+4. invert (1) for `H`, and repeat at three or four cells at different radii to
+   check it is consistent rather than fitted to one spot.
+
+A camera extrinsic, measured by the machine, from geometry that is already
+written and already tested. It upgrades an existing module from "which block is
+on top" to "which block is on top, and at what level", which is the missing half
+of every level-aware feature in this document.
+
+**Difficulty: 3 / 5.** The traps are that `H` must be to the *ground plane* the
+`WorkspaceMap` is fitted to (not the table, not the frame rail), and that the
+consistency check across radii is the part that catches a wrong answer — a
+single-cell fit will always produce *a* number.
+
+### 3.3 Build by photograph  ★ the best demo in this file
+
+Lay blocks on the board by hand. Press a button. The console reads the board and
+hands you a Studio model of it.
+
+Every piece exists: `detect_aligned_blocks` finds the blocks,
+`block_outline._lattice_filter` labels each one with an integer cell, and
+`studio/rigmodel.ts` already serialises a `rigmodel/1` document that the library,
+the compiler, the validator and the runner all consume. The feature is a
+translation between two formats the repo already speaks.
+
+It inverts the project's whole interaction model — the camera stops being a
+monitor and becomes an **input device** — and it demonstrates the vision
+pipeline and the motion pipeline in one gesture, to an examiner, without a word
+of explanation.
+
+State the limit on the button, not in a footnote: **single layer only.** The
+camera is above the board, a block at level 1 hides the one beneath it, and
+§A.1 D3 explains why that is structural rather than a bug. "Copy this layer" is
+an honest label; "copy this structure" is not.
+
+**Difficulty: 3 / 5**, and most of it is the honesty surface — what to do about a
+detection the lattice filter dropped, and how to show the operator what was read
+before it becomes a saved model.
+
+### 3.4 The rest
+
+Each of these is small, and each replaces a guessed constant or a silent failure
+with a measured number or a stated one.
+
+| # | Feature | What it fixes | Difficulty |
+| --- | --- | --- | --- |
+| 3.4.1 | **Feeder-empty detection** — watch cell `[0,0]` for a staged block before issuing `B` | [block_calibration.py](../python/rig/block_calibration.py) states outright that *there is no sensor that can tell an empty feeder from a failed grip*. This is that sensor, and it removes a whole class of confusing `rejected` results | 3 / 5 — `[0,0]` sits near the frame edge and the claw occludes it |
+| 3.4.2 | **Measured settle time** — frame-difference at 10 Hz after `PLACED` and find when the scene actually stops moving | Replaces `SETTLE_SECONDS = 1.5`, and probably shortens it. A second per placement across a six-cell calibration is real | 2 / 5 |
+| 3.4.3 | **Measured cycle and phase durations** — timestamp the firmware's `@n STEP` phases against camera-observed motion start/stop | Replaces `BLOCK_CYCLE_SECONDS` and `LATCH_HOMING_SECONDS` with numbers from the physical arm, which is exactly what both constants ask for | 2 / 5 |
+| 3.4.4 | **Soft presence interlock** — frame-difference energy over a threshold refuses to start the next build | The E-stop is not fitted (§2.12). This is not a substitute and must never be called one, but "something large is moving over the board, so I will not start" is honest and free — it reuses supervision's D4 quiet-window primitive exactly | 2 / 5 |
+| 3.4.5 | **Calibration-drift self-check** — on startup, re-measure the saved map's residual and report its age | Turns *"a saved map does not reach a running app by itself"* ([BLOCK-VISION §4](BLOCK-VISION.md)) into something the console says before a demo rather than something an operator discovers during one. Feeds §2.4 | 2 / 5 |
+| 3.4.6 | **Lighting-quality guard** — workspace contrast, clipped-saturation fraction, detections against expected | Detection degrades silently when the light changes; the colour work already documents veiling glare as the limiting factor. Saying *"the light changed since calibration"* beats finding fewer blocks and not knowing why | 2 / 5 |
+| 3.4.7 | **Labelled frame dataset** — bank the frames every calibration run already produces, with their ground-truth cells | Detection accuracy is currently quoted as 29/29 on two reference boards. A banked set turns that into a measured rate over hundreds of frames, and gives `mock_camera` real material | 2 / 5 |
+
+### 3.5 The one answer this tier cannot give
+
+Every feature above is level-blind, because the camera is above the board and
+that is geometry, not effort. `block_levels` recovers heights from side slivers
+and is proud, correctly, of doing it *"from software alone — no second camera"* —
+but it cannot see a block lifted off the **top** of a stack, and neither can
+supervision (§A.1 D3), and neither can build-by-photo.
+
+The only real fix is a **second, side-on camera**, and the Pi 5 has the port for
+it. It is out of scope for a software tier and expensive everywhere — a mount, a
+second calibration, a second geometry, and double the pipeline cost on a Pi that
+is already timed in [BLOCK-VISION §2](BLOCK-VISION.md). Named here so the limit
+has a known answer, and so nobody proposes it as if it were cheap.
+
+---
+
+## Tier 4 — designed in full, in their own files
+
+Three ideas were audited against the repo in detail and given a design document
+each under [features/](features/). They are listed here so this catalogue stays
+the single index; the files hold the decisions.
+
+| # | Feature | Status | Difficulty |
+| --- | --- | --- | --- |
+| 4.1 | [Grid shift in the twin](features/grid-shift-in-the-twin.md) | partial — every coordinate function already takes a shift; the twin never passes one | 2–3 / 5 |
+| 4.2 | [Between-build error calibration](features/between-build-error-calibration.md) | partial — the measurement exists, nothing feeds it back to a knob | 4 / 5 |
+| 4.3 | [Removed-block compensation](features/removed-block-compensation.md) | not started — extends §1.4/Appendix A from idle-time to mid-program | 5 / 5 |
+
+4.2 and 4.3 both need Appendix A's `PlacementLedger`. Build it once.
+
+---
+
 ## Deliberately not doing
 
 - **Cancel / retry controls.** The firmware is deaf during a build and an

@@ -6,16 +6,18 @@ Flash `belt_v1/belt_v1.ino` to an **Arduino Uno** for the feeder. Its wiring is:
 
 - A4988 belt driver: `DIR = 2`, `STEP = 3`
 - A4988 `ENABLE` is not used; connect it to GND
-- Exit HC-SR04: `TRIG = 4`, `ECHO = 5`
+- Exit IR obstacle sensor: `OUT = 4` (default active-low; pin 5 is unused)
 - Alignment-servo signal: pin `6`
 - Pickup/stage IR obstacle sensor: `OUT = 8` (default active-low)
 - Container-servo signal: pin `12`
 
 `FEED [id]` (or its `RUN [id]` alias) performs one complete feeder cycle:
-close the container to 20°, open it in stages (90° then 160°), wait for the
-exit sensor to see a block below 10 cm, run the belt, and stop it only when the
+run the belt forward for one second, close the container to 20°, open it in
+stages (90° then 160°), wait for the
+exit IR sensor to see a block, run the belt, and stop it only when the
 stage IR sensor sees the block. The alignment servo then nudges the block square
-and the stage sensor verifies that it remained present.
+and the stage sensor verifies that it remained present. Each servo position
+change is followed by a one-second settling interval.
 
 Every controller command must end in a newline. A feed cycle is identified by
 the optional numeric `id` and reports structured telemetry:
@@ -26,8 +28,8 @@ the optional numeric `id` and reports structured telemetry:
 @42 STATE state=waiting_for_exit
 @42 EVENT phase=waiting_for_exit
 @42 STATE state=moving_to_stage
-@42 SENSOR sensor=exit distance_cm=7.4 detected=1
-@42 EVENT phase=exit_detected_container_closed_belt_running distance_cm=7.4
+@42 SENSOR sensor=exit detected=1
+@42 EVENT phase=exit_detected_container_closed_belt_running
 @42 SENSOR sensor=stage detected=1
 @42 EVENT phase=stage_detected_aligning
 @42 EVENT phase=block_ready
@@ -39,14 +41,14 @@ Mega may pick from `[0,0]`. `ACK`, `STATE`, `SENSOR`, and `EVENT` are progress
 telemetry; `OK` or `ERROR` is terminal. A terminal `@id ERROR
 state=... reason=stage_occupied`, `exit_timeout`, `stage_timeout`, or
 `cancelled` means it must not. The Uno prints
-`@0 READY firmware=belt_v1 protocol=2 board=uno` at boot. See
+`@0 READY firmware=belt_v1 protocol=3 board=uno` at boot. See
 [the full feeder-controller protocol](../docs/feeder-controller.md) for every
 message type and controller recovery rule.
 
 Use `STOP` to cancel a cycle safely. Manual commands are `STATUS` (or `P`),
 `OPEN`, `CLOSE`, `ON`, `OFF`, `F`, `B`, `S <speed>`, `US`, and `HELP`. The
-default belt speed is 325 steps per second. `US`/`STATUS` read the exit distance
-and report the stage IR sensor as `detected` or `clear`.
+default belt speed is 325 steps per second. `US`/`STATUS` read both IR sensors
+and report each as `detected=0` or `detected=1`.
 If the belt turns the wrong physical direction, swap the forward and reverse
 direction-level constants in the sketch.
 

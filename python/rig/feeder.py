@@ -120,7 +120,7 @@ class Feeder:
         self.port_name = str(feeder_cfg.get("port") or "")
         self.baud = int(feeder_cfg.get("baud", 9600))
         self.expected_firmware = str(feeder_cfg.get("firmware", "belt_v1"))
-        self.expected_protocol = int(feeder_cfg.get("protocol", 2))
+        self.expected_protocol = int(feeder_cfg.get("protocol", 3))
         self._serial_factory = serial_factory
         self._on_line = on_line
         self._on_message = on_message

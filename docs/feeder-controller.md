@@ -19,12 +19,13 @@ FastAPI → the guard stack → both serial clients → result → `/api/events`
 
 One `FEED` request runs this sequence:
 
-1. Stop the belt, return the alignment arm to rest, and close the container.
+1. Stop the belt and return the alignment arm to rest.
 2. Refuse the request if the stage sensor already sees a block. This prevents
    a second block from being fed into an occupied pickup point.
-3. Wait 500 ms for the container to settle.
-4. Open the container in two deliberate stages: 20° closed → 90° → 160°,
-   waiting 500 ms at each opening stage. This is intended to queue and release
+3. Run the belt forward for one second, then stop it and close the container.
+4. Wait one second for the container to settle, then open it in two deliberate
+   stages: 20° closed → 90° → 160°, waiting one second at each opening stage.
+   This is intended to queue and release
    blocks more gently than one large movement.
 5. Wait up to 10 seconds for the **exit sensor** to see a block leave the
    container and enter the belt.
@@ -33,7 +34,9 @@ One `FEED` request runs this sequence:
 7. Wait up to 15 seconds for the **stage sensor** at the pickup point to see
    the block. Detection stops the belt.
 8. Move the alignment servo briefly to nudge the block square, return it to
-   rest after 350 ms, and read the stage sensor again.
+   rest after one second, and read the stage sensor again. Every deliberate
+   servo position change in the feed sequence is separated by this one-second
+   delay.
 9. Emit `@id OK state=block_ready result=staged` only if the block is still at the stage.
    The controller may now instruct the Mega to pick up from `[0,0]`.
 
@@ -46,7 +49,7 @@ that did not arrive at the pickup point.
 | Part | Uno pins | Notes |
 | --- | --- | --- |
 | A4988 belt driver | `DIR 2`, `STEP 3` | Tie `ENABLE` low if it is not controlled separately. |
-| Exit HC-SR04 | `TRIG 4`, `ECHO 5` | Confirms that a block left the container. |
+| Exit IR obstacle sensor | `OUT 4` | Confirms that a block left the container. The default logic is active-low; pin 5 is unused. |
 | Alignment servo | `6` | Rests at 90° and nudges to 120°; tune mechanically. |
 | Stage IR obstacle sensor | `OUT 8` | Confirms that the pickup position contains a block. The default logic is active-low; change `STAGE_IR_DETECTED_LEVEL` if the installed sensor is inverted. |
 | Container servo | `12` | Closed 20°, first opening 90°, final opening 160°. |
@@ -62,7 +65,7 @@ way.
 
 ## Serial protocol
 
-Protocol 2 is line-oriented ASCII at 9600 baud. Every command and every
+Protocol 3 is line-oriented ASCII at 9600 baud. Every command and every
 response is one newline-terminated line. Responses are deliberately formatted
 as space-separated `key=value` fields so a controller can parse them without
 depending on prose intended for a human serial monitor.
@@ -91,7 +94,7 @@ Every protocol response has this envelope:
 | `RECV` | `@id` | The Uno received a `FEED` line and assigned it this transaction ID. |
 | `ACK` | `@id` or `@0` | A command was accepted. For a feed, `accepted=1` means the stage was empty and the cycle has started. |
 | `STATE` | `@id` | A feed-state transition. It is the authoritative current state. |
-| `SENSOR` | `@id` or `@0` | A named sensor observation. The exit HC-SR04 includes `distance_cm`; the digital stage IR sensor reports `detected=0` or `1`. |
+| `SENSOR` | `@id` or `@0` | A named IR-sensor observation with `detected=0` or `1`. |
 | `EVENT` | `@id` | A meaningful physical milestone within the current state. |
 | `STATUS` | `@0` | A requested snapshot of state, active flag, belt, container and speed. It is followed by two `SENSOR` lines. |
 | `CONFIG` | `@0` | A manual setting change, currently the belt speed. |
@@ -101,7 +104,7 @@ Every protocol response has this envelope:
 At boot the Uno prints:
 
 ```text
-@0 READY firmware=belt_v1 protocol=2 board=uno
+@0 READY firmware=belt_v1 protocol=3 board=uno
 ```
 
 For `FEED 42`, a normal transaction is:
@@ -110,8 +113,10 @@ For `FEED 42`, a normal transaction is:
 @42 RECV cmd=FEED
 @42 SENSOR sensor=stage detected=0
 @42 ACK cmd=FEED accepted=1
+@42 STATE state=pre_closing_belt_run
+@42 EVENT phase=belt_running_before_container_close
 @42 STATE state=closing
-@42 EVENT phase=container_closing
+@42 EVENT phase=container_closing_after_belt_run
 @42 STATE state=opening_stage_1
 @42 EVENT phase=container_opening_stage_1
 @42 STATE state=opening_stage_2
@@ -119,8 +124,8 @@ For `FEED 42`, a normal transaction is:
 @42 STATE state=waiting_for_exit
 @42 EVENT phase=waiting_for_exit
 @42 STATE state=moving_to_stage
-@42 SENSOR sensor=exit distance_cm=7.4 detected=1
-@42 EVENT phase=exit_detected_container_closed_belt_running distance_cm=7.4
+@42 SENSOR sensor=exit detected=1
+@42 EVENT phase=exit_detected_container_closed_belt_running
 @42 STATE state=aligning
 @42 SENSOR sensor=stage detected=1
 @42 EVENT phase=stage_detected_aligning
@@ -137,14 +142,11 @@ Only the final `OK` is permission to pick the block up. `ACK`, `STATE`,
 controller should wait for exactly one `OK` or `ERROR` for its active request
 and should not send the Mega a build/pick command after an error.
 
-Exit `SENSOR` values are reported in centimetres, rounded to one decimal place.
-`distance_cm=no_echo` means the HC-SR04 received no echo before its 30 ms
-firmware timeout; it is never treated as a detected block. Its detection rule
-is `distance_cm < 10.0`. The digital stage IR sensor has no distance value and
-reports only `detected=0` or `1`; its active level is configured by
-`STAGE_IR_DETECTED_LEVEL`. The firmware reports readings at cycle admission,
-on stage detection, and during final stage verification; it does not flood the
-serial port with its 100 ms polling reads.
+Both `SENSOR` lines report only `detected=0` or `1`. The exit and stage sensors
+are digital IR sensors, configured independently by `EXIT_IR_DETECTED_LEVEL`
+and `STAGE_IR_DETECTED_LEVEL`. The firmware reports readings at cycle
+admission, on exit/stage detection, and during final stage verification; it
+does not flood the serial port with its 100 ms polling reads.
 
 ### Status and manual acknowledgement
 
@@ -153,7 +155,7 @@ feed request is running:
 
 ```text
 @0 STATUS state=moving_to_stage active=1 belt=running container=closed speed_steps_s=325
-@0 SENSOR sensor=exit distance_cm=21.7 detected=0
+@0 SENSOR sensor=exit detected=0
 @0 SENSOR sensor=stage detected=0
 ```
 
@@ -182,7 +184,7 @@ results. A controller should reject malformed input locally before sending it.
 | Command | Effect |
 | --- | --- |
 | `STOP` / `OFF` / `X` | Stop the belt and cancel an active feed cycle. |
-| `STATUS` / `P` | Print state, belt/container status, exit distance, and stage IR state (`detected` or `clear`). |
+| `STATUS` / `P` | Print state, belt/container status, and both IR states (`detected=0` or `detected=1`). |
 | `US` | Same sensor/status snapshot as `STATUS`. |
 | `OPEN` / `O` | Test-only manual two-stage container opening. It cancels an active cycle. |
 | `CLOSE` / `C` | Close the container and stop the belt. |
@@ -199,31 +201,31 @@ request, so an automated controller must not mix them into a production cycle.
 
 The firmware uses a state machine rather than a multi-second `delay()` belt
 run. It continues accepting serial input while a cycle is active, so `STOP` is
-available during an exit wait, belt movement, or alignment. The exit HC-SR04
-uses a 30 ms echo timeout, so its reads can briefly delay belt pulse generation;
-this is acceptable for feeder staging but is not precision motion control.
+available during an exit wait, belt movement, or alignment. IR reads are
+digital and immediate; belt pulsing is still intended for feeder staging, not
+precision motion control.
 
 | State | Belt | Exit sensor | Stage sensor | Exit condition |
 | --- | --- | --- | --- | --- |
-| `closing` | stopped | — | — | 500 ms elapsed |
-| `opening_stage_1` | stopped | — | — | 500 ms elapsed |
-| `opening_stage_2` | stopped | — | — | 500 ms elapsed |
+| `pre_closing_belt_run` | running forward | — | — | 1 s elapsed, then close the container |
+| `closing` | stopped | — | — | 1 s elapsed |
+| `opening_stage_1` | stopped | — | — | 1 s elapsed |
+| `opening_stage_2` | stopped | — | — | 1 s elapsed |
 | `waiting_for_exit` | stopped | sampled every 100 ms | — | block detected or 10 s timeout |
 | `moving_to_stage` | running forward | — | sampled every 100 ms | block detected or 15 s timeout |
-| `aligning` | stopped | — | — | 350 ms elapsed |
+| `aligning` | stopped | — | — | 1 s elapsed |
 | `verifying_stage` | stopped | — | read once after settling | block ready or resume belt |
 | `block_ready` | stopped | — | — | terminal success |
 
-The exit sensor detects an object when it returns a valid distance below
-`10.0 cm`; no echo is treated as no detection. The stage sensor reports a
-digital presence signal, active-low by default. The values are installation
-calibrations: adjust `DETECT_DISTANCE_CM`, `STAGE_IR_DETECTED_LEVEL`, the three
-servo-angle groups, belt rate, and timeouts only after testing with the actual
-hopper and pickup fixture.
+Both sensors report a digital presence signal, active-low by default. The
+installation calibrations are `EXIT_IR_DETECTED_LEVEL`,
+`STAGE_IR_DETECTED_LEVEL`, the three servo-angle groups, belt rate, and
+timeouts; adjust them only after testing with the actual hopper and pickup
+fixture.
 
 ## Pi orchestration contract
 
-`python/rig/feeder.py` owns the Uno port and validates the exact protocol-2
+`python/rig/feeder.py` owns the Uno port and validates the exact protocol-3
 `READY` identity before use. `python/rig/link.py` independently owns the Mega
 port. `python/rig/orchestrator.py` is the only production handoff between them:
 

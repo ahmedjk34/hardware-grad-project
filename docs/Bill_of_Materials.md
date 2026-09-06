@@ -20,7 +20,7 @@
 | ULN2003 Driver             | 1   |
 | Servo Motor                | 3   |
 | Limit Switch               | 4   |
-| Ultrasonic Sensor          | 2   |
+| IR Obstacle Sensor         | 2   |
 
 ## Mechanical
 

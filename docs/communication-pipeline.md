@@ -37,7 +37,7 @@ Arduinos never exchange a byte with each other.
 
 | Role | Board | Firmware | Owns |
 | --- | --- | --- | --- |
-| Feeder | Arduino Uno | `arduino/belt_v1/belt_v1.ino` | hopper container, belt, alignment arm, exit HC-SR04 and stage IR sensor — the path from hopper to the fixed pickup point `[0,0]` |
+| Feeder | Arduino Uno | `arduino/belt_v1/belt_v1.ino` | hopper container, belt, alignment arm, exit and stage IR sensors — the path from hopper to the fixed pickup point `[0,0]` |
 | Gantry | Arduino MEGA 2560 | `arduino/build_test_v1/build_test_v1.ino` | X/Y/Z motion, claw servo, rotation stepper — pick from `[0,0]`, place at any cell |
 | Brain | Raspberry Pi 5 | `python/web` + `python/rig` | camera, all orchestration, every safety rule, the web server |
 
@@ -53,7 +53,7 @@ protocols, opened and closed separately by the same FastAPI lifespan.
 | Python client | `python/rig/feeder.py` → `Feeder` | `python/rig/link.py` → `Rig` |
 | Config keys | `config/rig.json` → `feeder.port` / `.baud` / `.firmware` / `.protocol` / `.fqbn` / `.sketch` | `config/rig.json` → `serial.port` / `.baud`, `board.*` |
 | Baud | 9600 8N1 | 9600 8N1 |
-| Identity check on connect | `@0 READY firmware=belt_v1 protocol=2 board=uno` must match `feeder.*` exactly, or the port is closed and startup fails | `@0 READY ... board=` must not be `mega`-mismatched; Mega banner/READY handshake |
+| Identity check on connect | `@0 READY firmware=belt_v1 protocol=3 board=uno` must match `feeder.*` exactly, or the port is closed and startup fails | `@0 READY ... board=` must not be `mega`-mismatched; Mega banner/READY handshake |
 | Reader | one daemon thread, `readline()` loop, parsed lines pushed to a queue | one daemon thread, same shape |
 | Log tag | `[UNO/FEEDER …]` in `logs/serial.log` and the `/api/events` `serial` stream | `[MEGA/GANTRY …]` |
 | Mock (`--mock`) | `rig/mock_feeder.py` → `MockFeeder` | `rig/mock_board.py` → `MockBoard` |
@@ -223,7 +223,7 @@ next `FEED` until the current `B` is terminal. "STOP AFTER THIS BLOCK" becomes
 ```jsonc
 "serial": { "port": "/dev/serial/by-id/…-Mega…", "baud": 9600 },
 "feeder": { "port": "/dev/serial/by-id/…-Uno…", "baud": 9600,
-            "firmware": "belt_v1", "protocol": 2,
+            "firmware": "belt_v1", "protocol": 3,
             "fqbn": "arduino:avr:uno", "sketch": "arduino/belt_v1" }
 ```
 
@@ -273,7 +273,7 @@ stop and fix `config/rig.json` — do not start a second process.
 
 - The Mega `@seq STEP`/ACK firmware is compile-verified but, per
   [ack-protocol.md](ack-protocol.md), **has not been flashed**; `link.py` still
-  has a loud prose fallback. The Uno protocol-2 firmware is likewise
+  has a loud prose fallback. The Uno protocol-3 firmware is likewise
   syntax-checked only — physical commissioning is still required.
 - No hardwired emergency stop, watchdog, or Mega mid-motion interrupt exists.
 - The Mega does not correlate `B` to a Pi-supplied id (it uses its own

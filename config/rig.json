@@ -11,7 +11,7 @@
     "port": "",
     "baud": 9600,
     "firmware": "belt_v1",
-    "protocol": 2,
+    "protocol": 3,
     "fqbn": "arduino:avr:uno",
     "sketch": "arduino/belt_v1"
   },
