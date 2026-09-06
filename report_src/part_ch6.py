@@ -346,7 +346,7 @@ def appendices(rep):
         "          text=Open_the_claw_and_release status=done\n"
         "@n  ERR   expected: B <col> <row> <level>\n"
         "@n  SAFE  cell out of range\n"
-        "@n  HELD  Z never reached the ground switch\n"
+        "@n  HELD  Z never reached the pickup height\n"
         "@n  OK    col=3 row=5 level=0")
     rep.p(
         "`OK`, `ERR`, `SAFE` and `HELD` are terminal; `BOOT`, `READY`, `RECV` and `STEP` are "

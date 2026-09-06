@@ -317,7 +317,7 @@ class BuildResult(str):
 
         r = rig.build(3, 5, 0)
         r == ABORTED        -> go and look at the rig
-        r.reason            -> 'Z never reached the ground switch'
+        r.reason            -> 'Z never reached the pickup height'
         r.ack               -> the Ack it came from, or None if prose
 
     Deliberately no __bool__: a non-empty string is always truthy, so

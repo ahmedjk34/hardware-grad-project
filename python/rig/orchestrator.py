@@ -43,7 +43,6 @@ class CellOrchestrator:
                 f"cell orchestrator is locked: {self.locked_reason}; restart after inspection")
         if not self._operation.acquire(blocking=False):
             raise CellError("another physical cell operation already owns the pickup area")
-        staged = False
         try:
             self._phase("feeding")
             try:
@@ -53,7 +52,6 @@ class CellOrchestrator:
                     f"feeder did not safely stage a block: {exc}; "
                     "pickup state requires inspection",
                 )
-            staged = True
             self._phase("ready_for_pick")
             try:
                 self._phase("placing")
@@ -74,9 +72,9 @@ class CellOrchestrator:
             self._phase("complete")
             return result
         finally:
-            # `staged` intentionally has no automatic cleanup. Failure after it
-            # locks the controller; only a person can establish pickup state.
-            _ = staged
+            # No automatic cleanup on a failure after staging: that locks the
+            # controller instead, because only a person can establish pickup
+            # state at that point.
             self._operation.release()
 
     def cancel(self) -> bool:

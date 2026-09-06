@@ -37,6 +37,18 @@ There are no per-variable sign quirks. If a knob seems to need the opposite
 sign to what you expect, you have the **wrong knob** or a **wrong
 measurement** — do not "fix" it by flipping a sign somewhere.
 
+**The one documented exception: `Z_PICKUP_DROP_FROM_TOP_CM`.** Since a feeder
+belt was fitted at `[0,0]`, build phase 5 no longer seeks the ground switch to
+pick a block up — it descends a fixed distance **below the pin-29 top switch**
+and grips there. That distance is therefore measured *down from the top
+switch*, not up from ground, because the pickup never references ground and
+phase 1's top-switch seek is the live reference. Larger value = deeper
+descent = lower pickup point. It is firmware-only, applies to phase 5 alone,
+and is the **only** number in this file that breaks the rule above. Every
+other Z knob (`Z_MARGIN_*`, `Z_TRAVEL_*`, levels) is still a magnitude above
+the ground switch. Level-0 *placement* (`zGoLevel(0)`) and `0+` still ground-
+seek normally; the belt only occupies the feeder cell.
+
 ### Rule 0a — magnitudes are not machine positions
 
 The machine's **signed positions** (`axisPos[]`, what `moveAxisTo()` takes)
@@ -83,6 +95,7 @@ camera overlay, `gridded_camera_feed`, `block_grid_calibrate`, `rig_console`.
 | `Z_MARGIN_PER_LEVEL_CM` | Z height, **cumulative** per level | taller each level | no | no | no |
 | `Z_MARGIN_FIXED_CM` | Z height, **once** at level ≥ 1 | taller | no | no | no |
 | `Z_MARGIN_FIXED_STEPS` | Z height, raw steps, applied last | taller | no | no | no |
+| `Z_PICKUP_DROP_FROM_TOP_CM` | **build phase-5 pickup descent** only | *(sign exception)* deeper descent, **lower** pickup point — measured **down from the TOP switch**, not up from ground | no | no | no |
 | `SKEW_{X,Y}_PER_{COL,ROW,COLROW}_CM` | **build motion** only, grows with index | away from home as index rises | no | no | no |
 | `BUILD_PLACEMENT_OFFSET_{X,Y}_CM` | **build motion** only, constant | placements away from home | no | no | no |
 
@@ -153,6 +166,7 @@ describes the bug, not the rig.
 | `SKEW_X_*`, `SKEW_Y_PER_ROW/COLROW` | `0.0` | `0.0` | unmeasured, stay zero |
 | `BUILD_PLACEMENT_OFFSET_X_CM` | **`0.0`** | **`−0.4`** | horizontal placements sit 0.4 cm **toward** the X home switch |
 | `BUILD_PLACEMENT_OFFSET_Y_CM` | **`0.0`** | `0.0` | no fixed Y correction in either mode |
+| `Z_PICKUP_DROP_FROM_TOP_CM` | `9.5` | `9.5` | not per mode — phase-5 pickup descends 9.5 cm below the top switch (≈ 17.0 cm above ground at the shipped Z calibration) onto the feeder belt, instead of ground-seeking |
 
 **`BUILD_PLACEMENT_OFFSET_*` is `0.0` for vertical on both axes, and that is a
 real statement, not a placeholder.** It means vertical builds get **no fixed

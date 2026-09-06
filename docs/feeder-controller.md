@@ -40,6 +40,12 @@ One `FEED` request runs this sequence:
 9. Emit `@id OK state=block_ready result=staged` only if the block is still at the stage.
    The controller may now instruct the Mega to pick up from `[0,0]`.
 
+The block is staged **on the belt surface**, which sits above the table
+ground. The Mega's build phase 5 accounts for this: it lowers the claw a fixed
+distance below its top switch (`Z_PICKUP_DROP_FROM_TOP_CM`, 9.5 cm) rather than
+seeking the ground switch. If the belt height changes, that firmware constant
+must change with it — see AGENTS.md.
+
 This is sensor-stopped staging, not a fixed belt-duration guess. The exit and
 stage observations also distinguish an empty/blocked hopper path from a block
 that did not arrive at the pickup point.

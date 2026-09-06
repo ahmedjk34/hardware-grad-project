@@ -38,7 +38,7 @@ Arduinos never exchange a byte with each other.
 | Role | Board | Firmware | Owns |
 | --- | --- | --- | --- |
 | Feeder | Arduino Uno | `arduino/belt_v1/belt_v1.ino` | hopper container, belt, alignment arm, exit and stage IR sensors — the path from hopper to the fixed pickup point `[0,0]` |
-| Gantry | Arduino MEGA 2560 | `arduino/build_test_v1/build_test_v1.ino` | X/Y/Z motion, claw servo, rotation stepper — pick from `[0,0]`, place at any cell |
+| Gantry | Arduino MEGA 2560 | `arduino/build_test_v1/build_test_v1.ino` | X/Y/Z motion, claw servo, rotation stepper — pick from `[0,0]` (a fixed drop onto the feeder belt, not a ground seek; `Z_PICKUP_DROP_FROM_TOP_CM`), place at any cell |
 | Brain | Raspberry Pi 5 | `python/web` + `python/rig` | camera, all orchestration, every safety rule, the web server |
 
 ---

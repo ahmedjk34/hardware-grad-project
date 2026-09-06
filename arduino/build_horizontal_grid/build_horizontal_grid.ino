@@ -166,7 +166,9 @@ void handleLine(char *line);
        rotates - it always presents a block standing, in both modes.
     3. Return the claw to neutral (including any manual A jog)
     4. Open the claw
-    5. Z down to GROUND (into the Z switch - this also re-zeroes Z)
+    5. Z down to the FEEDER PICKUP HEIGHT (a fixed drop below the top
+       switch - the belt sits above GROUND, so this is NOT a ground seek
+       any more; see Z_PICKUP_DROP_FROM_TOP_CM)
     6. Close the claw                            (block is now held)
     7. Z up to the TOP SWITCH                    (carry height)
     8. X/Y to the requested cell
@@ -975,6 +977,31 @@ float Z_TRAVEL_CM = 26.5;
 //   level 0 = GROUND (drive into the physical switch)
 //   level 1 = 1.5 cm, level 2 = 3.0 cm, level 3 = 4.5 cm ...
 float BLOCK_HEIGHT_CM = 1.5;
+
+// ------------------------------------------------------------
+//   FEEDER-BELT PICKUP HEIGHT  (build phase 5 only)
+// ------------------------------------------------------------
+//   A feeder belt sits at the [0,0] pickup point, ABOVE the table
+//   GROUND. Build phase 5 no longer drops the claw onto the bottom Z
+//   switch to grab its block - it would ram the belt. It descends a
+//   FIXED distance below the TOP switch and grips there.
+//
+//   SIGN EXCEPTION - the one Z knob NOT measured up from GROUND. It is
+//   measured DOWN from the pin 29 TOP switch, because the pickup no
+//   longer references GROUND and phase 1's zGoTop() is the live
+//   reference the drop is taken from. Larger = deeper = LOWER pickup.
+//
+//        pickup_steps = Z_TRAVEL_STEPS - round(DROP_FROM_TOP_CM * stepsPerCm)
+//
+//   At the shipped calibration (Z_TRAVEL_CM 26.5, Z_TRAVEL_STEPS 1350):
+//        9.5 cm below top == 17.0 cm above GROUND == ~866 steps.
+//
+//   The build no longer re-zeroes Z at GROUND; phase 1's top-switch seek
+//   references it every build, and `0+` still gives a true GROUND zero.
+//   The bottom Z switch stays required as a physical backstop. Keep this
+//   in step with arduino/build_test_v1 (test_grid.py pairs the fill
+//   sketches to the rig sketch).
+float Z_PICKUP_DROP_FROM_TOP_CM = 9.5;
 
 // ------------------------------------------------------------
 //   MARGIN OF ERROR  (all three may be POSITIVE or NEGATIVE)
@@ -3671,6 +3698,38 @@ long zEtaToGroundMs()
   return zEtaMs(zStepsFromGround());
 }
 
+// The feeder-belt pickup point as an absolute height in steps ABOVE
+// GROUND: Z_TRAVEL_STEPS minus the configured drop below the top switch,
+// clamped into the real travel. Keep in step with arduino/build_test_v1.
+long zPickupStepsFromGround()
+{
+  long drop = lround(Z_PICKUP_DROP_FROM_TOP_CM * zStepsPerCm());
+  if (drop < 0)
+  {
+    drop = 0;
+  }
+  long steps = Z_TRAVEL_STEPS - drop;
+  if (steps < 0)
+  {
+    steps = 0;
+  }
+  if (steps > Z_TRAVEL_STEPS)
+  {
+    steps = Z_TRAVEL_STEPS;
+  }
+  return steps;
+}
+
+// zGoPickup(): a fixed descent from the top switch, NOT a ground seek.
+long zEtaToPickupMs()
+{
+  if (!axisHomed[AXIS_Z])
+  {
+    return zEtaMs(Z_TRAVEL_STEPS);
+  }
+  return zEtaMs(zStepsFromGround() - zPickupStepsFromGround());
+}
+
 // zGoLevel(): level 0 is a ground seek; every other level is an exact
 // step target, so its duration is exact too.
 long zEtaToLevelMs(long level)
@@ -3712,10 +3771,44 @@ bool zGoTop()
 
 // Drop Z onto the table - the bottom switch IS ground, so this
 // re-zeroes the axis and kills any accumulated Z error every cycle.
+// Still used by `0+` and by level-0 PLACEMENT; the build's phase-5
+// PICKUP uses zGoPickup() instead - the feeder belt is in the way.
 bool zGoGround()
 {
   Serial.println(F("  Z down to GROUND (into the bottom Z switch) ..."));
   return homeAxis(AXIS_Z);
+}
+
+// Lower Z to the feeder-belt pickup height for build phase 5: a fixed
+// drop below the pin 29 TOP switch, NOT a seek onto the pin 28 GROUND
+// switch. The belt sits above GROUND, so a ground seek would ram it.
+// Phase 1's zGoTop() always leaves a Z reference, so this guard never
+// trips inside a build; it mirrors zGoLevel() for any other caller.
+bool zGoPickup()
+{
+  if (!axisHomed[AXIS_Z])
+  {
+    Serial.println(F("  !! Z has no reference - cannot go to the pickup height."));
+    Serial.println(F("  !! Raise Z into the top switch (or send 0+) first."));
+    return false;
+  }
+
+  long steps = zPickupStepsFromGround();
+  long target = steps * (long)travelEndOf(AXIS_Z);
+
+  Serial.print(F("  Z down to the feeder pickup height ("));
+  Serial.print(Z_PICKUP_DROP_FROM_TOP_CM, 2);
+  Serial.print(F(" cm below the top switch)  =  "));
+  Serial.print(steps);
+  Serial.println(F(" steps above GROUND ..."));
+
+  bool ok = moveAxisTo(AXIS_Z, target);
+
+  if (!ok)
+  {
+    Serial.println(F("  !! Z did not reach the pickup height - a limit stopped it."));
+  }
+  return ok;
 }
 
 // Drop Z to a computed block level.
@@ -3727,8 +3820,9 @@ bool zGoLevel(long level)
   }
 
   // Levels are absolute heights above GROUND, so they only mean
-  // something once the bottom switch has given Z a zero. The build
-  // sequence always grounds first; this catches every other caller.
+  // something once Z has a reference. A build gets one from phase 1's
+  // zGoTop() (the top switch); `0+` and a manual ground seek give a true
+  // zero. This guard catches every caller that skipped all three.
   if (!axisHomed[AXIS_Z])
   {
     Serial.println(F("  !! Z has no zero - cannot place at a level."));
@@ -4061,8 +4155,10 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
     return buildReject("tool offset target outside X/Y travel");
   }
 
-  // A build needs BOTH Z switches: the bottom one to find GROUND and
-  // pick the block up, the top one to fly it over the stack.
+  // A build needs BOTH Z switches. The TOP one references Z and flies the
+  // block over the stack. The BOTTOM one is the physical backstop below
+  // the phase-5 pickup descent (which no longer seeks it - see
+  // Z_PICKUP_DROP_FROM_TOP_CM) and is what `0+` uses for a true GROUND zero.
   if (!limitEnabledAt(AXIS_Z, homeEndOf(AXIS_Z)))
   {
     Serial.print(F("  ERROR - build needs the BOTTOM Z switch (pin "));
@@ -4163,15 +4259,19 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
   openServoAndWait();
   buildPause();
 
-  // ---- 5. down to ground (this also re-zeroes Z) ----
-
+  // ---- 5. down to the feeder pickup height ----
+  //
+  // NOT a ground seek any more: the feeder belt sits above GROUND, so
+  // this drops a fixed distance below the top switch and grips there
+  // (Z_PICKUP_DROP_FROM_TOP_CM). Z keeps its reference from phase 1's
+  // top-switch seek. Wire identifiers kept stable - see docs/ack-protocol.md.
   buildStep(5, F("lower_to_ground"), F("move"),
             F("Lower_Z_to_the_ground_switch"),
-            "Lower Z to GROUND (bottom Z switch)",
-            zEtaToGroundMs());
-  if (!zGoGround())
+            "Lower Z to the feeder pickup height (fixed drop below the top switch)",
+            zEtaToPickupMs());
+  if (!zGoPickup())
   {
-    buildAbort("Z never reached the ground switch");
+    buildAbort("Z never reached the pickup height");
     return false;
   }
   buildPause();
@@ -5172,6 +5272,14 @@ void printBuildConfig()
   Serial.print(F(" cm  =  "));
   Serial.print(blockHeightInSteps(), 2);
   Serial.println(F(" steps (margin included)"));
+
+  Serial.print(F("Pickup       : "));
+  Serial.print(Z_PICKUP_DROP_FROM_TOP_CM, 2);
+  Serial.print(F(" cm below top  =  "));
+  Serial.print(zPickupStepsFromGround());
+  Serial.print(F(" steps above GROUND  ("));
+  Serial.print((float)zPickupStepsFromGround() * zCmPerStep(), 2);
+  Serial.println(F(" cm; build phase 5, NOT a ground seek)"));
 
   Serial.print(F("Margins      : per-level "));
   Serial.print(Z_MARGIN_PER_LEVEL_CM, 3);

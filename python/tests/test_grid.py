@@ -526,6 +526,17 @@ for constant, expected_by_mode in placement_offset_defaults.items():
               f"firmware {actual[mode_name]}, expected {expected}")
 check("live gripper close angle is 54 degrees", firmware_number("SERVO_CLOSE_ANGLE") == 54)
 
+# The feeder belt sits above ground, so build phase 5 drops a fixed distance
+# below the TOP switch instead of ground-seeking. Firmware-only, no rig.json
+# partner - but it lives in all three build sketches and they must agree, or a
+# manual standalone run rams the belt while the rig sketch clears it.
+Z_PICKUP_DROP_FROM_TOP_CM = 9.5
+check("rig sketch feeder pickup drop is 9.5 cm below the top switch",
+      firmware_number("Z_PICKUP_DROP_FROM_TOP_CM") == Z_PICKUP_DROP_FROM_TOP_CM,
+      str(firmware_number("Z_PICKUP_DROP_FROM_TOP_CM")))
+check("rig sketch phase 5 uses zGoPickup(), not zGoGround()",
+      "if (!zGoPickup())" in sketch and "if (!zGoGround())" not in sketch)
+
 # The supervised vertical/horizontal fill sketches must use the same dynamic
 # correction tables as the configured rig sketch. They are not flashed by
 # scripts/flash.sh, but leaving their old Y-only implementation behind makes a
@@ -533,6 +544,15 @@ check("live gripper close angle is 54 degrees", firmware_number("SERVO_CLOSE_ANG
 for standalone_name in ("build_vertical_grid", "build_horizontal_grid"):
     standalone_path = sketch_path.parents[1] / standalone_name / f"{standalone_name}.ino"
     standalone = standalone_path.read_text()
+    standalone_drop = re.search(
+        r"^\s*float\s+Z_PICKUP_DROP_FROM_TOP_CM\s*=\s*([-+]?\d+(?:\.\d+)?)\s*;",
+        standalone, re.MULTILINE)
+    check(f"{standalone_name} feeder pickup drop matches the rig sketch (9.5 cm)",
+          standalone_drop is not None
+          and float(standalone_drop.group(1)) == Z_PICKUP_DROP_FROM_TOP_CM,
+          standalone_drop.group(1) if standalone_drop else "not found")
+    check(f"{standalone_name} phase 5 uses zGoPickup(), not zGoGround()",
+          "if (!zGoPickup())" in standalone and "if (!zGoGround())" not in standalone)
     for constant, expected_by_mode in {**dynamic_skew_defaults,
                                        **placement_offset_defaults}.items():
         actual = firmware_mode_numbers(constant, standalone)

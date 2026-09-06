@@ -142,9 +142,9 @@ BUILD_REJECTED = [
 
 BUILD_ABORTED = [
     "",
-    "*** BUILD ABORTED - Z never reached the ground switch",
+    "*** BUILD ABORTED - Z never reached the pickup height",
     "*** The claw may still be holding a block. Check the rig.",
-    "@3 HELD Z never reached the ground switch",
+    "@3 HELD Z never reached the pickup height",
 ]
 
 # The nasty one: the block IS down, so the prose says COMPLETE — and then two
@@ -277,7 +277,7 @@ for raw, kind, seq in [
     ("@1 ERR expected: B <col> <row> <level>", "ERR", 1),
     ("@2 SAFE cell out of range", "SAFE", 2),
     ("@3 OK col=3 row=5 level=0", "OK", 3),
-    ("@4 HELD Z never reached the ground switch", "HELD", 4),
+    ("@4 HELD Z never reached the pickup height", "HELD", 4),
 ]:
     ack = link.parse_ack(raw)
     check(f"parse {kind}", ack is not None and ack.kind == kind and ack.seq == seq, raw)

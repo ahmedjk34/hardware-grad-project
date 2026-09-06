@@ -67,7 +67,7 @@ running it:
 @1 ERR expected: B <col> <row> <level>
 @2 SAFE cell out of range
 @3 OK col=3 row=5 level=0
-@4 HELD Z never reached the ground switch
+@4 HELD Z never reached the pickup height
 @5 HELD block placed but parking failed
 ```
 
@@ -133,7 +133,7 @@ or loses a row.
 | 2 | `home_feeder` | move | home X/Y to the feeder cell `[0,0]` |
 | 3 | `neutralise_claw` | rotate | return the claw to neutral before picking up |
 | 4 | `open_claw` | release | open the claw |
-| 5 | `lower_to_ground` | move | lower Z to the bottom switch |
+| 5 | `lower_to_ground` | move | lower Z to the **feeder pickup height** — a fixed drop below the top switch, *not* a ground seek (`Z_PICKUP_DROP_FROM_TOP_CM`); the `phase`/`text` identifiers are kept for wire stability |
 | 6 | `grip` | grip | close the claw — **the block is now in it** |
 | 7 | `lift_block` | move | raise Z to carry height |
 | 8 | `move_to_target` | move | fly X/Y to the target cell |
@@ -174,6 +174,12 @@ full travel          1350 steps          = 2565 ms  (+ DIR_SETTLE_MS = 2570)
 one block height     76.4 steps          =  145 ms
 descent to level K   1350 - 76.4*K steps = 2565 - 145*K  ms
 ```
+
+Phase 5 (`lower_to_ground`) is no longer a full top-to-bottom travel: since
+the feeder belt was fitted it is a **fixed partial descent** to the pickup
+height (`Z_PICKUP_DROP_FROM_TOP_CM`, 9.5 cm below the top switch ≈ a
+484-step / ~920 ms move at the shipped calibration). `zEtaToPickupMs()` sends
+the shorter figure. Placement phases 7/10/12 are unchanged.
 
 Measured on the rig with a stopwatch: **2.6-2.8 s** for a full top-to-bottom
 travel, against 2.57 s predicted. The 35-235 ms gap is the fixed overheads the
@@ -239,7 +245,7 @@ the phase announcements in order (the same technique as the transcript above):
 @12 STEP step=2 total=14 phase=home_feeder action=move text=Home_XY_to_the_feeder status=begin
 @12 STEP step=3 total=14 phase=neutralise_claw action=rotate text=Return_the_claw_to_neutral status=begin
 @12 STEP step=4 total=14 phase=open_claw action=release text=Open_the_claw status=begin
-@12 STEP step=5 total=14 phase=lower_to_ground action=move text=Lower_Z_to_the_ground_switch status=begin ms=2570
+@12 STEP step=5 total=14 phase=lower_to_ground action=move text=Lower_Z_to_the_ground_switch status=begin ms=920
 @12 STEP step=6 total=14 phase=grip action=grip text=Close_the_claw_and_grip status=begin
 @12 STEP step=7 total=14 phase=lift_block action=move text=Raise_Z_to_carry_height status=begin ms=2570
 @12 STEP step=8 total=14 phase=move_to_target action=move text=Move_XY_to_the_target_cell status=begin
@@ -439,7 +445,7 @@ Trimmed to the terminal and milestone lines — a real build prints all fourteen
                                     <- Pi sends: R / RR mode latch, then S 6 5
 @1 RECV cmd=B col=3 row=5 level=0
 @1 STEP step=2 total=14 phase=home_feeder action=move text=Home_XY_to_the_feeder status=begin
-@1 STEP step=5 total=14 phase=lower_to_ground action=move text=Lower_Z_to_the_ground_switch status=begin ms=2570
+@1 STEP step=5 total=14 phase=lower_to_ground action=move text=Lower_Z_to_the_ground_switch status=begin ms=920
 @1 STEP step=8 total=14 phase=move_to_target action=move text=Move_XY_to_the_target_cell status=begin
 @1 STEP step=11 total=14 phase=release action=release text=Open_the_claw_and_release status=begin
 @1 STEP step=11 total=14 phase=release action=release text=Open_the_claw_and_release status=done
@@ -450,8 +456,8 @@ And the one that matters:
 
 ```
 @3 RECV cmd=B col=3 row=5 level=0
-@3 STEP step=5 total=14 phase=lower_to_ground action=move text=Lower_Z_to_the_ground_switch status=begin ms=2570
-@3 HELD Z never reached the ground switch
+@3 STEP step=5 total=14 phase=lower_to_ground action=move text=Lower_Z_to_the_ground_switch status=begin ms=920
+@3 HELD Z never reached the pickup height
 ```
 
 Three lines, and the Pi knows to stop and put a red banner on the screen.

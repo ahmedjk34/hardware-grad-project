@@ -210,7 +210,7 @@ check("a rejected placement recorded nothing",
 
 # An abort means the claw may still be holding a block: the run is over.
 run, rig, camera, grid = make(
-    outcomes={first: BuildResult("aborted", "Z never reached the ground switch")})
+    outcomes={first: BuildResult("aborted", "Z never reached the pickup height")})
 run.start()
 expect("an abort raises its own type", BlockCalibrationAborted,
        run.step, "go and look")

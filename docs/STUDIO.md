@@ -255,6 +255,11 @@ Constants: `MM_PER_CM`, `BLOCK_HEIGHT_CM = 1.5`, `BLOCK_HEIGHT_MM`,
 `BLOCK_HEIGHT_CM` from `arduino/build_test_v1`, stated once here and once in
 `python/tools/dump_grid_fixtures.py`. See also `ENVELOPE_Z_CM` in §5.4.
 
+The Studio has **no** copy of the firmware's other Z constants
+(`Z_TRAVEL_STEPS`, `Z_MARGIN_*`, and `Z_PICKUP_DROP_FROM_TOP_CM` — the
+phase-5 feeder-belt pickup descent added when the belt was fitted). None of
+them move anything the Studio draws; they are pick-and-place mechanics.
+
 ### 5.2 `studio/geometry.ts` — machine-space predicates
 
 `aabbOf(block)`, `topFaceZ`, `intersects` (touching faces are **not** a
@@ -1269,6 +1274,20 @@ first in the diff.
 
 Newest first. One entry per landed change; note anything that contradicts the
 plan or that a future reader could not infer.
+
+### Firmware build phase 5 stopped ground-seeking (feeder belt) — no Studio change
+
+A feeder belt was fitted at `[0,0]`, above the table ground. Build phase 5
+(`lower_to_ground`) now descends a fixed `Z_PICKUP_DROP_FROM_TOP_CM` (9.5 cm)
+below the top switch and grips there, instead of seeking the ground switch and
+re-zeroing Z. Z is still referenced every build by phase 1's top-switch seek;
+`0+` and level-0 placement still ground-seek. The wire `phase`/`text`
+identifiers (`lower_to_ground` / `Lower_Z_to_the_ground_switch`) are unchanged
+for stability, so `twin.ts` `PHASE_BY_ID` and `twin.test.ts` are untouched.
+The phase-5 abort reason string changed to `Z never reached the pickup
+height`; the phase-5 `ms=` ETA is now the shorter partial descent. Nothing the
+Studio draws is affected — noted here only so the phase-table drift is on
+record.
 
 ### A settled build stopped freezing the runner on "14/14 park the claw"
 
