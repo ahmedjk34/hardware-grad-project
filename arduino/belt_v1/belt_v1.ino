@@ -54,8 +54,8 @@ const unsigned long PRE_CLOSE_BELT_RUN_MS = 1000;
 // After the exit IR sees a block, keep the gate open while the belt starts.
 const unsigned long EXIT_DETECTED_TO_CLOSE_DELAY_MS = 1250;
 // Let the block travel slightly past the stage IR before stopping the belt.
-// Continue walking the belt for 200 ms after the stage IR detects the block.
-const unsigned long STAGE_DETECTED_BELT_SETTLE_MS = 200;
+// Continue walking the belt for 180 ms after the stage IR detects the block.
+const unsigned long STAGE_DETECTED_BELT_SETTLE_MS = 180;
 const unsigned long EXIT_TIMEOUT_MS = 10000;
 const unsigned long STAGE_TIMEOUT_MS = 15000;
 const unsigned long SENSOR_INTERVAL_MS = 100;
