@@ -165,15 +165,14 @@ class WorkspaceMap:
         return cls(cols, rows, [(x / w, y / h) for x, y in corners], projection,
                    mode=mode)
 
-    @classmethod
-    def from_grid(cls, grid: MachineGrid, corners, image_size, projection=None):
-        """Map four camera points around the measured holder-motion rectangle."""
-        if not grid.has_physical_scale:
-            raise ValueError("workspace mapping needs a physically scaled grid")
-        w, h = image_size
-        if w <= 0 or h <= 0:
-            raise ValueError("image size must be positive")
-        geometry = {
+    @staticmethod
+    def _geometry_from_grid(grid: MachineGrid) -> dict:
+        """The ``physical_grid`` block a saved map carries for a scaled grid.
+
+        Its own copy of the block/gap/trim numbers, so a loaded calibration
+        cannot silently borrow whatever ``config/rig.json`` says today.
+        """
+        return {
             "workspace_width_cm": grid.workspace_width_cm,
             "workspace_height_cm": grid.workspace_height_cm,
             "block_x_cm": grid.block_x_cm,
@@ -190,8 +189,37 @@ class WorkspaceMap:
             "shift_y_cm": grid.shift_y_cm,
             "blocked_cells": [list(pair) for pair in sorted(grid.blocked)],
         }
+
+    @classmethod
+    def from_grid(cls, grid: MachineGrid, corners, image_size, projection=None):
+        """Map four camera points around the measured holder-motion rectangle."""
+        if not grid.has_physical_scale:
+            raise ValueError("workspace mapping needs a physically scaled grid")
+        w, h = image_size
+        if w <= 0 or h <= 0:
+            raise ValueError("image size must be positive")
         return cls(grid.cols, grid.rows, [(x / w, y / h) for x, y in corners],
-                   projection, geometry, grid.mode or DEFAULT_GRID_MODE)
+                   projection, cls._geometry_from_grid(grid),
+                   grid.mode or DEFAULT_GRID_MODE)
+
+    @classmethod
+    def from_grid_normalized(cls, grid: MachineGrid, corners, projection=None):
+        """Like :meth:`from_grid` but for corners ALREADY in normalized [0,1].
+
+        :meth:`from_grid` takes pixel corners plus an image size; this takes the
+        normalized points directly. Used when the four corners come from another
+        saved map - the two grid modes are photographed by the same camera
+        through the same holder-travel envelope, so a calibrated map's corners
+        are reusable for the other mode - rather than from a fresh detection on
+        a live frame. Everything else is identical: same ``physical_grid``
+        block, same per-mode entry, same validation in ``__post_init__``.
+        """
+        if not grid.has_physical_scale:
+            raise ValueError("workspace mapping needs a physically scaled grid")
+        return cls(grid.cols, grid.rows,
+                   [(float(x), float(y)) for x, y in corners],
+                   projection, cls._geometry_from_grid(grid),
+                   grid.mode or DEFAULT_GRID_MODE)
 
     @classmethod
     def load(cls, path=WORKSPACE_MAP_PATH, cols=None, rows=None, *, mode=None):

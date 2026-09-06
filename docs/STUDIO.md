@@ -1282,6 +1282,47 @@ first in the diff.
 Newest first. One entry per landed change; note anything that contradicts the
 plan or that a future reader could not infer.
 
+### `virtcal` — derive one grid mode's workspace map from the other's
+
+Camera Studio gains a `virtcal` command / **VIRTUAL GRID CAL** button, and
+`python/camera/virtual_calibrate.py` is the same thing headless. Given a
+calibrated `vertical` (or `horizontal`) entry in `config/workspace_map.json`, it
+writes the other mode's entry without a camera or the rig.
+
+Why it is sound, and why it is only a drawing aid:
+
+- The four corners a workspace map stores are the **holder-travel envelope** —
+  machine `(0,0)` to the software cap. That rectangle describes the *machine*,
+  not the mode: `workspace.width_cm` / `height_cm` are not per-mode, and a block
+  lying down does not move a limit switch. Same camera, same lens, same ROI. So
+  the four corners are the same image points in both modes, and a calibrated
+  map already holds what the other mode's corners need.
+- The lattice *inside* the envelope is read from `config/rig.json`, never from
+  the map. `MachineGrid.from_config(mode="horizontal")` already carries the
+  `+1.9 cm` pickup-cell registration, the `3×10` counts and the (empty)
+  blocked-cell list, and `WorkspaceMap.from_grid_normalized` embeds them. So
+  the `+1.9` shift is data, not a special case in this code.
+- What it does **not** capture: any residual the target mode's firmware motion
+  knobs (`tool_offsets.cw`, `BUILD_PLACEMENT_OFFSET_*`, `SKEW_*`) fail to
+  cancel. Those are deliberately kept out of the drawn model (`AGENTS.md` §3a) —
+  the map draws the ideal lattice and the firmware bends motion to hit it — so a
+  real placed-block run on the target grid would not put them in the saved map
+  either, beyond perturbing its own four-corner fit. The derived map is
+  **exactly as accurate as the source map** and assumes the firmware
+  compensations are correct. It is a target-selection / overlay aid, not an
+  independent measurement of target-mode placement.
+
+Mechanics: `WorkspaceMap` grows `_geometry_from_grid` (factored out of
+`from_grid`) and `from_grid_normalized` (corners already in `[0,1]`, no image
+size). `rig/calibration_transfer.py` holds `transfer_workspace_map` and its
+guards — same-mode, missing source, a source with no `projection`, a
+non-matching envelope. The per-mode `save` already leaves the other entry
+byte-identical. `virtcal` warns (does not refuse) when the source map's
+projection has drifted from `camera_settings.json`, because the source map is
+then already stale and so is anything built from it. `tests/test_workspace_transfer.py`
+covers the copy, the geometry swap, the round-trip and every guard; no existing
+test changed.
+
 ### Belt-blocked cells — a twelfth diagnostic, `BLOCKED_CELL`
 
 The feeder belt sits across a few cells next to `[0,0]` (shipped: vertical

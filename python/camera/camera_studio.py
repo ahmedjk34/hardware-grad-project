@@ -135,6 +135,20 @@ Prefer `camera/block_grid_calibrate.py` when the rig is available: there the
 machine places each block on a cell it was TOLD, so the labelling is recorded
 rather than inferred and the anchor problem does not arise.
 
+`virtcal` (the VIRTUAL GRID CAL button) derives the OTHER grid mode's workspace
+map from the one already on disk - no camera, no placement. The four
+holder-envelope corners of `config/workspace_map.json` are the same image points
+in both modes (one camera, one holder-travel rectangle), so a calibrated
+vertical map already holds what a horizontal map's corners need; `virtcal`
+copies them across and pairs them with the target mode's `config/rig.json`
+lattice, `+1.9 cm` registration and all. It measures nothing: the result is
+exactly as accurate as the source calibration, and assumes the target mode's
+firmware motion knobs (`tool_offsets.cw`, `BUILD_PLACEMENT_OFFSET_*`, `SKEW_*`)
+land a block on the ideal lattice, which is what they are tuned for. With no
+argument it derives the mode `config/rig.json` does not call active;
+`virtcal horizontal` names the target explicitly. `python/camera/virtual_calibrate.py`
+is the same thing from a terminal, no GUI.
+
 While an entry or dropdown has focus it takes the keyboard instead. That focus
 guard is load-bearing: without it, digits typed into a field would also fire the
 numeric lens shortcuts.
@@ -267,9 +281,13 @@ from vision.color_correction import (
     pair_samples,
     solve_matrix,
 )
-from rig.config import load as load_rig_config
+from rig.config import GRID_MODES, load as load_rig_config
 from rig.grid import MachineGrid
 from rig.workspace import WORKSPACE_MAP_PATH
+from rig.calibration_transfer import (
+    CalibrationTransferError,
+    transfer_workspace_map,
+)
 from camera.camera_feed import framing_roi, load_settings, profile_from_settings
 from camera.gridded_camera_feed import projection_metadata
 from vision.block_grid import (
@@ -1101,6 +1119,9 @@ class Studio:
                  "write the last blockcal result to config/workspace_map.json")
         cmds.add("blockcaloff", self._cmd_blockcaloff, "",
                  "clear the block-calibration overlay")
+        cmds.add("virtcal", self._cmd_virtcal, "[target-mode]",
+                 "derive the OTHER grid mode's workspace map from the one "
+                 "already saved on disk - no camera, no placement")
 
         # --- colour: the software correction, separate from the sensor's own ---
         cmds.add("colour", self._cmd_colour, "[on|off]",
@@ -1394,6 +1415,53 @@ class Studio:
         self.block_lattice = None
         self.block_lattice_note = ""
         return "block calibration overlay cleared"
+
+    def _cmd_virtcal(self, args):
+        """Derive the other grid mode's workspace map from the saved one.
+
+        The four holder-envelope corners of ``config/workspace_map.json`` are
+        the same image points in both grid modes - one camera, one holder-travel
+        rectangle - so a calibrated map already holds what the other mode's
+        corners need. This copies them across and pairs them with the target
+        mode's ``config/rig.json`` lattice (horizontal's +1.9 cm registration
+        included). It reads no frame and moves nothing: the result is exactly as
+        good as the source calibration, and assumes the target mode's firmware
+        motion knobs land a block on the ideal lattice. See the module
+        docstring and ``docs/STUDIO.md``.
+        """
+        try:
+            cfg = load_rig_config(reload=True)
+        except (OSError, ValueError, KeyError) as exc:
+            raise CommandError(f"cannot read the rig config: {exc}")
+        active = MachineGrid.from_config(cfg).mode
+        if args:
+            target = str(args[0]).lower()
+            if target not in GRID_MODES:
+                raise CommandError(
+                    f"target mode must be one of {', '.join(GRID_MODES)}")
+        else:
+            # Default: derive the mode config does NOT call active, from the
+            # active one - the active one is what you just calibrated.
+            target = next(m for m in GRID_MODES if m != active)
+        source = next(m for m in GRID_MODES if m != target)
+
+        try:
+            derived, report = transfer_workspace_map(source, target, cfg=cfg)
+        except CalibrationTransferError as exc:
+            raise CommandError(str(exc))
+
+        # The derived map inherits the source map's projection. If that no
+        # longer matches what the app renders from camera_settings.json, the
+        # source map is already stale and so is anything built from it - say so
+        # rather than let every consumer reject the result with no clue why.
+        on_disk = self.saved_projection()
+        if on_disk is not None and derived.projection != on_disk:
+            self.log.add(True,
+                         f"the {source} calibration's projection does not match "
+                         f"{self.settings_path.name}; the app will refuse this "
+                         f"{target} map until the {source} grid is recalibrated "
+                         f"under the current settings")
+        return report.describe()
 
     def _cmd_swaprb(self, args):
         self.swap_rb = self._flag(args, self.swap_rb)
@@ -1817,6 +1885,7 @@ BUTTONS = [
     ("BLOCK CALIBRATION", "blockcal"),
     ("BLOCK CAL SAVE", "blockcalsave"),
     ("BLOCK CAL OFF", "blockcaloff"),
+    ("VIRTUAL GRID CAL", "virtcal"),
     ("TUNE VIEW", "tuneview"),
     ("TUNE RESET", "tunereset"),
     ("TUNE GUIDE", "straight"),
