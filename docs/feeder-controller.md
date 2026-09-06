@@ -23,17 +23,17 @@ One `FEED` request runs this sequence:
 2. Refuse the request if the stage sensor already sees a block. This prevents
    a second block from being fed into an occupied pickup point.
 3. Run the belt forward for one second, then stop it and close the container
-   in three deliberate stages: 150° → 108° → 65° → 23°, waiting one second
-   at each stage. (A gate already at 23° stays closed.)
+   in two stages: 150° → 108° → 23°, waiting one second at each stage. (A
+   gate already at 23° stays closed.)
 4. Wait one second for the container to settle, then open it through the same
-   three stages in reverse: 23° → 65° → 108° → 150°. The increments are 42°,
-   43°, and 42°, the most uniform possible with whole-degree servo commands.
+   two stages in reverse: 23° → 108° → 150°. The first opening is about two
+   thirds of the total travel; the final opening is the remaining third.
    This is intended to queue and release
    blocks more gently than one large movement.
 5. Wait up to 10 seconds for the **exit sensor** to see a block leave the
    container and enter the belt.
 6. Start the belt forward at that confirmation, wait 1.25 seconds, then close
-   the container gate through its three 150° → 108° → 65° → 23° stages.
+   the container gate through its two 150° → 108° → 23° stages.
 7. Wait up to 15 seconds for the **stage sensor** at the pickup point to see
    the block. Stop the belt immediately on detection so the block remains in
    the pickup area.
@@ -62,7 +62,7 @@ that did not arrive at the pickup point.
 | Exit IR obstacle sensor | `OUT 4` | Confirms that a block left the container. The default logic is active-low; pin 5 is unused. |
 | Alignment servo | `6` | Rests at 90° and nudges to 120°; tune mechanically. |
 | Stage IR obstacle sensor | `OUT 8` | Confirms that the pickup position contains a block. The default logic is active-low; change `STAGE_IR_DETECTED_LEVEL` if the installed sensor is inverted. |
-| Container servo | `12` | Closed 23°, staged at 65° then 108°, fully open at 150°. |
+| Container servo | `12` | Closed 23°, first opening stage 108°, fully open at 150°. |
 
 The sketch uses 9600 baud. All serial commands must end with a newline.
 
@@ -128,15 +128,11 @@ For `FEED 42`, a normal transaction is:
 @42 STATE state=closing_stage_1
 @42 EVENT phase=container_closing_stage_1_after_belt_run
 @42 STATE state=closing_stage_2
-@42 EVENT phase=container_closing_stage_2
-@42 STATE state=closing_stage_3
-@42 EVENT phase=container_closing_stage_3
+@42 EVENT phase=container_closing_final
 @42 STATE state=opening_stage_1
 @42 EVENT phase=container_opening_stage_1
 @42 STATE state=opening_stage_2
-@42 EVENT phase=container_opening_stage_2
-@42 STATE state=opening_stage_3
-@42 EVENT phase=container_opening_stage_3
+@42 EVENT phase=container_opening_final
 @42 STATE state=waiting_for_exit
 @42 EVENT phase=waiting_for_exit
 @42 STATE state=waiting_to_close_after_exit
@@ -145,9 +141,9 @@ For `FEED 42`, a normal transaction is:
 @42 STATE state=exit_closing_stage_1
 @42 EVENT phase=exit_delay_elapsed_container_closing_stage_1
 @42 STATE state=exit_closing_stage_2
-@42 EVENT phase=exit_container_closing_stage_2
+@42 EVENT phase=exit_container_closing_final
 @42 STATE state=moving_to_stage
-@42 EVENT phase=exit_container_closing_stage_3_belt_running
+@42 EVENT phase=exit_container_closing_final_belt_running
 @42 STATE state=stage_belt_settling
 @42 SENSOR sensor=stage detected=1
 @42 EVENT phase=stage_detected_belt_settling
@@ -210,7 +206,7 @@ results. A controller should reject malformed input locally before sending it.
 | `STOP` / `OFF` / `X` | Stop the belt and cancel an active feed cycle. |
 | `STATUS` / `P` | Print state, belt/container status, and both IR states (`detected=0` or `detected=1`). |
 | `US` | Same sensor/status snapshot as `STATUS`. |
-| `OPEN` / `O` | Test-only manual three-stage container opening (23° → 65° → 108° → 150°). It cancels an active cycle. |
+| `OPEN` / `O` | Test-only manual two-stage container opening (23° → 108° → 150°). It cancels an active cycle. |
 | `CLOSE` / `C` | Close the container and stop the belt. |
 | `ON` | Run belt forward without a sensor-controlled cycle. |
 | `F` | Run belt forward for bench testing. |
@@ -232,16 +228,14 @@ precision motion control.
 | State | Belt | Exit sensor | Stage sensor | Exit condition |
 | --- | --- | --- | --- | --- |
 | `pre_closing_belt_run` | running forward | — | — | 1 s elapsed, then begin closing |
-| `closing_stage_1` | stopped | — | — | 1 s elapsed, then move 108° → 65° |
-| `closing_stage_2` | stopped | — | — | 1 s elapsed, then move 65° → 23° |
-| `closing_stage_3` | stopped | — | — | 1 s elapsed, then begin opening |
+| `closing_stage_1` | stopped | — | — | 1 s elapsed, then move 108° → 23° |
+| `closing_stage_2` | stopped | — | — | 1 s elapsed, then begin opening |
 | `opening_stage_1` | stopped | — | — | 1 s elapsed |
-| `opening_stage_2` | stopped | — | — | 1 s elapsed |
-| `opening_stage_3` | stopped | — | — | 1 s elapsed |
+| `opening_stage_2` | stopped | — | — | 1 s elapsed, then wait for exit |
 | `waiting_for_exit` | stopped | sampled every 100 ms | — | block detected or 10 s timeout |
 | `waiting_to_close_after_exit` | running forward | — | — | 1.25 s elapsed, then close the container |
-| `exit_closing_stage_1` | running forward | — | — | 1 s elapsed, then move 108° → 65° |
-| `exit_closing_stage_2` | running forward | — | — | 1 s elapsed, then move 65° → 23° |
+| `exit_closing_stage_1` | running forward | — | — | 1 s elapsed, then move 108° → 23° |
+| `exit_closing_stage_2` | running forward | — | — | 1 s elapsed, then continue to stage |
 | `moving_to_stage` | running forward | — | sampled every 100 ms | block detected or 15 s timeout |
 | `stage_belt_settling` | running forward | — | — | immediate stop on stage detection |
 | `aligning` | stopped | — | — | 1 s elapsed |

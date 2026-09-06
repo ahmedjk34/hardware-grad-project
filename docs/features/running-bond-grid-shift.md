@@ -16,13 +16,17 @@ where that block goes.**
 
 ## 1. The geometry, settled
 
-A block is `2.2 × 6.0 × 1.5 cm`. The **run axis** of a mode is the one its
-`6.0 cm` face lies along — the direction blocks are laid end to end and where a
-straddling course bridges a joint:
+**The bond course applies to the HORIZONTAL grid only.** The vertical grid is
+never shifted by this feature — one gate, `BOND_MODE` in `resolveShift`, and the
+compiler, validator, Twin and Studio all follow it. The Studio panel is inert in
+vertical mode and says so.
 
-| mode | run axis | block on run axis | gap | **pitch** | half pitch = **the increment** |
+A block is `2.2 × 6.0 × 1.5 cm`. The horizontal grid lays its `6.0 cm` face
+along **X** — the direction blocks run end to end and where a straddling course
+bridges a joint:
+
+| grid | run axis | block on run axis | gap | **pitch** | half pitch = **the increment** |
 | --- | --- | --- | --- | --- | --- |
-| vertical | **Y** | 6.0 | 1.6 | 7.6 cm | **3.8 cm** = 760 steps (Y, 200.0 st/cm) |
 | horizontal | **X** | 6.0 | 1.6 | 7.6 cm | **3.8 cm** ≈ 758 steps (X, 199.56 st/cm) |
 
 For a level-1 block to sit centred on the joint between two level-0 blocks, its
@@ -35,22 +39,17 @@ unique offset that makes every "equal each side" measure true at once:
   73 %`, over the `SUPPORT_RATIO` of `0.55`
 - inset from the outer edges of the two-block group: `3.8 cm` each side
 
-The increment set on the run axis is `{−3.8, 0, +3.8}`, single step. A full
-pitch is just a whole-cell re-index and is not offered.
+The incrementer steps by `±3.8 cm`, clamped to one step (`{−3.8, 0, +3.8}`). A
+full pitch is a whole-cell re-index and is not offered.
 
 ### What clips
 
-The shifted lattice pushes `+3.8 cm` toward the far end:
-
-- **vertical / Y** sits exactly on its Y cap (`centres 0.00 → 38.00`), so a
-  shifted course **loses its last row** — `7 × 6` becomes `7 × 5`. Row 0 moves
-  to `y = 3.8`, clearer of the home-switch overhang.
-- **horizontal / X** has `5.7 cm` of far-end slack (`centres 1.90 → 17.10`,
-  cap `22.8`), so a shifted course **keeps all 3 columns**.
-
-Blocks left sitting on a clipped cell are marked, not deleted (`CLIPPED_BY_SHIFT`
-already exists as an `error` in `web/src/studio/validate.ts`); RUN is blocked
-until they are moved or removed.
+The horizontal grid's X centres run `1.90 → 17.10` with the cap at `22.8` and a
+`3.0 cm` X overhang budget, so a **single `+3.8 cm` course keeps all 3 columns**
+— the shipped geometry has the slack. `clippedByShift` / `CLIPPED_BY_SHIFT` stay
+wired as the safety net for any larger offset: a block a course pushes past the
+cap is marked (an `error` in `validate.ts`), never deleted, and RUN is blocked
+until it moves.
 
 ### `[0,0]` never moves
 
@@ -71,7 +70,8 @@ feeder cell.
 A model gains **`bondShifts`**: an author field beside `blocks` / `order` (not
 in the `rig` snapshot — it is intent, not recorded geometry). Per mode, a map
 from **level index** to an `[x_cm, y_cm]` offset added **on top of** the rig's
-live shift. Absent level, or `level ≤ 0`, ⇒ `[0, 0]`.
+live shift. Absent level, `level ≤ 0`, or a `vertical` entry ⇒ `[0, 0]` — only
+the `horizontal` submap is ever consulted.
 
 **No schema bump.** `bondShifts` is additive and optional: a `rigmodel/1` file
 with no `bondShifts` correctly means "no bond", exactly as an older file with no
@@ -81,8 +81,7 @@ the whole document.
 
 ```jsonc
 "bondShifts": {
-  "vertical":   { "1": [0, 3.8], "3": [0, 3.8], "5": [0, 3.8] },
-  "horizontal": {}
+  "horizontal": { "1": [3.8, 0], "3": [3.8, 0], "5": [3.8, 0] }
 }
 ```
 

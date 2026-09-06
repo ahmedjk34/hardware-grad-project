@@ -19,7 +19,7 @@ import {
 } from "three";
 import { RoundedBoxGeometry } from "three-stdlib";
 import {
-  blockSceneSize, cellToScene, type ModeName, type Shift,
+  blockSceneSize, cellToScene, resolveShift, type BondShifts, type ModeName, type Shift,
 } from "../coords";
 import type { ModelBlock } from "../model";
 import { resolveTopTarget } from "../pick";
@@ -257,13 +257,18 @@ export function BlockBatch<T extends BatchBlock>({
 /** The Studio's own colouring: the colour the author gave the block. */
 const authoredColour = (block: ModelBlock) => tokenColor(`--block-${block.colour}`);
 
-export const Blocks = memo(function Blocks({ blocks, activeMode, shift, heldLevel, reduced, ...handlers }: {
+export const Blocks = memo(function Blocks({ blocks, activeMode, shift, bondShifts, heldLevel, reduced, ...handlers }: {
   blocks: ModelBlock[];
   activeMode: ModeName;
   shift?: Shift;
+  /** The model's running-bond courses, so a placed block renders where it will
+   *  physically go — at the shifted spot on its course. Horizontal grid only
+   *  (`resolveShift` gates it); vertical blocks always draw at their plain cell. */
+  bondShifts?: BondShifts;
   heldLevel: number | null;
   reduced: boolean;
 } & SurfaceHandlers) {
+  const shiftOf = (block: ModelBlock) => resolveShift(block, undefined, bondShifts);
   const knownIds = useRef(new Set<string>());
   const animateIds = new Set(blocks.filter(block => !knownIds.current.has(block.id)).map(block => block.id));
   useLayoutEffect(() => {
@@ -287,11 +292,11 @@ export const Blocks = memo(function Blocks({ blocks, activeMode, shift, heldLeve
     <>
       {(["vertical", "horizontal"] as ModeName[]).flatMap(mode => [
         <BlockBatch key={`${mode}-solid`} blocks={groups[mode].solid} animateIds={animateIds} mode={mode}
-          activeMode={activeMode} shift={shift} opacity={1} reduced={reduced} handlers={surfaceHandlers}
-          colourOf={authoredColour} />,
+          activeMode={activeMode} shift={shift} shiftOf={shiftOf} opacity={1} reduced={reduced}
+          handlers={surfaceHandlers} colourOf={authoredColour} />,
         <BlockBatch key={`${mode}-xray`} blocks={groups[mode].xray} animateIds={animateIds} mode={mode}
-          activeMode={activeMode} shift={shift} opacity={0.42} reduced={reduced} handlers={surfaceHandlers}
-          colourOf={authoredColour} />,
+          activeMode={activeMode} shift={shift} shiftOf={shiftOf} opacity={0.42} reduced={reduced}
+          handlers={surfaceHandlers} colourOf={authoredColour} />,
       ])}
     </>
   );

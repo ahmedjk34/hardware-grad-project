@@ -37,10 +37,11 @@ const uint8_t CONTAINER_SERVO_PIN = 12;
 
 const uint8_t BELT_FORWARD_DIRECTION_LEVEL = HIGH;
 const uint8_t BELT_REVERSE_DIRECTION_LEVEL = LOW;
-// Three equal-as-possible movements from closed to open: +42°, +43°, +42°.
+// Two opening movements: roughly two-thirds of the travel, then the final third.
 const uint8_t CONTAINER_CLOSED_ANGLE = 23;
-const uint8_t CONTAINER_STAGE_1_ANGLE = 65;
-const uint8_t CONTAINER_STAGE_2_ANGLE = 108;
+const uint8_t CONTAINER_STAGE_1_ANGLE = 108;
+// Temporarily disabled extra intermediate stage (65°):
+// const uint8_t CONTAINER_STAGE_2_ANGLE = 65;
 const uint8_t CONTAINER_OPEN_ANGLE = 150;
 const uint8_t ALIGN_REST_ANGLE = 90;
 const uint8_t ALIGN_NUDGE_ANGLE = 120;
@@ -68,10 +69,8 @@ enum FeedState {
   PRE_CLOSING_BELT_RUN,
   CLOSING_STAGE_1,
   CLOSING_STAGE_2,
-  CLOSING_STAGE_3,
   OPENING_STAGE_1,
   OPENING_STAGE_2,
-  OPENING_STAGE_3,
   WAITING_FOR_EXIT,
   WAITING_TO_CLOSE_AFTER_EXIT,
   EXIT_CLOSING_STAGE_1,
@@ -198,20 +197,14 @@ void closeContainer() {
 }
 
 void closeContainerStage1() {
-  containerServo.write(CONTAINER_STAGE_2_ANGLE);
-}
-
-void closeContainerStage2() {
   containerServo.write(CONTAINER_STAGE_1_ANGLE);
 }
 
 void closeContainerInStages() {
   // Do not move a gate that is already closed. A known fully-open gate closes
-  // through the same three near-equal moves used by the FEED cycle.
+  // through the same two moves used by the FEED cycle.
   if (containerOpen) {
     closeContainerStage1();
-    delay(CLOSE_SETTLE_MS);
-    closeContainerStage2();
     delay(CLOSE_SETTLE_MS);
   }
   closeContainer();
@@ -219,10 +212,6 @@ void closeContainerInStages() {
 
 void openContainerStage1() {
   containerServo.write(CONTAINER_STAGE_1_ANGLE);
-}
-
-void openContainerStage2() {
-  containerServo.write(CONTAINER_STAGE_2_ANGLE);
 }
 
 void openContainerStage3() {
@@ -298,26 +287,19 @@ void updateFeedCycle() {
           event(F("container_closing_stage_1_after_belt_run"));
         } else {
           closeContainer();
-          setState(CLOSING_STAGE_3);
+          setState(CLOSING_STAGE_2);
           event(F("container_already_closed_after_belt_run"));
         }
       }
       break;
     case CLOSING_STAGE_1:
       if (elapsed(stateStartedAtMs, CLOSE_SETTLE_MS)) {
-        closeContainerStage2();
+        closeContainer();
         setState(CLOSING_STAGE_2);
-        event(F("container_closing_stage_2"));
+        event(F("container_closing_final"));
       }
       break;
     case CLOSING_STAGE_2:
-      if (elapsed(stateStartedAtMs, CLOSE_SETTLE_MS)) {
-        closeContainer();
-        setState(CLOSING_STAGE_3);
-        event(F("container_closing_stage_3"));
-      }
-      break;
-    case CLOSING_STAGE_3:
       if (elapsed(stateStartedAtMs, CLOSE_SETTLE_MS)) {
         openContainerStage1();
         setState(OPENING_STAGE_1);
@@ -326,19 +308,12 @@ void updateFeedCycle() {
       break;
     case OPENING_STAGE_1:
       if (elapsed(stateStartedAtMs, CONTAINER_STAGE_DELAY_MS)) {
-        openContainerStage2();
+        openContainerStage3();
         setState(OPENING_STAGE_2);
-        event(F("container_opening_stage_2"));
+        event(F("container_opening_final"));
       }
       break;
     case OPENING_STAGE_2:
-      if (elapsed(stateStartedAtMs, CONTAINER_STAGE_DELAY_MS)) {
-        openContainerStage3();
-        setState(OPENING_STAGE_3);
-        event(F("container_opening_stage_3"));
-      }
-      break;
-    case OPENING_STAGE_3:
       if (elapsed(stateStartedAtMs, CONTAINER_STAGE_DELAY_MS)) {
         setState(WAITING_FOR_EXIT);
         event(F("waiting_for_exit"));
@@ -358,16 +333,15 @@ void updateFeedCycle() {
       break;
     case EXIT_CLOSING_STAGE_1:
       if (elapsed(stateStartedAtMs, CLOSE_SETTLE_MS)) {
-        closeContainerStage2();
+        closeContainer();
         setState(EXIT_CLOSING_STAGE_2);
-        event(F("exit_container_closing_stage_2"));
+        event(F("exit_container_closing_final"));
       }
       break;
     case EXIT_CLOSING_STAGE_2:
       if (elapsed(stateStartedAtMs, CLOSE_SETTLE_MS)) {
-        closeContainer();
         setState(MOVING_TO_STAGE);
-        event(F("exit_container_closing_stage_3_belt_running"));
+        event(F("exit_container_closing_final_belt_running"));
       }
       break;
     case MOVING_TO_STAGE:
@@ -451,10 +425,8 @@ const __FlashStringHelper *stateName() {
     case IDLE: return F("idle"); case PRE_CLOSING_BELT_RUN: return F("pre_closing_belt_run");
     case CLOSING_STAGE_1: return F("closing_stage_1");
     case CLOSING_STAGE_2: return F("closing_stage_2");
-    case CLOSING_STAGE_3: return F("closing_stage_3");
     case OPENING_STAGE_1: return F("opening_stage_1");
     case OPENING_STAGE_2: return F("opening_stage_2");
-    case OPENING_STAGE_3: return F("opening_stage_3");
     case WAITING_FOR_EXIT: return F("waiting_for_exit");
     case WAITING_TO_CLOSE_AFTER_EXIT: return F("waiting_to_close_after_exit");
     case EXIT_CLOSING_STAGE_1: return F("exit_closing_stage_1");
@@ -519,7 +491,6 @@ void handleCommand(char *line) {
     printStatus();
   } else if (!strcmp(line, "OPEN") || !strcmp(line, "O")) {
     cancelCycle(true); stopBelt(); openContainerStage1();
-    delay(CONTAINER_STAGE_DELAY_MS); openContainerStage2();
     delay(CONTAINER_STAGE_DELAY_MS); openContainerStage3();
     acknowledgeManual(F("OPEN"));
   } else if (!strcmp(line, "CLOSE") || !strcmp(line, "C")) {

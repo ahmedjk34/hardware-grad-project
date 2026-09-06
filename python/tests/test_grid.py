@@ -582,6 +582,29 @@ check("rig sketch feeder pickup drop is 13.7 cm below the top switch",
 check("rig sketch phase 5 uses zGoPickup(), not zGoGround()",
       "if (!zGoPickup())" in sketch and "if (!zGoGround())" not in sketch)
 
+
+def zgopickup_body(src):
+    """zGoPickup()'s body (brace-matched), comments stripped, or '' if absent."""
+    m = re.search(r"bool zGoPickup\(\)\s*\{", src)
+    if not m:
+        return ""
+    i, depth = m.end(), 1
+    while i < len(src) and depth:
+        depth += (src[i] == "{") - (src[i] == "}")
+        i += 1
+    body = src[m.end():i]
+    return re.sub(r"//[^\n]*", "", body)  # code only - a word in a comment is not a use
+
+
+# zGoPickup() must reference the TOP switch physically (seek it) and step the
+# drop from there - NOT compute an absolute target from Z_TRAVEL_STEPS, which
+# would make the pickup height wrong (and first-block-different) whenever the
+# step constant does not match the rig.
+_body = zgopickup_body(sketch)
+check("rig sketch zGoPickup() seeks the top switch as its reference",
+      "zGoTop()" in _body and "zStepsFromGround()" in _body
+      and "Z_TRAVEL_STEPS" not in _body)
+
 # The supervised vertical/horizontal fill sketches must use the same dynamic
 # correction tables as the configured rig sketch. They are not flashed by
 # scripts/flash.sh, but leaving their old Y-only implementation behind makes a
@@ -598,6 +621,10 @@ for standalone_name in ("build_vertical_grid", "build_horizontal_grid"):
           standalone_drop.group(1) if standalone_drop else "not found")
     check(f"{standalone_name} phase 5 uses zGoPickup(), not zGoGround()",
           "if (!zGoPickup())" in standalone and "if (!zGoGround())" not in standalone)
+    _sbody = zgopickup_body(standalone)
+    check(f"{standalone_name} zGoPickup() seeks the top switch as its reference",
+          "zGoTop()" in _sbody and "zStepsFromGround()" in _sbody
+          and "Z_TRAVEL_STEPS" not in _sbody)
     for constant, expected_by_mode in {**dynamic_skew_defaults,
                                        **placement_offset_defaults}.items():
         actual = firmware_mode_numbers(constant, standalone)

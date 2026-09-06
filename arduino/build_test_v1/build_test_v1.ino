@@ -1294,19 +1294,21 @@ float BLOCK_HEIGHT_CM = 1.5;
 //   SIGN EXCEPTION - the one Z knob NOT measured up from GROUND. Every
 //   other Z number in this file is a magnitude above the ground switch
 //   (SECTION 6C, Rule 0). This one is measured DOWN from the pin 29 TOP
-//   switch, because after this change the pickup never references GROUND
-//   and phase 1's zGoTop() is the live reference the drop is taken from.
-//   Larger value = deeper descent = LOWER pickup point.
+//   switch, because the pickup never references GROUND. zGoPickup() SEEKS
+//   the top switch itself and then steps `drop` below where it physically
+//   stopped - so the descent is exact even if Z_TRAVEL_STEPS is off, and
+//   the same on the first block and the fiftieth. Larger value = deeper
+//   descent = LOWER pickup point.
 //
-//        pickup_steps = Z_TRAVEL_STEPS - round(DROP_FROM_TOP_CM * stepsPerCm)
+//        drop         = round(DROP_FROM_TOP_CM * stepsPerCm)   [cm->steps only]
+//        pickup       = (physical top switch position) - drop
 //
-//   At the shipped calibration (Z_TRAVEL_CM 26.5, Z_TRAVEL_STEPS 1350):
+//   At the shipped calibration (Z_TRAVEL_CM 26.5, Z_TRAVEL_STEPS 1350) the
+//   NOMINAL figures the `Z` report prints:
 //        13.7 cm below top  ==  ~12.8 cm above GROUND  ==  ~652 steps
 //        from ground  ==  a ~698-step descent from the top switch.
-//
-//   Taking the drop from the TOP (not a fixed height above ground) keeps
-//   it exact even if Z_TRAVEL_STEPS is a little off: phase 1 has just
-//   physically referenced the top switch when this runs.
+//   Z_TRAVEL_STEPS is used ONLY to turn cm into the `drop` step count here,
+//   never as the reference position - that is read live from the switch.
 //
 //   The bottom Z switch stays REQUIRED and enabled: it is now a physical
 //   backstop below the pickup height, and `0+` still uses it to give Z a
@@ -1404,8 +1406,14 @@ const bool BUILD_VERBOSE = true;
 //   last build did NR  ->  nothing to undo
 
 const int8_t ROT_NONE = 0;
-const int8_t ROT_CW = +1;
-const int8_t ROT_CCW = -1;
+// Sign inverted on purpose: the horizontal build now swings the claw the
+// OPPOSITE physical way. The labels and their tool-offset slots are
+// unchanged (ROT_CW still reads TOOL_OFFSET_CW_*), so the same placement
+// compensation applies to the build - only the motor direction each label
+// drives is flipped. Low-level rotateAuxStepperCW/CCW logs and statRotCW/CCW
+// now read opposite the ROT_ label; that is cosmetic.
+const int8_t ROT_CW = -1;
+const int8_t ROT_CCW = +1;
 
 // Where the claw is RIGHT NOW, relative to neutral. A manual angle that is
 // not exactly 0/+90/-90 has no calibrated tool offset, so it is marked
@@ -4257,10 +4265,11 @@ long zEtaToGroundMs()
   return zEtaMs(zStepsFromGround());
 }
 
-// The feeder-belt pickup point as an absolute Z position in steps ABOVE
-// GROUND: Z_TRAVEL_STEPS minus the configured drop below the top switch,
-// clamped into the real travel. Kept in ground-referenced step space so
-// the clamp, the ETA and the move all match zGoLevel()'s arithmetic.
+// The NOMINAL feeder-belt pickup height in steps above GROUND, at the shipped
+// Z calibration: Z_TRAVEL_STEPS minus the configured drop below the top switch.
+// Informational only - the `Z` report prints it. zGoPickup() does NOT use this:
+// it descends `drop` from the PHYSICAL top switch, so the real pickup height
+// tracks the true travel even when Z_TRAVEL_STEPS is a little off.
 long zPickupStepsFromGround()
 {
   long drop = lround(Z_PICKUP_DROP_FROM_TOP_CM * zStepsPerCm());
@@ -4283,12 +4292,14 @@ long zPickupStepsFromGround()
 // zGoPickup(): a fixed descent from the top switch, NOT a ground seek.
 long zEtaToPickupMs()
 {
-  if (!axisHomed[AXIS_Z])
+  // zGoPickup() seeks the top switch (a no-op mid-build, phase 1 just did it)
+  // and then descends exactly `drop` steps below it.
+  long drop = lround(Z_PICKUP_DROP_FROM_TOP_CM * zStepsPerCm());
+  if (drop < 0)
   {
-    return zEtaMs(Z_TRAVEL_STEPS);
+    drop = 0;
   }
-  long target = axisPosFromHomeSteps(AXIS_Z, zPickupStepsFromGround());
-  return zEtaMs(zStepsFromGround() - target);
+  return zEtaMs(drop);
 }
 
 // zGoLevel(): level 0 is a ground seek; every other level is an exact
@@ -4349,20 +4360,39 @@ bool zGoGround()
 // this guard never trips; it mirrors zGoLevel() for any other caller.
 bool zGoPickup()
 {
-  if (!axisHomed[AXIS_Z])
+  // The pickup descent is measured DOWN FROM THE TOP SWITCH, so reference that
+  // switch PHYSICALLY instead of trusting Z_TRAVEL_STEPS. In a build, phase 1's
+  // zGoTop() has just done this and the switch is still made, so this seek
+  // returns immediately with no motion. Doing it here as well guarantees the
+  // descent is exactly Z_PICKUP_DROP_FROM_TOP_CM below the REAL switch on every
+  // cycle - identical for the first block and the fiftieth, and correct even if
+  // the step constant does not match the rig - and makes zGoPickup() safe to
+  // call on its own. zGoTop() also establishes the Z reference (it is a seek),
+  // so no separate axisHomed[] guard is needed.
+  if (!zGoTop())
   {
-    Serial.println(F("  !! Z has no reference - cannot go to the pickup height."));
-    Serial.println(F("  !! Raise Z into the top switch (or send 0+) first."));
+    Serial.println(F("  !! Z could not reference the top switch for the pickup descent."));
     return false;
   }
 
-  long steps = zPickupStepsFromGround();
-  long target = axisPosFromHomeSteps(AXIS_Z, steps);
+  long drop = lround(Z_PICKUP_DROP_FROM_TOP_CM * zStepsPerCm());
+  if (drop < 0)
+  {
+    drop = 0;
+  }
+
+  // zStepsFromGround() now reads the physical top; go `drop` steps below it.
+  long targetMag = zStepsFromGround() - drop;
+  if (targetMag < 0)
+  {
+    targetMag = 0; // never below GROUND - the bottom switch also backstops this
+  }
+  long target = axisPosFromHomeSteps(AXIS_Z, targetMag);
 
   Serial.print(F("  Z down to the feeder pickup height ("));
   Serial.print(Z_PICKUP_DROP_FROM_TOP_CM, 2);
   Serial.print(F(" cm below the top switch)  =  "));
-  Serial.print(steps);
+  Serial.print(targetMag);
   Serial.println(F(" steps above GROUND ..."));
 
   bool ok = moveAxisTo(AXIS_Z, target);

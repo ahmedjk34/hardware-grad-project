@@ -41,8 +41,11 @@ measurement** — do not "fix" it by flipping a sign somewhere.
 belt was fitted at `[0,0]`, build phase 5 no longer seeks the ground switch to
 pick a block up — it descends a fixed distance **below the pin-29 top switch**
 and grips there. That distance is therefore measured *down from the top
-switch*, not up from ground, because the pickup never references ground and
-phase 1's top-switch seek is the live reference. Larger value = deeper
+switch*, not up from ground, because the pickup never references ground.
+`zGoPickup()` seeks the top switch itself and then steps `drop` below where it
+physically stopped, so the pickup height is exact even when `Z_TRAVEL_STEPS`
+is off (that constant only converts cm → the drop step count) and is the same
+on the first block and the fiftieth. Larger value = deeper
 descent = lower pickup point. It is firmware-only, applies to phase 5 alone,
 and is the **only** number in this file that breaks the rule above. Every
 other Z knob (`Z_MARGIN_*`, `Z_TRAVEL_*`, levels) is still a magnitude above

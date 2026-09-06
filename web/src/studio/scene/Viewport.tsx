@@ -12,7 +12,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Vector3 } from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
-import type { ModeName, Shift } from "../coords";
+import { resolveShift, type BondShifts, type ModeName, type Shift } from "../coords";
 import type { Model } from "../model";
 import type { CellTarget } from "../pick";
 import type { Diagnostic } from "../validate";
@@ -169,15 +169,22 @@ function CameraRig({ view, nonce, reduced, focusBox }: {
   return null;
 }
 
-function Scene({ mode, shift, view, nonce, reduced, model, target, status, heldLevel,
+function Scene({ mode, shift, bondShifts, view, nonce, reduced, model, target, status, heldLevel,
                  diagnostics, emphasizedId, focusBox, captureHandle, ...handlers }: {
-  mode: ModeName; shift?: Shift; view: ViewName; nonce: number; reduced: boolean;
+  mode: ModeName; shift?: Shift; bondShifts?: BondShifts; view: ViewName; nonce: number; reduced: boolean;
   model: Model; target: CellTarget | null; status: GhostStatus | null; heldLevel: number | null;
   diagnostics: Diagnostic[]; emphasizedId?: string | null; focusBox: Box | null;
   captureHandle?: CaptureHandle;
 } & SurfaceHandlers) {
   const box = useMemo(() => envelopeBoxScene(), []);
   const centre = boxCentre(box);
+  // Placed blocks — and their contact shadows — draw where they will physically
+  // land: at the shifted spot on their running-bond course. Horizontal only
+  // (`resolveShift` gates the vertical grid out).
+  const shadowBlocks = useMemo(
+    () => model.blocks.map(block => ({ ...block, shift: resolveShift(block, undefined, bondShifts) })),
+    [model.blocks, bondShifts],
+  );
   return (
     <>
       {/* Section 8.2: one key with soft shadows, one dim fill, a faint hemisphere. */}
@@ -190,9 +197,9 @@ function Scene({ mode, shift, view, nonce, reduced, model, target, status, heldL
 
       <Envelope box={box} />
       <Lattice mode={mode} shift={shift} {...handlers} />
-      <BlockShadows blocks={model.blocks} />
-      <Blocks blocks={model.blocks} activeMode={mode} shift={shift} heldLevel={heldLevel}
-              reduced={reduced} {...handlers} />
+      <BlockShadows blocks={shadowBlocks} />
+      <Blocks blocks={model.blocks} activeMode={mode} shift={shift} bondShifts={bondShifts}
+              heldLevel={heldLevel} reduced={reduced} {...handlers} />
       <DiagnosticMarkers blocks={model.blocks} diagnostics={diagnostics} emphasizedId={emphasizedId} />
       <Ghost mode={mode} shift={shift} target={target} status={status} />
 
@@ -210,6 +217,9 @@ function Scene({ mode, shift, view, nonce, reduced, model, target, status, heldL
 export interface ViewportProps {
   mode: ModeName;
   shift?: Shift;
+  /** The model's running-bond courses, for drawing placed blocks at the
+   *  shifted spot they will be built on. */
+  bondShifts?: BondShifts;
   view: ViewName;
   /** Bumped by the caller to re-snap to the view that is already selected. */
   nonce?: number;
@@ -224,7 +234,7 @@ export interface ViewportProps {
   captureHandle?: CaptureHandle;
 }
 
-export function Viewport({ mode, shift, view, nonce = 0, model, target, status, heldLevel,
+export function Viewport({ mode, shift, bondShifts, view, nonce = 0, model, target, status, heldLevel,
                            diagnostics = [], emphasizedId, focusBox = null, captureHandle,
                            onSurfaceMove, onSurfaceDown, onSurfaceUp, onSurfaceLeave }: ViewportProps & SurfaceHandlers) {
   const reduced = useReducedMotion();
@@ -236,7 +246,7 @@ export function Viewport({ mode, shift, view, nonce = 0, model, target, status, 
         gl={{ antialias: true, alpha: true, stencil: false, powerPreference: "high-performance" }}
         camera={{ fov: FOV_DEG, near: 0.5, far: 800 }}
       >
-        <Scene mode={mode} shift={shift} view={view} nonce={nonce} reduced={reduced}
+        <Scene mode={mode} shift={shift} bondShifts={bondShifts} view={view} nonce={nonce} reduced={reduced}
                model={model} target={target} status={status} heldLevel={heldLevel}
                diagnostics={diagnostics} emphasizedId={emphasizedId} focusBox={focusBox}
                captureHandle={captureHandle}

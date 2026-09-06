@@ -421,7 +421,7 @@ export default function Studio() {
       </header>
 
       <div className="studio-stage">
-        <Viewport mode={mode} shift={previewShift} view={view} nonce={nonce} model={model}
+        <Viewport mode={mode} shift={previewShift} bondShifts={bondShifts} view={view} nonce={nonce} model={model}
                   captureHandle={capture}
                   target={target} status={status} heldLevel={heldLevel}
                   diagnostics={diagnostics}

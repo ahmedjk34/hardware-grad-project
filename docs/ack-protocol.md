@@ -176,10 +176,12 @@ descent to level K   1350 - 76.4*K steps = 2565 - 145*K  ms
 ```
 
 Phase 5 (`lower_to_ground`) is no longer a full top-to-bottom travel: since
-the feeder belt was fitted it is a **fixed partial descent** to the pickup
-height (`Z_PICKUP_DROP_FROM_TOP_CM`, 13.7 cm below the top switch ≈ a
-698-step / ~1331 ms move at the shipped calibration). `zEtaToPickupMs()` sends
-the shorter figure. Placement phases 7/10/12 are unchanged.
+the feeder belt was fitted it re-seeks the top switch (a no-op — phase 1 just
+made it) and then steps a **fixed partial descent** below it to the pickup
+height (`Z_PICKUP_DROP_FROM_TOP_CM`, 13.7 cm ≈ a 698-step / ~1331 ms move at
+the shipped calibration — the descent is measured from the *physical* switch,
+so it is exact even if `Z_TRAVEL_STEPS` is off). `zEtaToPickupMs()` sends the
+shorter figure. Placement phases 7/10/12 are unchanged.
 
 Measured on the rig with a stopwatch: **2.6-2.8 s** for a full top-to-bottom
 travel, against 2.57 s predicted. The 35-235 ms gap is the fixed overheads the
