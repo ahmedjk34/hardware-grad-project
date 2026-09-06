@@ -159,7 +159,7 @@ except BuildStateError:
 
 rig = FakeRig([RigError("cable lost")])
 controller = BuildController(rig)
-controller.select((1, 1))
+controller.select((3, 3))  # clear of the feeder and the feeder-belt cells
 try:
     controller.build()
     check("serial error propagates", False)

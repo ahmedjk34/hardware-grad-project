@@ -20,6 +20,7 @@ export function placementStatus(model: Model, mode: ModeName, target: CellTarget
   if (!error) return { legal: true, reason: null };
   const legacyReasons: Partial<Record<DiagnosticCode, string>> = {
     FEEDER_CELL: "[0,0] is the feeder",
+    BLOCKED_CELL: "blocked by the feeder belt",
     OUT_OF_GRID: "outside the grid",
     DUPLICATE_CELL: "already a block here",
   };

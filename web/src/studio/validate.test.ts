@@ -4,7 +4,7 @@ import { aabbOf, footprintContains, intersects } from "./geometry";
 import { type Model, type ModelBlock } from "./model";
 import { DEFAULT_STUDIO_SETTINGS } from "./settings";
 import {
-  RULES, clawClearance, clippedByShift, collision, duplicateCell,
+  RULES, blockedCell, clawClearance, clippedByShift, collision, duplicateCell,
   edgeOverhang, feederCell, geometryDrift, island, levelCeiling,
   outOfGrid, primaryDiagnostic, snapshotRigGeometry, supportMetrics,
   unsupported, validateModel, validatePlacement,
@@ -54,6 +54,18 @@ const cases: RuleCase[] = [
     blocks: [block("b1", "vertical", 1, 0, 0)], subject: "b1", fires: false },
   { name: "reserves [0,0] in either mode", code: "FEEDER_CELL", rule: feederCell,
     blocks: [block("b1", "horizontal", 0, 0, 2)], subject: "b1", fires: true },
+
+  { name: "rejects a shipped feeder-belt cell in vertical", code: "BLOCKED_CELL", rule: blockedCell,
+    blocks: [block("b1", "vertical", 2, 1, 0)], subject: "b1", fires: true },
+  { name: "rejects a belt cell at every level", code: "BLOCKED_CELL", rule: blockedCell,
+    blocks: [block("b1", "vertical", 1, 0, 4)], subject: "b1", fires: true },
+  { name: "leaves an ordinary vertical cell alone", code: "BLOCKED_CELL", rule: blockedCell,
+    blocks: [block("b1", "vertical", 3, 3, 0)], subject: "b1", fires: false },
+  { name: "does not block the same indices in horizontal", code: "BLOCKED_CELL", rule: blockedCell,
+    blocks: [block("b1", "horizontal", 2, 1, 0)], subject: "b1", fires: false },
+  { name: "honours an added belt cell from config", code: "BLOCKED_CELL", rule: blockedCell,
+    config: changed(c => { c.grid.modes.horizontal.blocked_cells = [[1, 2]] as [number, number][]; }),
+    blocks: [block("b1", "horizontal", 1, 2, 0)], subject: "b1", fires: true },
 
   { name: "uses a modified mode count for a legal edge cell", code: "OUT_OF_GRID", rule: outOfGrid,
     config: changed(c => { c.grid.modes.horizontal.cols = 2; }),
@@ -233,7 +245,7 @@ describe("clearance follows authored build order", () => {
 describe("the two validator entry points", () => {
   it("runs the same ordered RULES for a model and a ghost candidate", () => {
     expect(RULES.map(rule => rule.code)).toEqual([
-      "FEEDER_CELL", "OUT_OF_GRID", "CLIPPED_BY_SHIFT", "EDGE_OVERHANG",
+      "FEEDER_CELL", "BLOCKED_CELL", "OUT_OF_GRID", "CLIPPED_BY_SHIFT", "EDGE_OVERHANG",
       "LEVEL_CEILING", "DUPLICATE_CELL", "COLLISION", "UNSUPPORTED",
       "CLAW_CLEARANCE", "GEOMETRY_DRIFT", "ISLAND",
     ]);

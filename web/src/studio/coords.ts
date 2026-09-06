@@ -184,6 +184,22 @@ export function cellCount(mode: ModeName): { cols: number; rows: number } {
 /** `[0,0]` is where blocks come FROM, in both modes, and is never built on. */
 export function isFeeder(col: number, row: number): boolean { return col === 0 && row === 0; }
 
+/**
+ * The mode's belt-blocked cells as `[col, row]` pairs. A fixed obstruction (the
+ * feeder belt) sits in these, so the claw can never descend there, at any
+ * level - the firmware refuses `B`/`G` for them exactly as it does the feeder.
+ * Per mode: what the belt fouls with blocks standing up need not match what it
+ * fouls with them lying down.
+ */
+export function blockedCells(mode: ModeName): [number, number][] {
+  return (modeGeometry(mode).blocked_cells ?? []).map(([c, r]) => [c, r] as [number, number]);
+}
+
+/** Whether a fixed obstruction sits in `[col,row]` for this mode. */
+export function isBlocked(mode: ModeName, col: number, row: number): boolean {
+  return blockedCells(mode).some(([c, r]) => c === col && r === row);
+}
+
 /** The feeder is a plain home to raw [0,0]: no shift, no tool offset. */
 export function feederCentre(): Vec3 { return { x: 0, y: 0, z: 0 }; }
 

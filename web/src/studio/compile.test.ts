@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { rigConfig, setRigConfig } from "./coords";
 import { aabbOf } from "./geometry";
 import type { Model, ModelBlock } from "./model";
@@ -9,7 +9,13 @@ import {
   orderBlocks, summarise, supportGraph, type OrderTerm,
 } from "./compile";
 
+// These tests exercise the compiler pipeline (ordering, latching, stats), not
+// belt-cell validation, and the canonical fixtures place on [1,1] / [2,1] —
+// which the shipped rig now blocks. Run them on a belt-free rig; BLOCKED_CELL
+// has its own coverage in validate.test.ts.
 const shipped = structuredClone(rigConfig());
+for (const mode of Object.values(shipped.grid.modes)) mode.blocked_cells = [];
+beforeEach(() => setRigConfig(structuredClone(shipped)));
 afterEach(() => setRigConfig(structuredClone(shipped)));
 
 function block(id: string, mode: ModelBlock["mode"], col: number, row: number,

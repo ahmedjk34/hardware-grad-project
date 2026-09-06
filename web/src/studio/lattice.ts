@@ -9,12 +9,12 @@
  * Everything handed out is in SCENE units, converted only by `machineToScene`.
  */
 import {
-  blockExtents, cellToMachine, isFeeder, machineToScene,
+  blockExtents, cellToMachine, isBlocked, isFeeder, machineToScene,
   type ModeName, type Shift, type Vec3,
 } from "./coords";
 import { clippedCells } from "./geometry";
 
-export type CellKind = "feeder" | "cell" | "clipped";
+export type CellKind = "feeder" | "cell" | "clipped" | "blocked";
 
 export interface LatticeCell {
   col: number; row: number; kind: CellKind;
@@ -45,8 +45,12 @@ export function latticeCells(mode: ModeName, shift?: Shift): LatticeCell[] {
       cells.push({
         col, row,
         // The feeder is never built on, so it reads as the feeder in every
-        // state - including one a shift has put out of reach.
-        kind: isFeeder(col, row) ? "feeder" : clipped ? "clipped" : "cell",
+        // state - including one a shift has put out of reach. A belt-blocked
+        // cell is likewise permanent, and takes precedence over "clipped":
+        // the belt is there whatever the shift is.
+        kind: isFeeder(col, row) ? "feeder"
+          : isBlocked(mode, col, row) ? "blocked"
+          : clipped ? "clipped" : "cell",
         centre: { x: centre.x, y: 0, z: centre.z },
         sizeX, sizeZ,
       });

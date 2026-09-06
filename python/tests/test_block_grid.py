@@ -65,8 +65,13 @@ def expect_error(name, fn, needle=""):
     failures.append(name)
 
 
-VERTICAL = MachineGrid.from_config(mode="vertical")
-HORIZONTAL = MachineGrid.from_config(mode="horizontal")
+# These suites pin the calibration lattice geometry (dense-vs-spread plans,
+# virtual-cell fill, the reference-board cell sets) and predate the feeder
+# belt. Build them with no blocked cells so those exact expectations hold;
+# `contains_build_target` skipping belt cells has its own coverage in
+# test_grid.py.
+VERTICAL = MachineGrid.from_config(mode="vertical", blocked=frozenset())
+HORIZONTAL = MachineGrid.from_config(mode="horizontal", blocked=frozenset())
 
 # --------------------------------------------------------------------------- #
 # a synthetic rig view, with a known ground-truth homography

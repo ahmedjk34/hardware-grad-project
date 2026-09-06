@@ -287,7 +287,7 @@ whose far block hangs off the machine.
 
 ```ts
 latticeCells(mode, shift?) → LatticeCell[]
-  { col, row, kind: "feeder" | "cell" | "clipped", centre: Vec3, sizeX, sizeZ }
+  { col, row, kind: "feeder" | "cell" | "clipped" | "blocked", centre: Vec3, sizeX, sizeZ }
 rulerTicks(lengthCm, stepCm = 1, majorEvery = 5) → { cm, major, at }[]
 ```
 
@@ -297,7 +297,12 @@ comes back whole: a shift clips what the machine can reach without changing what
 was asked for, and the Studio draws clipped cells struck through rather than
 deleting them. **The feeder outranks clipping** — `[0,0]` reads as the feeder in
 every state, including one a shift has put out of reach, because it is never
-built on either way.
+built on either way. **A `"blocked"` cell outranks clipping too**: it is one of
+`grid.modes.<mode>.blocked_cells` (`coords.ts` `isBlocked()`), a cell the feeder
+belt physically occupies, and the belt is there whatever the shift is. It stays
+a real, drawn, addressable cell — `Lattice.tsx` hatches it red and strikes it
+through — but `validate.ts`'s `BLOCKED_CELL` rule refuses any block placed on
+it, at every level, exactly as `FEEDER_CELL` refuses `[0,0]`.
 
 ### 5.4 `studio/view.ts` — where the camera stands
 
@@ -891,10 +896,12 @@ it is always visible. It is never inferred from the lattice: it comes from
 ### 6.3 `scene/Lattice.tsx`
 
 Every addressable cell at its true footprint with the true gaps: `--signal` fills
-at 30 % with outlines, the feeder hatched and labelled `FEED`, and cells the live
-shift has clipped in `--motion`, crossed through. Plain fills and clipped fills
-are one instanced draw each instead of one mesh/draw per cell. Cell outlines and
-crosses remain one merged line geometry each.
+at 30 % with outlines, the feeder hatched and labelled `FEED`, cells the live
+shift has clipped in `--motion`, crossed through, and belt-blocked cells hatched
+in `--danger` and crossed through (one mesh each — there are only a handful).
+Plain fills and clipped fills are one instanced draw each instead of one
+mesh/draw per cell. Cell outlines and crosses remain one merged line geometry
+each.
 
 Which cells those are, and which is which, is `latticeCells()` — see §5.3.
 
@@ -1274,6 +1281,32 @@ first in the diff.
 
 Newest first. One entry per landed change; note anything that contradicts the
 plan or that a future reader could not infer.
+
+### Belt-blocked cells — a twelfth diagnostic, `BLOCKED_CELL`
+
+The feeder belt sits across a few cells next to `[0,0]` (shipped: vertical
+`[1,0] [1,1] [2,1]`, horizontal none), so the claw can never descend into one.
+The list lives in `config/rig.json` → `grid.modes.<mode>.blocked_cells`, paired
+with the firmware's `GRID_BLOCKED_*` tables (see `AGENTS.md` §3b-bis). Studio
+side:
+
+- `coords.ts` gains `blockedCells(mode)` / `isBlocked(mode, col, row)`; the
+  `ModeGeometry` type gains `blocked_cells?: [number, number][]`.
+- `lattice.ts` `CellKind` gains `"blocked"`, ranked above `"clipped"` and
+  below `"feeder"` — the belt is there whatever the shift is. `Lattice.tsx`
+  draws these cells hatched in `--danger` and struck through, still wired to
+  the surface handlers so hovering one resolves a target and the validator
+  explains the refusal (same UX as the feeder).
+- `validate.ts` gains rule `blockedCell` / code `BLOCKED_CELL`, second in
+  `RULES` and `PRIORITY` right after `FEEDER_CELL`. It is an `error`, fires at
+  every level, and flows through `compile.ts` unchanged (`validateModel`).
+- `GEOMETRY_DRIFT` deliberately does **not** track `blocked_cells`: a model
+  that predates the belt should not warn wholesale — the per-block
+  `BLOCKED_CELL` rule flags exactly the placements that are now illegal.
+- Test fixtures that placed on `[1,1]` / `[2,1]` (compile/bond/placement,
+  Python `test_block_grid` / `test_build_*`) moved to clear cells or a
+  belt-free rig; `BLOCKED_CELL` has its own coverage in `validate.test.ts`,
+  `lattice.test.ts` and `coords.test.ts`.
 
 ### Firmware build phase 5 stopped ground-seeking (feeder belt) — no Studio change
 

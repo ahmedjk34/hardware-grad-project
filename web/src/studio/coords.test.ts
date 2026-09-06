@@ -1,7 +1,8 @@
 import { describe, expect, it, afterEach } from "vitest";
 import fixtures from "./coords.fixtures.json";
 import {
-  blockExtents, blockSceneSize, cellCount, cellToMachine, cellToScene, isFeeder, latticeBounds, machineToScene,
+  blockExtents, blockSceneSize, cellCount, cellToMachine, cellToScene, isBlocked, isFeeder,
+  latticeBounds, machineToScene,
   reachableCells, rigConfig, setRigConfig, type RigConfig, type ModeName,
 } from "./coords";
 import { aabbOf } from "./geometry";
@@ -31,6 +32,7 @@ describe("Studio coordinates against python/rig/grid.py", () => {
         expect(box.min.z).toBeCloseTo(cell.aabb_mm.min[2], 6);
         expect(box.max.z).toBeCloseTo(cell.aabb_mm.max[2], 6);
         expect(isFeeder(cell.col, cell.row)).toBe(cell.feeder);
+        expect(isBlocked(mode, cell.col, cell.row)).toBe(cell.blocked);
       }
     });
 
@@ -88,6 +90,15 @@ describe("the facts the fixtures cannot state on their own", () => {
     expect(isFeeder(0, 0)).toBe(true);
     expect(isFeeder(1, 0)).toBe(false);
     expect(isFeeder(0, 1)).toBe(false);
+  });
+
+  it("marks the feeder-belt cells blocked in vertical, none in horizontal", () => {
+    for (const [col, row] of [[1, 0], [1, 1], [2, 1]] as const) {
+      expect(isBlocked("vertical", col, row)).toBe(true);
+    }
+    expect(isBlocked("vertical", 0, 1)).toBe(false);
+    expect(isBlocked("vertical", 3, 3)).toBe(false);
+    expect(isBlocked("horizontal", 1, 1)).toBe(false);
   });
 
   it("previews a shift without editing the config", () => {

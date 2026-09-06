@@ -130,7 +130,7 @@ class BrokenRig(SlowRig):
 
 rig = BrokenRig(None)
 controller = BuildController(rig)
-controller.select((1, 1))
+controller.select((3, 3))  # clear of the feeder and the feeder-belt cells
 job = BuildJob(controller, timeout=30.0)
 job.start()
 job.join(5.0)

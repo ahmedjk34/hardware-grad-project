@@ -572,6 +572,36 @@ convention. `gridded_camera_feed.py` derives it from four clicked envelope
 corners and saves `workspace_map.json`; `MachineGrid.origin` / `swap_axes`
 remain useful only for count-only/legacy drawings without that homography.
 
+### 3b-bis. Belt-blocked cells — a fixed obstruction, per mode
+
+| Where | What |
+| --- | --- |
+| `config/rig.json` → `grid.modes.<mode>.blocked_cells` | `[[col,row], …]`, **authoritative for the Pi and the Studio** |
+| `build_test_v1.ino` SECTION 6C | `GRID_BLOCKED_COL[][] / GRID_BLOCKED_ROW[][] / GRID_BLOCKED_COUNT[]` — the compiled copy, capacity `GRID_BLOCKED_MAX` |
+| `python/rig/grid.py` | `MachineGrid.blocked` / `.is_blocked()`; `contains_build_target()` excludes them |
+| `web/src/studio/coords.ts` | `blockedCells()` / `isBlocked()`; `validate.ts` rule `BLOCKED_CELL`; `lattice.ts` kind `"blocked"` |
+| `python/tests/test_grid.py` | parses the firmware tables and fails on any drift from `rig.json` |
+
+The feeder belt physically sits across a few cells next to the pick-up point,
+so the claw can never descend into one — **at any level**, which makes this a
+cell predicate with no level argument, exactly like the feeder. `B` and `G`
+refuse a blocked cell before anything moves (firmware `cellIsBeltBlocked()` →
+`buildReject("cell blocked by feeder belt")`). These cells are **still real,
+drawable, addressable cells** — the grid keeps its dimensions, the Studio still
+draws them (hatched red, struck through), `positionToIndex()` still names
+them; they are simply not build targets.
+
+**Per mode**, because the two grids put their cell centres in different places:
+what the belt fouls with blocks standing up (`vertical`) it need not foul with
+them lying down (`horizontal`). The shipped list is `vertical` `[1,0] [1,1]
+[2,1]` and `horizontal` `[]`; fill horizontal's in when that grid is measured
+against the belt. `[0,0]` is the feeder and is tracked separately — never put
+it in `blocked_cells`.
+
+**Paired value:** the Mega cannot read `rig.json`, so if you change one side
+change the other in the same commit. `test_grid.py` parses
+`GRID_BLOCKED_COL/ROW/COUNT` out of the sketch and fails on a mismatch.
+
 ### 3c. Tool-centre offsets — holder position is not block position
 
 | Where | What |

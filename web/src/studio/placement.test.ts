@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 import { emptyModel, applyEdit, type ModelBlock } from "./model";
 import { placementStatus } from "./placement";
 
+// [2,2]: clear of the feeder AND the feeder-belt cells ([1,0] [1,1] [2,1]).
 const block: ModelBlock = {
-  id: "b1", mode: "vertical", col: 2, row: 1, level: 0, colour: "red",
+  id: "b1", mode: "vertical", col: 2, row: 2, level: 0, colour: "red",
 };
 
 describe("M2 local placement checks", () => {
@@ -21,13 +22,13 @@ describe("M2 local placement checks", () => {
 
   it("rejects an occupied same-mode cell and level", () => {
     const model = applyEdit(emptyModel(), { type: "place", block });
-    expect(placementStatus(model, "vertical", { col: 2, row: 1, level: 0 }))
+    expect(placementStatus(model, "vertical", { col: 2, row: 2, level: 0 }))
       .toEqual({ legal: false, reason: "already a block here" });
   });
 
   it("allows an empty target without starting M3 support or collision rules", () => {
     const model = applyEdit(emptyModel(), { type: "place", block });
-    expect(placementStatus(model, "horizontal", { col: 2, row: 1, level: 0 }))
+    expect(placementStatus(model, "horizontal", { col: 2, row: 2, level: 0 }))
       .toEqual({ legal: true, reason: null });
   });
 });

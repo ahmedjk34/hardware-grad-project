@@ -66,6 +66,11 @@ class BuildController:
                 "[0,0] is the feeder - it is where blocks are picked up from, "
                 "in both modes, and is never built on"
             )
+        if self.rig.grid.is_blocked(col, row):
+            raise BuildStateError(
+                f"[{col},{row}] is blocked by the feeder belt - the claw "
+                "cannot descend there at any level"
+            )
         if not self.rig.grid.contains_build_target(col, row):
             raise BuildStateError(
                 f"build target [{col},{row}] is outside "

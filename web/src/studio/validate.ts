@@ -7,8 +7,8 @@
  * testable without React, three.js, a browser or a GPU.
  */
 import {
-  MM_PER_CM, cellCount, modeGeometry, resolveShift, rigConfig, type BondShifts,
-  type ModeName, type RigConfig, type Shift,
+  MM_PER_CM, cellCount, isBlocked, modeGeometry, resolveShift, rigConfig,
+  type BondShifts, type ModeName, type RigConfig, type Shift,
 } from "./coords";
 import {
   EPS_MM, aabbOf, clippedCells, contacts, descentPrism, footprintArea,
@@ -20,7 +20,7 @@ import { ENVELOPE_Z_CM } from "./view";
 
 export type DiagnosticSeverity = "error" | "warning";
 export type DiagnosticCode =
-  | "FEEDER_CELL" | "OUT_OF_GRID" | "CLIPPED_BY_SHIFT" | "EDGE_OVERHANG"
+  | "FEEDER_CELL" | "BLOCKED_CELL" | "OUT_OF_GRID" | "CLIPPED_BY_SHIFT" | "EDGE_OVERHANG"
   | "LEVEL_CEILING" | "DUPLICATE_CELL" | "COLLISION" | "UNSUPPORTED"
   | "CLAW_CLEARANCE" | "GEOMETRY_DRIFT" | "ISLAND";
 
@@ -114,6 +114,14 @@ export const feederCell = defineRule("FEEDER_CELL", (_model, block) => {
   return [{
     severity: "error", code: "FEEDER_CELL", blockId: block.id,
     message: "[0,0] is the feeder — blocks are picked up there, never built there",
+  }];
+});
+
+export const blockedCell = defineRule("BLOCKED_CELL", (_model, block) => {
+  if (!block || !isBlocked(block.mode, block.col, block.row)) return [];
+  return [{
+    severity: "error", code: "BLOCKED_CELL", blockId: block.id,
+    message: `[${block.col},${block.row}] is blocked by the feeder belt — the claw can't reach it at any level`,
   }];
 });
 
@@ -330,12 +338,12 @@ export const island = defineRule("ISLAND", (model, block, ctx) => {
 
 /** The Plan 4 section 6.4 table, in its one greppable execution order. */
 export const RULES: Rule[] = [
-  feederCell, outOfGrid, clippedByShift, edgeOverhang, levelCeiling,
+  feederCell, blockedCell, outOfGrid, clippedByShift, edgeOverhang, levelCeiling,
   duplicateCell, collision, unsupported, clawClearance, geometryDrift, island,
 ];
 
 const PRIORITY: DiagnosticCode[] = [
-  "FEEDER_CELL", "OUT_OF_GRID", "CLIPPED_BY_SHIFT", "EDGE_OVERHANG",
+  "FEEDER_CELL", "BLOCKED_CELL", "OUT_OF_GRID", "CLIPPED_BY_SHIFT", "EDGE_OVERHANG",
   "LEVEL_CEILING", "DUPLICATE_CELL", "COLLISION", "UNSUPPORTED",
   "CLAW_CLEARANCE", "GEOMETRY_DRIFT", "ISLAND",
 ];
