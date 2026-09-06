@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { emptyModel, applyEdit, type ModelBlock } from "./model";
 import { placementStatus } from "./placement";
 
-// [2,2]: clear of the feeder AND the feeder-belt cells ([1,0] [1,1] [2,1]).
+// [2,2]: clear of the feeder AND the feeder-belt cells ([0,1] [1,0] [1,1]).
 const block: ModelBlock = {
   id: "b1", mode: "vertical", col: 2, row: 2, level: 0, colour: "red",
 };

@@ -10,8 +10,8 @@ import {
 } from "./compile";
 
 // These tests exercise the compiler pipeline (ordering, latching, stats), not
-// belt-cell validation, and the canonical fixtures place on [1,1] / [2,1] —
-// which the shipped rig now blocks. Run them on a belt-free rig; BLOCKED_CELL
+// belt-cell validation, and the canonical fixtures place on [1,1] — which the
+// shipped rig now blocks. Run them on a belt-free rig; BLOCKED_CELL
 // has its own coverage in validate.test.ts.
 const shipped = structuredClone(rigConfig());
 for (const mode of Object.values(shipped.grid.modes)) mode.blocked_cells = [];

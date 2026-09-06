@@ -166,7 +166,7 @@ describes the bug, not the rig.
 | `SKEW_X_*`, `SKEW_Y_PER_ROW/COLROW` | `0.0` | `0.0` | unmeasured, stay zero |
 | `BUILD_PLACEMENT_OFFSET_X_CM` | **`0.0`** | **`−0.4`** | horizontal placements sit 0.4 cm **toward** the X home switch |
 | `BUILD_PLACEMENT_OFFSET_Y_CM` | **`0.0`** | `0.0` | no fixed Y correction in either mode |
-| `Z_PICKUP_DROP_FROM_TOP_CM` | `13.0` | `13.0` | not per mode — phase-5 pickup descends 13.0 cm below the top switch (≈ 13.5 cm above ground at the shipped Z calibration) onto the feeder belt, instead of ground-seeking |
+| `Z_PICKUP_DROP_FROM_TOP_CM` | `13.9` | `13.9` | not per mode — phase-5 pickup descends 13.9 cm below the top switch (≈ 12.6 cm above ground at the shipped Z calibration) onto the feeder belt, instead of ground-seeking |
 
 **`BUILD_PLACEMENT_OFFSET_*` is `0.0` for vertical on both axes, and that is a
 real statement, not a placeholder.** It means vertical builds get **no fixed
@@ -595,8 +595,8 @@ them; they are simply not build targets.
 
 **Per mode**, because the two grids put their cell centres in different places:
 what the belt fouls with blocks standing up (`vertical`) it need not foul with
-them lying down (`horizontal`). The shipped list is `vertical` `[1,0] [1,1]
-[2,1]` and `horizontal` `[]`; fill horizontal's in when that grid is measured
+them lying down (`horizontal`). The shipped list is `vertical` `[0,1] [1,0]
+[1,1]` and `horizontal` `[]`; fill horizontal's in when that grid is measured
 against the belt. `[0,0]` is the feeder and is tracked separately — never put
 it in `blocked_cells`.
 

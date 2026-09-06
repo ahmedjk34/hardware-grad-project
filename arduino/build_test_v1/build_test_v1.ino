@@ -621,7 +621,7 @@ const bool SOFT_LIMIT_VERBOSE = true;
 //   Z_MARGIN_PER_LEVEL_CM              0.0          (not per mode)
 //   Z_MARGIN_FIXED_CM                  0.12
 //   Z_MARGIN_FIXED_STEPS               0
-//   Z_PICKUP_DROP_FROM_TOP_CM          13.0         (drop from TOP, see below)
+//   Z_PICKUP_DROP_FROM_TOP_CM          13.9         (drop from TOP, see below)
 //
 // A 0.0 is a real statement - "this mode/axis needs no correction of this
 // kind" - not a placeholder waiting to be filled in. Vertical carries no fixed
@@ -762,7 +762,7 @@ const bool SOFT_LIMIT_VERBOSE = true;
 //               switch, not up from GROUND. Larger = deeper descent = LOWER
 //               pickup point. Rule 0 does not apply because the pickup no
 //               longer touches GROUND; phase 1's top-switch seek is the
-//               live reference. 13.0 below top == ~13.5 above GROUND at
+//               live reference. 13.9 below top == ~12.6 above GROUND at
 //               the shipped 26.5 cm / 1350-step calibration.
 //     TOUCH WHEN: the feeder-belt surface height changes, or a block is not
 //               being gripped cleanly at the belt.
@@ -1108,11 +1108,11 @@ long GRID_ROWS[GRID_MODE_COUNT] = {5, 9};
 const uint8_t GRID_BLOCKED_MAX = 8;
 long GRID_BLOCKED_COUNT[GRID_MODE_COUNT] = {3, 0};
 long GRID_BLOCKED_COL[GRID_MODE_COUNT][GRID_BLOCKED_MAX] = {
-  { 1,  1,  2, -1, -1, -1, -1, -1},   // vertical
+  { 0,  1,  1, -1, -1, -1, -1, -1},   // vertical: [0,1] [1,0] [1,1]
   {-1, -1, -1, -1, -1, -1, -1, -1}    // horizontal
 };
 long GRID_BLOCKED_ROW[GRID_MODE_COUNT][GRID_BLOCKED_MAX] = {
-  { 0,  1,  1, -1, -1, -1, -1, -1},   // vertical
+  { 1,  0,  1, -1, -1, -1, -1, -1},   // vertical: [0,1] [1,0] [1,1]
   {-1, -1, -1, -1, -1, -1, -1, -1}    // horizontal
 };
 
@@ -1301,8 +1301,8 @@ float BLOCK_HEIGHT_CM = 1.5;
 //        pickup_steps = Z_TRAVEL_STEPS - round(DROP_FROM_TOP_CM * stepsPerCm)
 //
 //   At the shipped calibration (Z_TRAVEL_CM 26.5, Z_TRAVEL_STEPS 1350):
-//        13.0 cm below top  ==  ~13.5 cm above GROUND  ==  ~688 steps
-//        from ground  ==  a ~662-step descent from the top switch.
+//        13.9 cm below top  ==  ~12.6 cm above GROUND  ==  ~642 steps
+//        from ground  ==  a ~708-step descent from the top switch.
 //
 //   Taking the drop from the TOP (not a fixed height above ground) keeps
 //   it exact even if Z_TRAVEL_STEPS is a little off: phase 1 has just
@@ -1311,7 +1311,7 @@ float BLOCK_HEIGHT_CM = 1.5;
 //   The bottom Z switch stays REQUIRED and enabled: it is now a physical
 //   backstop below the pickup height, and `0+` still uses it to give Z a
 //   true GROUND zero.
-float Z_PICKUP_DROP_FROM_TOP_CM = 13.3;
+float Z_PICKUP_DROP_FROM_TOP_CM = 13.9;
 
 // ------------------------------------------------------------
 //   MARGIN OF ERROR  (all three may be POSITIVE or NEGATIVE)

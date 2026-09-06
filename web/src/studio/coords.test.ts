@@ -93,10 +93,10 @@ describe("the facts the fixtures cannot state on their own", () => {
   });
 
   it("marks the feeder-belt cells blocked in vertical, none in horizontal", () => {
-    for (const [col, row] of [[1, 0], [1, 1], [2, 1]] as const) {
+    for (const [col, row] of [[0, 1], [1, 0], [1, 1]] as const) {
       expect(isBlocked("vertical", col, row)).toBe(true);
     }
-    expect(isBlocked("vertical", 0, 1)).toBe(false);
+    expect(isBlocked("vertical", 2, 1)).toBe(false);
     expect(isBlocked("vertical", 3, 3)).toBe(false);
     expect(isBlocked("horizontal", 1, 1)).toBe(false);
   });

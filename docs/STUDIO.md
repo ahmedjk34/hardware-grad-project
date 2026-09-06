@@ -1285,10 +1285,12 @@ plan or that a future reader could not infer.
 ### Belt-blocked cells — a twelfth diagnostic, `BLOCKED_CELL`
 
 The feeder belt sits across a few cells next to `[0,0]` (shipped: vertical
-`[1,0] [1,1] [2,1]`, horizontal none), so the claw can never descend into one.
+`[0,1] [1,0] [1,1]`, horizontal none), so the claw can never descend into one.
 The list lives in `config/rig.json` → `grid.modes.<mode>.blocked_cells`, paired
-with the firmware's `GRID_BLOCKED_*` tables (see `AGENTS.md` §3b-bis). Studio
-side:
+with the firmware's `GRID_BLOCKED_*` tables (see `AGENTS.md` §3b-bis). It also
+rides the saved `workspace_map.json` (`WorkspaceMap.physical_grid`) and is drawn
+on the web console's camera overlay (`python/web/geometry.py` →
+`components/GridOverlay.tsx`), same red-crossed style. Studio side:
 
 - `coords.ts` gains `blockedCells(mode)` / `isBlocked(mode, col, row)`; the
   `ModeGeometry` type gains `blocked_cells?: [number, number][]`.
@@ -1303,7 +1305,7 @@ side:
 - `GEOMETRY_DRIFT` deliberately does **not** track `blocked_cells`: a model
   that predates the belt should not warn wholesale — the per-block
   `BLOCKED_CELL` rule flags exactly the placements that are now illegal.
-- Test fixtures that placed on `[1,1]` / `[2,1]` (compile/bond/placement,
+- Test fixtures that placed on `[1,1]` / `[0,1]` (compile/bond/placement,
   Python `test_block_grid` / `test_build_*`) moved to clear cells or a
   belt-free rig; `BLOCKED_CELL` has its own coverage in `validate.test.ts`,
   `lattice.test.ts` and `coords.test.ts`.
@@ -1311,7 +1313,7 @@ side:
 ### Firmware build phase 5 stopped ground-seeking (feeder belt) — no Studio change
 
 A feeder belt was fitted at `[0,0]`, above the table ground. Build phase 5
-(`lower_to_ground`) now descends a fixed `Z_PICKUP_DROP_FROM_TOP_CM` (13.0 cm)
+(`lower_to_ground`) now descends a fixed `Z_PICKUP_DROP_FROM_TOP_CM` (13.9 cm)
 below the top switch and grips there, instead of seeking the ground switch and
 re-zeroing Z. Z is still referenced every build by phase 1's top-switch seek;
 `0+` and level-0 placement still ground-seek. The wire `phase`/`text`

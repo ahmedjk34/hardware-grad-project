@@ -552,6 +552,8 @@ svg.grid-overlay.selectable { cursor: crosshair; }
 .grid-cell { fill: none; stroke: var(--signal); opacity: .55; }
 .grid-cell.approximate { stroke: var(--motion); stroke-dasharray: 6 4; }
 .grid-cell.feeder { stroke: var(--text-faint); stroke-dasharray: 2 3; fill: var(--halo); opacity: .8; }
+.grid-cell.blocked { stroke: var(--danger); fill: color-mix(in srgb, var(--danger) 16%, transparent); opacity: .9; }
+.grid-blocked-cross line { stroke: var(--danger); opacity: .9; }
 .feeder-label { fill: var(--text-faint); font-family: var(--font-mono); font-weight: 600; letter-spacing: .1em; }
 .hover-cell { fill: var(--wash-signal); stroke: none; }
 .selected { fill: var(--wash-ready); stroke: var(--ready); }

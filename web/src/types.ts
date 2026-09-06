@@ -1,6 +1,10 @@
 export type Point = [number, number];
 
-export interface CellGeometry { col: number; row: number; polygon: Point[] }
+export interface CellGeometry {
+  col: number; row: number; polygon: Point[];
+  /** A cell the feeder belt occupies: real and drawn, never a build target. */
+  blocked?: boolean;
+}
 
 export interface Geometry {
   image_size: [number, number];

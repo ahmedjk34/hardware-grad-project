@@ -58,7 +58,7 @@ describe("resolveShift — the one place the two sources combine", () => {
 
 describe("the compiler emits shiftX / shiftY latches at course changes", () => {
   // A vertical running-bond wall in column 3 (clear of the feeder-belt cells at
-  // [1,0] [1,1] [2,1]). Course 0 flush (rows 1-3), course 1 offset (rows 1-2,
+  // [0,1] [1,0] [1,1]). Course 0 flush (rows 1-3), course 1 offset (rows 1-2,
   // each block bridging two course-0 blocks), course 2 flush again (row 2,
   // bridging two course-1 blocks). Every block clears SUPPORT_RATIO.
   const wall = modelOf([

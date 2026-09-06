@@ -32,7 +32,7 @@ describe("which cells the lattice draws", () => {
       const blocked = latticeCells(mode)
         .filter(cell => cell.kind === "blocked")
         .map(cell => `${cell.col},${cell.row}`).sort();
-      expect(blocked).toEqual(mode === "vertical" ? ["1,0", "1,1", "2,1"] : []);
+      expect(blocked).toEqual(mode === "vertical" ? ["0,1", "1,0", "1,1"] : []);
     });
 
     it(`${mode}: every cell sits where coords.ts puts it, at its true footprint`, () => {
