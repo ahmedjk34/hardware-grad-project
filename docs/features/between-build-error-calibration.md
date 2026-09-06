@@ -1,8 +1,18 @@
 # Between-build error calibration — closing the loop on placement
 
-**Status: partially implemented. The measurement exists; the feedback path does
-not, and one of the two things you might mean by this feature is physically
-impossible on today's hardware.**
+**Status: DEFERRED (2026-09-06). Not a work item.** The project is doing
+per-stage placement checkers instead — [stage-15-placement-correction.md](stage-15-placement-correction.md)
+and the individual stage checkers — which judge and physically repair *one
+outlier block at a time* rather than estimating a population-wide drift and
+writing a calibration number back. Read
+[§0a — Why this is deferred, and when to un-defer it](#0a--why-this-is-deferred-and-when-to-un-defer-it)
+before assuming the per-stage checkers make this redundant: **they cover
+outliers, not systematic bias.**
+
+**Original status, still accurate as a description of the code: partially
+implemented.** The measurement exists; the feedback path does not, and one of
+the two things you might mean by this feature is physically impossible on
+today's hardware.
 
 ---
 
@@ -25,6 +35,37 @@ closes on nothing reports success. Do not smuggle it in as part of (a).
 
 **This document is reading (a): a measured, bounded, between-builds correction to
 the grid's own origin.** §7 says what it would take to add (b).
+
+---
+
+## 0a. Why this is deferred, and when to un-defer it
+
+The decision (2026-09-06): **work each stage checker individually** instead of
+building this. That is the right call *for outliers* and it sidesteps every
+hard part of this document — no windowed mean, no deadband against the map's
+0.27 cm noise floor, no persistent bias with provenance, no choice between the
+three interchangeable-looking knobs (`trim` / `error_offset` / `shift`), and no
+new firmware verb. [Stage 15](stage-15-placement-correction.md) judges one block
+and takes a *physical* action; nothing is written to the grid.
+
+**What deferring this gives up.** Per-stage / per-block checking catches a block
+that landed *wrong once* — knocked, mis-gripped, a single bad placement. It does
+**not** catch a *systematic* bias. If the machine lands every block, say,
+0.4 cm toward the X home switch, Stage 15 will pick up and re-place block after
+block, forever, chasing the same constant error, because it never updates
+`error_offset_*`. This document's own §6 Q1 says it directly: *"Is the drift you
+are chasing actually constant?"* — a constant offset across the whole board is
+exactly what a per-block repair cannot fix and what this feature was for.
+
+**The trigger to un-defer.**
+[feature-ideas.md §3.1 — placement repeatability and backlash](../feature-ideas.md#31-placement-repeatability-and-backlash--highest-value-per-line)
+is the measurement that says whether a systematic bias exists. If 3.1 comes
+back showing a consistent directional offset (rather than symmetric scatter
+about the cell centre), this feature comes back off the shelf and **Approach A
+(advisory only, §4)** is the first thing to build. Until then it stays here,
+unbuilt, as reference — the audit below and the sign-convention worked example
+in §2 D5 are still correct and still worth reading before touching any
+placement-correction code.
 
 ---
 

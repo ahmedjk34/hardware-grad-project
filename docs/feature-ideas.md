@@ -180,11 +180,15 @@ is a loop and a standard deviation.
 
 Two things make it worth doing before anything else in this file:
 
-- It is the **noise floor for
-  [between-build error calibration](features/between-build-error-calibration.md)**.
-  That design deadbands corrections at 0.3 cm because that is the workspace map's
-  own flattening error; the machine's *own* scatter is a separate unknown, and
-  correcting a drift smaller than it is chasing noise.
+- It is the **noise floor and the go/no-go check** for every placement-correction
+  feature — [Stage 15](features/stage-15-placement-correction.md)'s D8 correction
+  band and the deferred
+  [between-build error calibration](features/between-build-error-calibration.md).
+  Stage 15's band is `0.5–1.2 cm`; if repeatability is near 0.5 cm the band is
+  empty and the correction half cannot help. And a *consistent directional*
+  offset here (not symmetric scatter) is the one result that pulls between-build
+  calibration back off the shelf, because a per-block repair cannot fix a
+  systematic bias — it just re-places block after block forever.
 - It is a **Results-section number**, and the report has very few.
 
 Do not skip the alternating approach. A repeatability figure measured from one
@@ -286,17 +290,19 @@ has a known answer, and so nobody proposes it as if it were cheap.
 
 ## Tier 4 — designed in full, in their own files
 
-Three ideas were audited against the repo in detail and given a design document
-each under [features/](features/). They are listed here so this catalogue stays
-the single index; the files hold the decisions.
+Ideas audited against the repo in detail and given a design document each under
+[features/](features/). They are listed here so this catalogue stays the single
+index; the files hold the decisions.
 
 | # | Feature | Status | Difficulty |
 | --- | --- | --- | --- |
 | 4.1 | [Running-bond grid shift](features/running-bond-grid-shift.md) — half-pitch course offsets, Studio + Twin + compiler + `POST /api/shift` (was "grid shift in the twin", now folded in) | **built**; firmware `shiftX`/`shiftY` unchanged | 3 / 5 |
-| 4.2 | [Between-build error calibration](features/between-build-error-calibration.md) | partial — the measurement exists, nothing feeds it back to a knob | 4 / 5 |
+| 4.2 | [Stage 15 — between-job placement correction](features/stage-15-placement-correction.md) — find the one outlier block after a job parks, pick it up and re-place it, re-verify; never touches the grid | not started — design agreed; supersedes 4.4 | 3 / 5 |
 | 4.3 | [Removed-block compensation](features/removed-block-compensation.md) | not started — extends §1.4/Appendix A from idle-time to mid-program | 5 / 5 |
+| 4.4 | [Between-build error calibration](features/between-build-error-calibration.md) — population-wide drift → a correction written to the grid origin | **DEFERRED (2026-09-06)** — superseded by 4.2 for outliers; measurement half exists in the code. Un-defer only if §3.1 shows a *systematic* bias, which per-block repair cannot fix | 4 / 5 |
 
-4.2 and 4.3 both need Appendix A's `PlacementLedger`. Build it once.
+4.2's as-built memory and 4.3 both need a server-side placement record
+(Appendix A's `PlacementLedger` / Stage 15 §3). Build it once.
 
 ---
 
