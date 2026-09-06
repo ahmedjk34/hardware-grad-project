@@ -621,7 +621,7 @@ const bool SOFT_LIMIT_VERBOSE = true;
 //   Z_MARGIN_PER_LEVEL_CM              0.0          (not per mode)
 //   Z_MARGIN_FIXED_CM                  0.12
 //   Z_MARGIN_FIXED_STEPS               0
-//   Z_PICKUP_DROP_FROM_TOP_CM          13.25        (drop from TOP, see below)
+//   Z_PICKUP_DROP_FROM_TOP_CM          13.0         (drop from TOP, see below)
 //
 // A 0.0 is a real statement - "this mode/axis needs no correction of this
 // kind" - not a placeholder waiting to be filled in. Vertical carries no fixed
@@ -762,7 +762,7 @@ const bool SOFT_LIMIT_VERBOSE = true;
 //               switch, not up from GROUND. Larger = deeper descent = LOWER
 //               pickup point. Rule 0 does not apply because the pickup no
 //               longer touches GROUND; phase 1's top-switch seek is the
-//               live reference. 13.25 below top == 13.25 above GROUND at
+//               live reference. 13.0 below top == ~13.5 above GROUND at
 //               the shipped 26.5 cm / 1350-step calibration.
 //     TOUCH WHEN: the feeder-belt surface height changes, or a block is not
 //               being gripped cleanly at the belt.
@@ -1085,6 +1085,37 @@ float GRID_MAX_EDGE_OVERHANG_Y_CM[GRID_MODE_COUNT] = {3.0, 1.1};
 long GRID_COLS[GRID_MODE_COUNT] = {6, 2};
 long GRID_ROWS[GRID_MODE_COUNT] = {5, 9};
 
+// ------------------------------------------------------------
+// BELT-BLOCKED CELLS - a fixed obstruction, not a shift            <<< NEW
+// ------------------------------------------------------------
+// The feeder belt sits across a few cells next to the pick-up point. They are
+// still real, drawable, addressable cells - a block WOULD fit there - but the
+// claw can never descend into one, at ANY level, because the belt is in the
+// way. B and G refuse them before anything moves, exactly like the feeder
+// ([0,0]), which is a separate always-on case and is NOT listed here.
+//
+// PER MODE: what the belt fouls when blocks stand up (vertical) it need not
+// foul when they lie down (horizontal), because the two grids put their cell
+// centres in different places. Horizontal currently lists none; fill its row
+// in when that grid is measured against the belt.
+//
+// PAIRED with config/rig.json -> grid.modes.<mode>.blocked_cells. The Mega
+// cannot read that file, so the list is baked in here; test_grid.py parses
+// this table and fails if the two disagree. Change both in the same commit.
+//
+// Fixed-capacity table: GRID_BLOCKED_MAX slots per mode, the first
+// GRID_BLOCKED_COUNT[mode] of which are live. {-1,-1} pads the unused tail.
+const uint8_t GRID_BLOCKED_MAX = 8;
+long GRID_BLOCKED_COUNT[GRID_MODE_COUNT] = {3, 0};
+long GRID_BLOCKED_COL[GRID_MODE_COUNT][GRID_BLOCKED_MAX] = {
+  { 1,  1,  2, -1, -1, -1, -1, -1},   // vertical
+  {-1, -1, -1, -1, -1, -1, -1, -1}    // horizontal
+};
+long GRID_BLOCKED_ROW[GRID_MODE_COUNT][GRID_BLOCKED_MAX] = {
+  { 0,  1,  1, -1, -1, -1, -1, -1},   // vertical
+  {-1, -1, -1, -1, -1, -1, -1, -1}    // horizontal
+};
+
 // Read these rather than indexing the tables. Everything downstream of here
 // is written against the ACTIVE mode and never mentions the other one.
 //
@@ -1270,8 +1301,8 @@ float BLOCK_HEIGHT_CM = 1.5;
 //        pickup_steps = Z_TRAVEL_STEPS - round(DROP_FROM_TOP_CM * stepsPerCm)
 //
 //   At the shipped calibration (Z_TRAVEL_CM 26.5, Z_TRAVEL_STEPS 1350):
-//        13.25 cm below top  ==  13.25 cm above GROUND (exactly mid-
-//        travel)  ==  ~675 steps from ground  ==  a ~675-step descent.
+//        13.0 cm below top  ==  ~13.5 cm above GROUND  ==  ~688 steps
+//        from ground  ==  a ~662-step descent from the top switch.
 //
 //   Taking the drop from the TOP (not a fixed height above ground) keeps
 //   it exact even if Z_TRAVEL_STEPS is a little off: phase 1 has just
@@ -1280,7 +1311,7 @@ float BLOCK_HEIGHT_CM = 1.5;
 //   The bottom Z switch stays REQUIRED and enabled: it is now a physical
 //   backstop below the pickup height, and `0+` still uses it to give Z a
 //   true GROUND zero.
-float Z_PICKUP_DROP_FROM_TOP_CM = 13.25;
+float Z_PICKUP_DROP_FROM_TOP_CM = 13.0;
 
 // ------------------------------------------------------------
 //   MARGIN OF ERROR  (all three may be POSITIVE or NEGATIVE)
@@ -3331,6 +3362,51 @@ bool cellIsFeeder(long col, long row)
   return col == 0 && row == 0;
 }
 
+// A fixed obstruction (the feeder belt) sits in this cell for the ACTIVE mode,
+// so the claw can never descend into it - at any level. Refused by B and G
+// before anything moves, the same as the feeder. The list is GRID_BLOCKED_*
+// in SECTION 6C and is paired with config/rig.json.
+bool cellIsBeltBlocked(long col, long row)
+{
+  long n = GRID_BLOCKED_COUNT[gridMode];
+  if (n > (long)GRID_BLOCKED_MAX)
+  {
+    n = (long)GRID_BLOCKED_MAX;
+  }
+  for (long i = 0; i < n; i++)
+  {
+    if (GRID_BLOCKED_COL[gridMode][i] == col &&
+        GRID_BLOCKED_ROW[gridMode][i] == row)
+    {
+      return true;
+    }
+  }
+  return false;
+}
+
+// How many belt-blocked cells land inside the currently reachable grid, for
+// the "N buildable cells" summary. A blocked entry outside gridColsNow() /
+// gridRowsNow() (e.g. clipped away by a shift) is not subtracted twice.
+long gridBlockedCountNow()
+{
+  long n = GRID_BLOCKED_COUNT[gridMode];
+  if (n > (long)GRID_BLOCKED_MAX)
+  {
+    n = (long)GRID_BLOCKED_MAX;
+  }
+  long inRange = 0;
+  for (long i = 0; i < n; i++)
+  {
+    long c = GRID_BLOCKED_COL[gridMode][i];
+    long r = GRID_BLOCKED_ROW[gridMode][i];
+    if (c >= 0 && c <= gridColsNow() && r >= 0 && r <= gridRowsNow())
+    {
+      inRange++;
+    }
+  }
+  return inRange;
+}
+
 // 0 is a real coordinate AND a real block footprint. It no longer means
 // "leave that axis alone" - B 0 3 and B 4 0 are ordinary placements now.
 bool cellInRange(long col, long row)
@@ -3701,6 +3777,16 @@ bool gotoCellForRotation(long col, long row, int8_t rotation)
   {
     Serial.println(F("  [0,0] is the FEEDER - going to its centre."));
     return goToFeeder();
+  }
+
+  // The feeder belt is parked in this cell for the active mode. G would only
+  // drive the gantry over it (no Z descent), but there is nothing to do there
+  // and lowering by hand afterwards would hit the belt - so refuse it, the
+  // same as a build does. See GRID_BLOCKED_* / config/rig.json.
+  if (cellIsBeltBlocked(col, row))
+  {
+    Serial.println(F("  ERROR - cell blocked by the feeder belt. Nothing to do there."));
+    return false;
   }
 
   long targetX = 0;
@@ -4620,6 +4706,13 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
   {
     return buildReject("cell out of range");
   }
+  // A fixed obstruction (the feeder belt) is parked in this cell for the
+  // active mode - the claw cannot descend there at any level. Refused here,
+  // before the pick-up, exactly like the feeder. See GRID_BLOCKED_* / rig.json.
+  if (cellIsBeltBlocked(col, row))
+  {
+    return buildReject("cell blocked by feeder belt");
+  }
 
   // Reject an impossible compensated holder target before the claw picks up a
   // block.  The same check is repeated in gotoCellForRotation() for direct G.
@@ -5508,8 +5601,15 @@ void printGridConfig()
   Serial.print(F(" cols x "));
   Serial.print(gridSlotsOf(AXIS_Y));
   Serial.print(F(" rows  = "));
-  Serial.print(gridSlotsOf(AXIS_X) * gridSlotsOf(AXIS_Y) - 1);
-  Serial.println(F(" buildable cells (+1 feeder)"));
+  Serial.print(gridSlotsOf(AXIS_X) * gridSlotsOf(AXIS_Y) - 1 - gridBlockedCountNow());
+  Serial.print(F(" buildable cells (+1 feeder"));
+  if (gridBlockedCountNow() > 0)
+  {
+    Serial.print(F(", "));
+    Serial.print(gridBlockedCountNow());
+    Serial.print(F(" belt-blocked"));
+  }
+  Serial.println(F(")"));
 
   Serial.print(F("Coordinates: col 0.."));
   Serial.print(gridColsNow());
@@ -5707,6 +5807,10 @@ void printGridPosition()
     {
       Serial.print(F(" FEEDER"));
     }
+    else if (cellIsBeltBlocked(liveCol, liveRow))
+    {
+      Serial.print(F(" BELT-BLOCKED"));
+    }
     Serial.println();
   }
 
@@ -5875,7 +5979,7 @@ void printGrid()
   }
 
   Serial.println();
-  Serial.println(F("  # = machine   . = buildable cell   F = feeder"));
+  Serial.println(F("  # = machine   . = buildable cell   F = feeder   X = belt"));
   Serial.println(F("  (every cell is a real block; [0,0] is the feeder)"));
   Serial.println();
 
@@ -5898,6 +6002,10 @@ void printGrid()
       else if (cellIsFeeder(c, r))
       {
         Serial.print(F(" F"));
+      }
+      else if (cellIsBeltBlocked(c, r))
+      {
+        Serial.print(F(" X"));
       }
       else
       {
@@ -5924,7 +6032,7 @@ void printGrid()
       Serial.print(F(" "));
   }
   Serial.println();
-  Serial.println(F("     ^ [0,0] feeder; every other cell is buildable"));
+  Serial.println(F("     ^ [0,0] feeder; X = belt-blocked; rest buildable"));
   Serial.println(F("======================================"));
 }
 

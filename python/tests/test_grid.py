@@ -35,7 +35,7 @@ def check(name, condition, detail=""):
 # The map, transcribed from printGrid() with GRID_COLS=4, GRID_ROWS=3
 # ------------------------------------------------------------------
 
-EXPECTED = """  # = machine   . = buildable cell   F = feeder
+EXPECTED = """  # = machine   . = buildable cell   F = feeder   X = belt
   (every cell is a real block; [0,0] is the feeder)
 
   3 | . . . . .
@@ -44,7 +44,7 @@ EXPECTED = """  # = machine   . = buildable cell   F = feeder
   0 | F . . . .
     +----------
      0 1 2 3 4
-     ^ [0,0] feeder; every other cell is buildable"""
+     ^ [0,0] feeder; X = belt-blocked; rest buildable"""
 
 small = MachineGrid(cols=5, rows=4)
 check("ascii_map matches printGrid()", small.ascii_map() == EXPECTED)
@@ -492,6 +492,49 @@ for constant, json_key in per_mode_pairs.items():
               actual[mode_name] == expected,
               f"firmware {actual[mode_name]}, JSON {expected}")
 
+# Belt-blocked cells: a per-mode {col,row} list, baked into GRID_BLOCKED_* in
+# the sketch and mirrored in config/rig.json. Not a straight per-mode scalar,
+# so it has its own parser: two 2D tables plus a live-count vector.
+def firmware_blocked_cells():
+    def table(name):
+        found = re.search(
+            rf"long\s+{name}\[GRID_MODE_COUNT\]\[GRID_BLOCKED_MAX\]\s*=\s*\{{(.*?)\}}\s*;",
+            sketch, re.DOTALL)
+        if found is None:
+            return None
+        return [[int(part) for part in block.split(",")]
+                for block in re.findall(r"\{([^{}]*)\}", found.group(1))]
+
+    counts = re.search(
+        r"long\s+GRID_BLOCKED_COUNT\[GRID_MODE_COUNT\]\s*=\s*\{([^}]*)\}\s*;", sketch)
+    cols, rows = table("GRID_BLOCKED_COL"), table("GRID_BLOCKED_ROW")
+    if counts is None or cols is None or rows is None:
+        return None
+    count_vals = [int(part) for part in counts.group(1).split(",")]
+    if not (len(count_vals) == len(cols) == len(rows) == len(FIRMWARE_MODE_ORDER)):
+        return None
+    return {
+        mode_name: {(cols[idx][i], rows[idx][i]) for i in range(count_vals[idx])}
+        for idx, mode_name in enumerate(FIRMWARE_MODE_ORDER)
+    }
+
+
+fw_blocked = firmware_blocked_cells()
+if fw_blocked is None:
+    check("firmware GRID_BLOCKED_* tables parse", False, "no readable tables")
+else:
+    for mode_name in ("vertical", "horizontal"):
+        want = {tuple(pair) for pair in
+                config["grid"]["modes"][mode_name].get("blocked_cells", [])}
+        check(f"firmware/config pair GRID_BLOCKED[{mode_name}]",
+              fw_blocked[mode_name] == want,
+              f"firmware {sorted(fw_blocked[mode_name])}, JSON {sorted(want)}")
+    grid_v = MachineGrid.from_config(config, mode="vertical")
+    check("[1,1] is a blocked build target in vertical",
+          not grid_v.contains_build_target(1, 1) and grid_v.is_blocked(1, 1))
+    check("[3,3] is still buildable in vertical",
+          grid_v.contains_build_target(3, 3))
+
 # Dynamic build-motion compensation is deliberately firmware-only: it bends
 # the holder path, not the rectangular grid that the Pi/camera draw.  It must
 # nevertheless stay split by target axis AND grid mode, so a vertical tuning
@@ -530,8 +573,8 @@ check("live gripper close angle is 54 degrees", firmware_number("SERVO_CLOSE_ANG
 # below the TOP switch instead of ground-seeking. Firmware-only, no rig.json
 # partner - but it lives in all three build sketches and they must agree, or a
 # manual standalone run rams the belt while the rig sketch clears it.
-Z_PICKUP_DROP_FROM_TOP_CM = 13.25
-check("rig sketch feeder pickup drop is 13.25 cm below the top switch",
+Z_PICKUP_DROP_FROM_TOP_CM = 13.0
+check("rig sketch feeder pickup drop is 13.0 cm below the top switch",
       firmware_number("Z_PICKUP_DROP_FROM_TOP_CM") == Z_PICKUP_DROP_FROM_TOP_CM,
       str(firmware_number("Z_PICKUP_DROP_FROM_TOP_CM")))
 check("rig sketch phase 5 uses zGoPickup(), not zGoGround()",
@@ -547,7 +590,7 @@ for standalone_name in ("build_vertical_grid", "build_horizontal_grid"):
     standalone_drop = re.search(
         r"^\s*float\s+Z_PICKUP_DROP_FROM_TOP_CM\s*=\s*([-+]?\d+(?:\.\d+)?)\s*;",
         standalone, re.MULTILINE)
-    check(f"{standalone_name} feeder pickup drop matches the rig sketch (13.25 cm)",
+    check(f"{standalone_name} feeder pickup drop matches the rig sketch (13.0 cm)",
           standalone_drop is not None
           and float(standalone_drop.group(1)) == Z_PICKUP_DROP_FROM_TOP_CM,
           standalone_drop.group(1) if standalone_drop else "not found")

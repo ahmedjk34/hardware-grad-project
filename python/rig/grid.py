@@ -82,7 +82,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 
-from rig.config import (active_grid_mode, grid_geometry, load,
+from rig.config import (active_grid_mode, blocked_cells, grid_geometry, load,
                         max_edge_overhang_cm)
 
 # Which image corner holds machine cell [0,0].
@@ -136,6 +136,11 @@ class MachineGrid:
     # equal to cols/rows whenever no shift trims the grid.
     requested_cols: int | None = None
     requested_rows: int | None = None
+    # Cells a fixed obstruction (the feeder belt) sits in: real, drawable cells
+    # that the claw can never descend into, at any level. Per mode, paired with
+    # the firmware's GRID_BLOCKED_* tables (test_grid.py holds them equal).
+    # `[0,0]` is the feeder and is tracked separately, never listed here.
+    blocked: frozenset[tuple[int, int]] = frozenset()
 
     @classmethod
     def from_config(cls, cfg: dict | None = None, mode: str | None = None,
@@ -173,6 +178,7 @@ class MachineGrid:
             # can preview "what would a 1.6 cm shift do" without editing cfg.
             shift_x_cm=float(kwargs.pop("shift_x_cm", grid.get("shift_x_cm", 0.0))),
             shift_y_cm=float(kwargs.pop("shift_y_cm", grid.get("shift_y_cm", 0.0))),
+            blocked=frozenset(kwargs.pop("blocked", blocked_cells(grid))),
             **kwargs,
         )
 
@@ -452,6 +458,16 @@ class MachineGrid:
         """[0,0] is the feeder in both modes and is never built on."""
         return col == 0 and row == 0
 
+    def is_blocked(self, col: int, row: int) -> bool:
+        """Whether a fixed obstruction (the feeder belt) sits in ``[col,row]``.
+
+        A real, drawable cell the claw can never descend into, at any level.
+        Per mode: what the belt fouls in the vertical layout it need not foul
+        in the horizontal one. Firmware refuses ``B``/``G`` for these cells the
+        same way it refuses the feeder; the two lists are paired.
+        """
+        return (int(col), int(row)) in self.blocked
+
     def cell_bounds_cm(self, col: int, row: int) -> tuple[float, float, float, float]:
         """Physical block edges, excluding the visible 0.5 cm gaps."""
         cx, cy = self.cell_center_cm(col, row)
@@ -519,12 +535,15 @@ class MachineGrid:
     def contains_build_target(self, col: int, row: int) -> bool:
         """Whether coordinates are valid for the firmware's ``B`` command.
 
-        Every cell except the feeder. ``[0,0]`` is where blocks come FROM in
-        both modes, so ``B 0 0`` stays the inert no-op it has always been -
-        but ``B 0 3`` and ``B 4 0`` are ordinary placements now, where they
-        used to be the "move one axis only" calibration sentinel.
+        Every cell except the feeder and the belt-blocked cells. ``[0,0]`` is
+        where blocks come FROM in both modes, so ``B 0 0`` stays the inert
+        no-op it has always been - but ``B 0 3`` and ``B 4 0`` are ordinary
+        placements now, where they used to be the "move one axis only"
+        calibration sentinel. A ``blocked`` cell has a fixed obstruction in it
+        and the firmware refuses it before anything moves.
         """
-        return self.contains(col, row) and not self.is_feeder(col, row)
+        return (self.contains(col, row) and not self.is_feeder(col, row)
+                and not self.is_blocked(col, row))
 
     # --- reporting --------------------------------------------------------
 
@@ -554,6 +573,7 @@ class MachineGrid:
             and self.error_offset_y_cm == other.error_offset_y_cm
             and self.shift_x_cm == other.shift_x_cm
             and self.shift_y_cm == other.shift_y_cm
+            and self.blocked == other.blocked
         )
 
     def describe(self) -> str:
@@ -589,7 +609,7 @@ class MachineGrid:
         numbers, which the firmware does to keep the map aligned.
         """
         lines = [
-            "  # = machine   . = buildable cell   F = feeder",
+            "  # = machine   . = buildable cell   F = feeder   X = belt",
             "  (every cell is a real block; [0,0] is the feeder)",
             "",
         ]
@@ -600,11 +620,13 @@ class MachineGrid:
                     marker = "#"
                 elif self.is_feeder(c, r):
                     marker = "F"
+                elif self.is_blocked(c, r):
+                    marker = "X"
                 else:
                     marker = "."
                 cells += f" {marker}"
             lines.append(f"{r:>3} |{cells}")
         lines.append("    +" + "--" * self.cols)
         lines.append("     " + " ".join(str(c % 10) for c in range(0, self.cols)))
-        lines.append("     ^ [0,0] feeder; every other cell is buildable")
+        lines.append("     ^ [0,0] feeder; X = belt-blocked; rest buildable")
         return "\n".join(lines)

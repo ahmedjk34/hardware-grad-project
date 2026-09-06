@@ -994,14 +994,14 @@ float BLOCK_HEIGHT_CM = 1.5;
 //        pickup_steps = Z_TRAVEL_STEPS - round(DROP_FROM_TOP_CM * stepsPerCm)
 //
 //   At the shipped calibration (Z_TRAVEL_CM 26.5, Z_TRAVEL_STEPS 1350):
-//        13.25 cm below top == 13.25 cm above GROUND (mid-travel) == ~675 steps.
+//        13.0 cm below top == ~13.5 cm above GROUND == ~688 steps.
 //
 //   The build no longer re-zeroes Z at GROUND; phase 1's top-switch seek
 //   references it every build, and `0+` still gives a true GROUND zero.
 //   The bottom Z switch stays required as a physical backstop. Keep this
 //   in step with arduino/build_test_v1 (test_grid.py pairs the fill
 //   sketches to the rig sketch).
-float Z_PICKUP_DROP_FROM_TOP_CM = 13.25;
+float Z_PICKUP_DROP_FROM_TOP_CM = 13.0;
 
 // ------------------------------------------------------------
 //   MARGIN OF ERROR  (all three may be POSITIVE or NEGATIVE)

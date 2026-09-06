@@ -33,6 +33,12 @@ export interface ModeGeometry {
   max_edge_overhang_x_cm?: number; max_edge_overhang_y_cm?: number;
   error_offset_x_cm?: number; error_offset_y_cm?: number;
   shift_x_cm?: number; shift_y_cm?: number;
+  /**
+   * Cells a fixed obstruction (the feeder belt) sits in: real, addressable
+   * cells the claw can never descend into, at any level. Per mode, paired with
+   * the firmware's `GRID_BLOCKED_*`. Absent / `[]` means none.
+   */
+  blocked_cells?: [number, number][];
   /** Block height has no partner in rig.json today; see BLOCK_HEIGHT_CM. */
   block_z_cm?: number;
 }
