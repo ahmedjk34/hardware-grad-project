@@ -178,7 +178,7 @@ descent to level K   1350 - 76.4*K steps = 2565 - 145*K  ms
 Phase 5 (`lower_to_ground`) is no longer a full top-to-bottom travel: since
 the feeder belt was fitted it re-seeks the top switch (a no-op — phase 1 just
 made it) and then steps a **fixed partial descent** below it to the pickup
-height (`Z_PICKUP_DROP_FROM_TOP_CM`, 13.7 cm ≈ a 698-step / ~1331 ms move at
+height (`Z_PICKUP_DROP_FROM_TOP_CM`, 13.3 cm ≈ a 678-step / ~1293 ms move at
 the shipped calibration — the descent is measured from the *physical* switch,
 so it is exact even if `Z_TRAVEL_STEPS` is off). `zEtaToPickupMs()` sends the
 shorter figure. Placement phases 7/10/12 are unchanged.
@@ -247,7 +247,7 @@ the phase announcements in order (the same technique as the transcript above):
 @12 STEP step=2 total=14 phase=home_feeder action=move text=Home_XY_to_the_feeder status=begin
 @12 STEP step=3 total=14 phase=neutralise_claw action=rotate text=Return_the_claw_to_neutral status=begin
 @12 STEP step=4 total=14 phase=open_claw action=release text=Open_the_claw status=begin
-@12 STEP step=5 total=14 phase=lower_to_ground action=move text=Lower_Z_to_the_ground_switch status=begin ms=1331
+@12 STEP step=5 total=14 phase=lower_to_ground action=move text=Lower_Z_to_the_ground_switch status=begin ms=1293
 @12 STEP step=6 total=14 phase=grip action=grip text=Close_the_claw_and_grip status=begin
 @12 STEP step=7 total=14 phase=lift_block action=move text=Raise_Z_to_carry_height status=begin ms=2570
 @12 STEP step=8 total=14 phase=move_to_target action=move text=Move_XY_to_the_target_cell status=begin
@@ -447,7 +447,7 @@ Trimmed to the terminal and milestone lines — a real build prints all fourteen
                                     <- Pi sends: R / RR mode latch, then S 6 5
 @1 RECV cmd=B col=3 row=5 level=0
 @1 STEP step=2 total=14 phase=home_feeder action=move text=Home_XY_to_the_feeder status=begin
-@1 STEP step=5 total=14 phase=lower_to_ground action=move text=Lower_Z_to_the_ground_switch status=begin ms=1331
+@1 STEP step=5 total=14 phase=lower_to_ground action=move text=Lower_Z_to_the_ground_switch status=begin ms=1293
 @1 STEP step=8 total=14 phase=move_to_target action=move text=Move_XY_to_the_target_cell status=begin
 @1 STEP step=11 total=14 phase=release action=release text=Open_the_claw_and_release status=begin
 @1 STEP step=11 total=14 phase=release action=release text=Open_the_claw_and_release status=done
@@ -458,7 +458,7 @@ And the one that matters:
 
 ```
 @3 RECV cmd=B col=3 row=5 level=0
-@3 STEP step=5 total=14 phase=lower_to_ground action=move text=Lower_Z_to_the_ground_switch status=begin ms=1331
+@3 STEP step=5 total=14 phase=lower_to_ground action=move text=Lower_Z_to_the_ground_switch status=begin ms=1293
 @3 HELD Z never reached the pickup height
 ```
 

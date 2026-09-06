@@ -621,7 +621,7 @@ const bool SOFT_LIMIT_VERBOSE = true;
 //   Z_MARGIN_PER_LEVEL_CM              0.0          (not per mode)
 //   Z_MARGIN_FIXED_CM                  0.12
 //   Z_MARGIN_FIXED_STEPS               0
-//   Z_PICKUP_DROP_FROM_TOP_CM          13.7         (drop from TOP, see below)
+//   Z_PICKUP_DROP_FROM_TOP_CM          13.3         (drop from TOP, see below)
 //
 // A 0.0 is a real statement - "this mode/axis needs no correction of this
 // kind" - not a placeholder waiting to be filled in. Vertical carries no fixed
@@ -762,7 +762,7 @@ const bool SOFT_LIMIT_VERBOSE = true;
 //               switch, not up from GROUND. Larger = deeper descent = LOWER
 //               pickup point. Rule 0 does not apply because the pickup no
 //               longer touches GROUND; phase 1's top-switch seek is the
-//               live reference. 13.7 below top == ~12.8 above GROUND at
+//               live reference. 13.3 below top == ~13.2 above GROUND at
 //               the shipped 26.5 cm / 1350-step calibration.
 //     TOUCH WHEN: the feeder-belt surface height changes, or a block is not
 //               being gripped cleanly at the belt.
@@ -1305,15 +1305,15 @@ float BLOCK_HEIGHT_CM = 1.5;
 //
 //   At the shipped calibration (Z_TRAVEL_CM 26.5, Z_TRAVEL_STEPS 1350) the
 //   NOMINAL figures the `Z` report prints:
-//        13.7 cm below top  ==  ~12.8 cm above GROUND  ==  ~652 steps
-//        from ground  ==  a ~698-step descent from the top switch.
+//        13.3 cm below top  ==  ~13.2 cm above GROUND  ==  ~672 steps
+//        from ground  ==  a ~678-step descent from the top switch.
 //   Z_TRAVEL_STEPS is used ONLY to turn cm into the `drop` step count here,
 //   never as the reference position - that is read live from the switch.
 //
 //   The bottom Z switch stays REQUIRED and enabled: it is now a physical
 //   backstop below the pickup height, and `0+` still uses it to give Z a
 //   true GROUND zero.
-float Z_PICKUP_DROP_FROM_TOP_CM = 13.7;
+float Z_PICKUP_DROP_FROM_TOP_CM = 13.3;
 
 // ------------------------------------------------------------
 //   MARGIN OF ERROR  (all three may be POSITIVE or NEGATIVE)

@@ -169,7 +169,7 @@ describes the bug, not the rig.
 | `SKEW_X_*`, `SKEW_Y_PER_ROW/COLROW` | `0.0` | `0.0` | unmeasured, stay zero |
 | `BUILD_PLACEMENT_OFFSET_X_CM` | **`0.0`** | **`−0.4`** | horizontal placements sit 0.4 cm **toward** the X home switch |
 | `BUILD_PLACEMENT_OFFSET_Y_CM` | **`0.0`** | `0.0` | no fixed Y correction in either mode |
-| `Z_PICKUP_DROP_FROM_TOP_CM` | `13.7` | `13.7` | not per mode — phase-5 pickup descends 13.7 cm below the top switch (≈ 12.8 cm above ground at the shipped Z calibration) onto the feeder belt, instead of ground-seeking |
+| `Z_PICKUP_DROP_FROM_TOP_CM` | `13.3` | `13.3` | not per mode — phase-5 pickup descends 13.3 cm below the top switch (≈ 13.2 cm above ground at the shipped Z calibration) onto the feeder belt, instead of ground-seeking |
 
 **`BUILD_PLACEMENT_OFFSET_*` is `0.0` for vertical on both axes, and that is a
 real statement, not a placeholder.** It means vertical builds get **no fixed

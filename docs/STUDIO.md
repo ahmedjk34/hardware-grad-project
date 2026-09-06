@@ -1377,7 +1377,7 @@ on the web console's camera overlay (`python/web/geometry.py` →
 
 A feeder belt was fitted at `[0,0]`, above the table ground. Build phase 5
 (`lower_to_ground`) now re-seeks the top switch (a no-op — phase 1 just made
-it) and steps a fixed `Z_PICKUP_DROP_FROM_TOP_CM` (13.7 cm) below where it
+it) and steps a fixed `Z_PICKUP_DROP_FROM_TOP_CM` (13.3 cm) below where it
 physically stopped, instead of seeking the ground switch and re-zeroing Z.
 Referencing the physical switch each cycle makes the pickup height exact even
 if `Z_TRAVEL_STEPS` is off, and identical on every block (`Z_TRAVEL_STEPS`

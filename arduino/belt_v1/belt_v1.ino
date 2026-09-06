@@ -37,9 +37,9 @@ const uint8_t CONTAINER_SERVO_PIN = 12;
 
 const uint8_t BELT_FORWARD_DIRECTION_LEVEL = HIGH;
 const uint8_t BELT_REVERSE_DIRECTION_LEVEL = LOW;
-// Two opening movements: roughly two-thirds of the travel, then the final third.
+// Two near-equal opening movements across the full gate travel.
 const uint8_t CONTAINER_CLOSED_ANGLE = 23;
-const uint8_t CONTAINER_STAGE_1_ANGLE = 108;
+const uint8_t CONTAINER_STAGE_1_ANGLE = 87;
 // Temporarily disabled extra intermediate stage (65°):
 // const uint8_t CONTAINER_STAGE_2_ANGLE = 65;
 const uint8_t CONTAINER_OPEN_ANGLE = 150;
