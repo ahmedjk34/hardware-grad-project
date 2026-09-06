@@ -292,7 +292,7 @@ the single index; the files hold the decisions.
 
 | # | Feature | Status | Difficulty |
 | --- | --- | --- | --- |
-| 4.1 | [Grid shift in the twin](features/grid-shift-in-the-twin.md) | partial — every coordinate function already takes a shift; the twin never passes one | 2–3 / 5 |
+| 4.1 | [Running-bond grid shift](features/running-bond-grid-shift.md) — half-pitch course offsets, Studio + Twin + compiler + `POST /api/shift` (was "grid shift in the twin", now folded in) | **built**; firmware `shiftX`/`shiftY` unchanged | 3 / 5 |
 | 4.2 | [Between-build error calibration](features/between-build-error-calibration.md) | partial — the measurement exists, nothing feeds it back to a knob | 4 / 5 |
 | 4.3 | [Removed-block compensation](features/removed-block-compensation.md) | not started — extends §1.4/Appendix A from idle-time to mid-program | 5 / 5 |
 

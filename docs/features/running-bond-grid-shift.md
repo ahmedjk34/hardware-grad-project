@@ -68,12 +68,19 @@ feeder cell.
 
 ## 2. The model — one new field
 
-`rigmodel/2` adds `bond_shift_cm`: per mode, a map from **level index** to a
-`[x_cm, y_cm]` offset added **on top of** the rig's live shift. Absent level ⇒
-`[0, 0]`. `rigmodel/1` files migrate with an empty map (no behaviour change).
+A model gains **`bondShifts`**: an author field beside `blocks` / `order` (not
+in the `rig` snapshot — it is intent, not recorded geometry). Per mode, a map
+from **level index** to an `[x_cm, y_cm]` offset added **on top of** the rig's
+live shift. Absent level, or `level ≤ 0`, ⇒ `[0, 0]`.
+
+**No schema bump.** `bondShifts` is additive and optional: a `rigmodel/1` file
+with no `bondShifts` correctly means "no bond", exactly as an older file with no
+`colour` means white — the established repair-don't-refuse pattern in
+`rigmodel.ts`. `parseBondShifts` drops any malformed entry rather than failing
+the whole document.
 
 ```jsonc
-"bond_shift_cm": {
+"bondShifts": {
   "vertical":   { "1": [0, 3.8], "3": [0, 3.8], "5": [0, 3.8] },
   "horizontal": {}
 }
@@ -135,21 +142,26 @@ nothing).
 Two shift sources, and they are not the same question:
 
 - **What the rig is on now** — `state.shift_cm`, published by the server
-  (§5). The Twin's placed blocks and its lattice are drawn from this. During a
-  bonded RUN it oscillates `0 → 3.8 → 0` as courses go up and the Twin just
-  follows; the Twin needs no per-level knowledge for built blocks.
-- **Where the unbuilt plan goes** — the model's `bond_shift_cm`. The ghost
-  blocks and the target pulse use `resolveShift` so the plan preview shows the
-  brick pattern before it is built.
+  (§5). The Twin's **base-course lattice** and any **off-model** rig block are
+  drawn from this (`liveShiftOf(state)` → `<Lattice shift>`).
+- **Where the plan goes** — the model's `bondShifts`. Every **model block** —
+  ghost, target, placed, building — is positioned by
+  `resolveShift(block, undefined, bondShifts)` (`TwinBlock.shift`, applied by
+  `BlockBatch`'s new `shiftOf`), so a bonded structure is drawn brick-laid even
+  mid-build while `state.shift_cm` is oscillating `0 → 3.8 → 0` between courses.
+  When the model has **no** `bondShifts`, model blocks follow `state.shift_cm`
+  instead (a plain operator re-registration).
 
-`GEOMETRY_DRIFT` already fires when the model's stored shift ≠ the live shift;
-`bond_shift_cm` joins the snapshot so a model authored bonded and run against a
-rig with a stuck manual shift is caught before RUN.
+`GEOMETRY_DRIFT` already fires when the model's stored shift ≠ the live shift,
+which catches a bonded model run against a rig carrying a stuck manual shift.
+`bondShifts` is deliberately **not** in the drift snapshot: it is a plan, not a
+geometry the rig has to match.
 
 Traps carried over from [grid-shift-in-the-twin.md](grid-shift-in-the-twin.md)
-§4: the shift is per mode; `twinSignature` must include it; a shift moves the
-lattice, never the cell indices; no sign flip in the scene layer; clipped cells
-are struck through, not deleted; a shift change invalidates the saved workspace
+§4: the shift is per mode; `twinSignature` includes `state.shift_cm` and the
+bond-map hash; a shift moves the lattice, never the cell indices; no sign flip
+in the scene layer; clipped cells are struck through, not deleted; a shift
+change invalidates the saved workspace
 map.
 
 ---
@@ -176,44 +188,62 @@ end.
 
 ---
 
-## 6. Where it lives
+## 6. Where it lives — as built
 
 ```
 docs/features/running-bond-grid-shift.md   this file
 config — unchanged (shipped shift stays 0.0)
 arduino/build_test_v1/build_test_v1.ino    unchanged; shiftX/shiftY already do the work
-python/web/state.py                        + shift_cm, + reachable
-python/web/routes_command.py               + POST /api/shift
-python/rig/link.py                         set_shift already takes x_cm / y_cm
-python/tests/web_state_test.py             shift_cm is the active mode's, changes on latch
-python/tests/test_shift_route.py           new — the route's guards and ordering
-web/src/studio/coords.ts                   + resolveShift, + BondShifts type
-web/src/studio/geometry.ts                 aabbOf via resolveShift
-web/src/studio/lattice.ts                  per-level cells for the ghost
-web/src/studio/validate.ts                 clippedByShift / drift via resolveShift + bond snapshot
-web/src/studio/compile.ts                  + ShiftOp, emitOps latch state, summarise
-web/src/studio/model.ts                    + bondShifts on Model, + setBond edit
-web/src/studio/rigmodel.ts                 rigmodel/2, migration, (de)serialise
-web/src/studio/runner*.ts                  send shift ops during RUN
+python/rig/mock_board.py                   + _handle_shift so the mock echoes GRID SHIFT
+python/rig/link.py                         set_shift rebuilds rig.grid on an explicit shift
+python/web/state.py                        + shift_cm, + reachable, + requested
+python/web/routes_command.py               + POST /api/shift (guards, mode check, map re-validate)
+python/tests/web_state_test.py             asserts shift_cm / reachable / requested
+python/tests/test_shift_route.py           new — apply+clip, wrong-mode 409, unseat 409
+web/src/types.ts + test-state.ts           StateModel gains shift_cm / reachable / requested
+web/src/studio/coords.ts                   + resolveShift, runAxisOf, bondIncrementCm, BondShifts
+web/src/studio/validate.ts                 ValidationContext.bondShifts; shiftFor via resolveShift
+web/src/studio/compile.ts                  + ShiftOp, cmWord, emitOps latch state, summarise.shifts
+web/src/studio/settings.ts                 + shiftLatchSeconds
+web/src/studio/model.ts                    Model.bondShifts, setBond edit, carried through edits
+web/src/studio/rigmodel.ts                 StudioModel.bondShifts, parseBondShifts (no schema bump)
+web/src/studio/runner.ts / runner-driver.ts + shift Effect/RunEvent, issueShift, api.shift
+web/src/api.ts                             + shift(mode, x_cm, y_cm)
+web/src/studio/twin.ts                     liveShiftOf; per-block TwinBlock.shift; signature
+web/src/studio/scene/{Blocks,BlockShadows,Twin}.tsx  BlockBatch.shiftOf; <Lattice shift>
+web/src/components/TwinPanel.tsx            bond-map hash into twinSignature
+web/src/routes/Studio.tsx                  bondShifts into validate/compile; previewShift; <GridShift>
 web/src/studio/panels/GridShift.tsx        new — the control window
-web/src/studio/scene/Twin.tsx / Lattice    thread shift + bondShifts
-web/src/components/TwinPanel.tsx            prop reaches <Twin>, no-state fallback labelled
-web/src/studio/*.test.ts(x)                 new cases per file
-python/tools/dump_grid_fixtures.py         per-level shifted cases
-python/tools/dump_twin_states.py            re-run for the new state field
+web/src/style.css                          .studio-gridshift*, .studio-program-shift
+web/src/studio/bond.test.ts                new — resolver, compiler latches, edit, roundtrip, clip
+web/src/studio/panels/GridShift.test.tsx   new — the panel
+web/src/studio/runner.test.ts              + running-bond shift latch cases
 ```
 
-## 7. Difficulty
+Not done, and why:
 
-| Piece | Difficulty | Why |
+- **`dump_twin_states.py` regen** — the checked-in `twin.fixtures.json` is
+  already stale against the current server (missing `feeder_*`, `hardware_ready`
+  fields), so a regen is a 20k-line diff of unrelated drift. `twin.test.ts`
+  passes with the old fixture because `liveShiftOf` treats a missing `shift_cm`
+  as no shift. Regenerate it in a dedicated fixture-refresh change.
+- **`dump_grid_fixtures.py` per-level cases** — the existing shifted-lattice
+  fixtures already exercise the mechanism (bond composes to a plain `Shift`);
+  `bond.test.ts` covers the per-level composition against the live `latticeOf`.
+- **`S` re-send after a runtime shift** — not needed. `applyGridShift` re-clips
+  `gridColsNow()` / `gridRowsNow()` in place; `set_shift` rebuilds `rig.grid`
+  the same way. Verified in `test_shift_route.py`.
+
+## 7. Difficulty — as it landed
+
+| Piece | Difficulty | Notes |
 | --- | --- | --- |
-| `resolveShift` + threading it | 2 / 5 | every consumer already takes `Shift` |
-| Publish the shift, thread to the Twin | 2 / 5 | the [older doc](grid-shift-in-the-twin.md)'s work |
-| `bond_shift_cm` in `rigmodel/2` + migration | 3 / 5 | the migration hook exists; a schema bump touches (de)serialise + fixtures |
-| `ShiftOp` in the compiler + latch state machine | 3 / 5 | mirrors the mode-latch state machine, per-mode re-assert is the trap |
+| `resolveShift` + threading it | 2 / 5 | every consumer already took `Shift` |
+| Publish the shift + Twin plumbing | 2 / 5 | `BlockBatch.shiftOf` was the one new seam |
+| `bondShifts` on the model, no schema bump | 2 / 5 | additive optional field, `parseBondShifts` repairs |
+| `ShiftOp` + `emitOps` latch state machine | 3 / 5 | per-mode re-assert after `R`/`RR` was the trap |
 | The Studio panel | 2 / 5 | lattice already redraws from `latticeOf(mode, shift)` |
-| `POST /api/shift` + runner emits latches + on-rig | 4 / 5 | map invalidation, `S` re-send, ordering, build-lock, base+bond composition |
-| Fixture regeneration, both languages | 3 / 5 | recorded from a live mock server, not hand-written |
+| `POST /api/shift` + runner latches + mock | 3 / 5 | no `S` re-send needed; MockBoard `_handle_shift` added |
 
 **Overall: 3–4 / 5.** The firmware is untouched; the weight is in the model
 schema bump, the compiler state machine and the write-path safety.

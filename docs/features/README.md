@@ -11,7 +11,8 @@ requires. A second, drifting description of built code is worse than none.
 
 | Feature | Status | Difficulty | The one-sentence version |
 | --- | --- | --- | --- |
-| [Grid shift in the twin](grid-shift-in-the-twin.md) | **partial** — maths done, plumbing missing | 2–3 / 5 | Every web coordinate function already takes a `shift`; the twin is the one caller that never passes one, because the server never publishes it. |
+| [Running-bond grid shift](running-bond-grid-shift.md) | **built** (unflashed firmware unchanged) | 3 / 5 | A level can carry a half-pitch course offset on the run axis so a block bridges the joint of the two beneath it — Studio, Twin, compiled program and `POST /api/shift` all agree; supersedes the row below. |
+| [Grid shift in the twin](grid-shift-in-the-twin.md) | **folded into** running-bond grid shift | 2–3 / 5 | Every web coordinate function already takes a `shift`; the twin is the one caller that never passes one, because the server never publishes it. |
 | [Between-build error calibration](between-build-error-calibration.md) | **partial** — measurement exists, feedback path does not | 4 / 5 | Turn a measured placement residual into a bounded, provenance-carrying correction to the grid origin — and pick the honest knob to apply it with. |
 | [Removed-block compensation](removed-block-compensation.md) | **not started** — idle half already designed in [Appendix A](../feature-ideas.md#appendix-a--placement-supervision-full-design) | 5 / 5 | Mid-*command* verification is impossible; mid-*program* verification is not, because the runner already stops between every block. |
 

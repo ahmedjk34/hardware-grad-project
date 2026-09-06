@@ -19,6 +19,9 @@ const build = (id: string, col: number, row: number, level: number): Op => ({
 const mode = (next: "vertical" | "horizontal"): Op => ({
   op: "mode", mode: next, cost: "homes X and Y", text: next === "vertical" ? "R" : "RR",
 });
+const shiftOp = (cm: number): Op => ({
+  op: "shift", mode: "vertical", axis: "y", cm, text: `shiftY ${cm}`,
+});
 
 function dispatch(state: RunState, event: RunEvent) {
   return step(state, event);
@@ -419,5 +422,36 @@ describe("a lost socket pauses, and a later phase resumes", () => {
     expect(turn.state.cursor).toBe(0);
     expect(dispatch(turn.state, { type: "continue", now: 800 }).state.phase)
       .not.toBe("locked");
+  });
+});
+
+describe("running-bond shift latches in a run", () => {
+  it("issues a shift effect with no confirm gate, then advances on shift-settled", () => {
+    // shift, then the block it sets the course for.
+    let turn = start([shiftOp(3.8), build("a", 1, 1, 1)], "run");
+    expect(turn.effects).toEqual<Effect[]>([
+      { kind: "shift", mode: "vertical", axis: "y", cm: 3.8, command: "shiftY 3.8", dry: false },
+    ]);
+    expect(turn.state.phase).toBe("building");
+    expect(turn.state.inFlight).toBe(true);
+
+    turn = dispatch(turn.state, { type: "shift-settled", now: 200 });
+    expect(turn.state.cursor).toBe(1);
+    expect(turn.state.log.at(-1)).toMatchObject({ kind: "shift", result: "shifted", command: "shiftY 3.8" });
+    // and it rolls straight into arming the build that follows.
+    expect(turn.state.phase).toBe("arming");
+  });
+
+  it("STEP mode also runs the shift without asking — it moves nothing", () => {
+    const turn = start([shiftOp(0), build("a", 1, 1, 0)], "step");
+    expect(turn.effects[0].kind).toBe("shift");
+    expect(turn.state.pendingConfirm).toBeNull();
+  });
+
+  it("a dry run settles the shift on its own timer", () => {
+    const turn = start([shiftOp(3.8)], "dry");
+    expect(turn.effects).toEqual<Effect[]>([
+      { kind: "shift", mode: "vertical", axis: "y", cm: 3.8, command: "shiftY 3.8", dry: true },
+    ]);
   });
 });
