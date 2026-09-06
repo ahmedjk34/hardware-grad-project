@@ -1354,7 +1354,7 @@ on the web console's camera overlay (`python/web/geometry.py` →
 ### Firmware build phase 5 stopped ground-seeking (feeder belt) — no Studio change
 
 A feeder belt was fitted at `[0,0]`, above the table ground. Build phase 5
-(`lower_to_ground`) now descends a fixed `Z_PICKUP_DROP_FROM_TOP_CM` (13.9 cm)
+(`lower_to_ground`) now descends a fixed `Z_PICKUP_DROP_FROM_TOP_CM` (13.55 cm)
 below the top switch and grips there, instead of seeking the ground switch and
 re-zeroing Z. Z is still referenced every build by phase 1's top-switch seek;
 `0+` and level-0 placement still ground-seek. The wire `phase`/`text`
