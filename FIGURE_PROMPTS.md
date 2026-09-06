@@ -408,7 +408,7 @@ assumed.*
 >
 > **Stage 3 — FEED** (actor: Arduino Uno)
 > `Pi sends FEED <id>` → `Close container, settle 500 ms` → `Open gate in two
-> stages: 20° → 90° → 160°` → `Wait for EXIT sensor (10 s timeout)` → `Shut gate
+> stages: 23° → 80° → 150°` → `Wait for EXIT sensor (10 s timeout)` → `Shut gate
 > behind the block` → `Run belt` → `Wait for STAGE sensor (15 s timeout)` →
 > `Nudge square with the alignment servo, 350 ms` → `Re-read STAGE sensor`
 >
@@ -517,7 +517,7 @@ convert -density 130 -background white fig-wiring-uno.svg fig-wiring-uno.png
 | 5 | Exit HC-SR04 ECHO | proves a block left the hopper |
 | 8 | Stage IR OUT | active-low by default; proves a block reached [0,0] |
 | 6 | Alignment servo signal | rest 90°, nudge 120° |
-| 12 | Container servo signal | closed 20°, stage 1 at 90°, open 160° |
+| 12 | Container servo signal | closed 23°, stage 1 at 80°, open 150° |
 | USB | Raspberry Pi 5 | 9600 8N1, protocol 2, also powers the board |
 
 > A4988 **ENABLE is tied directly to ground**, not driven by the Arduino — there is

@@ -24,7 +24,7 @@ One `FEED` request runs this sequence:
    a second block from being fed into an occupied pickup point.
 3. Run the belt forward for one second, then stop it and close the container.
 4. Wait one second for the container to settle, then open it in two deliberate
-   stages: 20° closed → 90° → 160°, waiting one second at each opening stage.
+   stages: 23° closed → 80° → 150°, waiting one second at each opening stage.
    This is intended to queue and release
    blocks more gently than one large movement.
 5. Wait up to 10 seconds for the **exit sensor** to see a block leave the
@@ -59,7 +59,7 @@ that did not arrive at the pickup point.
 | Exit IR obstacle sensor | `OUT 4` | Confirms that a block left the container. The default logic is active-low; pin 5 is unused. |
 | Alignment servo | `6` | Rests at 90° and nudges to 120°; tune mechanically. |
 | Stage IR obstacle sensor | `OUT 8` | Confirms that the pickup position contains a block. The default logic is active-low; change `STAGE_IR_DETECTED_LEVEL` if the installed sensor is inverted. |
-| Container servo | `12` | Closed 20°, first opening 90°, final opening 160°. |
+| Container servo | `12` | Closed 23°, first opening 80°, final opening 150°. |
 
 The sketch uses 9600 baud. All serial commands must end with a newline.
 

@@ -208,7 +208,7 @@ uno_right = [
     {"pin": "5",  "to": "EXIT HC-SR04  ECHO", "note": "block left the hopper"},
     {"pin": "8",  "to": "STAGE IR  OUT", "note": "block reached [0,0]"},
     {"pin": "6",  "to": "ALIGNMENT SERVO",    "note": "rest 90 deg / nudge 120 deg", "col": PWR5},
-    {"pin": "12", "to": "CONTAINER SERVO",    "note": "closed 20 / stage 90 / open 160", "col": PWR5},
+    {"pin": "12", "to": "CONTAINER SERVO",    "note": "closed 23 / stage 80 / open 150", "col": PWR5},
 ]
 draw(
     "Figure — Arduino Uno, feeder controller: complete wiring",

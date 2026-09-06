@@ -12,8 +12,8 @@ Flash `belt_v1/belt_v1.ino` to an **Arduino Uno** for the feeder. Its wiring is:
 - Container-servo signal: pin `12`
 
 `FEED [id]` (or its `RUN [id]` alias) performs one complete feeder cycle:
-run the belt forward for one second, close the container to 20°, open it in
-stages (90° then 160°), wait for the
+run the belt forward for one second, close the container to 23°, open it in
+stages (80° then 150°), wait for the
 exit IR sensor to see a block, run the belt, wait 1.25 seconds before closing
 the gate, and stop the belt 0.25 seconds after the stage IR sensor sees the
 block. The alignment servo then nudges the block square and the stage sensor

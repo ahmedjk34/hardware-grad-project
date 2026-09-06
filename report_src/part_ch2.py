@@ -400,8 +400,8 @@ def chapter_2(rep):
     rep.numbered([
         "**The container.** A hopper sized for the block footprint, with vertical elevation so a "
         "column of blocks can queue inside it, closed by a servo-driven gate on Uno pin 12. The "
-        "gate does not simply open: it moves in two deliberate stages, 20 degrees closed to 90 "
-        "degrees, then 90 to 160 degrees, with a 500 ms settle at each stage. Opening in one "
+        "gate does not simply open: it moves in two deliberate stages, 23 degrees closed to 80 "
+        "degrees, then 80 to 150 degrees, with a 500 ms settle at each stage. Opening in one "
         "large movement releases blocks in a clump; opening in two lets the column settle "
         "against the gate and release the bottom block on its own.",
         "**The exit sensor.** An HC-SR04 at the container's exit (TRIG 4, ECHO 5) that confirms "

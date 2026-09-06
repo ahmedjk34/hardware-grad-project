@@ -261,7 +261,7 @@ Questions:
 **Answer:**
 
 **Q2.4.5 [NEEDED]** Describe the **feeder module** physically: the hopper/
-container (a servo-driven gate that opens in two stages, 20°→90°→160°), the
+container (a servo-driven gate that opens in two stages, 23°→80°→150°), the
 conveyor belt (belt sheet + 3D-printed parts + a stepper via A4988), the
 alignment servo that nudges the block square, and where the exit HC-SR04 and
 digital stage IR sensor sit (one at the container exit, one at the pickup/stage

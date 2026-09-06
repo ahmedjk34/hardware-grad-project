@@ -634,8 +634,8 @@ def chapter_4(rep):
         ["State", "Belt", "Sensor sampled", "Leaves when"],
         [
             ["`closing`", "stopped", "-", "500 ms have elapsed"],
-            ["`opening_stage_1`", "stopped", "-", "500 ms (gate at 90 degrees)"],
-            ["`opening_stage_2`", "stopped", "-", "500 ms (gate at 160 degrees)"],
+            ["`opening_stage_1`", "stopped", "-", "500 ms (gate at 80 degrees)"],
+            ["`opening_stage_2`", "stopped", "-", "500 ms (gate at 150 degrees)"],
             ["`waiting_for_exit`", "stopped", "exit, every 100 ms",
              "a block is detected, or 10 s timeout"],
             ["`moving_to_stage`", "running", "stage, every 100 ms",

@@ -37,9 +37,10 @@ const uint8_t CONTAINER_SERVO_PIN = 12;
 
 const uint8_t BELT_FORWARD_DIRECTION_LEVEL = HIGH;
 const uint8_t BELT_REVERSE_DIRECTION_LEVEL = LOW;
-const uint8_t CONTAINER_CLOSED_ANGLE = 20;
-const uint8_t CONTAINER_STAGE_1_ANGLE = 90;
-const uint8_t CONTAINER_OPEN_ANGLE = 160;
+// Container gate sequence: closed, first opening stage, then fully open.
+const uint8_t CONTAINER_CLOSED_ANGLE = 23;
+const uint8_t CONTAINER_STAGE_1_ANGLE = 80;
+const uint8_t CONTAINER_OPEN_ANGLE = 150;
 const uint8_t ALIGN_REST_ANGLE = 90;
 const uint8_t ALIGN_NUDGE_ANGLE = 120;
 

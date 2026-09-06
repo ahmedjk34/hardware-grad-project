@@ -325,7 +325,7 @@ def appendices(rep):
             ["6", "output", "Alignment servo signal", "Rest 90 deg, nudge 120 deg"],
             ["8", "input", "Stage IR OUT", "Pickup-point presence sensor, active-low by default"],
             ["12", "output", "Container servo signal",
-             "Closed 20 deg, stage 1 at 90 deg, open 160 deg"],
+             "Closed 23 deg, stage 1 at 80 deg, open 150 deg"],
             ["USB", "serial", "Raspberry Pi", "9600 8N1, protocol 2"],
         ],
         widths=[1.4, 2.6, 4.4, 6.6], size=9)
