@@ -1001,7 +1001,7 @@ float BLOCK_HEIGHT_CM = 1.5;
 //   The bottom Z switch stays required as a physical backstop. Keep this
 //   in step with arduino/build_test_v1 (test_grid.py pairs the fill
 //   sketches to the rig sketch).
-float Z_PICKUP_DROP_FROM_TOP_CM = 13.0;
+float Z_PICKUP_DROP_FROM_TOP_CM = 13.3;
 
 // ------------------------------------------------------------
 //   MARGIN OF ERROR  (all three may be POSITIVE or NEGATIVE)

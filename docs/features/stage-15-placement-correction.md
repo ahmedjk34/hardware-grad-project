@@ -91,15 +91,29 @@ measurement needs; no new interlock has to be invented.
 It does **not** run after every block. A per-block check adds a settle and a
 frame grab (~2 s) to every placement, and judges each block on one observation.
 
-### D2 — It is stage 15 in the UI, and Pi-side in fact
+### D2 — "Stage 15" is a name for the operator, not a 15th build phase
 
 The Mega has no camera and no filesystem. It cannot look at the board, so this
 **cannot be a firmware phase**, and phases 1–14 are not modified.
 
-The Pi synthesises a stage-15 `STEP` line into the same progress stream
-[`BuildProgressTracker`](../../python/web/progress.py#L158) already consumes, so
-the operator sees a genuine 15th stage. Documentation and `total_steps` must say
-plainly that 15 is a Pi-side stage, not a firmware one.
+It is tempting to have the Pi synthesise a 15th `@n STEP … phase=` line into the
+existing build-progress stream. **Do not.** Two reasons, both checked:
+
+1. Per [AGENTS.md §5a](../../AGENTS.md), the fourteen `phase=` ids are a
+   **protocol**, mirrored in four places — the sketch's `buildStep()` call sites,
+   `MockBoard.BUILD_PHASES`, `twin.ts`'s `PHASE_BY_ID`, and `docs/ack-protocol.md`
+   — and `twin.test.ts` asserts the browser's table matches the documented
+   fourteen. Adding a fifteenth is a protocol change to the thing Rule 1 says not
+   to touch.
+2. The fallback is not graceful. `twin.ts:440` reads
+   `PHASE_BY_ID[progress.phase] ?? "moving-to-target"`, so an unrecognised id
+   makes the 3D twin **draw the gantry flying to a target** — an active
+   misstatement of what the machine is doing, not a shrug.
+
+So stage 15 gets **its own state fields and its own UI strip**, parallel to the
+build-phase channel and never inside it. The operator sees "Stage 15 — placement
+check" because that is what it is *to them*; the fourteen-phase contract is
+untouched, `twin.ts` needs no new id, and `twin.test.ts` keeps passing unchanged.
 
 ### D3 — Level and rotation come from memory, never from vision
 
@@ -457,16 +471,150 @@ is flash → run into a real structure → watch what breaks.
 **Overall: 3 / 5**, but unevenly distributed — most of the difficulty and nearly
 all of the risk sits in the last two rows.
 
-### The order this should be built in
+---
 
-1. **Measurement half, advisory only.** Cheap, safe, independently useful, and it
-   answers the questions that decide everything else: are the errors real, are
-   they above 0.5 cm, and does the parallax model agree with a ruler at level 2?
-2. **Two bench measurements** (§5.2, §5.3). Twenty minutes each.
-3. **The `P` verb — only if 1 and 2 come back favourable.** If the parallax model
-   does not validate against a ruler, or the correction band turns out empty, the
-   correction half should not be built at all.
+## 8. The implementation plan
 
-Stopping after step 1 leaves a useful feature: the machine tells you which block
-is out of place and by how much. That is worth having even if the claw never
-touches it.
+Three stages with **gates between them**. Stage B can kill stage C, and that is
+the point of ordering it this way.
+
+### Stage A — measurement only, no motion (build this first, unconditionally)
+
+Nothing in stage A can move the machine. It is safe to run on a live rig from
+day one, and it is independently useful even if stage C is never built.
+
+**New files**
+
+| File | Holds |
+| --- | --- |
+| `python/rig/placement_ledger.py` | the as-built memory (§3): per cell the top level, its rotation, when. Plus the D5/D6 predicates — `is_top_of_column`, `has_taller_neighbour`. Pure, no I/O. |
+| `python/rig/placement_check.py` | D4 parallax, D7 matching, D8 banding. `parallax_excess(level, x_cm, y_cm) -> (dx, dy)`, `match(predictions, detections) -> matches`, `judge(error_cm) -> IGNORE / CORRECT / REFUSE`. Pure functions, no camera, no rig, no OpenCV. |
+| `python/rig/stage15.py` | the orchestration: take the parked frame, run its own `detect_aligned_blocks(frame, grid=None)`, project through the `WorkspaceMap`, parallax-correct, match, judge, return a report. Advisory only in stage A — it returns findings and does nothing with them. |
+| `python/tests/test_placement_ledger.py` | |
+| `python/tests/test_placement_check.py` | |
+| `python/tests/test_stage15.py` | |
+
+**Edits**
+
+| File | Change |
+| --- | --- |
+| `config/rig.json` | add the `camera` section: `height_cm: 57.0`, `nadir_x_cm: 11.4`, `nadir_y_cm: 32.5` |
+| `python/rig/config.py` | load it |
+| `python/rig/build_controller.py` | record every `PLACED` result into the ledger — cell, level, rotation. One call at the existing `elif str(result) == PLACED:` branch. |
+| `python/web/state.py` | surface `stage15_*` fields (D2) — never `build_*` |
+| `python/web/routes_command.py` | the toggle, and a manual "check now" |
+| `web/src/…` | the toggle (default off, D11) and the findings strip |
+| `docs/STUDIO.md` | if the toggle lands in the Studio UI, same commit, with changelog |
+
+**`vision/` is not touched.** Stage 15 calls the existing detector with different
+arguments; it adds no detector and modifies no module there. The layering rule of
+[BLOCK-VISION §7](../BLOCK-VISION.md) holds.
+
+**Gate out of stage A:** run it advisory for a session and answer — are the
+errors real, are any above 0.5 cm, and **does the parallax prediction agree with
+a ruler at level 2?** If the parallax model does not validate, stop; everything
+downstream inherits it.
+
+### Stage B — two bench measurements (gates stage C)
+
+Neither needs code. Both are ~20 minutes.
+
+1. **Jaw capture tolerance** (§5.2). Place a block deliberately 0.5 cm off; drive
+   the claw to it; does it grip, or shove? Repeat at 0.8 and 1.2 cm. This decides
+   whether stage C can work at all.
+2. **Placement repeatability** (§5.3). Place the same cell repeatedly and measure
+   the spread. If it is near 0.5 cm, D8's band is empty and **stage C should not
+   be built.**
+
+### Stage C — the correction (only if A and B come back favourable)
+
+| File | Change |
+| --- | --- |
+| `arduino/build_vertical_grid/build_vertical_grid.ino` | the `P` verb (§4) |
+| `arduino/build_horizontal_grid/build_horizontal_grid.ino` | the same, same commit |
+| `AGENTS.md` §6 | add `P` to the command vocabulary; give it an `@` ack so it is safe from rewording, as `B` is and `S`/`G`/`0` are not |
+| `python/rig/link.py` | `replace_block()` beside `build()`, with the same abort discipline |
+| `python/rig/mock_board.py` | mock `P` so the whole path is testable off-rig |
+| `python/rig/stage15.py` | act on the finding: correct, re-verify (D9), stop (D10) |
+| `python/tests/test_grid.py` | extend — it parses the sketch and is the drift check |
+| `python/tests/test_link.py` | `P` ack shape and abort handling |
+| `docs/ack-protocol.md` | the `P` ack |
+
+**No local Arduino toolchain** (§4): stub-`g++` syntax check, say plainly the
+result is unflashed and unverified, and never claim otherwise.
+
+### Checks after any stage
+
+```bash
+python3 python/tests/test_grid.py     # firmware <-> config pairing
+cd web && npx vitest run              # Studio / coords / Twin
+cd python && python3 -m pytest tests/ # the rest
+```
+
+Known pre-existing failures, not regressions: `mock_camera_test.py`,
+`test_combined_grid`, `test_color_tuning`, `test_camera_performance`,
+`test_block_outline`.
+
+---
+
+## 9. Implementation style
+
+Match the repo; it has a strong and consistent house style.
+
+**Layering.** `rig/` orchestrates and knows nothing about OpenCV beyond passing
+arrays through — `block_calibration.py` says so in its own docstring and is the
+model to copy. `vision/` stays unmodified. Pure geometry (`placement_check.py`)
+must be importable and testable with no camera, no serial port and no frame.
+
+**Docstrings explain *why*, not *what*.** The house style is a module docstring
+with named sections — "Why it is step-wise rather than one call", "The two safety
+rules that are not negotiable". `block_calibration.py` and `progress.py` are the
+templates. The D5/D6/D8 refusals each need a sentence saying what they are
+protecting against, because none of them is obvious from the code.
+
+**Dataclasses, frozen, for results.** `BuildOutcome`, `BlockGridReport`,
+`BuildProgress` are all frozen dataclasses with a docstring naming what exactly
+one of them means. Stage 15's finding should be one too.
+
+**`from __future__ import annotations`** at the top of every new module.
+
+**Tests are hand-rolled, not pytest, where the neighbours are.**
+`test_build_controller.py` uses a `check(name, condition, detail)` helper with
+`PASSED`/`FAILED` lists and prints one aligned line per assertion; `test_grid.py`
+is the same shape at 221 checks. Match the file you sit beside rather than
+importing a new idiom. Fakes over mocks: `FakeRig` in `test_build_controller.py`
+is the pattern.
+
+**Assert named physical scenarios, not bare numbers.** Inherited from the
+predecessor doc and it still applies: *"a block at [0,0] level 2 is seen 1.9 cm
+toward −Y; the parallax model must explain all of it and the residual error must
+be under the ignore threshold"* beats `assert 1.9 == 1.9`, which passes just as
+happily with the sign inverted.
+
+**Sign discipline.** [AGENTS.md](../../AGENTS.md) Rule 0 and 0a: every
+calibration number is a magnitude from that axis' home switch, `+` away from
+home; X's `axisPos[]` runs the opposite way, and the two spaces are crossed only
+via `axisPosFromHomeSteps()` / `axisStepsFromHome()`. Stage 15's `(dx,dy)` goes
+on the wire in **cm magnitudes** and is converted inside the firmware at the
+`gotoBuildTarget()` injection point, exactly as `buildSkewSteps()` already is —
+so the conversion happens once, in the place that already gets it right.
+
+**Refusals are refusals.** D5, D6 and D8's upper bound halt and say why. They do
+not warn and continue, and they do not clamp — a clamped 3 cm error is a 1.2 cm
+correction applied to a machine that has something else wrong with it.
+
+**Docs in the same commit as the code.** `docs/STUDIO.md` and its changelog for
+any Studio change; `AGENTS.md` §6 and `docs/ack-protocol.md` for the `P` verb;
+this document's status line when a stage lands.
+
+---
+
+## 10. Where to start
+
+Stage A of §8, and nothing else, until its gate is answered.
+
+Stopping after stage A still leaves a feature worth having: the machine tells you
+which block is out of place, by how much, and on which level — with the parallax
+accounted for, which is the part a person cannot do by eye. The claw never has to
+touch it for that to be useful, and everything risky in this document lives on
+the other side of a gate that stage A exists to open.

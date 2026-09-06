@@ -1311,7 +1311,7 @@ float BLOCK_HEIGHT_CM = 1.5;
 //   The bottom Z switch stays REQUIRED and enabled: it is now a physical
 //   backstop below the pickup height, and `0+` still uses it to give Z a
 //   true GROUND zero.
-float Z_PICKUP_DROP_FROM_TOP_CM = 13.0;
+float Z_PICKUP_DROP_FROM_TOP_CM = 13.3;
 
 // ------------------------------------------------------------
 //   MARGIN OF ERROR  (all three may be POSITIVE or NEGATIVE)
