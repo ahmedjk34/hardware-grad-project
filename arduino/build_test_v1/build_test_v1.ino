@@ -1406,14 +1406,8 @@ const bool BUILD_VERBOSE = true;
 //   last build did NR  ->  nothing to undo
 
 const int8_t ROT_NONE = 0;
-// Sign inverted on purpose: the horizontal build now swings the claw the
-// OPPOSITE physical way. The labels and their tool-offset slots are
-// unchanged (ROT_CW still reads TOOL_OFFSET_CW_*), so the same placement
-// compensation applies to the build - only the motor direction each label
-// drives is flipped. Low-level rotateAuxStepperCW/CCW logs and statRotCW/CCW
-// now read opposite the ROT_ label; that is cosmetic.
-const int8_t ROT_CW = -1;
-const int8_t ROT_CCW = +1;
+const int8_t ROT_CW = +1;
+const int8_t ROT_CCW = -1;
 
 // Where the claw is RIGHT NOW, relative to neutral. A manual angle that is
 // not exactly 0/+90/-90 has no calibrated tool offset, so it is marked
