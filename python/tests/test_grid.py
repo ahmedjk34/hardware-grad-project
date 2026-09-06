@@ -530,8 +530,8 @@ check("live gripper close angle is 54 degrees", firmware_number("SERVO_CLOSE_ANG
 # below the TOP switch instead of ground-seeking. Firmware-only, no rig.json
 # partner - but it lives in all three build sketches and they must agree, or a
 # manual standalone run rams the belt while the rig sketch clears it.
-Z_PICKUP_DROP_FROM_TOP_CM = 9.5
-check("rig sketch feeder pickup drop is 9.5 cm below the top switch",
+Z_PICKUP_DROP_FROM_TOP_CM = 10.75
+check("rig sketch feeder pickup drop is 10.75 cm below the top switch",
       firmware_number("Z_PICKUP_DROP_FROM_TOP_CM") == Z_PICKUP_DROP_FROM_TOP_CM,
       str(firmware_number("Z_PICKUP_DROP_FROM_TOP_CM")))
 check("rig sketch phase 5 uses zGoPickup(), not zGoGround()",
@@ -547,7 +547,7 @@ for standalone_name in ("build_vertical_grid", "build_horizontal_grid"):
     standalone_drop = re.search(
         r"^\s*float\s+Z_PICKUP_DROP_FROM_TOP_CM\s*=\s*([-+]?\d+(?:\.\d+)?)\s*;",
         standalone, re.MULTILINE)
-    check(f"{standalone_name} feeder pickup drop matches the rig sketch (9.5 cm)",
+    check(f"{standalone_name} feeder pickup drop matches the rig sketch (10.75 cm)",
           standalone_drop is not None
           and float(standalone_drop.group(1)) == Z_PICKUP_DROP_FROM_TOP_CM,
           standalone_drop.group(1) if standalone_drop else "not found")

@@ -621,7 +621,7 @@ const bool SOFT_LIMIT_VERBOSE = true;
 //   Z_MARGIN_PER_LEVEL_CM              0.0          (not per mode)
 //   Z_MARGIN_FIXED_CM                  0.12
 //   Z_MARGIN_FIXED_STEPS               0
-//   Z_PICKUP_DROP_FROM_TOP_CM          9.5          (drop from TOP, see below)
+//   Z_PICKUP_DROP_FROM_TOP_CM          10.75        (drop from TOP, see below)
 //
 // A 0.0 is a real statement - "this mode/axis needs no correction of this
 // kind" - not a placeholder waiting to be filled in. Vertical carries no fixed
@@ -762,8 +762,8 @@ const bool SOFT_LIMIT_VERBOSE = true;
 //               switch, not up from GROUND. Larger = deeper descent = LOWER
 //               pickup point. Rule 0 does not apply because the pickup no
 //               longer touches GROUND; phase 1's top-switch seek is the
-//               live reference. 9.5 below top == 17.0 above GROUND at the
-//               shipped 26.5 cm / 1350-step calibration.
+//               live reference. 10.75 below top == ~15.75 above GROUND at
+//               the shipped 26.5 cm / 1350-step calibration.
 //     TOUCH WHEN: the feeder-belt surface height changes, or a block is not
 //               being gripped cleanly at the belt.
 //     NOTE:     the build no longer re-zeroes Z at GROUND. Z is still
@@ -1270,8 +1270,8 @@ float BLOCK_HEIGHT_CM = 1.5;
 //        pickup_steps = Z_TRAVEL_STEPS - round(DROP_FROM_TOP_CM * stepsPerCm)
 //
 //   At the shipped calibration (Z_TRAVEL_CM 26.5, Z_TRAVEL_STEPS 1350):
-//        9.5 cm below top  ==  17.0 cm above GROUND  ==  ~866 steps from
-//        ground  ==  a ~484-step descent from the top switch.
+//        10.75 cm below top  ==  ~15.75 cm above GROUND  ==  ~802 steps
+//        from ground  ==  a ~548-step descent from the top switch.
 //
 //   Taking the drop from the TOP (not a fixed height above ground) keeps
 //   it exact even if Z_TRAVEL_STEPS is a little off: phase 1 has just
@@ -1280,7 +1280,7 @@ float BLOCK_HEIGHT_CM = 1.5;
 //   The bottom Z switch stays REQUIRED and enabled: it is now a physical
 //   backstop below the pickup height, and `0+` still uses it to give Z a
 //   true GROUND zero.
-float Z_PICKUP_DROP_FROM_TOP_CM = 9.5;
+float Z_PICKUP_DROP_FROM_TOP_CM = 10.75;
 
 // ------------------------------------------------------------
 //   MARGIN OF ERROR  (all three may be POSITIVE or NEGATIVE)
