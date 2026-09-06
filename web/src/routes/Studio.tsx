@@ -10,7 +10,11 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Viewport } from "../studio/scene/Viewport";
-import { activeMode, cellCount, modeGeometry, reachableCells, type ModeName } from "../studio/coords";
+import {
+  activeMode, cellCount, modeGeometry, reachableCells, resolveShift,
+  type ModeName,
+} from "../studio/coords";
+import { GridShift } from "../studio/panels/GridShift";
 import { VIEWS, type ViewName } from "../studio/view";
 import { blockBoxScene, modelBoxScene } from "../studio/view";
 import { applyEdit, emptyModel, type Edit, type Model, type ModelBlock } from "../studio/model";
@@ -109,17 +113,26 @@ export default function Studio() {
   // and says so, rather than looking right and building wrong.
   const shifts = useMemo(() => shiftsOf(modelDocument.rig), [modelDocument.rig]);
   const rigSnapshot = useMemo(() => fromFileRig(modelDocument.rig), [modelDocument.rig]);
+  const bondShifts = model.bondShifts;
   const validationContext = useMemo<ValidationContext>(
-    () => ({ mode, settings, shifts, rigSnapshot }),
-    [mode, settings, shifts, rigSnapshot],
+    () => ({ mode, settings, shifts, bondShifts, rigSnapshot }),
+    [mode, settings, shifts, bondShifts, rigSnapshot],
   );
   const diagnostics = useMemo(
     () => validateModel(model, validationContext),
     [model, validationContext],
   );
   const program = useMemo(
-    () => compile(model, { mode, settings, shifts, rigSnapshot }),
-    [model, mode, settings, shifts, rigSnapshot],
+    () => compile(model, { mode, settings, shifts, bondShifts, rigSnapshot }),
+    [model, mode, settings, shifts, bondShifts, rigSnapshot],
+  );
+  // The lattice preview follows the level being edited: hold a level and its
+  // running-bond course offset shows, so a bonded structure is drawn brick-laid
+  // as it is designed. Unheld ⇒ the base course (no bond).
+  const previewShift = useMemo(
+    () => resolveShift({ mode, level: heldLevel ?? 0 }, { [mode]: shifts[mode] }, bondShifts)
+      ?? shifts[mode],
+    [mode, heldLevel, shifts, bondShifts],
   );
   const placementDiagnostics = useMemo(() => target ? validatePlacement(model, {
     id: "ghost", mode, col: target.col, row: target.row, level: target.level, colour: "white",
@@ -401,7 +414,7 @@ export default function Studio() {
       </header>
 
       <div className="studio-stage">
-        <Viewport mode={mode} shift={shifts[mode]} view={view} nonce={nonce} model={model}
+        <Viewport mode={mode} shift={previewShift} view={view} nonce={nonce} model={model}
                   captureHandle={capture}
                   target={target} status={status} heldLevel={heldLevel}
                   diagnostics={diagnostics}
@@ -418,6 +431,10 @@ export default function Studio() {
                        onSelect={selectDiagnostic} onFix={applyFix} />
           <ProgramView program={program.program} valid={program.valid} stats={program.stats}
                        selectedId={selectedId} onSelect={selectDiagnostic} />
+          <GridShift mode={mode} level={heldLevel} bondShifts={bondShifts}
+                     maxLevel={model.blocks.reduce((m, b) => Math.max(m, b.level), 0)}
+                     orphanCount={diagnostics.filter(d => d.code === "CLIPPED_BY_SHIFT").length}
+                     onSetBond={(level, offsetCm) => commit({ type: "setBond", mode, level, offsetCm })} />
           <Settings value={settings} onChange={setSettings} />
         </div>
 

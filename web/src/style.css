@@ -1231,6 +1231,64 @@ svg.grid-overlay.selectable { cursor: crosshair; }
 .studio-program-rule { height: 1px; background: var(--motion); opacity: .6; }
 .studio-program-cost { color: var(--text-dim); font: var(--t-xs); letter-spacing: .04em; }
 
+/* The running-bond course latch reads like a mode latch but in the signal
+   colour: it moves nothing, it re-registers the lattice for a course. */
+.studio-program-shift .studio-program-chip {
+  border-color: color-mix(in srgb, var(--signal) 45%, var(--line));
+  background: var(--wash-signal);
+  color: var(--signal);
+}
+.studio-program-shift .studio-program-rule { background: var(--signal); }
+
+/* ── Running-bond course panel ─────────────────────────────────────────── */
+.studio-gridshift {
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--plate);
+}
+.studio-gridshift-axis { margin-left: auto; color: var(--text-dim); font: var(--t-xs); letter-spacing: .06em; }
+.studio-gridshift-body { padding: var(--s2) var(--s3); display: grid; gap: var(--s2); }
+.studio-gridshift-hint { margin: 0; color: var(--text-faint); font: var(--t-xs); line-height: 1.5; }
+.studio-gridshift-stepper {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: center;
+  gap: var(--s1);
+}
+.studio-gridshift-stepper button {
+  min-width: 2.2ch;
+  padding: 2px var(--s1);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--font-mono);
+  cursor: pointer;
+}
+.studio-gridshift-stepper button:hover:not(:disabled) { border-color: var(--line-strong); }
+.studio-gridshift-stepper button:disabled { opacity: .35; cursor: default; }
+.studio-gridshift-stepper button:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+.studio-gridshift-value {
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+}
+.studio-gridshift-preset {
+  padding: 3px var(--s2);
+  border: 1px solid color-mix(in srgb, var(--signal) 40%, var(--line));
+  border-radius: var(--r-sm);
+  background: var(--wash-signal);
+  color: var(--signal);
+  font: var(--t-xs);
+  letter-spacing: .06em;
+  cursor: pointer;
+}
+.studio-gridshift-preset:disabled { opacity: .35; cursor: default; }
+.studio-gridshift-preset:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+.studio-gridshift-summary { margin: 0; color: var(--text-dim); font: var(--t-xs); }
+.studio-gridshift-orphans { margin: 0; color: var(--danger); font: var(--t-xs); line-height: 1.5; }
+
 /* No infinite checkerboard — a vignette instead, so the model reads as lit
    from above (DESIGN.md §8.2) and nothing on the floor competes with it. */
 .studio-viewport {

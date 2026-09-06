@@ -52,8 +52,8 @@ const unsigned long ALIGN_SETTLE_MS = SERVO_MOVEMENT_DELAY_MS;
 const unsigned long PRE_CLOSE_BELT_RUN_MS = 1000;
 // After the exit IR sees a block, keep the gate open while the belt starts.
 const unsigned long EXIT_DETECTED_TO_CLOSE_DELAY_MS = 1250;
-// Let the block travel past the stage IR slightly before stopping the belt.
-const unsigned long STAGE_DETECTED_BELT_SETTLE_MS = 250;
+// Set to zero: stop the belt immediately when the stage IR detects a block.
+const unsigned long STAGE_DETECTED_BELT_SETTLE_MS = 0;
 const unsigned long EXIT_TIMEOUT_MS = 10000;
 const unsigned long STAGE_TIMEOUT_MS = 15000;
 const unsigned long SENSOR_INTERVAL_MS = 100;
@@ -353,11 +353,16 @@ void updateSensors() {
     }
   } else if (feedState == MOVING_TO_STAGE) {
     if (stageDetected()) {
-      // Keep the belt moving briefly after stage detection so the block can
-      // settle into the building/pickup area before the alignment nudge.
-      setState(STAGE_BELT_SETTLING);
       stageSensorReportFor(commandId, true);
-      event(F("stage_detected_belt_settling"));
+      if (STAGE_DETECTED_BELT_SETTLE_MS == 0) {
+        stopBelt();
+        alignmentServo.write(ALIGN_NUDGE_ANGLE);
+        setState(ALIGNING);
+        event(F("stage_detected_aligning"));
+      } else {
+        setState(STAGE_BELT_SETTLING);
+        event(F("stage_detected_belt_settling"));
+      }
     }
   }
 }
