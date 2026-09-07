@@ -78,6 +78,60 @@ def diff_fraction(view: np.ndarray, previous: np.ndarray | None) -> float | None
     return float(np.count_nonzero(diff >= PIXEL_THRESHOLD)) / float(diff.size)
 
 
+#: The three ways `cell_at` can decline to name a cell, and they are NOT the
+#: same fact. The first parked run made this the most important thing the
+#: script measures: one persistent off-lattice detection sat in 99.8% of
+#: frames, and a classifier that reads every None as FOREIGN would stop the
+#: machine forever on a board that is completely correct.
+#:
+#:   "cell"    - on a real build site
+#:   "gap"     - inside the envelope AND inside the grid allocation, but in one
+#:               of the deliberate gaps between block footprints. THIS is the
+#:               signal D9 wants: a block on the board and not on a site.
+#:   "margin"  - inside the camera's envelope quad but outside the grid's own
+#:               x/y allocation. Not on the board. Ignore.
+#:   "outside" - outside the envelope quad altogether: the frame-edge rails,
+#:               anything beside the holder. Ignore.
+PLACEMENTS = ("cell", "gap", "margin", "outside")
+
+
+def locate(frame, detection):
+    """Where a detection sits: on a site, in a gap, in the margin, or off-board.
+
+    Mirrors `WorkspaceMap.cell_at`'s own branches rather than guessing, so the
+    split reported here is exactly the split the supervisor will act on:
+
+    1. `normalized_at` outside [0,1] on either axis      -> "outside"
+    2. inside the quad but off the grid's cm allocation  -> "margin"
+    3. `cell_at` gave a cell                             -> "cell"
+    4. otherwise                                          -> "gap"
+
+    Returns ``(cell_or_None, placement, u, v)``.
+    """
+    workspace = frame.workspace
+    point, size = detection.center, frame.image_size
+    u, v = workspace.normalized_at(point, size)
+    epsilon = 1e-9
+    if u < -epsilon or v < -epsilon or u > 1 + epsilon or v > 1 + epsilon:
+        return None, "outside", u, v
+
+    cell = workspace.cell_at(point, size)
+    if cell is not None:
+        return (int(cell[0]), int(cell[1])), "cell", u, v
+
+    grid = workspace.mapped_grid
+    if grid is None:
+        # No physical grid embedded in the map, so there are no gaps to be in:
+        # cell_at's own fallback divides the quad evenly and always answers.
+        return None, "margin", u, v
+    x_cm = min(max(u, 0.0), 1.0) * grid.workspace_width_cm
+    y_cm = min(max(v, 0.0), 1.0) * grid.workspace_height_cm
+    if (x_cm < grid.x_start_cm - epsilon or x_cm > grid.x_end_cm + epsilon
+            or y_cm < grid.y_start_cm - epsilon or y_cm > grid.y_end_cm + epsilon):
+        return None, "margin", u, v
+    return None, "gap", u, v
+
+
 def cell_for(frame, detection):
     """Pixel -> cell, which is the supervisor's own work.
 
@@ -143,13 +197,17 @@ def collect(pipeline, seconds: float, interval: float) -> list[dict]:
         fraction = diff_fraction(frame.view, previous_view)
         previous_view = frame.view
 
-        cells, off_lattice = [], 0
+        cells = []
+        placements = {name: 0 for name in PLACEMENTS}
+        elsewhere = []
         for detection in frame.detections:
-            cell = cell_for(frame, detection)
-            if cell is None:
-                off_lattice += 1
+            cell, placement, u, v = locate(frame, detection)
+            placements[placement] += 1
+            if cell is not None:
+                cells.append(cell)
             else:
-                cells.append(tuple(cell))
+                elsewhere.append(f"{placement[0]}{u:.3f}/{v:.3f}")
+        off_lattice = len(frame.detections) - placements["cell"]
         cell_set = frozenset(cells)
         churn = None if previous_cells is None else len(cell_set ^ previous_cells)
         previous_cells = cell_set
@@ -164,6 +222,10 @@ def collect(pipeline, seconds: float, interval: float) -> list[dict]:
             "detections": len(frame.detections),
             "on_lattice": len(cells),
             "off_lattice": off_lattice,
+            "in_gap": placements["gap"],
+            "margin": placements["margin"],
+            "outside": placements["outside"],
+            "elsewhere": elsewhere,
             "cell_churn": churn,
             "cells": sorted(cell_set),
         })
@@ -173,7 +235,8 @@ def collect(pipeline, seconds: float, interval: float) -> list[dict]:
 
 def write_csv(rows: list[dict], path: Path) -> None:
     lines = ["t,seq,stale,calibrated,mode,diff_fraction,detections,"
-             "on_lattice,off_lattice,cell_churn,cells"]
+             "on_lattice,off_lattice,in_gap,margin,outside,cell_churn,"
+             "cells,elsewhere"]
     for row in rows:
         cells = " ".join(f"{col}:{r}" for col, r in row["cells"])
         fraction = "" if row["diff_fraction"] is None else f"{row['diff_fraction']:.6f}"
@@ -181,7 +244,8 @@ def write_csv(rows: list[dict], path: Path) -> None:
         lines.append(
             f"{row['t']},{row['seq']},{int(row['stale'])},{int(row['calibrated'])},"
             f"{row['mode']},{fraction},{row['detections']},{row['on_lattice']},"
-            f"{row['off_lattice']},{churn},{cells}")
+            f"{row['off_lattice']},{row['in_gap']},{row['margin']},"
+            f"{row['outside']},{churn},{cells}," + " ".join(row["elsewhere"]))
     path.write_text("\n".join(lines) + "\n")
 
 
@@ -239,6 +303,22 @@ def report(rows: list[dict]) -> int:
     print(f"off-lattice (cell_at -> None)  total "
           f"{sum(row['off_lattice'] for row in rows)}, frames with any: "
           f"{sum(1 for row in rows if row['off_lattice'])}")
+    gaps = sum(row["in_gap"] for row in rows)
+    margins = sum(row["margin"] for row in rows)
+    outsides = sum(row["outside"] for row in rows)
+    gap_frames = sum(1 for row in rows if row["in_gap"])
+    print(f"  ...of which  IN A GAP {gaps} (in {gap_frames} frames)"
+          f"   margin {margins}   outside the quad {outsides}")
+    print("  A GAP detection is a block on the board and NOT on a site — real")
+    print("  FOREIGN. `margin` and `outside` are the rails and the holder's")
+    print("  offcuts: not on the board, and supervision must IGNORE them.")
+    if gap_frames > 0.5 * len(rows):
+        print("  *** A GAP DETECTION IS PERSISTENT. Supervision would sit at")
+        print("  *** FOREIGN forever. Clear the object, or the classifier")
+        print("  *** needs a rule this design does not have.")
+    if gap_frames == 0 and (margins or outsides):
+        print("  -> every off-lattice detection is off the BOARD, not in a gap.")
+        print("     Splitting the two Nones is sufficient; nothing to clear.")
     sparse = sum(1 for row in rows if row["detections"] < 6)
     print(f"frames under MIN_LATTICE_BLOCKS (6): {sparse}"
           + ("   <-- D10: no FOREIGN, no DISAGREES in these" if sparse else ""))
