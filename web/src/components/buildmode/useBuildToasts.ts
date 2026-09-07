@@ -43,6 +43,10 @@ export function useBuildToasts() {
     setToasts(current => current.filter(toast => toast.key !== key));
   }, []);
 
+  const dismissWhere = useCallback((prefix: string) => {
+    setToasts(current => current.filter(toast => !toast.key.startsWith(prefix)));
+  }, []);
+
   const push = useCallback((input: ToastInput) => {
     setToasts(current => {
       const existing = current.find(toast => toast.key === input.key);
@@ -86,5 +90,5 @@ export function useBuildToasts() {
     timers.current.clear();
   }, []);
 
-  return { toasts, push, dismiss };
+  return { toasts, push, dismiss, dismissWhere };
 }

@@ -14,7 +14,7 @@
  * so opening it mid-build shows the build already in progress, and it shares
  * the twin's model key, so a build chosen here is the build the console shows.
  */
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { store } from "../../consoleStore";
 import { twinModelChoices } from "../../studio/twin";
 import { CameraChip } from "../CameraChip";
@@ -34,7 +34,9 @@ export function BuildMode() {
   const [controlsOpen, setControlsOpen] = useState(true);
   const [activityOpen, setActivityOpen] = useState(false);
   const [runnerActive, setRunnerActive] = useState(false);
-  const { toasts, push, dismiss } = useBuildToasts();
+  const { toasts, push, dismiss, dismissWhere } = useBuildToasts();
+  const previousBoardVerdict = useRef<string | null>(null);
+  const boardToastReady = useRef(false);
 
   const state = snapshot.state;
   const progress = snapshot.progress;
@@ -120,8 +122,26 @@ export function BuildMode() {
   // its full history stays in the activity drawer instead of stacking alerts.
   const supervision = state?.supervision;
   useEffect(() => {
-    if (!supervision?.verdict || supervision.judged_at_ms === null) return;
-    const verdict = supervision.verdict;
+    const verdict = supervision?.verdict ?? null;
+    // Opening #/build is not itself a board change. Remember the status we
+    // inherited and alert only when the detector subsequently changes it.
+    if (!boardToastReady.current) {
+      boardToastReady.current = true;
+      previousBoardVerdict.current = verdict;
+      return;
+    }
+    // A verdict is a state, not a stream. A persistent REMOVED must alert once,
+    // then live in the activity log until the detector reaches a different
+    // conclusion. Clearing the verdict also clears its old toast immediately.
+    if (!verdict) {
+      previousBoardVerdict.current = null;
+      dismissWhere("board:");
+      return;
+    }
+    if (verdict === previousBoardVerdict.current) return;
+    previousBoardVerdict.current = verdict;
+    dismissWhere("board:");
+    if (supervision.judged_at_ms === null) return;
     const cells = supervision.cells.map(([col, row]) => `[${col},${row}]`).join(", ");
     const copy = {
       VERIFIED: ["success", "BOARD VERIFIED", cells ? `${cells} matches the plan.` : "The board matches the plan."],
@@ -133,7 +153,7 @@ export function BuildMode() {
     } as const;
     const [kind, title, detail] = copy[verdict];
     push({ key: `board:${supervision.judged_at_ms}`, kind, title, detail, sticky: supervision.severity === "red" });
-  }, [supervision, push]);
+  }, [supervision, push, dismissWhere]);
 
   if (!state) return (
     <main className="boot"><Icon name="waiting" size={28} />Connecting to rig…</main>

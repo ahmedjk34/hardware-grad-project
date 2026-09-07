@@ -302,14 +302,16 @@ export function RunnerPanel({ state, connected, modelId, api, delay, onActiveCha
         {run.style === "dry" && run.phase !== "idle" && (
           <span className="chip is-motion">DRY RUN{compact ? "" : " — no serial traffic"}</span>
         )}
-        {run.phase !== "idle" && run.phase !== "locked" && server.build_state !== "LOCKED" && (
+        {run.phase !== "locked" && server.build_state !== "LOCKED" && (
           <button type="button" className="btn btn-ghost runner-clear"
-                  disabled={run.inFlight}
+                  disabled={run.phase === "idle" || run.inFlight}
                   title={run.inFlight
                     ? "Can't clear while a block is in flight — Mega motion cannot be interrupted"
-                    : "End this run and clear the panel so another build can be chosen"}
+                    : run.phase === "idle"
+                      ? "There is no build state to clear"
+                      : "End this run and clear the panel so another build can be chosen"}
                   onClick={() => applyEvent({ type: "reset", now: Date.now() })}>
-            CLEAR
+            CLEAR BUILD STATE
           </button>
         )}
       </header>
