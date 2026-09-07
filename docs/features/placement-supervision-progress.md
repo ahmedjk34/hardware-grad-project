@@ -837,6 +837,36 @@ reads them from there.
 Note F12 before trusting them: three of the four predate the
 `gap`/`margin`/`outside` split and carry one merged `off_lattice` column.
 
+### P8 — Remove D10 / `MIN_LATTICE_BLOCKS` from supervision — **DONE**
+
+The user took the holder off the rig and asked for the threshold gone. F9
+already established its only surviving rationale was the holder's offcuts beside
+`[0,0]` reading as `gap` → `FOREIGN`; F5's regression was fixed by `locate()`'s
+three-way split, not by the count; F8 showed the boundary was a junk-inflated
+cliff. With the holder physically gone, none of it holds.
+
+Removed: `MIN_LATTICE_BLOCKS`, the `sparse` branch in `classify()` (and its
+`detections` parameter), `Supervisor.note_regime` and `self._sparse`, and the
+P2 `_lattice_filter`-crossing hysteresis reset. `Observation.detections` stays
+as a display-only field.
+
+Added in the same change: `in_gap` now goes through D7's hysteresis
+(`Supervisor._gap_history`, `N of M` judged frames), because it was the one
+signal that reached `classify()` straight from the current frame and D10 was
+the only thing keeping single-frame centroid jitter from stopping the program
+early in a build. Denoising only — it does not name the gap cell and is not the
+`MOVED`-lands-in-a-gap fix.
+
+Consequence, accepted with the user: `FOREIGN` / `DISAGREES` are now reachable
+from block one, including on a restart with leftover blocks on the board (empty
+ledger vs non-empty board). That is a correct verdict, not a false positive.
+
+Re-verified: all four Gate 0 traces replay to **identical verdict tallies**
+(`split` 98.3% VERIFIED / zero false verdicts; `parked` 514 VERIFIED / 7 REMOVED
+at `(2,0)` / zero FOREIGN; `hand` all BUSY; merged-reading regression still
+99.4% FOREIGN). `test_supervisor.py` 82 pass, `test_supervisor_frames.py` 21
+pass, `web_supervision_test.py` +1 new (sparse-board FOREIGN through the seam).
+
 ---
 
 ## 5. What is built, and what is not

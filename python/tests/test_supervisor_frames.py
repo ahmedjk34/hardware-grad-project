@@ -42,7 +42,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from rig.link import PLACED, BuildResult  # noqa: E402
 from rig.placement_ledger import PlacementLedger  # noqa: E402
 from rig.supervisor import (  # noqa: E402
-    MIN_LATTICE_BLOCKS, Interlocks, Observation, Supervisor,
+    Interlocks, Observation, Supervisor,
 )
 
 PASSED, FAILED = [], []
@@ -163,11 +163,12 @@ check("SPLIT: every verdict judged the EXACT five placed cells",
       str(verdicts[0].expected))
 check("SPLIT: and observed exactly those five, never a renumbered set",
       all(v.observed == tuple(sorted(PLACED_CELLS)) for v in verdicts))
-# Q6, from the trace itself: this run sat BELOW MIN_LATTICE_BLOCKS for all 172
-# frames — the lattice filter never engaged — and was still flawless. The count
-# is irrelevant to a cell the ledger named.
-check("SPLIT: flawless BELOW MIN_LATTICE_BLOCKS — Q6's answer, from the rig",
-      all(row["detections"] < MIN_LATTICE_BLOCKS for row in split),
+# Q6, from the trace itself: this run never had more than 5 detections in a
+# frame, and every verdict on it was still correct. Detection count no longer
+# gates anything (D10 removed with the holder), but the fact is worth pinning:
+# a low count is not a degraded verdict for a cell the ledger named.
+check("SPLIT: five detections at most, and still flawless",
+      max(row["detections"] for row in split) <= 5,
       f"{max(row['detections'] for row in split)} detections at most")
 
 
@@ -219,36 +220,24 @@ check("D3 and every judgeable frame of it says NO MEMORY",
       tally.get("NO_MEMORY") == len(split) - tally.get("BUSY", 0), str(tally))
 
 
-# --- F8 / P2: the MIN_LATTICE_BLOCKS crossing is real in this data --------- #
-
-def crossings(rows):
-    return sum(1 for a, b in zip(rows, rows[1:])
-               if (a["detections"] < MIN_LATTICE_BLOCKS)
-               != (b["detections"] < MIN_LATTICE_BLOCKS))
-
-
-check("F8 the detection count really does cross MIN_LATTICE_BLOCKS mid-run",
-      crossings(hand) > 0, f"{crossings(hand)} crossings in {len(hand)} frames")
-check("F8 and a rig-placed board barely crosses it at all",
-      crossings(parked) <= 1, f"{crossings(parked)} in {len(parked)} frames")
-
-# P2: the crossing must reset the hysteresis, so a verdict is never assembled
-# from frames judged under two different filtering regimes. Asserted as a trace
-# rather than on the counter, which is private.
+# --- detection count no longer changes a verdict -------------------------- #
+#
+# F8/P2 are retired: `note_regime` reset the hysteresis on the count crossing 6
+# because `_lattice_filter` switched behaviour there. With D10 gone the
+# classifier ignores the count entirely, so a swing in `detections` — the exact
+# thing the hand run does 6 times — must not disturb a settle in progress.
 sup = Supervisor(quiet_diff_fraction=0.01, settle_n=3, settle_m=5)
 ledger = ledger_for(PLACED_CELLS)
 open_gates = Interlocks(parked=True, calibrated=True, quiet=True)
 states = []
-for detections in (MIN_LATTICE_BLOCKS, MIN_LATTICE_BLOCKS,
-                   MIN_LATTICE_BLOCKS - 1, MIN_LATTICE_BLOCKS - 1,
-                   MIN_LATTICE_BLOCKS - 1):
+for detections in (8, 8, 4, 4, 4):
     states.append(sup.step(
         mode="vertical", ledger=ledger,
         observation=Observation(cells=tuple(sorted(PLACED_CELLS)),
                                 detections=detections),
         interlocks=open_gates)[0])
-check("P2 the crossing restarts the settle — no verdict on the frame after it",
-      states == ["WARMING", "WARMING", "WARMING", "WARMING", "VERDICT"],
+check("a detection-count swing does not restart the settle",
+      states == ["WARMING", "WARMING", "VERDICT", "VERDICT", "VERDICT"],
       str(states))
 
 

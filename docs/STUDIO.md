@@ -1292,6 +1292,19 @@ first in the diff.
 Newest first. One entry per landed change; note anything that contradicts the
 plan or that a future reader could not infer.
 
+### Supervision's sparse-board `FOREIGN` suppression removed
+
+`MIN_LATTICE_BLOCKS` / D10 is gone from `rig/supervisor.py` — the holder came
+off the rig and it was its only surviving rationale. No Studio code changed, but
+the behaviour a Studio reader sees does: the camera overlay, banner, runner and
+twin can now show `FOREIGN` / `DISAGREES` on a near-empty board, including on
+block one of a program (and on a restart with blocks still on the board — a
+correct red verdict, not a false alarm; the operator dismisses per D12). Single-
+frame gap jitter is filtered by a new `N of M` hysteresis on `in_gap`. Verdict
+tallies on all four Gate 0 traces are unchanged. See
+[features/placement-supervision.md](features/placement-supervision.md) D10 and
+progress.md P8.
+
 ### Placement supervision reaches the runner and the twin
 
 Two of the four surfaces placement supervision publishes to are the Studio's,

@@ -185,11 +185,13 @@ testable in Vitest exactly as the rest of the reducer is.
 2. **The arm is in the frame more of the time during a program.** The quiet
    window between ops is short. Measure how many settled frames you actually get
    between two builds before designing around `SETTLE_N = 3` of them.
-3. **A sparse board disables the lattice filter.** `_lattice_filter` skips below
-   `MIN_LATTICE_BLOCKS` (6) and disables itself if it would reject more than
-   30 %. Early in a program the board *is* sparse, so the observed set is
-   unfiltered and the holder's offcuts beside `[0,0]` can read as blocks. Refuse
-   `FOREIGN` verdicts below the threshold, as Appendix A A.4 already requires.
+3. **A sparse board disables `_lattice_filter`** (it skips below
+   `MIN_LATTICE_BLOCKS` (6) and self-disables past 30 % rejection). This is
+   `block_outline`'s concern, not supervision's — `locate()` classifies by
+   geometry at any count. Supervision's old `MIN_LATTICE_BLOCKS` mirror (D10,
+   no `FOREIGN` on a sparse board) was removed once the holder came off the
+   rig; `FOREIGN` / `DISAGREES` are live from block one. See
+   [placement-supervision.md](placement-supervision.md) D10.
 4. **A mode latch invalidates the observed set.** Two grids, two lattices, two
    registrations. The ledger is keyed by mode; a program with an `R`/`RR` in it
    crosses that boundary mid-run.

@@ -339,32 +339,42 @@ window means something happened this model does not describe. After P1 it means
 precisely *"both sides changed and I cannot pair them"*, which is the only case
 that actually needs identity.
 
-### D10 — Sparse boards get no `FOREIGN`
+### D10 — Sparse boards get no `FOREIGN` — **REMOVED**
 
-**The rationale first given here was wrong; the conclusion holds (F9 / P3).**
-The original reason was that below `MIN_LATTICE_BLOCKS = 6` detections
-`_lattice_filter` skips entirely, so the observed set is *unfiltered*. Per F3
-and F5 that filter was never supervision's defence against junk — it fits an
-*infinite* lattice from the detections themselves and answers "is this on the
-lattice", never "is this on the board". `locate()` is the defence, and it works
-at any detection count.
+**Deleted from the code when the holder was taken off the rig.** The tombstone
+stays because CAMERA.md, feature-ideas.md and §9 all pointed here.
 
-The **real** reason: AGENTS.md names *"the holder's two small offcuts beside
-`[0,0]`"*. Beside `[0,0]` means **on the board**, inside the envelope, so
-`locate()` correctly classes them as `gap` and D9 makes a gap detection
-`FOREIGN`. Strictly correct, and operationally intolerable — a red
-stop-the-program verdict because two offcuts are sitting where they always sit.
+D10 suppressed `FOREIGN` and `DISAGREES` while the frame held fewer than
+`MIN_LATTICE_BLOCKS = 6` detections. Two rationales were tried. The first —
+"below 6 the observed set is unfiltered because `_lattice_filter` skips" — was
+wrong (F9): that filter was never supervision's defence against junk, `locate()`
+is, and it classifies by geometry at any detection count. The second (F9 / P3)
+was the holder's two offcuts beside `[0,0]`: on the board, inside the envelope,
+so `locate()` calls them `gap` and D9 makes a gap detection `FOREIGN` — a red
+stop every time two offcuts sit where they always sit.
 
-D10 buys **restraint about the loudest verdict** during the phase of every
-program when the board is emptiest and the junk-to-block ratio is worst. The
-same fail-open instinct as `block_outline`'s, pointed the other way: one refuses
-to hide a block, the other refuses to raise an alarm.
+With the holder physically removed that last rationale is gone, and the
+threshold was a hand-me-down constant with a cliff shape and a junk-inflated
+input (F8). It is deleted. `classify()` no longer takes a `detections`
+argument; `Supervisor.note_regime` and the `_lattice_filter`-crossing hysteresis
+reset (P2) went with it.
 
-> Below the threshold, supervision emits `VERIFIED` / `NOT DETECTED` /
-> `REMOVED` only. **Never `FOREIGN`, never `DISAGREES`.**
+> **Consequence, deliberate:** `FOREIGN` and `DISAGREES` are now live from the
+> first placed block — including on block one after a restart with blocks still
+> on the board (an empty ledger against a non-empty board). That is a correct
+> verdict, not a bug: there are cells the plan cannot account for. The operator
+> dismisses per D12.
 
-Early in every program the board *is* sparse, so this is the common path, not an
-edge case.
+To keep that from being noisy, the one signal that used to bypass D7's
+hysteresis — `in_gap` — now gets it: a non-zero `in_gap` reaches the classifier
+only after `SETTLE_N` of the last `SETTLE_M` judged frames saw a gap detection.
+A single frame of centroid jitter across a footprint boundary no longer stops
+the program. This is denoising only; it does **not** name the gap cell, and it
+is not the fix for a `MOVED` block that lands off a site (that needs per-gap
+identity — separate work).
+
+Re-verified against all four Gate 0 traces: verdict tallies are unchanged by the
+removal.
 
 ### D11 — Notify, never act (for now)
 
@@ -425,7 +435,7 @@ anticipate: `web/src/components/SupervisionBanner.tsx` and
 ```
 python/rig/placement_ledger.py   NEW   D2/D3 — the memory. Pure, no I/O beyond
                                        the append-only log. No OpenCV.
-python/rig/supervisor.py         NEW   D5-D10 — interlocks, pixel→cell, hysteresis,
+python/rig/supervisor.py         NEW   D5-D9 — interlocks, pixel→cell, hysteresis,
                                        classifier. Consumes ProcessedFrame +
                                        WorkspaceMap. Adds no detector.
 python/rig/build_controller.py   edit  one call on the PLACED branch
@@ -624,10 +634,10 @@ it.
 
 ### 6.4 Showing what we *cannot* see — hatch, not colour
 
-Three separate blindnesses have to be visible (D4, D6, D10): cells above the
-level-3 ceiling, the level-blind idle sweep, and `FOREIGN` suppression on a
-sparse board. None of them is a *machine state*, so **none of them may take a
-state colour.**
+Two separate blindnesses have to be visible (D4, D6): cells above the level-3
+ceiling and the level-blind idle sweep. Neither is a *machine state*, so
+**neither may take a state colour.** (A third — `FOREIGN` suppression on a
+sparse board — went away with D10.)
 
 The answer is a **non-colour channel**: a 45° diagonal hatch at low opacity over
 the cell, plus a count in the banner strip.
@@ -640,7 +650,6 @@ UNCHECKED  3 cells above level 2   ⟋⟋⟋
 - Each hatched cell gets an SVG `<title>`: *"not checked — expected top level 3
   is above the detection ceiling"*.
 - The banner names the **count and the reason**, always — never a silent skip.
-- On a sparse board the strip adds `FOREIGN CHECKS OFF — fewer than 6 blocks`.
 
 This satisfies "never colour alone" trivially, because it is not colour, and it
 keeps the reserved palette intact for actual machine state. It also directly
@@ -883,7 +892,7 @@ and `PASSED`/`FAILED` lists, and `FakeRig` is the pattern (fakes over mocks).
 | Suite | Checks |
 | --- | --- |
 | `tests/test_placement_ledger.py` | append/reload, per-mode separation, level collapse to a column, `PLACED`-only admission, `NO MEMORY` after restart, the two Stage 15 predicates |
-| `tests/test_supervisor.py` | every D9 row from synthetic cell sets; hysteresis needs `N of M`; each D5 interlock independently suppresses a verdict; counters **reset rather than decay** on a tripped interlock; D6 refuses level ≥ 3; D10 suppresses `FOREIGN` below 6 detections; D13 resets on a mode change |
+| `tests/test_supervisor.py` | every D9 row from synthetic cell sets; hysteresis needs `N of M`; each D5 interlock independently suppresses a verdict; counters **reset rather than decay** on a tripped interlock; D6 refuses level ≥ 3; `in_gap` gets `N of M` too (D10 removed); D13 resets on a mode change |
 | `tests/test_supervisor_frames.py` | **built differently, and stronger.** Not the reference stills — the **four Gate 0 rig traces** in `docs/measurements/`, 1398 frames the rig actually produced, replayed through the shipped `Supervisor`. Reproduces the measured distribution to within a tenth of a percent, names the exact residual cell `(2,0)`, and replays the pre-fix merged reading to measure it emitting `FOREIGN` in 99.4% of windows on a correct board |
 | `tests/web_supervision_test.py` | **new.** The seam: what `web/app.py` hands the supervisor, the mode-latch suspension, the repeated-sequence guard, D5's parked gate including the `complete` trap, and the per-build check's four outcomes |
 | `web/src/tokens.test.ts` | **new.** Reads the real stylesheet and asserts every colour that carries a state WORD clears 7:1, and pins the fact that `--danger` itself does not |
@@ -931,8 +940,11 @@ Still expected to fail on a clean checkout, for missing fixtures:
    *unobservable*, not empty. D5 refuses to judge at all in the common case; a
    cell under a **static** occluder will read as `REMOVED` forever, which is
    exactly why the verdict stops the machine rather than driving it.
-5. **Sparse boards get no `FOREIGN`** (D10) — including the whole early part of
-   every program.
+5. **`FOREIGN` / `DISAGREES` are live from block one** (D10 removed). Including
+   after a restart with blocks still on the board: an empty ledger against a
+   non-empty board reads those blocks as unaccounted for, and that is a correct
+   red verdict, not a bug. Dismiss per D12. Single-frame gap jitter is filtered
+   by `in_gap`'s own `N of M` hysteresis.
 6. **No memory after a restart** (D3). Honest and deliberate.
 6a. **No verdicts without a saved workspace map** (D5). Uncalibrated, the
    pipeline falls back to `approximate_workspace` and `cell_at` would be

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The classifier, the interlocks, the hysteresis and the two suppressions.
+"""The classifier, the interlocks, the hysteresis and the level ceiling.
 
 Hand-rolled like ``test_build_controller.py``: a ``check`` helper, PASSED/FAILED
 lists, fakes over mocks. No camera, no frames — every case here is built from
@@ -23,7 +23,7 @@ from rig.link import PLACED, BuildResult  # noqa: E402
 from rig.placement_ledger import PlacementLedger  # noqa: E402
 from rig.grid import MachineGrid  # noqa: E402
 from rig.supervisor import (  # noqa: E402
-    LEVEL_CEILING, MIN_LATTICE_BLOCKS, AMBER_VERDICTS, RED_VERDICTS,
+    LEVEL_CEILING, AMBER_VERDICTS, RED_VERDICTS,
     Interlocks, Observation, Supervisor, classify, locate, observe,
     unjudged_cells, verify_placement,
 )
@@ -55,11 +55,6 @@ def ledger_with(mode, cells):
 def supervisor(settle_n=3, settle_m=5, quiet=0.02):
     return Supervisor(quiet_diff_fraction=quiet, settle_n=settle_n,
                       settle_m=settle_m)
-
-
-def busy_board(n=MIN_LATTICE_BLOCKS):
-    """A detection count that clears D10, so FOREIGN/DISAGREES are allowed."""
-    return n
 
 
 # --- pixel -> cell is our own work (§2a.1) --------------------------------- #
@@ -95,7 +90,7 @@ check("a GAP detection is counted as evidence about the board",
       result.in_gap == 1)
 check("an OFF-BOARD detection is counted separately, never as gap",
       result.off_board == 1 and result.in_gap == 1)
-check("detections counts everything, for D10", result.detections == 3)
+check("observe counts every detection, junk included", result.detections == 3)
 
 duplicate = observe([FakeDetection(at_cm(*centre)), FakeDetection(at_cm(*centre))],
                     MAP, SIZE)
@@ -107,8 +102,7 @@ check("two detections in one cell are one occupied cell",
 # machine stopped on a board that was entirely correct.
 rails = observe([FakeDetection(at_cm(*centre)), FakeDetection((-500.0, -500.0))],
                 MAP, SIZE)
-verdict = classify("vertical", {(3, 2)}, rails.cells, in_gap=rails.in_gap,
-                   detections=busy_board())
+verdict = classify("vertical", {(3, 2)}, rails.cells, in_gap=rails.in_gap)
 check("REGRESSION: an off-board detection NEVER produces FOREIGN",
       verdict.verdict == "VERIFIED", verdict.verdict)
 
@@ -117,48 +111,44 @@ check("REGRESSION: an off-board detection NEVER produces FOREIGN",
 
 full = {(1, 1), (2, 1), (3, 1), (1, 2), (2, 2), (3, 2)}
 
-verdict = classify("vertical", full, full, detections=busy_board())
+verdict = classify("vertical", full, full)
 check("D9 sets equal -> VERIFIED", verdict.verdict == "VERIFIED")
 check("VERIFIED names no cells", verdict.cells == ())
 
-verdict = classify("vertical", full, full - {(2, 2)}, detections=busy_board())
+verdict = classify("vertical", full, full - {(2, 2)})
 check("D9 one missing -> REMOVED", verdict.verdict == "REMOVED")
 check("REMOVED names the EXACT cell", verdict.cells == ((2, 2),), str(verdict.cells))
 
-verdict = classify("vertical", full, (full - {(2, 2)}) | {(4, 2)},
-                   detections=busy_board())
+verdict = classify("vertical", full, (full - {(2, 2)}) | {(4, 2)})
 check("D9 one missing + one unexpected -> MOVED", verdict.verdict == "MOVED")
 check("MOVED names both cells, from then to",
       verdict.cells == ((2, 2), (4, 2)), str(verdict.cells))
 
-verdict = classify("vertical", full, full | {(4, 2)}, detections=busy_board())
+verdict = classify("vertical", full, full | {(4, 2)})
 check("D9 one unexpected -> FOREIGN", verdict.verdict == "FOREIGN")
 check("FOREIGN names the EXACT cell", verdict.cells == ((4, 2),))
 
-verdict = classify("vertical", full, full, in_gap=1, detections=busy_board())
+verdict = classify("vertical", full, full, in_gap=1)
 check("D9 a detection in a GAP -> FOREIGN", verdict.verdict == "FOREIGN",
       "a block on the board and not on a site")
 
 # P1, decided with the user: a ONE-SIDED change of any size is named, not
 # dismissed. Identity is only needed when there is something to pair with, and
 # a clean disappearance with nothing gained offers nothing to pair with.
-verdict = classify("vertical", full, full - {(2, 2), (3, 2)},
-                   detections=busy_board())
+verdict = classify("vertical", full, full - {(2, 2), (3, 2)})
 check("P1 two missing, nothing gained -> REMOVED, not DISAGREES",
       verdict.verdict == "REMOVED", verdict.verdict)
 check("REMOVED names ALL the missing cells",
       verdict.cells == ((2, 2), (3, 2)), str(verdict.cells))
 
-verdict = classify("vertical", full, full - {(1, 1), (2, 2), (3, 2)},
-                   detections=busy_board())
+verdict = classify("vertical", full, full - {(1, 1), (2, 2), (3, 2)})
 check("P1 three missing is still REMOVED — there is no ambiguity to protect",
       verdict.verdict == "REMOVED" and verdict.cells == ((1, 1), (2, 2), (3, 2)),
       str(verdict.cells))
 check("P1 many missing is amber and PAUSES, it does not stop the program",
       verdict.severity == "amber", verdict.severity)
 
-verdict = classify("vertical", full, full | {(4, 1), (4, 2)},
-                   detections=busy_board())
+verdict = classify("vertical", full, full | {(4, 1), (4, 2)})
 check("P1 two unexpected, nothing missing -> FOREIGN, not DISAGREES",
       verdict.verdict == "FOREIGN", verdict.verdict)
 check("FOREIGN names ALL the unexpected cells",
@@ -166,8 +156,7 @@ check("FOREIGN names ALL the unexpected cells",
 check("P1 many unexpected is still red — the plan cannot account for them",
       verdict.severity == "red", verdict.severity)
 
-verdict = classify("vertical", full, (full - {(1, 1), (2, 1)}) | {(4, 1), (4, 2)},
-                   detections=busy_board())
+verdict = classify("vertical", full, (full - {(1, 1), (2, 1)}) | {(4, 1), (4, 2)})
 check("P1 DISAGREES is reserved for BOTH sides changing",
       verdict.verdict == "DISAGREES", verdict.verdict)
 check("DISAGREES names every differing cell, from both sides",
@@ -178,8 +167,7 @@ check("DISAGREES carries BOTH sets for the banner",
 
 # The systemic case P1 was tested against: a camera bump shifts EVERYTHING, so
 # it presents as missing AND unexpected and still lands on DISAGREES.
-verdict = classify("vertical", full, {(2, 1), (3, 1), (4, 1), (2, 2), (3, 2), (4, 2)},
-                   detections=busy_board())
+verdict = classify("vertical", full, {(2, 1), (3, 1), (4, 1), (2, 2), (3, 2), (4, 2)})
 check("P1 a shifted board still reaches DISAGREES, not REMOVED",
       verdict.verdict == "DISAGREES", verdict.verdict)
 
@@ -187,10 +175,8 @@ check("amber and red are disjoint and complete",
       set(AMBER_VERDICTS) & set(RED_VERDICTS) == set()
       and "DISAGREES" in RED_VERDICTS and "REMOVED" in AMBER_VERDICTS)
 check("MOVED is amber, FOREIGN is red",
-      classify("vertical", full, (full - {(2, 2)}) | {(4, 2)},
-               detections=busy_board()).severity == "amber"
-      and classify("vertical", full, full | {(4, 2)},
-                   detections=busy_board()).severity == "red")
+      classify("vertical", full, (full - {(2, 2)}) | {(4, 2)}).severity == "amber"
+      and classify("vertical", full, full | {(4, 2)}).severity == "red")
 
 
 # --- D6: the level ceiling ------------------------------------------------- #
@@ -202,8 +188,7 @@ check("level 2 is still judged — the ceiling is 3", LEVEL_CEILING == 3)
 
 expected = {(1, 1), (2, 1), (3, 1)}
 verdict = classify("vertical", expected, {(1, 1), (2, 1)},
-                   top_levels={(1, 1): 0, (2, 1): 0, (3, 1): 3},
-                   detections=busy_board())
+                   top_levels={(1, 1): 0, (2, 1): 0, (3, 1): 3})
 check("a cell above the ceiling is NEVER reported REMOVED",
       verdict.verdict == "VERIFIED", verdict.verdict)
 check("it is listed as unjudged instead of silently skipped",
@@ -212,32 +197,32 @@ check("an unjudged cell is absent from expected and observed alike",
       (3, 1) not in verdict.expected and (3, 1) not in verdict.observed)
 
 verdict = classify("vertical", expected, {(1, 1), (2, 1), (3, 1)},
-                   top_levels={(3, 1): 4}, detections=busy_board())
+                   top_levels={(3, 1): 4})
 check("a cell above the ceiling is never FOREIGN either",
       verdict.verdict == "VERIFIED", verdict.verdict)
 
 
-# --- D10: sparse boards get no FOREIGN ------------------------------------- #
+# --- D10 removed: the classifier no longer branches on detection count ----- #
+#
+# The holder is off the rig, so the only surviving rationale for suppressing
+# FOREIGN on a sparse board is gone. `locate()` classifies junk by geometry at
+# any count, and `classify` takes no `detections` argument any more. FOREIGN
+# and DISAGREES are now reachable however few blocks are on the board.
 
-sparse = {(1, 1), (2, 1)}
-verdict = classify("vertical", sparse, sparse | {(4, 4)},
-                   detections=MIN_LATTICE_BLOCKS - 1)
-check("D10 no FOREIGN below MIN_LATTICE_BLOCKS",
-      verdict.verdict == "VERIFIED", verdict.verdict)
-verdict = classify("vertical", sparse, sparse, in_gap=3,
-                   detections=MIN_LATTICE_BLOCKS - 1)
-check("D10 a gap detection is junk on a sparse board",
-      verdict.verdict == "VERIFIED", verdict.verdict)
-verdict = classify("vertical", sparse, set(), detections=MIN_LATTICE_BLOCKS - 1)
-check("D10 REMOVED still fires on a sparse board",
-      verdict.verdict == "REMOVED", verdict.verdict)
-check("D10 REMOVED names every missing cell, not DISAGREES",
-      verdict.cells == ((1, 1), (2, 1)), str(verdict.cells))
-verdict = classify("vertical", sparse, sparse | {(4, 4)},
-                   detections=MIN_LATTICE_BLOCKS)
-check("at exactly MIN_LATTICE_BLOCKS the filter is trusted again",
-      verdict.verdict == "FOREIGN", verdict.verdict)
-check("MIN_LATTICE_BLOCKS is block_outline's own 6", MIN_LATTICE_BLOCKS == 6)
+few = {(1, 1), (2, 1)}
+check("a near-empty board still names an unexpected cell FOREIGN",
+      classify("vertical", few, few | {(4, 4)}).verdict == "FOREIGN")
+check("a gap detection is FOREIGN on a near-empty board too",
+      classify("vertical", few, few, in_gap=3).verdict == "FOREIGN")
+verdict = classify("vertical", few, (few - {(1, 1)}) | {(4, 1), (4, 4)})
+check("both sides changing still reaches DISAGREES on a near-empty board",
+      verdict.verdict == "DISAGREES", verdict.verdict)
+verdict = classify("vertical", few, set())
+check("REMOVED names every missing cell, sparse or not",
+      verdict.verdict == "REMOVED" and verdict.cells == ((1, 1), (2, 1)),
+      str(verdict.cells))
+check("classify() no longer accepts a detections argument",
+      "detections" not in classify.__code__.co_varnames)
 
 
 # --- D8a: the per-build sentence, and what it refuses to claim ------------- #
@@ -380,45 +365,45 @@ check("D13 horizontal is judged against horizontal's lattice alone",
       str(verdict.expected))
 
 
-# --- P2: the MIN_LATTICE_BLOCKS crossing resets too (F8) ------------------- #
+# --- in_gap gets D7's hysteresis too ------------------------------------- #
 #
-# The threshold is a cliff, not a slope, and it counts DETECTIONS, not blocks.
-# Above it the lattice filter runs and rectifies; below it nothing is rejected.
-# Evidence gathered under one filtering regime must not judge under the other —
-# D13's argument, applied to the other boundary the observed set has.
+# `in_gap` is the one signal that used to reach `classify` straight from the
+# current frame. A single frame where a correctly placed block's centroid
+# crosses a footprint boundary must not stop the program, so a non-zero
+# `in_gap` now has to survive N of the last M judged frames. Denoising only —
+# it does not name the gap cell, and it is not the fix for a MOVED block that
+# lands off-site.
 
-busy = Observation(cells=((1, 1), (2, 1)), detections=MIN_LATTICE_BLOCKS)
-thin = Observation(cells=((1, 1), (2, 1)), detections=MIN_LATTICE_BLOCKS - 1)
-
-sup = supervisor(settle_n=2, settle_m=3)
-sup.step(mode="vertical", ledger=ledger, observation=busy, interlocks=open_gates)
-state, _, verdict = sup.step(mode="vertical", ledger=ledger, observation=thin,
-                             interlocks=open_gates)
-check("P2 dropping below MIN_LATTICE_BLOCKS resets the hysteresis",
-      state == "WARMING" and verdict is None, f"{state}")
-
-sup = supervisor(settle_n=2, settle_m=3)
-sup.step(mode="vertical", ledger=ledger, observation=thin, interlocks=open_gates)
-state, _, verdict = sup.step(mode="vertical", ledger=ledger, observation=busy,
-                             interlocks=open_gates)
-check("P2 crossing back UP resets it as well — both directions",
-      state == "WARMING" and verdict is None, f"{state}")
+clean = Observation(cells=((1, 1), (2, 1)), detections=8)
+one_gap = Observation(cells=((1, 1), (2, 1)), in_gap=1, detections=8)
 
 sup = supervisor(settle_n=2, settle_m=3)
 for _ in range(2):
-    state, _, verdict = sup.step(mode="vertical", ledger=ledger, observation=busy,
-                                 interlocks=open_gates)
-check("P2 a STEADY detection count still settles — it is a crossing, not a gate",
+    state, _, verdict = sup.step(mode="vertical", ledger=ledger,
+                                 observation=clean, interlocks=open_gates)
+check("baseline: a matching board with no gap is VERIFIED",
       state == "VERDICT" and verdict.verdict == "VERIFIED", f"{state}")
 
-sup = supervisor(settle_n=2, settle_m=3)
-for detections in (MIN_LATTICE_BLOCKS + 4, MIN_LATTICE_BLOCKS + 1):
-    state, _, verdict = sup.step(
-        mode="vertical", ledger=ledger,
-        observation=Observation(cells=((1, 1), (2, 1)), detections=detections),
-        interlocks=open_gates)
-check("P2 a count that moves WITHOUT crossing does not reset",
-      state == "VERDICT" and verdict.verdict == "VERIFIED", f"{state}")
+state, _, verdict = sup.step(mode="vertical", ledger=ledger,
+                             observation=one_gap, interlocks=open_gates)
+check("a SINGLE gap frame does not stop the program",
+      verdict.verdict == "VERIFIED", verdict.verdict)
+
+state, _, verdict = sup.step(mode="vertical", ledger=ledger,
+                             observation=one_gap, interlocks=open_gates)
+check("a gap sustained N of M frames DOES become FOREIGN",
+      verdict.verdict == "FOREIGN", verdict.verdict)
+
+# A tripped interlock resets the gap history along with the cell history (D7:
+# reset, never decay) — evidence from a frame that was not allowed to be
+# judged must not leak into the next verdict.
+shut = Interlocks(parked=True, calibrated=True, quiet=False)
+sup.step(mode="vertical", ledger=ledger, observation=one_gap, interlocks=shut)
+state, _, verdict = sup.step(mode="vertical", ledger=ledger,
+                             observation=one_gap, interlocks=open_gates)
+check("one gap frame after an interlock trip is not yet FOREIGN",
+      verdict is None or verdict.verdict != "FOREIGN",
+      f"{state} {verdict.verdict if verdict else None}")
 
 
 # --- a verdict never locks ------------------------------------------------- #

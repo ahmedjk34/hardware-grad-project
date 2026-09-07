@@ -320,8 +320,9 @@ def report(rows: list[dict]) -> int:
         print("  -> every off-lattice detection is off the BOARD, not in a gap.")
         print("     Splitting the two Nones is sufficient; nothing to clear.")
     sparse = sum(1 for row in rows if row["detections"] < 6)
-    print(f"frames under MIN_LATTICE_BLOCKS (6): {sparse}"
-          + ("   <-- D10: no FOREIGN, no DISAGREES in these" if sparse else ""))
+    print(f"frames with fewer than 6 detections: {sparse}"
+          + ("   (D10 removed — the count no longer gates any verdict)"
+             if sparse else ""))
 
     print()
     print("--- Q3: do cells assign consistently? ------------------------------")

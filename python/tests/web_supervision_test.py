@@ -165,6 +165,22 @@ def test_a_missing_block_names_the_exact_cell():
     assert seen[-1].severity == "amber"
 
 
+def test_an_unexpected_block_on_a_near_empty_board_is_FOREIGN():
+    """D10 removed: with the holder off the rig the classifier no longer
+
+    suppresses FOREIGN on a sparse board. Two placed cells plus one extra
+    detection — three in the frame, well under the old threshold of six —
+    now stops the program instead of reading VERIFIED.
+    """
+    app = fake_app()
+    seen = drive(app, [frame_at(1, cells=((1, 1), (2, 1), (4, 4))),
+                       frame_at(2, cells=((1, 1), (2, 1), (4, 4)))])
+    assert seen[-1].state == "VERDICT"
+    assert seen[-1].verdict.verdict == "FOREIGN"
+    assert seen[-1].verdict.cells == ((4, 4),)
+    assert seen[-1].severity == "red"
+
+
 # --- refusal 1: the mode latch (D13) --------------------------------------- #
 
 def test_a_frame_from_the_other_lattice_suspends_and_clears_the_baseline():

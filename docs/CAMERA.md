@@ -410,7 +410,7 @@ Geometry, not effort. State these rather than discovering them in a demo.
 | **Cannot see above level 3** | parallax pushes an elevated block past `LATTICE_SNAP` (0.34 cells) and `_lattice_filter` silently discards it. See [features/camera-parallax-and-levels.md](features/camera-parallax-and-levels.md) |
 | **Cannot confirm a block added to an existing stack** | the cell was occupied before and is occupied after; an overhead view cannot tell a stack that grew from one that did not. Supervision reports `unconfirmed` at levels 1-2 rather than claiming either way. The cell reading *empty* is still decisive — that is a tower that fell. Closing this needs a measured per-cell change threshold (Gate 0b) |
 | **Cannot resolve a sub-cell nudge** | 0.34-cell snap plus the map's own 0.27 cm flattening error. A block pushed a few millimetres still reads as the same cell |
-| **Is unreliable on a sparse board** | `_lattice_filter` skips entirely below `MIN_LATTICE_BLOCKS` (6) and disables itself if it would reject >30 %. The holder's offcuts beside `[0,0]` can then read as blocks — which is the *common* state early in every build |
+| **`_lattice_filter` self-disables on a sparse or mostly-wrong board** | it skips entirely below `MIN_LATTICE_BLOCKS` (6) and disables itself if it would reject >30 %. This is `block_outline`'s own drawing-layer behaviour; supervision does **not** depend on it — `locate()` classifies by geometry at any count (F3). Supervision's old `MIN_LATTICE_BLOCKS` mirror (D10) was removed once the holder came off the rig |
 | **Cannot see through the gantry** | the arm crosses the board during a build. This is why every check is a between-ops activity |
 | **Is worthless without a current map** | with no saved calibration the pipeline falls back to `approximate_workspace`, and `cell_at` will be confidently wrong. Any consumer must refuse to judge when `calibrated` is false |
 
@@ -514,16 +514,17 @@ Plans: [placement-supervision.md](features/placement-supervision.md) ·
       camera on the development desktop, so the quiet gate has only ever run
       here on synthetic arrays — Gate 0 measured the numbers on the rig, but
       this code has never seen a real frame
-- [x] `python/tests/test_supervisor.py` — **73 checks**, synthetic cell sets only
+- [x] `python/tests/test_supervisor.py` — **82 checks**, synthetic cell sets only
 - [x] **D9 refined (P1)** — a one-sided change of any size is NAMED, not
       dismissed: N missing with nothing gained is `REMOVED` naming all N, N
       unexpected with nothing missing is `FOREIGN` naming all N. `DISAGREES` is
       now precisely "both sides changed and I cannot pair them", which is the
       only case that actually needs block identity
-- [x] **Hysteresis resets on the `MIN_LATTICE_BLOCKS` crossing (P2)**, both
-      directions — evidence gathered under one filtering regime must not judge
-      under another, which is D13's argument applied to the other boundary
-- [x] `python/tests/test_supervisor_frames.py` — **23 checks**. The four Gate 0
+- [x] **`in_gap` gets D7's `N of M` hysteresis** — the one signal that used to
+      reach `classify()` straight from the current frame. Added when D10 /
+      `MIN_LATTICE_BLOCKS` was removed (progress.md P8); the P2 filter-regime
+      reset went with it
+- [x] `python/tests/test_supervisor_frames.py` — **21 checks**. The four Gate 0
       rig traces (`docs/measurements/gate0_*.csv`, 1398 frames the rig actually
       produced) replayed through the shipped `Supervisor`. Chosen over the
       reference stills in `python/captures/`: stronger evidence, no OpenCV.
@@ -559,7 +560,9 @@ Plans: [placement-supervision.md](features/placement-supervision.md) ·
 - [x] Whole-board occupancy diff in every quiet window while parked
 - [x] D9 verdicts, refined by P1: `VERIFIED` / `NOT_DETECTED` / `REMOVED` /
       `MOVED` / `FOREIGN` / `DISAGREES`
-- [x] No `FOREIGN` below `MIN_LATTICE_BLOCKS` (6)
+- [x] ~~No `FOREIGN` below `MIN_LATTICE_BLOCKS` (6)~~ — D10 removed once the
+      holder came off the rig (progress.md P8). `FOREIGN` / `DISAGREES` are now
+      live at any detection count
 - [x] `SupervisionModel` published whole; `POST /api/supervision/ack`, which
       also **resets the hysteresis** so the re-check after a dismissal is built
       from fresh evidence rather than from frames taken while a hand was over

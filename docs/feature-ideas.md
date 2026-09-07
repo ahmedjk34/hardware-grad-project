@@ -619,12 +619,14 @@ happened.**
   few millimetres still reads as the same cell. Residual distance from the
   fitted centre is available and could raise a **soft warning**, but must never
   trigger a repair at that error budget.
-- **Lattice brakes carry over.** `_lattice_filter` skips entirely below
-  `MIN_LATTICE_BLOCKS` (6) detections and disables itself if it would reject
-  more than 30 %. On a nearly empty board the observed set is unfiltered, so
-  the holder's offcuts beside `[0,0]` can read as blocks. Supervision must
-  refuse to produce `FOREIGN` verdicts below that threshold — a sparse board
-  gets `VERIFIED`/`REMOVED` only.
+- **Junk on a near-empty board.** Supervision's defence is `locate()`, which
+  classifies every detection by geometry at any count — not `_lattice_filter`,
+  which is `block_outline`'s drawing-layer concern. An early `MIN_LATTICE_BLOCKS`
+  mirror (D10, "no `FOREIGN` on a sparse board") existed to spare the holder's
+  offcuts beside `[0,0]` a red verdict; it was removed once the holder came off
+  the rig. `FOREIGN` / `DISAGREES` are now live from block one. See
+  [features/placement-supervision.md](features/placement-supervision.md) D10 and
+  progress.md P8.
 - **Occlusion is not emptiness.** A cell the gantry, a cable or a hand is
   covering is *unobservable*, not empty. D4 handles the common case by refusing
   to judge at all; a cell under a static occluder will read as `REMOVED`
@@ -639,7 +641,7 @@ happened.**
 | --- | --- |
 | `tests/test_placement_ledger.py` | append/reload, per-mode separation, level collapse to a column, `PLACED`-only admission |
 | `tests/test_supervisor.py` | every D6 row from synthetic cell sets; hysteresis needs `N of M`; each D4 interlock independently suppresses a verdict; counters reset rather than decay on a tripped interlock |
-| `tests/test_supervisor_frames.py` | against the two reference boards in `python/captures/`: full board → `VERIFIED`; one cell erased → `REMOVED [c,r]` naming the **exact** cell, not a count; a block relocated → `MOVED`; the holder's offcuts never produce `FOREIGN` |
+| `tests/test_supervisor_frames.py` | the four Gate 0 rig traces replayed: full board → `VERIFIED`; one cell erased → `REMOVED [c,r]` naming the **exact** cell, not a count; the persistent off-board object never produces `FOREIGN` (it is `outside`, not `gap`) |
 | existing | `test_block_outline.py`'s timing guard must still pass — supervision adds no detector work |
 
 Assert exact cell sets, never counts. BLOCK-VISION §0 explains why: a count-only
