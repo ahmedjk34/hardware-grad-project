@@ -196,6 +196,8 @@ chooses every target).
   │  POST /api/select|deselect|level|mode|view    │
   │  POST /api/build         (echoes command)     │
   │  POST /api/supervision/ack (dismiss a verdict)│
+  │  POST /api/supervision/correct (return a      │
+  │                    MOVED/DISPLACED block)     │
   │  POST /api/calibration/* (corners / sheet /   │
   │                            placed-block)      │
   └───────────────┬───────────────┬──────────────┘
@@ -223,7 +225,7 @@ chooses every target).
 | `rig/console_pipeline.py` → `ConsolePipeline`, `ProcessedFrame` | the headless capture+detect loop; owns exactly one camera, applies orientation then colour correction exactly once, does **not** own a serial `Rig` |
 | `web/app.py` | FastAPI app factory, one-owner lifespan, `GET /api/state`, `WS /api/events` |
 | `web/state.py` | Pydantic snapshot model, including `vision_verification` and the `SupervisionModel` block — **one field, four readers, no surface re-derives a verdict** |
-| `web/routes_command.py` | select / select-axis / deselect / level / mode / shift / view / build, all guarded through `BuildController`, plus `POST /api/supervision/ack` — the one mutating route allowed **during** a build, because it moves nothing and a verdict that paused the runner has to be dismissible |
+| `web/routes_command.py` | select / select-axis / deselect / level / mode / shift / view / build, all guarded through `BuildController`, plus `POST /api/supervision/ack` — the one mutating route allowed **during** a build, because it moves nothing and a verdict that paused the runner has to be dismissible — and `POST /api/supervision/correct`, the operator CORRECTION action ([`correction-action.md`](features/correction-action.md)): a confirm-gated, one-shot pick-and-re-place for a `MOVED` / `DISPLACED` verdict that re-derives its own safety server-side and drives the firmware `P` verb via `rig.replace_block()` |
 | `rig/placement_ledger.py` → `PlacementLedger` | the as-built memory: what the machine was told to place and what the firmware said came of it. Pure data, no OpenCV, `PLACED` only, keyed by mode, **never reloaded from disk as authority** |
 | `rig/supervisor.py` | the board's observer: D5's interlocks, pixel→cell, hysteresis, the classifier. Consumes `ProcessedFrame.detections` and a `WorkspaceMap`; adds no detector and takes no extra frames |
 | `web/routes_calibration.py` | corner calibration, printed-sheet calibration, and the placed-block calibration sub-flow |

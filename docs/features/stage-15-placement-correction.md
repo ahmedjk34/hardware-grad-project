@@ -1,13 +1,24 @@
 # Stage 15 — between-job placement correction
 
-**Status: design agreed, not implemented — but §3's prerequisite is now BUILT.**
+**Status: design agreed, orchestration not implemented — but §3's prerequisite
+AND its Stage C firmware verb are now built.**
 
-The as-built memory this feature called a prerequisite shipped with
-[placement supervision](placement-supervision.md) M1, and it was built to serve
-both: `rig/placement_ledger.py` carries **this feature's own D5/D6 safety
-predicates**, `is_top_of_column()` and `has_taller_neighbour()`, so Stage 15
-inherits them rather than writing a second occupancy model that could disagree.
-See §3 for what changed and what did not.
+Two pieces of this design shipped early, driven by the
+[CORRECTION action](correction-action.md) (an operator button on a supervision
+verdict, which shares Stage 15's machinery):
+
+- The as-built memory shipped with [placement supervision](placement-supervision.md)
+  M1: `rig/placement_ledger.py` carries **this feature's own D5/D6 safety
+  predicates**, `is_top_of_column()` and `has_taller_neighbour()`.
+- **Stage C's `P` verb, `link.replace_block()` and the `mock_board` `P`
+  handler** were built for the CORRECTION action. `P` takes **separate pick and
+  place cells** (`P <pcol> <prow> <plevel> <dx_cm> <dy_cm> <qcol> <qrow>
+  <qlevel>`) rather than the single-cell form §4 sketched — see there. **It is
+  unflashed and unverified on hardware.** `rig/placement_check.py` holds the
+  band / angle / offset geometry.
+
+Stage 15's own orchestration (the between-jobs advisory pass, `stage15.py`, the
+parallax `camera` config, the toggle) is still unbuilt. See §3 for what changed.
 
 This supersedes [between-build-error-calibration.md](between-build-error-calibration.md)
 as the design we are actually building. That document designed its *reading (a)*

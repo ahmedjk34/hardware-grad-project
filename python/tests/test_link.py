@@ -317,6 +317,82 @@ for acks in (True, False):
 
 
 # ------------------------------------------------------------------
+# P — the CORRECTION verb (docs/features/correction-action.md)
+# ------------------------------------------------------------------
+# Terminal ack only, no STEP stream, so the fourteen-phase protocol is
+# untouched. Same three-word contract and abort discipline as build().
+# The firmware verb is UNFLASHED / UNVERIFIED ON HARDWARE — these prove the Pi
+# half of the loop, not the machine.
+
+REPLACE_OK = [
+    "@5 RECV cmd=P col=3 row=1 level=0",
+    "======================================",
+    "CORRECTION COMPLETE - block moved to [2,1] level 0",
+    "PARKED - ready for the next command.",
+    "======================================",
+    "@5 OK col=2 row=1 level=0",
+]
+REPLACE_SAFE = [
+    "  BUILD REJECTED - a neighbouring stack is taller than the descent corridor",
+    "  Nothing moved.",
+    "@5 SAFE a neighbouring stack is taller than the descent corridor",
+]
+REPLACE_HELD = [
+    "",
+    "*** BUILD ABORTED - Z did not reach the pick level",
+    "*** The claw may still be holding a block. Check the rig.",
+    "@5 HELD Z did not reach the pick level",
+]
+REPLACE_PARK_FAILED = [
+    "CORRECTION COMPLETE - block moved to [2,1] level 0",
+    "!! BLOCK IS PLACED, BUT PARKING FAILED - check the rig.",
+    "@5 HELD block placed but parking failed",
+]
+
+
+def replace_outcome(name, transcript, expected, acks=True):
+    rig, fake = fake_rig(replies={"S": GRID_RESIZED, "P": transcript}, acks=acks)
+    result = rig.replace_block(3, 1, 0, -0.42, 0.11, 2, 1, 0, timeout=20)
+    rig.close()
+    check(name, str(result) == expected and result.from_prose == (not acks),
+          f"-> {str(result)!r} {result.reason!r}")
+    return result
+
+
+for acks in (True, False):
+    tag = "ack" if acks else "prose"
+    replace_outcome(f"P {tag}: complete", REPLACE_OK, link.PLACED, acks)
+    replace_outcome(f"P {tag}: rejected (SAFE)", REPLACE_SAFE, link.REJECTED, acks)
+    replace_outcome(f"P {tag}: aborted (HELD)", REPLACE_HELD, link.ABORTED, acks)
+    replace_outcome(f"P {tag}: placed, not parked", REPLACE_PARK_FAILED, link.ABORTED, acks)
+
+# The wire form, with the sign discipline: pick cell, signed cm nudge, place
+# cell — eight fields, dx/dy formatted to 3 dp with their sign.
+rig, fake = fake_rig(replies={"S": GRID_RESIZED, "P": REPLACE_OK})
+rig.replace_block(3, 1, 0, -0.42, 0.11, 2, 1, 0, timeout=20)
+rig.close()
+check("P wire form is eight fields, signed nudge in the middle",
+      "P 3 1 0 -0.420 0.110 2 1 0" in fake.written, str(fake.written))
+
+# Guard rails the Pi enforces before a byte is sent.
+rig, fake = fake_rig(replies={"S": GRID_RESIZED, "P": REPLACE_OK})
+for bad_args, why in [
+    ((0, 0, 0, 0.0, 0.0, 2, 1, 0), "a feeder pick cell"),
+    ((3, 1, 0, 0.0, 0.0, 0, 0, 0), "a feeder place cell"),
+    ((3, 1, 0, 9.0, 0.0, 2, 1, 0), "a runaway nudge"),
+    ((3, 1, -1, 0.0, 0.0, 2, 1, 0), "a negative level"),
+]:
+    try:
+        rig.replace_block(*bad_args, timeout=5)
+        check(f"P refuses {why}", False)
+    except ValueError:
+        check(f"P refuses {why}", True)
+check("P guard rails send nothing on the wire",
+      not any(w.startswith("P ") for w in fake.written), str(fake.written))
+rig.close()
+
+
+# ------------------------------------------------------------------
 # The connect sequence
 # ------------------------------------------------------------------
 

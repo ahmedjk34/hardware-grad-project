@@ -1280,9 +1280,9 @@ change the baud.
 
 ### 6. Firmware command vocabulary
 
-The sketch's commands (`B`, `G`, `S`, `0`, `0+`, `5`, `9`, `Z`, `U`, `D`, `O`,
-`C`, `V`, `A`, `R`, `RR`) are the contract between the two machines. `V <angle>`
-sets the gripper servo to an integer angle from 0 to 180 degrees. `A <degrees>`
+The sketch's commands (`B`, `M`, `P`, `G`, `S`, `0`, `0+`, `5`, `9`, `Z`, `U`,
+`D`, `O`, `C`, `V`, `A`, `R`, `RR`) are the contract between the two machines.
+`V <angle>` sets the gripper servo to an integer angle from 0 to 180 degrees. `A <degrees>`
 is a signed, **relative** auxiliary-stepper jog: `-360..360`, positive CW and
 negative CCW. It cannot be an absolute angle because that motor has no home
 switch or angle sensor.
@@ -1302,14 +1302,29 @@ Two of these changed meaning and one lost an argument:
 - **`B` no longer takes a rotation word.** `B <col> <row> <level>`, three
   numbers, nothing after them. How the block is laid comes from the active
   grid. A fourth word is a parse error that names the latch.
+- **`P <pcol> <prow> <plevel> <dx_cm> <dy_cm> <qcol> <qrow> <qlevel>` is the
+  operator CORRECTION verb** (`docs/features/correction-action.md`). It picks a
+  block already on the board at `[pcol,prow]` level `plevel` **plus** the signed
+  cm nudge `(dx_cm, dy_cm)` — where a MOVED / DISPLACED block actually is — and
+  re-places it on `[qcol,qrow]` level `qlevel` with **no** nudge. `dx`/`dy` are
+  magnitudes from each home switch, `+` away from home (Rule 0), converted to
+  steps once inside `gotoBuildTargetOffset()` — the same slot `buildSkewSteps()`
+  uses, so the grid model never sees them. It emits `RECV`, then a terminal
+  `OK` / `SAFE` / `HELD` and **no `STEP` stream** — the fourteen-phase protocol
+  is deliberately untouched. Same abort discipline as `B`: `SAFE` = nothing
+  moved, `HELD` = the claw may still hold a block, needs a human.
+  `python/rig/link.py` sends it through `replace_block()`. **The firmware verb
+  is unflashed and unverified on hardware** (no local Arduino toolchain);
+  `arduino/tools/pcheck/check.sh` syntax-checks it against a stub Arduino only.
 - **`@0 READY` carries `mode=` beside `grid=`.** A reset silently returns the
   board to vertical, so the Pi is told rather than left to assume.
 
 If you rename a command, change its arguments, or change the text it prints on
-success or failure, **grep `python/` for the old form first.** `B` has an `@`
-ack and is safe from rewording, but `S`, `G`, `0` and `0+` do not — for those,
-`link.py` waits on the prose. The strings it matches are all in one place,
-`_prose_outcome()` and the `done=` arguments in `python/rig/link.py`.
+success or failure, **grep `python/` for the old form first.** `B` and `P` have
+an `@` ack and are safe from rewording, but `S`, `G`, `0` and `0+` do not — for
+those, `link.py` waits on the prose. The strings it matches are all in one
+place, `_prose_outcome()` and the `done=` arguments in `python/rig/link.py`.
+`_prose_outcome()` also matches `P`'s `CORRECTION COMPLETE` as a prose fallback.
 
 ### 7. The studio's shipped defaults and the main camera feed
 

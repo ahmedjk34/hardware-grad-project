@@ -10,8 +10,9 @@ from pydantic import BaseModel, Field, root_validator
 from rig import build_log
 from rig.build_controller import BuildStateError
 from rig.build_job import BUSY_MESSAGE
-from rig.link import RigError
-from web.state import StateModel, build_state
+from rig.link import ABORTED, RigError
+from rig.supervisor import observe
+from web.state import StateModel, assess_frame_correction, build_state
 
 
 router = APIRouter(prefix="/api", tags=["commands"])
@@ -69,6 +70,15 @@ class BuildRequest(BaseModel):
 
 class ManualCloseRequest(BaseModel):
     confirm: bool = True
+
+
+class CorrectRequest(BaseModel):
+    """The operator CORRECTION action. `confirm` is the explicit consent the
+    confirm dialog collects — a correction drives the claw into a finished
+    structure, so it must never fire without it (DESIGN.md §8's superseded
+    'no re-place button' rule now carries an operator-initiated carve-out)."""
+
+    confirm: bool
 
 
 #: Held while a mode latch is homing X/Y. Read as "the rig is moving" by
@@ -288,6 +298,108 @@ async def acknowledge_supervision(http: Request) -> StateModel:
     if supervisor is not None:
         supervisor.reset()
     build_log.placements.note("operator acknowledged the verdict")
+    _signal(app)
+    return _state(app)
+
+
+def _verdict_signature(sv) -> tuple | None:
+    if sv is None or getattr(sv, "verdict", None) is None:
+        return None
+    v = sv.verdict
+    return (sv.state, v.verdict, tuple(v.cells))
+
+
+# Sync, on a worker thread, for the same reason as `/mode` and `/shift`:
+# `rig.replace_block()` blocks on ~30-60 s of serial motion. On the event loop
+# that would stall the WebSocket fan-out, the MJPEG stream and `_drive_pipeline`.
+# It holds `rig._inflight` for the whole move, so a `/api/build` arriving
+# meanwhile gets RigBusy rather than interleaving on one cable.
+@router.post("/supervision/correct", response_model=StateModel)
+def correct_supervision(request: CorrectRequest, http: Request) -> StateModel:
+    """The operator CORRECTION action — pick a MOVED / DISPLACED block up and
+    set it on the cell it belongs on (`docs/features/correction-action.md`).
+
+    This SUPERSEDES DESIGN.md §8's "no re-place button" and D11's "a verdict
+    never moves the rig", with an operator-initiated carve-out: it is opt-in per
+    press, confirm-gated, one attempt per verdict event, and it never fires
+    automatically. AGENTS.md §2a permits a guarded direct-Mega call on an
+    "explicit calibration/commissioning path where a person has staged the
+    block" — a CORRECTION is exactly that, the block already being on the board.
+
+    Server-authoritative: the published `correctable` flag is NOT trusted. This
+    re-runs `assess_frame_correction` on the CURRENT frame and refuses, with the
+    reason, if anything has changed. A `HELD`/`aborted` result LOCKS the
+    controller (the claw may still hold a block) — the one case where a
+    correction is allowed to lock, because it is a statement about the MACHINE,
+    not the board.
+    """
+    app = http.app
+    if not request.confirm:
+        raise HTTPException(status_code=400, detail="correction requires confirm=true")
+    require_mutable(app)
+    frame = require_fresh_camera(app)
+    rig = app.state.rig
+    if not rig.connected:
+        raise HTTPException(status_code=409,
+                            detail="Mega gantry must be connected for a correction")
+    if not bool(getattr(frame, "calibrated", False)):
+        raise HTTPException(status_code=409,
+                            detail="no calibrated workspace map; a correction needs one")
+
+    sv = getattr(app.state, "supervision", None)
+    signature = _verdict_signature(sv)
+    if signature is None:
+        raise HTTPException(status_code=409, detail="no verdict to correct")
+    if getattr(app.state, "correction_attempted_signature", None) == signature:
+        raise HTTPException(
+            status_code=409,
+            detail="a correction has already been attempted for this verdict; "
+                   "dismiss it and let the board re-check")
+
+    observation = observe(frame.detections, frame.workspace, frame.image_size)
+    correction, reason = assess_frame_correction(
+        ledger=app.state.ledger, workspace=frame.workspace,
+        observation=observation, state=sv.state, verdict=sv.verdict,
+        mode=frame.grid_mode)
+    if correction is None:
+        raise HTTPException(status_code=409,
+                            detail=reason or "this block cannot be corrected")
+
+    # One attempt per verdict event (§E.2). Set BEFORE the move so a retry
+    # during it is refused; `_note_supervision` clears it when the reading
+    # changes, exactly like `supervision_acknowledged`.
+    app.state.correction_attempted_signature = signature
+    pc, pr, pl, dx, dy, qc, qr, ql = correction.command_args
+    build_log.placements.note(
+        f"operator CORRECTION: pick [{pc},{pr}] L{pl} nudge ({dx:.2f},{dy:.2f}) "
+        f"-> place [{qc},{qr}] L{ql}")
+
+    try:
+        result = rig.replace_block(pc, pr, pl, dx, dy, qc, qr, ql)
+    except RigError as exc:
+        app.state.controller.locked_reason = (
+            f"serial/build state unknown after a correction: {exc}; "
+            "inspect the rig and restart")
+        _signal(app)
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    app.state.last_correction_result = {
+        "result": str(result), "reason": result.reason,
+        "cell": list(correction.place_cell), "verdict": correction.verdict,
+    }
+    if str(result) == ABORTED or result.needs_a_human:
+        # The one case a correction locks: the claw may be holding a block at an
+        # unknown position. That is a MACHINE fact, not a board verdict.
+        app.state.controller.locked_reason = (
+            result.reason or "correction aborted; the claw may be holding a block")
+    else:
+        # D12: re-verify. Drop the hysteresis so the next quiet window judges
+        # the board fresh, not on frames taken while the arm was over it.
+        supervisor = getattr(app.state, "supervisor", None)
+        if supervisor is not None:
+            supervisor.reset()
+        app.state.supervision_acknowledged = False
+    build_log.placements.note(f"correction result: {result} ({result.reason})")
     _signal(app)
     return _state(app)
 

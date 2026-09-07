@@ -107,6 +107,39 @@ check("REGRESSION: an off-board detection NEVER produces FOREIGN",
       verdict.verdict == "VERIFIED", verdict.verdict)
 
 
+# --- observe() retains a pick coordinate for the CORRECTION action -------- #
+#
+# The classifier never looks at these; the operator CORRECTION button does.
+# They must round-trip pixel -> cm within the map's own tolerance and stay
+# aligned with the gap / cell counts.
+
+class AngledDetection:
+    def __init__(self, center, angle):
+        self.center, self.angle = center, angle
+
+
+pts = observe([AngledDetection(at_cm(*centre), 1.5),
+               AngledDetection(at_cm(gap_x, centre[1]), 4.0),
+               FakeDetection((-500.0, -500.0))], MAP, SIZE)
+check("the GAP detection's centre is kept in workspace cm, one per in_gap",
+      len(pts.gap_points_cm) == pts.in_gap == 1
+      and abs(pts.gap_points_cm[0][0] - gap_x) < 0.05
+      and abs(pts.gap_points_cm[0][1] - centre[1]) < 0.05,
+      str(pts.gap_points_cm))
+check("the GAP detection's angle rides alongside it",
+      pts.gap_angles_deg == (4.0,))
+check("the ON-CELL detection's centre and angle are kept, keyed by cell",
+      pts.cell_points_cm[0][0] == (3, 2)
+      and abs(pts.cell_points_cm[0][1][0] - centre[0]) < 0.05
+      and pts.cell_angles_deg == (1.5,))
+check("an OFF-BOARD detection contributes no pick coordinate",
+      len(pts.gap_points_cm) + len(pts.cell_points_cm) == 2)
+
+bare = observe([FakeDetection(at_cm(*centre))], MAP, SIZE)
+check("a detection with no .angle attribute defaults to 0.0, never raises",
+      bare.cell_angles_deg == (0.0,))
+
+
 # --- D9, every row --------------------------------------------------------- #
 
 full = {(1, 1), (2, 1), (3, 1), (1, 2), (2, 2), (3, 2)}

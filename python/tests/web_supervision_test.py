@@ -78,6 +78,14 @@ def at_gap(a, b):
                                       SIZE))
 
 
+def at_cm_point(x_cm, y_cm, angle=0.0):
+    """A detection at an arbitrary workspace-cm point, with an optional angle."""
+    d = FakeDetection(MAP.pixel_at(x_cm / GRID.workspace_width_cm,
+                                   y_cm / GRID.workspace_height_cm, SIZE))
+    d.angle = angle
+    return d
+
+
 def view(fill: int = 40) -> np.ndarray:
     """One synthetic capture. Flat, so two of them differ by exactly `fill`."""
     frame = np.full((SIZE[1], SIZE[0], 3), fill, dtype=np.uint8)
@@ -204,6 +212,88 @@ def test_a_block_knocked_into_a_gap_is_DISPLACED_and_names_its_cell():
     assert seen[-1].verdict.verdict == "DISPLACED"
     assert seen[-1].verdict.cells == ((2, 1),)
     assert seen[-1].severity == "amber"
+
+
+# --- the operator CORRECTION action's server-side assessment ------------- #
+#
+# `_supervise` calls `_assess_correction`, which is read-only: it projects the
+# offending detection into workspace cm, reads the ledger, and asks the pure
+# `rig.placement_check.assess`. Nothing here moves the rig. The route
+# `/api/supervision/correct` re-runs the same path — the published flag is
+# never trusted (DESIGN.md §8).
+
+def test_a_DISPLACED_block_inside_the_band_publishes_a_ready_correction():
+    from web.state import supervision_model
+    app = fake_app()  # vertical, ledger [1,1] and [2,1]
+    # Cell (2,1) centre x = 7.6 cm, footprint ends at 8.7 cm. A detection at
+    # 8.75 cm is in the gap and 1.15 cm off the cell — inside the 0.5-1.2 band.
+    y = GRID.cell_center_cm(2, 1)[1]
+    off = at_cm_point(8.75, y)
+    seen = drive(app, [frame_at(1, cells=((1, 1),), extra=(off,)),
+                       frame_at(2, cells=((1, 1),), extra=(off,))])
+    sv = seen[-1]
+    assert sv.verdict.verdict == "DISPLACED"
+    assert sv.correction is not None
+    assert sv.correction.pick_cell == (2, 1) and sv.correction.place_cell == (2, 1)
+    assert sv.correction.pick_level == 0
+    assert "pick it up" in sv.correction_reason
+    model = supervision_model(sv)
+    assert model.correctable is True
+    assert model.correction_cell == (2, 1) and model.correction_level == 0
+    assert model.pick_offset_cm is not None and abs(model.pick_offset_cm[0] - 1.15) < 0.05
+
+
+def test_a_DISPLACED_block_past_the_band_offers_no_correction_but_says_why():
+    from web.state import supervision_model
+    app = fake_app()
+    gap = at_gap((2, 1), (3, 1))  # the midpoint: 1.9 cm off -> REFUSE
+    seen = drive(app, [frame_at(1, cells=((1, 1),), extra=(gap,)),
+                       frame_at(2, cells=((1, 1),), extra=(gap,))])
+    sv = seen[-1]
+    assert sv.verdict.verdict == "DISPLACED"
+    assert sv.correction is None
+    assert "beyond" in sv.correction_reason and "by hand" in sv.correction_reason
+    assert supervision_model(sv).correctable is False
+
+
+def test_a_MOVED_block_publishes_a_correction_naming_both_cells():
+    from web.state import supervision_model
+    app = fake_app()  # ledger [1,1] and [2,1]
+    # [2,1] emptied, a block squarely on the wrong cell [3,1], no gap detection.
+    seen = drive(app, [frame_at(1, cells=((1, 1), (3, 1))),
+                       frame_at(2, cells=((1, 1), (3, 1)))])
+    sv = seen[-1]
+    assert sv.verdict.verdict == "MOVED"
+    assert sv.verdict.cells == ((2, 1), (3, 1))
+    assert sv.correction is not None
+    assert sv.correction.pick_cell == (3, 1)   # where it IS
+    assert sv.correction.place_cell == (2, 1)  # where it BELONGS
+    model = supervision_model(sv)
+    assert model.correctable is True and model.correction_cell == (2, 1)
+
+
+def test_a_REMOVED_verdict_offers_no_correction_at_all():
+    from web.state import supervision_model
+    app = fake_app()
+    seen = drive(app, [frame_at(1, cells=((1, 1),)), frame_at(2, cells=((1, 1),))])
+    sv = seen[-1]
+    assert sv.verdict.verdict == "REMOVED"
+    assert sv.correction is None and sv.correction_reason is None
+    model = supervision_model(sv)
+    assert model.correctable is False and model.correction_reason is None
+
+
+def test_a_rotated_DISPLACED_block_is_refused_with_a_straighten_it_reason():
+    from web.state import supervision_model
+    app = fake_app()
+    y = GRID.cell_center_cm(2, 1)[1]
+    off = at_cm_point(8.75, y, angle=20.0)
+    seen = drive(app, [frame_at(1, cells=((1, 1),), extra=(off,)),
+                       frame_at(2, cells=((1, 1),), extra=(off,))])
+    sv = seen[-1]
+    assert sv.verdict.verdict == "DISPLACED"
+    assert sv.correction is None and "rotated" in sv.correction_reason
+    assert supervision_model(sv).correctable is False
 
 
 # --- refusal 1: the mode latch (D13) --------------------------------------- #
@@ -477,6 +567,174 @@ def test_acknowledging_is_per_event_and_a_new_reading_clears_it():
                     expected=((1, 1), (2, 1)), observed=((2, 1),), unjudged=())
     _note_supervision(app, "VERDICT", None, moved)
     assert app.state.supervision_acknowledged is False
+
+
+# --- POST /api/supervision/correct — the operator CORRECTION action ------- #
+#
+# The route re-derives the correction on the CURRENT frame and never trusts the
+# published flag. A HELD result locks the controller; a good result drops the
+# hysteresis so the board re-verifies (D12). Nothing here talks to real
+# hardware — `rig.replace_block` is a fake that returns a BuildResult.
+
+def _correct_app(*, verdict_name="DISPLACED", off_cm=8.75, angle=0.0,
+                 replace_result=None, locked=False, job_running=False):
+    import threading
+    from rig.link import BuildResult, PLACED
+    from rig.supervisor import Verdict
+    from web.state import SupervisionState
+
+    y = GRID.cell_center_cm(2, 1)[1]
+    if verdict_name == "DISPLACED":
+        extra = (at_cm_point(off_cm, y, angle),)
+        cells_seen = ((1, 1),)
+        verdict = Verdict(verdict="DISPLACED", cells=((2, 1),), mode="vertical",
+                          expected=((1, 1), (2, 1)), observed=((1, 1),), unjudged=())
+    else:  # MOVED
+        extra = ()
+        cells_seen = ((1, 1), (3, 1))
+        verdict = Verdict(verdict="MOVED", cells=((2, 1), (3, 1)), mode="vertical",
+                          expected=((1, 1), (2, 1)), observed=((1, 1), (3, 1)),
+                          unjudged=())
+
+    frame = frame_at(1, cells=cells_seen, extra=extra)
+    ledger = PlacementLedger()
+    ledger.append("vertical", 1, 1, 0, BuildResult(PLACED))
+    ledger.append("vertical", 2, 1, 0, BuildResult(PLACED))
+
+    sent = []
+
+    def fake_replace(*args):
+        sent.append(args)
+        return replace_result or BuildResult(PLACED, "")
+
+    supervisor = Supervisor(quiet_diff_fraction=QUIET_DIFF_FRACTION,
+                            settle_n=1, settle_m=1)
+    supervisor.reset_calls = 0
+    _orig_reset = supervisor.reset
+    supervisor.reset = lambda: (setattr(supervisor, "reset_calls",
+                                        supervisor.reset_calls + 1), _orig_reset())[1]
+
+    lock = threading.Lock()
+    state = SimpleNamespace(
+        job=SimpleNamespace(running=job_running),
+        mode_latch_lock=lock,
+        controller=SimpleNamespace(locked=locked, locked_reason=None),
+        latest_frame=frame,
+        rig=SimpleNamespace(connected=True, replace_block=fake_replace),
+        ledger=ledger,
+        supervisor=supervisor,
+        supervision=SupervisionState(state="VERDICT", reason=None, verdict=verdict,
+                                     judged_at_ms=1),
+        supervision_acknowledged=True,
+        signal_change=lambda: None,
+        pipeline=SimpleNamespace(saved_workspace=object()),
+    )
+    return SimpleNamespace(app=SimpleNamespace(state=state)), state, sent
+
+
+def _call_correct(http, confirm=True):
+    """Call the route, but return `app.state` instead of a full `StateModel`:
+    `build_state()` needs the whole running app, which the fake deliberately is
+    not. The route's side effects on `app.state` are what these tests check."""
+    import web.routes_command as rc
+    from web.routes_command import CorrectRequest, correct_supervision
+    saved = rc._state
+    rc._state = lambda app: app.state
+    try:
+        return correct_supervision(CorrectRequest(confirm=confirm), http)
+    finally:
+        rc._state = saved
+
+
+def test_correct_requires_confirm():
+    from fastapi import HTTPException
+    http, _, _ = _correct_app()
+    try:
+        _call_correct(http, confirm=False)
+        assert False, "should have refused"
+    except HTTPException as exc:
+        assert exc.status_code == 400 and "confirm" in exc.detail
+
+
+def test_correct_refuses_when_there_is_no_verdict():
+    from fastapi import HTTPException
+    http, state, _ = _correct_app()
+    state.supervision = None
+    try:
+        _call_correct(http)
+        assert False
+    except HTTPException as exc:
+        assert exc.status_code == 409 and "no verdict" in exc.detail
+
+
+def test_correct_drives_a_DISPLACED_block_in_band_and_re_verifies():
+    http, state, sent = _correct_app(off_cm=8.75)  # 1.15 cm off -> in band
+    result = _call_correct(http)
+    assert len(sent) == 1
+    pc, pr, pl, dx, dy, qc, qr, ql = sent[0]
+    assert (pc, pr, pl) == (2, 1, 0) and (qc, qr, ql) == (2, 1, 0)
+    assert abs(dx - 1.15) < 0.05 and abs(dy) < 0.05
+    assert result.last_correction_result["result"] == "placed"
+    assert result.last_correction_result["cell"] == [2, 1]
+    # D12: the board is re-checked — hysteresis dropped, ack cleared.
+    assert state.supervisor.reset_calls == 1
+    assert state.supervision_acknowledged is False
+    # One attempt per verdict event.
+    assert state.correction_attempted_signature is not None
+
+
+def test_correct_is_one_shot_per_verdict_event():
+    from fastapi import HTTPException
+    http, state, sent = _correct_app(off_cm=8.75)
+    _call_correct(http)
+    try:
+        _call_correct(http)
+        assert False
+    except HTTPException as exc:
+        assert exc.status_code == 409 and "already been attempted" in exc.detail
+    assert len(sent) == 1  # the rig was asked exactly once
+
+
+def test_correct_refuses_an_out_of_band_DISPLACED_with_the_reason():
+    from fastapi import HTTPException
+    http, _, sent = _correct_app(off_cm=9.5)  # the gap midpoint: 1.9 cm -> REFUSE
+    try:
+        _call_correct(http)
+        assert False
+    except HTTPException as exc:
+        assert exc.status_code == 409 and "beyond" in exc.detail
+    assert sent == []
+
+
+def test_a_HELD_correction_locks_the_controller():
+    from rig.link import BuildResult, ABORTED
+    http, state, _ = _correct_app(
+        off_cm=8.75, replace_result=BuildResult(ABORTED, "Z did not reach the pick level"))
+    _call_correct(http)
+    assert state.controller.locked_reason is not None
+    assert "Z did not reach" in state.controller.locked_reason
+    # A verdict never locks — but a HELD is a MACHINE fact, so this one does.
+    assert state.last_correction_result["result"] == "aborted"
+
+
+def test_correct_refuses_while_a_build_is_running():
+    from fastapi import HTTPException
+    http, _, sent = _correct_app(job_running=True)
+    try:
+        _call_correct(http)
+        assert False
+    except HTTPException as exc:
+        assert exc.status_code == 409
+    assert sent == []
+
+
+def test_correct_moves_a_MOVED_block_back_to_its_planned_cell():
+    http, state, sent = _correct_app(verdict_name="MOVED")
+    _call_correct(http)
+    assert len(sent) == 1
+    pc, pr, pl, dx, dy, qc, qr, ql = sent[0]
+    assert (pc, pr) == (3, 1)   # picked where it IS
+    assert (qc, qr) == (2, 1)   # placed where it BELONGS
 
 
 # --- the real wiring exists ------------------------------------------------ #

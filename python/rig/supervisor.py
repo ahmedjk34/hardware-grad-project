@@ -139,6 +139,18 @@ class Observation:
     #: classifier no longer branches on it (D10 removed once the holder was
     #: gone; `locate()` classifies at any count).
     detections: int = 0
+    #: Map-frame cm centre and measured angle (deg) of every `in_gap` detection
+    #: — parallel arrays, one entry each. Kept ONLY for the operator CORRECTION
+    #: action, which needs a pick coordinate for a DISPLACED block
+    #: (`rig/placement_check.py`). Empty for every other consumer; the
+    #: classifier never looks at them.
+    gap_points_cm: tuple[tuple[float, float], ...] = ()
+    gap_angles_deg: tuple[float, ...] = ()
+    #: Same, for the FIRST detection seen on each occupied cell — `(cell, (x_cm,
+    #: y_cm))` pairs and a parallel angle array. The CORRECTION action needs the
+    #: centre of the block on the *wrong* cell to correct a MOVED verdict.
+    cell_points_cm: tuple[tuple[Cell, tuple[float, float]], ...] = ()
+    cell_angles_deg: tuple[float, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -227,6 +239,22 @@ def locate(workspace, point, image_size):
     return None, "gap"
 
 
+def point_cm(workspace, point, image_size):
+    """Workspace-cm centre of an image point, or None with no physical grid.
+
+    The map's ``(u, v)`` times its own ``workspace_*_cm`` — a magnitude from
+    each home switch, ``+`` away from home, which is the frame every calibration
+    knob in AGENTS.md is written in and the one a displaced block's pick
+    coordinate has to be in. :func:`locate` already does this arithmetic
+    internally for its margin test; this exposes it for the CORRECTION action.
+    """
+    grid = getattr(workspace, "mapped_grid", None)
+    if grid is None:
+        return None
+    u, v = workspace.normalized_at(point, image_size)
+    return (float(u) * grid.workspace_width_cm, float(v) * grid.workspace_height_cm)
+
+
 def observe(detections, workspace, image_size) -> Observation:
     """Pixel -> cell for every detection. This is the supervisor's own work.
 
@@ -254,15 +282,36 @@ def observe(detections, workspace, image_size) -> Observation:
     Never treat any of this as a dropout.
     """
     cells = []
+    gap_points: list[tuple[float, float]] = []
+    gap_angles: list[float] = []
+    cell_points: dict[Cell, tuple[float, float]] = {}
+    cell_angles: dict[Cell, float] = {}
     counts = {name: 0 for name in PLACEMENTS}
     for detection in detections:
         cell, placement = locate(workspace, detection.center, image_size)
         counts[placement] += 1
+        angle = float(getattr(detection, "angle", 0.0) or 0.0)
         if cell is not None:
             cells.append(cell)
+            if cell not in cell_points:
+                cm = point_cm(workspace, detection.center, image_size)
+                if cm is not None:
+                    cell_points[cell] = cm
+                    cell_angles[cell] = angle
+        elif placement == "gap":
+            # `locate` only returns "gap" when `mapped_grid` is set, so this
+            # projection cannot come back None here.
+            cm = point_cm(workspace, detection.center, image_size)
+            if cm is not None:
+                gap_points.append(cm)
+                gap_angles.append(angle)
     return Observation(cells=_sorted(set(cells)), in_gap=counts["gap"],
                        off_board=counts["margin"] + counts["outside"],
-                       detections=len(detections))
+                       detections=len(detections),
+                       gap_points_cm=tuple(gap_points),
+                       gap_angles_deg=tuple(gap_angles),
+                       cell_points_cm=tuple(cell_points.items()),
+                       cell_angles_deg=tuple(cell_angles[c] for c in cell_points))
 
 
 def verify_placement(cell: Cell, level: int, occupied, *,

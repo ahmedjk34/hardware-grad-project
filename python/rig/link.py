@@ -1112,6 +1112,70 @@ class Rig:
             self._manual_close_ready.clear()
             self._inflight.release()
 
+    def replace_block(self, pick_col: int, pick_row: int, pick_level: int,
+                      dx_cm: float, dy_cm: float,
+                      place_col: int, place_row: int, place_level: int,
+                      timeout: float = 300.0) -> BuildResult:
+        """`P` — pick a block already on the board and set it where it belongs.
+
+        The operator CORRECTION action's verb (docs/features/correction-action.md).
+        It picks the block at ``[pick_col,pick_row]`` level ``pick_level`` **plus
+        the signed cm nudge** ``(dx_cm, dy_cm)`` — where a MOVED / DISPLACED
+        block actually is — and re-places it on ``[place_col,place_row]`` level
+        ``place_level`` with **no** nudge.
+
+        ``dx_cm`` / ``dy_cm`` are magnitudes from each home switch, ``+`` away
+        from home (AGENTS.md Rule 0); the firmware converts them to steps once,
+        in ``gotoBuildTargetOffset()``.
+
+        Same three-word contract and the same abort discipline as :meth:`build`:
+        ``'aborted'`` means the claw may still be holding a block somewhere
+        unknown — do not retry, do not home, go and look.
+
+        **The firmware verb is unflashed and unverified on hardware.** Until it
+        has been flashed and watched on the rig, this method drives nothing that
+        has been proven to work.
+        """
+        self._require_not_reset()
+        try:
+            pick_col, pick_row, pick_level = int(pick_col), int(pick_row), int(pick_level)
+            place_col, place_row, place_level = (int(place_col), int(place_row),
+                                                int(place_level))
+            dx_cm, dy_cm = float(dx_cm), float(dy_cm)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("replace_block cells/levels must be ints, dx/dy floats") from exc
+
+        for col, row, what in ((pick_col, pick_row, "pick"),
+                               (place_col, place_row, "place")):
+            if self.grid.is_feeder(col, row):
+                raise ValueError(f"{what} cell [0,0] is the feeder, not a correction target")
+            if self.grid.is_blocked(col, row):
+                raise ValueError(f"{what} cell [{col},{row}] is blocked by the feeder belt")
+            if not self.grid.contains_build_target(col, row):
+                raise ValueError(
+                    f"{what} cell [{col},{row}] is outside "
+                    f"0..{self.grid.max_col} x 0..{self.grid.max_row}")
+        if pick_level < 0 or place_level < 0:
+            raise ValueError("replace_block levels cannot be negative")
+        # Mirror the firmware's REPLACE_MAX_NUDGE_CM guard so a bad reading is
+        # refused on the Pi with a clear message, not silently by the Mega.
+        if abs(dx_cm) > 3.0 or abs(dy_cm) > 3.0:
+            raise ValueError(
+                f"pick nudge ({dx_cm:.2f}, {dy_cm:.2f}) cm exceeds the 3 cm safety limit")
+
+        command = (f"P {pick_col} {pick_row} {pick_level} "
+                   f"{dx_cm:.3f} {dy_cm:.3f} "
+                   f"{place_col} {place_row} {place_level}")
+
+        if not self._inflight.acquire(blocking=False):
+            raise RigBusy("a build is already running — the rig is not listening")
+        try:
+            self._drain()
+            self.send(command)
+            return self._wait_build(command, timeout)
+        finally:
+            self._inflight.release()
+
     def close_manual_pick(self) -> None:
         """Send the one permitted byte while an ``M`` build is paused low.
 
@@ -1187,12 +1251,14 @@ def _prose_outcome(line: str) -> tuple[str | None, str]:
     """
     if "BLOCK IS PLACED, BUT PARKING FAILED" in line:
         return ABORTED, "block placed but parking failed"
-    if "BUILD COMPLETE" in line:
+    if "BUILD COMPLETE" in line or "CORRECTION COMPLETE" in line:
         return PLACED, ""
     if "BUILD REJECTED" in line:
         return REJECTED, line.split(" - ", 1)[-1].strip()
     if "BUILD ABORTED" in line:
         return ABORTED, line.split(" - ", 1)[-1].strip()
     if "ERROR - use:  B " in line or "B takes exactly three numbers" in line:
+        return REJECTED, "bad arguments"
+    if "ERROR - use:  P " in line:
         return REJECTED, "bad arguments"
     return None, ""

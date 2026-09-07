@@ -459,6 +459,31 @@ check("firmware boots vertical (D2)",
 check("firmware mode count is 2",
       re.search(r"const uint8_t GRID_MODE_COUNT = 2;", sketch) is not None)
 
+# The P (CORRECTION) verb — docs/features/correction-action.md. UNFLASHED /
+# UNVERIFIED on hardware; this only pins its shape so a reword is a loud
+# failure, exactly like the B checks above.
+check("firmware defines the P (CORRECTION) command char",
+      re.search(r"const char CMD_REPLACE = 'P';", sketch) is not None)
+check("handleLine routes P to handleReplaceCommand",
+      re.search(r"case CMD_REPLACE:\s*\n\s*handleReplaceCommand\(line \+ 1\);",
+                sketch) is not None)
+check("replaceBlock reuses the build helpers, not a second motion path",
+      "bool replaceBlock(" in sketch
+      and "gotoBuildTargetOffset(pcol, prow, rot, dx, dy)" in sketch
+      and "gotoBuildTarget(qcol, qrow, rot)" in sketch)
+check("the P nudge enters gotoBuildTargetOffset's magnitude-space slot",
+      re.search(r"buildPlacementOffsetSteps\(axis\) \+ buildSkewSteps\(axis, col, row\)\s*\n"
+                r"\s*\+ lround\(extraCm \* xyStepsPerCmOf\(axis\)\)", sketch) is not None)
+check("gotoBuildTarget still exists as the zero-nudge B path",
+      re.search(r"bool gotoBuildTarget\(long col, long row, int8_t rotation\)\s*\{.*?"
+                r"return gotoBuildTargetOffset\(col, row, rotation, 0\.0, 0\.0\);",
+                sketch, re.DOTALL) is not None)
+check("P emits no STEP stream — the 14-phase protocol is untouched",
+      "buildStep(" not in sketch.split("bool replaceBlock(")[1].split("void handleReplaceCommand")[0])
+check("P's terminal acks are B's kinds (OK / SAFE via buildReject / HELD via buildAbort)",
+      'buildReject("' in sketch.split("bool replaceBlock(")[1].split("void handleReplaceCommand")[0]
+      and 'buildAbort("' in sketch.split("bool replaceBlock(")[1].split("void handleReplaceCommand")[0])
+
 # Every geometry value is now a per-mode table, and BOTH entries have to match
 # their config/rig.json partner. Checking only the active mode would let the
 # horizontal half of the firmware drift silently until someone sent RR.

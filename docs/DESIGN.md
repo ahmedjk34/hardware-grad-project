@@ -120,8 +120,11 @@ read at body size. It never appears as a fill, an edge or a dot; those stay
 `--danger`, which is where `LOCKED` gets its weight.
 
 **Placement supervision's verdicts map onto these three and add nothing.**
-`MOVED` / `REMOVED` / `NOT DETECTED` are amber and pause the runner; `FOREIGN` /
-`BOARD DISAGREES` are red and stop it. **A verdict never produces `LOCKED`** —
+`MOVED` / `DISPLACED` / `REMOVED` / `NOT DETECTED` are amber and pause the
+runner; `FOREIGN` / `BOARD DISAGREES` are red and stop it. (`DISPLACED` is a
+`MOVED` whose block landed in the build area on no site rather than on another
+cell — same severity, see
+[features/placement-supervision.md](features/placement-supervision.md) D9.) **A verdict never produces `LOCKED`** —
 that is reserved for "the claw's position is unknown", and a verdict is a
 statement about the *board*, not the *machine*. Conflating them would make a
 recoverable situation look unrecoverable. Supervision's own non-verdict states —
@@ -443,6 +446,11 @@ with age in ms, socket chip, session uptime. Every item is a chip: `--r-sm`,
 - No skeleton shimmer on the camera stage that could be mistaken for a frame.
 - No colour used decoratively from the state palette.
 - No "Cancel build" or "Retry" control, ever. The hardware cannot honour it.
+  (The **CORRECTION** control on the supervision banner is not a Retry: it is an
+  operator-initiated, confirm-gated, one-attempt pick-and-re-place for a
+  `MOVED` / `DISPLACED` verdict, and the server drives a real firmware verb for
+  it — see the "re-place it" bullet below and
+  [`correction-action.md`](features/correction-action.md).)
 - No client-side safety logic that isn't also enforced by the server. The
   browser is untrusted by design — the UI mirrors server state, it does not
   decide it.
@@ -450,9 +458,16 @@ with age in ms, socket chip, session uptime. Every item is a chip: `--r-sm`,
 - No client-side verdict about the board. The browser renders the server's
   opinion and never computes one — which is also why four surfaces showing one
   verdict cannot drift apart.
-- No "re-place it" button. Automatic repair is not built, and a control implying
-  the machine will fix it is a lie about what exists — the same rule as the
-  banned Retry.
+- No **automatic** "re-place it". A control implying the machine will fix a
+  verdict *on its own* is a lie about what exists — the same rule as the banned
+  Retry. **The operator-initiated CORRECTION control is the one carve-out**
+  ([`correction-action.md`](features/correction-action.md)): it appears only for
+  `MOVED` / `DISPLACED`, only when the server has judged the pick safe (vertical
+  mode, level 0, axis-aligned, no taller neighbour, destination clear, and for
+  `DISPLACED` the displacement in a measured band); it takes an explicit confirm
+  and runs once per verdict event; and its copy says "the claw *will* pick it
+  up — watch the rig", never "fixed". A dropped grip **locks** the session,
+  because a `HELD` claw is a machine fact, not a board verdict.
 
 ---
 

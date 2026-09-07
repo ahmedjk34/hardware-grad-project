@@ -57,6 +57,29 @@ Two audiences, two lines, neither compromised.
 | `handleBuildCommand()`, after a clean parse | `@n RECV cmd=B col= row= level=` |
 | `buildStep()`, before every phase | `@n STEP step= total= phase= action= text= status=begin` |
 | `buildBlock()`, the instant the jaws open | `@n STEP step=11 … status=done` |
+| `handleReplaceCommand()`, two parse failures | `@n ERR <what was expected>` |
+| `handleReplaceCommand()`, after a clean parse | `@n RECV cmd=P col= row= level=` — the PICK cell |
+| `replaceBlock()`, at the end | `@n OK col= row= level=` (the PLACE cell) — or `HELD` if parking failed; `SAFE` if it refused before moving |
+
+### `P` — the CORRECTION verb, terminal ack only
+
+`P <pcol> <prow> <plevel> <dx_cm> <dy_cm> <qcol> <qrow> <qlevel>`
+(`docs/features/correction-action.md`) picks a block already on the board and
+re-places it where it belongs. It reuses `buildBlock()`'s helpers, `buildReject()`
+and `buildAbort()`, so the kinds and their meanings are exactly `B`'s: `SAFE` =
+nothing moved, `HELD` = the claw may still hold a block.
+
+**It emits no `STEP` stream.** The fourteen `phase=` ids are a protocol mirrored
+in four places (§5a of AGENTS.md, `twin.test.ts`), and an unrecognised
+fifteenth would make the 3D twin draw the gantry flying to a target. `P` is
+operator-initiated, one-shot and watched, so the Pi's `replace_block()` waits on
+the terminal ack alone. Its prose fallback line is `CORRECTION COMPLETE`
+(matched by `_prose_outcome()` alongside `BUILD COMPLETE`).
+
+**The firmware verb is unflashed and unverified on hardware.** There is no local
+Arduino toolchain; `arduino/tools/pcheck/check.sh` syntax-checks the whole
+sketch against a stub Arduino, which proves it parses, not that it builds for
+AVR or behaves.
 
 Verified output, produced by compiling the real sketch against a host stub and
 running it:

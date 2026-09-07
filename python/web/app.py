@@ -54,7 +54,9 @@ from web.mjpeg import encode_jpeg, publish_encoded, router as mjpeg_router
 from web.progress import BuildProgressTracker
 from web.routes_command import router as command_router
 from web.routes_calibration import router as calibration_router
-from web.state import StateModel, SupervisionState, build_state
+from web.state import (
+    StateModel, SupervisionState, assess_frame_correction, build_state,
+)
 
 
 #: The state fields that make a snapshot MEAN something different. Camera
@@ -218,7 +220,8 @@ async def _supervise(app: FastAPI, frame, job: BuildJob, loop,
         app.state.pending_check = None
         app.state.vision_verification = None
         app.state.supervision_acknowledged = False
-        _note_supervision(app, "BUSY", "MODE LATCH — waiting for the new grid", None)
+        _note_supervision(app, "BUSY", "MODE LATCH — waiting for the new grid",
+                          None, None, None)
         return
 
     # 2. The SAME ProcessedFrame, handed back. `process_once` returns the last
@@ -252,8 +255,19 @@ async def _supervise(app: FastAPI, frame, job: BuildJob, loop,
     state, reason, verdict = supervisor.step(
         mode=frame.grid_mode, ledger=app.state.ledger,
         observation=observation, interlocks=interlocks)
-    _note_supervision(app, state, reason, verdict)
+    correction, correction_reason = _assess_correction(
+        app, frame, observation, state, verdict)
+    _note_supervision(app, state, reason, verdict, correction, correction_reason)
     _resolve_pending_check(app, state, verdict)
+
+
+def _assess_correction(app: FastAPI, frame, observation, state: str, verdict):
+    """Thin wrapper: `web.state.assess_frame_correction` is the real logic, so
+    the same code answers `/api/supervision/correct` before it moves the rig."""
+    return assess_frame_correction(
+        ledger=app.state.ledger, workspace=frame.workspace,
+        observation=observation, state=state, verdict=verdict,
+        mode=frame.grid_mode)
 
 
 def _resolve_pending_check(app: FastAPI, state: str, verdict) -> None:
@@ -284,7 +298,8 @@ def _resolve_pending_check(app: FastAPI, state: str, verdict) -> None:
     publish_state(app, force=True)
 
 
-def _note_supervision(app: FastAPI, state: str, reason, verdict) -> None:
+def _note_supervision(app: FastAPI, state: str, reason, verdict,
+                      correction=None, correction_reason=None) -> None:
     """Hold the latest reading, and log it once per CHANGE.
 
     Not once per frame: at the measured 8.6-8.7 Hz a per-frame line would be
@@ -298,7 +313,8 @@ def _note_supervision(app: FastAPI, state: str, reason, verdict) -> None:
     `GET /api/state` debugger are the whole of the bench session's evidence.
     """
     app.state.supervision = SupervisionState(
-        state=state, reason=reason, verdict=verdict, judged_at_ms=now_ms())
+        state=state, reason=reason, verdict=verdict, judged_at_ms=now_ms(),
+        correction=correction, correction_reason=correction_reason)
     signature = (state, None if verdict is None else verdict.verdict,
                  () if verdict is None else verdict.cells)
     if signature == app.state.supervision_signature:
@@ -309,6 +325,9 @@ def _note_supervision(app: FastAPI, state: str, reason, verdict) -> None:
     # acknowledgement does not carry over. There is no persistent "I removed
     # this deliberately, stop asking" mark in v1.
     app.state.supervision_acknowledged = False
+    # The operator CORRECTION action is one attempt per verdict event, and this
+    # is a new event, so a fresh press is allowed again (routes_command.py).
+    app.state.correction_attempted_signature = None
     build_log.placements.verdict(state, reason, verdict)
 
 

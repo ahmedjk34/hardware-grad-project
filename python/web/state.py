@@ -8,6 +8,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
+from rig.placement_check import Correction, assess as _assess
 from rig.supervisor import STATES, Verdict
 from web.geometry import build_geometry
 
@@ -30,6 +31,13 @@ class SupervisionState:
     reason: str | None
     verdict: Verdict | None
     judged_at_ms: int
+    #: The operator CORRECTION action's assessment of the current verdict — a
+    #: `Correction` when the claw MAY return a DISPLACED block, else None. The
+    #: `correction_reason` sentence beside it in `SupervisionModel` always says
+    #: why. Server-authoritative: `/api/supervision/correct` re-derives this and
+    #: never trusts the published flag (DESIGN.md §8).
+    correction: Correction | None = None
+    correction_reason: str | None = None
 
     @property
     def severity(self) -> str:
@@ -77,6 +85,18 @@ class SupervisionModel(BaseModel):
     #: D12. The operator has dealt with this one, whether by putting the block
     #: back or by choosing not to. Cleared the moment the verdict changes.
     acknowledged: bool
+    #: The operator CORRECTION action (`docs/features/correction-action.md`).
+    #: `correctable` is True ONLY for a DISPLACED verdict the claw may safely
+    #: return: vertical mode, level 0, displacement in the 0.5-1.2 cm band, the
+    #: block axis-aligned, no taller neighbour, the cell clear. `False` the rest
+    #: of the time, and `correction_reason` always says why in a sentence the UI
+    #: shows verbatim. The browser NEVER acts on `pick_offset_cm` — the route
+    #: re-derives everything server-side. Motion, so it is server-authoritative.
+    correctable: bool = False
+    correction_reason: str | None = None
+    correction_cell: tuple[int, int] | None = None
+    correction_level: int | None = None
+    pick_offset_cm: tuple[float, float] | None = None
 
 
 def supervision_model(reading, *, acknowledged: bool = False) -> SupervisionModel:
@@ -90,6 +110,7 @@ def supervision_model(reading, *, acknowledged: bool = False) -> SupervisionMode
             judged_at_ms=None, acknowledged=False)
     verdict = reading.verdict
     assert reading.state in STATES, reading.state
+    correction = getattr(reading, "correction", None)
     return SupervisionModel(
         state=reading.state,
         verdict=None if verdict is None else verdict.verdict,
@@ -102,6 +123,90 @@ def supervision_model(reading, *, acknowledged: bool = False) -> SupervisionMode
         reason=reading.reason,
         judged_at_ms=reading.judged_at_ms,
         acknowledged=acknowledged,
+        correctable=correction is not None,
+        correction_reason=getattr(reading, "correction_reason", None),
+        # The cell the block BELONGS on — where the operator will see it land.
+        correction_cell=None if correction is None else tuple(correction.place_cell),
+        correction_level=None if correction is None else correction.place_level,
+        pick_offset_cm=None if correction is None
+        else (round(correction.dx_cm, 3), round(correction.dy_cm, 3)),
+    )
+
+
+def _neighbour_stack_above_0(top_levels: dict, cell) -> bool:
+    """Does an orthogonally adjacent cell carry a block above level 0?
+
+    A same-height (level 0) neighbour is NOT a descent hazard — the claw goes to
+    level 0 beside it exactly as a normal `B` does. Only a neighbour STACK above
+    level 0 fouls the 1.6 cm slot the claw descends (Stage 15 D6).
+    """
+    col, row = cell
+    return any(top_levels.get((col + dx, row + dy), -1) >= 1
+               for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)))
+
+
+def assess_frame_correction(*, ledger, workspace, observation, state: str,
+                            verdict, mode: str):
+    """Can the claw safely return this MOVED / DISPLACED block? Read-only.
+
+    The single source of truth for the operator CORRECTION action: `web/app.py`
+    calls it once per quiet frame to publish `correctable`, and
+    `/api/supervision/correct` calls it AGAIN on the current frame before it
+    moves anything — the published flag is never trusted, because a correction
+    is motion (DESIGN.md §8). Nothing here touches the rig.
+
+    Returns `(Correction | None, reason | None)`. `reason` is None only when the
+    verdict is not one that could ever be corrected; otherwise it is a sentence
+    saying either "the claw can move it back" or exactly why not.
+    """
+    if state != "VERDICT" or verdict is None:
+        return None, None
+    name = verdict.verdict
+    if name not in ("MOVED", "DISPLACED"):
+        return None, None
+
+    grid = getattr(workspace, "mapped_grid", None)
+    top_levels = ledger.expected_top_level(mode)
+    occupied = set(observation.cells)
+    cell_points = dict(observation.cell_points_cm)
+    cell_angles = dict(zip((c for c, _ in observation.cell_points_cm),
+                           observation.cell_angles_deg))
+
+    if name == "DISPLACED":
+        if len(verdict.cells) != 1 or len(observation.gap_points_cm) != 1:
+            return None, "the block's position in the frame could not be pinned down"
+        plan_cell = (int(verdict.cells[0][0]), int(verdict.cells[0][1]))
+        where_cell = plan_cell
+        observed_cm = observation.gap_points_cm[0]
+        angle_deg = (observation.gap_angles_deg[0]
+                     if observation.gap_angles_deg else 0.0)
+    else:  # MOVED — cells are (from, to)
+        if len(verdict.cells) != 2:
+            return None, "the block's position in the frame could not be pinned down"
+        plan_cell = (int(verdict.cells[0][0]), int(verdict.cells[0][1]))
+        where_cell = (int(verdict.cells[1][0]), int(verdict.cells[1][1]))
+        observed_cm = cell_points.get(where_cell)
+        angle_deg = cell_angles.get(where_cell, 0.0)
+        if observed_cm is None:
+            return None, "the block's position in the frame could not be pinned down"
+
+    plan_level = top_levels.get(plan_cell)
+    map_pick_centre_cm = None if grid is None else grid.cell_center_cm(*where_cell)
+
+    if where_cell == plan_cell:
+        pick_is_top = (plan_level is not None
+                       and ledger.is_top_of_column(mode, *plan_cell, plan_level))
+    else:
+        pick_is_top = top_levels.get(where_cell, -1) <= 0
+
+    return _assess(
+        verdict=name, mode=mode, plan_cell=plan_cell, plan_level=plan_level,
+        where_cell=where_cell, observed_cm=observed_cm,
+        map_pick_centre_cm=map_pick_centre_cm, angle_deg=float(angle_deg),
+        plan_cell_clear=plan_cell not in occupied,
+        taller_neighbour_pick=_neighbour_stack_above_0(top_levels, where_cell),
+        taller_neighbour_place=_neighbour_stack_above_0(top_levels, plan_cell),
+        pick_is_top_of_column=pick_is_top,
     )
 
 
@@ -180,6 +285,10 @@ class StateModel(BaseModel):
     vision_verification: str | None
     #: M3b. The board's verdict, published whole. See `SupervisionModel`.
     supervision: SupervisionModel
+    #: The outcome of the last operator CORRECTION action this session, or None.
+    #: `{result: placed|rejected|aborted, reason, cell: [c,r], verdict}`. The
+    #: runner shows it and resumes only after the board re-verifies (D12).
+    last_correction: dict[str, Any] | None
     views: dict[str, bool]
     geometry: dict[str, Any] | None
 
@@ -244,6 +353,7 @@ def build_state(app) -> StateModel:
         supervision=supervision_model(
             getattr(app.state, "supervision", None),
             acknowledged=bool(getattr(app.state, "supervision_acknowledged", False))),
+        last_correction=getattr(app.state, "last_correction_result", None),
         views=dict(app.state.views),
         geometry=build_geometry(frame, controller.selected) if frame is not None else None,
     )

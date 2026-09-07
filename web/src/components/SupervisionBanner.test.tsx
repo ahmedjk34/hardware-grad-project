@@ -108,6 +108,59 @@ describe("the supervision banner", () => {
       <SupervisionBanner state={state({ acknowledged: true })} onAcknowledge={() => {}} />);
     expect(container.querySelector(".banner")).toBeNull();
   });
+
+  // --- the CORRECTION control (docs/features/correction-action.md) --------- #
+
+  const correctable = (over: Partial<Supervision> = {}) => state({
+    verdict: "DISPLACED", severity: "amber", cells: [[2, 1]],
+    correctable: true, correction_cell: [2, 1], correction_level: 0,
+    correction_reason: "the block is 0.90 cm off [2, 1]; the claw can pick it up",
+    ...over,
+  });
+
+  it("shows RETURN BLOCK TO CELL only when the server says correctable", () => {
+    const yes = render(<SupervisionBanner state={correctable()} onAcknowledge={() => {}} />);
+    expect(yes.getByRole("button", { name: /Return the block to column 2 row 1/ })).toBeTruthy();
+    yes.unmount();
+    // Same verdict, not correctable -> no button, the reason instead.
+    const no = render(<SupervisionBanner
+      state={correctable({ correctable: false,
+        correction_reason: "the block is 1.90 cm off its cell — beyond the 1.2 cm limit" })}
+      onAcknowledge={() => {}} />);
+    expect(no.queryByRole("button", { name: /Return the block/ })).toBeNull();
+    expect(no.container.textContent).toContain("beyond the 1.2 cm limit");
+  });
+
+  it("never fires the correction on a single click — it confirms first", () => {
+    const onCorrect = vi.fn();
+    render(<SupervisionBanner state={correctable()} onAcknowledge={() => {}} onCorrect={onCorrect} />);
+    fireEvent.click(screen.getByRole("button", { name: /Return the block/ }));
+    expect(onCorrect).not.toHaveBeenCalled();
+    // A confirm step appears, naming the motion and telling the operator to watch.
+    expect(screen.getByText(/Watch the rig/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "RUN" }));
+    expect(onCorrect).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets the operator back out of the confirm without moving anything", () => {
+    const onCorrect = vi.fn();
+    render(<SupervisionBanner state={correctable()} onAcknowledge={() => {}} onCorrect={onCorrect} />);
+    fireEvent.click(screen.getByRole("button", { name: /Return the block/ }));
+    fireEvent.click(screen.getByRole("button", { name: "CANCEL" }));
+    expect(onCorrect).not.toHaveBeenCalled();
+    expect(screen.queryByText(/Watch the rig/)).toBeNull();
+  });
+
+  it("offers no correction control for a REMOVED or FOREIGN verdict", () => {
+    for (const v of [
+      state({ verdict: "REMOVED", severity: "amber", correctable: true }),
+      state({ verdict: "FOREIGN", severity: "red", cells: [[4, 2]], correctable: true }),
+    ]) {
+      const r = render(<SupervisionBanner state={v} onAcknowledge={() => {}} />);
+      expect(r.queryByRole("button", { name: /Return the block/ })).toBeNull();
+      r.unmount();
+    }
+  });
 });
 
 describe("the camera overlay — the surface the operator is looking at", () => {

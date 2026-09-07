@@ -394,10 +394,19 @@ identity — separate work).
 Re-verified against all four Gate 0 traces: verdict tallies are unchanged by the
 removal.
 
-### D11 — Notify, never act (for now)
+### D11 — Notify, never act *automatically*
 
-On any verdict the machine **stops or pauses and tells the operator**. It never
-moves.
+On any verdict the machine **stops or pauses and tells the operator**. A verdict
+never moves the rig **on its own**.
+
+**Carve-out (2026, [CORRECTION action](correction-action.md)):** the operator
+may press `RETURN BLOCK TO CELL` on a `MOVED` / `DISPLACED` verdict. That is a
+deliberate, confirmed, one-attempt override — the operator acts, not the
+verdict — and it is gated server-side (vertical, level 0, axis-aligned, no
+taller neighbour, destination clear, band-checked). It drives the firmware `P`
+verb via `POST /api/supervision/correct`. A dropped grip **locks** the session
+(`HELD` is a machine fact); every other outcome re-verifies per D12 before the
+runner resumes. Everything below still holds for the notify-only default.
 
 - `REMOVED` / `MOVED` / `DISPLACED` / `NOT DETECTED` → **pause** the runner, name the cell(s).
 - `FOREIGN` / `BOARD DISAGREES` → **stop** the program, show both sets.
@@ -789,8 +798,13 @@ Inheriting DESIGN.md §8, plus this feature's own:
 - **No client-side verdict.** The browser renders the server's opinion and never
   computes one — DESIGN.md §8's "no client-side safety logic" rule, and the
   reason four surfaces cannot disagree.
-- **No "re-place it" button** in v1. Automatic repair is M4 and needs D9's
-  guards; a button implying the machine will fix it is a lie about what is built.
+- **No _automatic_ "re-place it".** Automatic repair is M4 and needs D9's
+  guards; a button implying the machine will fix a verdict on its own is a lie
+  about what is built. **Superseded for the operator-initiated case:** the
+  [CORRECTION action](correction-action.md) adds a confirm-gated, one-shot
+  `RETURN BLOCK TO CELL` control for `MOVED` / `DISPLACED`, shown only when the
+  server has judged the pick safe. It is a deliberate operator override, not the
+  machine acting on a verdict — see D11.
 - **No hiding the unjudged cells** to make the board look fully checked (§6.4).
 
 ### 6.11 UI acceptance tests

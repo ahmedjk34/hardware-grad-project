@@ -203,6 +203,8 @@ class MockBoard:
             self._handle_shift(command)
         elif upper.startswith("B "):
             self._handle_build(command)
+        elif upper.startswith("P "):
+            self._handle_replace(command)
         elif upper.startswith("M "):
             self._handle_manual_build(command)
         elif upper == "C" and self._manual_build is not None:
@@ -342,6 +344,61 @@ class MockBoard:
             self._emit(tuple(lines))
 
         threading.Thread(target=finish, name="mock-board-build", daemon=True).start()
+
+    def _handle_replace(self, command: str) -> None:
+        """`P` — the CORRECTION verb. Terminal ack only, no STEP stream.
+
+        Mirrors the sketch's `replaceBlock()`: `RECV cmd=P` naming the PICK
+        cell, then one terminal `OK` / `SAFE` / `HELD` naming the PLACE cell.
+        `fail_next_build()` drives the SAFE / HELD / ERR paths so the whole
+        `Rig.replace_block()` contract is testable off-rig.
+        """
+        parts = command.split()
+        with self._lock:
+            self._seq += 1
+            seq = self._seq
+        try:
+            _, pcol, prow, plevel, dx, dy, qcol, qrow, qlevel = parts
+            int(pcol), int(prow), int(plevel), int(qcol), int(qrow), int(qlevel)
+            float(dx), float(dy)
+        except ValueError:
+            self._emit(("  ERROR - use:  P <pcol> <prow> <plevel> <dx_cm> <dy_cm> "
+                        "<qcol> <qrow> <qlevel>", f"@{seq} ERR bad arguments"))
+            return
+
+        with self._lock:
+            failure = self._next_build_failure
+            self._next_build_failure = None
+            self._fail_at_step = 0
+            drop_ack = self._drop_next_build_ack
+            self._drop_next_build_ack = False
+
+        self._emit((f"@{seq} RECV cmd=P col={pcol} row={prow} level={plevel}",))
+
+        def finish():
+            if self._build_seconds:
+                time.sleep(self._build_seconds)
+            if failure is not None and failure[0] not in {"ABORTED", "HELD"}:
+                ack = "ERR" if failure[0] == "ERR" else "SAFE"
+                lines = [f"  BUILD REJECTED - {failure[1]}", "  Nothing moved."]
+                if not drop_ack:
+                    lines.append(f"@{seq} {ack} {failure[1]}")
+                self._emit(tuple(lines))
+                return
+            if failure is not None:  # ABORTED / HELD — part way through
+                lines = [f"*** BUILD ABORTED - {failure[1]}",
+                         "*** The claw may still be holding a block. Check the rig."]
+                if not drop_ack:
+                    lines.append(f"@{seq} HELD {failure[1]}")
+                self._emit(tuple(lines))
+                return
+            lines = [f"CORRECTION COMPLETE - block moved to [{qcol},{qrow}] level {qlevel}",
+                     "PARKED - ready for the next command."]
+            if not drop_ack:
+                lines.append(f"@{seq} OK col={qcol} row={qrow} level={qlevel}")
+            self._emit(tuple(lines))
+
+        threading.Thread(target=finish, name="mock-board-replace", daemon=True).start()
 
     def _handle_manual_build(self, command: str) -> None:
         """`M` matches B through descent, then waits for one explicit C."""

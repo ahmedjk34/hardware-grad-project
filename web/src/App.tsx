@@ -110,6 +110,13 @@ export function App() {
       <SupervisionBanner
         state={state}
         onAcknowledge={() => { void fetch("/api/supervision/ack", { method: "POST" }); }}
+        onCorrect={() => {
+          void fetch("/api/supervision/correct", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ confirm: true }),
+          });
+        }}
       />
 
       <div className="workspace">

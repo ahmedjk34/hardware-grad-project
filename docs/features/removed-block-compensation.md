@@ -22,9 +22,10 @@ infuriating*, and there is still no way to tell the two apart.
 The detection half of this feature is
 [feature-ideas.md §1.4 and Appendix A](../feature-ideas.md#appendix-a--placement-supervision-full-design):
 a `PlacementLedger`, a `Supervisor`, the quiet-window interlocks, the hysteresis,
-the set-difference classifier and the five verdicts (`VERIFIED`, `MOVED`,
-`REMOVED`, `FOREIGN BLOCK`, `BOARD DISAGREES`), with milestones M1–M5 and a full
-list of known limits.
+the set-difference classifier and its verdicts (`VERIFIED`, `NOT_DETECTED`,
+`MOVED`, `DISPLACED`, `REMOVED`, `FOREIGN`, `BOARD DISAGREES` — `MOVED` and
+`DISPLACED` split one event by where the block landed, progress.md P9), with
+milestones M1–M5 and a full list of known limits.
 
 **Read [placement-supervision.md](placement-supervision.md) and its
 [build record](placement-supervision-progress.md) first — they are the built

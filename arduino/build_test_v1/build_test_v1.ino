@@ -1108,12 +1108,12 @@ long GRID_ROWS[GRID_MODE_COUNT] = {5, 9};
 const uint8_t GRID_BLOCKED_MAX = 8;
 long GRID_BLOCKED_COUNT[GRID_MODE_COUNT] = {3, 0};
 long GRID_BLOCKED_COL[GRID_MODE_COUNT][GRID_BLOCKED_MAX] = {
-  { 0,  1,  1, -1, -1, -1, -1, -1},   // vertical: [0,1] [1,0] [1,1]
-  {-1, -1, -1, -1, -1, -1, -1, -1}    // horizontal
+    {0, 1, 1, -1, -1, -1, -1, -1},   // vertical: [0,1] [1,0] [1,1]
+    {-1, -1, -1, -1, -1, -1, -1, -1} // horizontal
 };
 long GRID_BLOCKED_ROW[GRID_MODE_COUNT][GRID_BLOCKED_MAX] = {
-  { 1,  0,  1, -1, -1, -1, -1, -1},   // vertical: [0,1] [1,0] [1,1]
-  {-1, -1, -1, -1, -1, -1, -1, -1}    // horizontal
+    {1, 0, 1, -1, -1, -1, -1, -1},   // vertical: [0,1] [1,0] [1,1]
+    {-1, -1, -1, -1, -1, -1, -1, -1} // horizontal
 };
 
 // Read these rather than indexing the tables. Everything downstream of here
@@ -1688,7 +1688,7 @@ const char CMD_MOVE_Z_POS = 'U'; // Z+  (top limit switch, pin 29)
 
 const char CMD_SERVO_OPEN = 'O';
 const char CMD_SERVO_CLOSE = 'C';
-const char CMD_SERVO_ANGLE = 'V'; // V <angle> (0..180 degrees)
+const char CMD_SERVO_ANGLE = 'V';       // V <angle> (0..180 degrees)
 const char CMD_AUX_STEPPER_ANGLE = 'A'; // A <degrees> (-360..360, relative)
 
 // R and RR are the GRID MODE LATCH, not a claw jog. R selects the vertical
@@ -1696,11 +1696,20 @@ const char CMD_AUX_STEPPER_ANGLE = 'A'; // A <degrees> (-360..360, relative)
 // handleLine because it is two characters.
 const char CMD_GRID_MODE_VERTICAL = 'R';
 
-const char CMD_BUILD = 'B';   // B <col> <row> <level>
+const char CMD_BUILD = 'B'; // B <col> <row> <level>
 // M follows the same validated 14-phase route as B, but pauses after the
 // open claw reaches the feeder. A later C is the operator's explicit consent
 // to close the jaws and continue. B itself must stay automatic for the Uno.
 const char CMD_MANUAL_BUILD = 'M'; // M <col> <row> <level>
+// P <pcol> <prow> <plevel> <dx_cm> <dy_cm> <qcol> <qrow> <qlevel>
+// Pick a block that is already on the board (at cell [pcol,prow], level plevel,
+// plus the signed cm nudge dx/dy applied exactly like BUILD_PLACEMENT_OFFSET_*)
+// and re-place it on cell [qcol,qrow] at qlevel with NO nudge. The operator
+// CORRECTION action's verb - one-shot, watched, terminal ack only (no STEP
+// stream, so the 14-phase protocol in docs/ack-protocol.md is untouched).
+// dx/dy are MAGNITUDES from each home switch, + away from home (Rule 0), and
+// are converted to steps once, inside gotoBuildTargetOffset().
+const char CMD_REPLACE = 'P';
 const char CMD_Z_TABLE = 'Z'; // print the Z / build calibration
 
 // ============================================================
@@ -1715,7 +1724,9 @@ const uint8_t BLOCK_SOFTWARE = 2;
 // SERIAL LINE BUFFER
 // ============================================================
 
-const uint8_t LINE_BUF_SIZE = 32;
+// 48, not 32: the P (CORRECTION) verb carries eight fields - two cells, two
+// levels and two signed cm nudges - which a fractional dx/dy can push past 32.
+const uint8_t LINE_BUF_SIZE = 48;
 char lineBuf[LINE_BUF_SIZE];
 uint8_t lineLen = 0;
 
@@ -1981,9 +1992,7 @@ void handleLine(char *line)
     break;
 
   case CMD_AUX_STEPPER_ANGLE:
-    if (parseSignedDegree(line + 1, &a)
-        && a >= -AUX_STEPPER_MAX_MANUAL_DEGREES
-        && a <= AUX_STEPPER_MAX_MANUAL_DEGREES)
+    if (parseSignedDegree(line + 1, &a) && a >= -AUX_STEPPER_MAX_MANUAL_DEGREES && a <= AUX_STEPPER_MAX_MANUAL_DEGREES)
     {
       rotateAuxStepperDegrees(a);
     }
@@ -2002,6 +2011,10 @@ void handleLine(char *line)
 
   case CMD_MANUAL_BUILD:
     handleBuildCommand(line + 1, true);
+    break;
+
+  case CMD_REPLACE:
+    handleReplaceCommand(line + 1);
     break;
 
   case 'R':
@@ -3129,8 +3142,7 @@ float gridAllocationStartCmOf(uint8_t axis, long count)
 // `count` is the HIGHEST INDEX the grid uses, so 0 is a legal one-slot axis.
 bool gridGeometryFitsRaw(uint8_t axis, long count)
 {
-  if (count < 0 || xyStepsPerCmOf(axis) <= 0.0
-      || gridBlockCmOf(axis) <= 0.0 || gridGapCmOf(axis) < 0.0)
+  if (count < 0 || xyStepsPerCmOf(axis) <= 0.0 || gridBlockCmOf(axis) <= 0.0 || gridGapCmOf(axis) < 0.0)
   {
     return false;
   }
@@ -3184,9 +3196,7 @@ long gridCountMaxOf(uint8_t axis)
   {
     return -1;
   }
-  long plausible = (long)ceil((xyTravelCmOf(axis)
-                              + 2.0 * fabs(gridTrimCmOf(axis))
-                              + 2.0 * pitch) / pitch);
+  long plausible = (long)ceil((xyTravelCmOf(axis) + 2.0 * fabs(gridTrimCmOf(axis)) + 2.0 * pitch) / pitch);
   long maximum = -1;
   for (long index = 0; index <= plausible; index++)
   {
@@ -3334,8 +3344,7 @@ bool gridReady()
     Serial.println(F("  and non-zero. Check SECTION 6B."));
     return false;
   }
-  if (!gridGeometryFits(AXIS_X, gridColsNow())
-      || !gridGeometryFits(AXIS_Y, gridRowsNow()))
+  if (!gridGeometryFits(AXIS_X, gridColsNow()) || !gridGeometryFits(AXIS_Y, gridRowsNow()))
   {
     Serial.println(F("  ERROR - grid placement centres/trim do not fit the X/Y holder travel."));
     Serial.println(F("  Check SECTION 6B/6C and send 5 for the calculated geometry."));
@@ -3539,8 +3548,7 @@ bool setGridMode(uint8_t mode)
   // not physically fit (judged with that mode's shift removed), say so and stay
   // where we were rather than latching into an unusable grid. A shift that only
   // clips the far column/row is fine - gridColsNow()/gridRowsNow() absorb it.
-  if (!physicalGridGeometryFits(AXIS_X, GRID_COLS[gridMode])
-      || !physicalGridGeometryFits(AXIS_Y, GRID_ROWS[gridMode]))
+  if (!physicalGridGeometryFits(AXIS_X, GRID_COLS[gridMode]) || !physicalGridGeometryFits(AXIS_Y, GRID_ROWS[gridMode]))
   {
     gridMode = previous;
     Serial.print(F("  ERROR - the "));
@@ -3639,6 +3647,95 @@ bool parseSignedCm(const char *s, float *out)
 
   *out = negative ? -value : value;
   return true;
+}
+
+// One signed decimal starting at s[*i], separators skipped first; advances *i
+// past it. Unlike parseSignedCm() this does NOT require the string to end - it
+// is one field of the P grammar. Returns false on no digits.
+bool scanSignedCmField(const char *s, uint8_t *i, float *out)
+{
+  while (s[*i] == ' ' || s[*i] == '\t' || s[*i] == ',' || s[*i] == ':')
+    (*i)++;
+
+  bool negative = false;
+  if (s[*i] == '+' || s[*i] == '-')
+  {
+    negative = (s[*i] == '-');
+    (*i)++;
+  }
+  bool sawDigit = false;
+  float value = 0.0;
+  while (s[*i] >= '0' && s[*i] <= '9')
+  {
+    value = value * 10.0 + (float)(s[*i] - '0');
+    sawDigit = true;
+    (*i)++;
+  }
+  if (s[*i] == '.')
+  {
+    (*i)++;
+    float place = 0.1;
+    while (s[*i] >= '0' && s[*i] <= '9')
+    {
+      value += (float)(s[*i] - '0') * place;
+      place *= 0.1;
+      sawDigit = true;
+      (*i)++;
+    }
+  }
+  if (!sawDigit)
+    return false;
+  *out = negative ? -value : value;
+  return true;
+}
+
+// One unsigned integer starting at s[*i], separators skipped first; advances
+// *i past it. Returns false on no digits. '-' is NOT consumed here - the P
+// grammar's only signed fields are dx/dy, handled by scanSignedCmField().
+bool scanUnsignedField(const char *s, uint8_t *i, long *out)
+{
+  while (s[*i] == ' ' || s[*i] == '\t' || s[*i] == ',' || s[*i] == ':')
+    (*i)++;
+  bool sawDigit = false;
+  long value = 0;
+  while (s[*i] >= '0' && s[*i] <= '9')
+  {
+    value = value * 10 + (s[*i] - '0');
+    sawDigit = true;
+    (*i)++;
+  }
+  if (!sawDigit)
+    return false;
+  *out = value;
+  return true;
+}
+
+// P <pcol> <prow> <plevel> <dx_cm> <dy_cm> <qcol> <qrow> <qlevel>
+// Eight fields: three unsigned, two signed decimals, three unsigned. Every
+// trailing character except separators is an error, exactly like B's parser.
+bool parseReplaceArgs(const char *s, long *pcol, long *prow, long *plevel,
+                      float *dx, float *dy, long *qcol, long *qrow, long *qlevel)
+{
+  uint8_t i = 0;
+  if (!scanUnsignedField(s, &i, pcol))
+    return false;
+  if (!scanUnsignedField(s, &i, prow))
+    return false;
+  if (!scanUnsignedField(s, &i, plevel))
+    return false;
+  if (!scanSignedCmField(s, &i, dx))
+    return false;
+  if (!scanSignedCmField(s, &i, dy))
+    return false;
+  if (!scanUnsignedField(s, &i, qcol))
+    return false;
+  if (!scanUnsignedField(s, &i, qrow))
+    return false;
+  if (!scanUnsignedField(s, &i, qlevel))
+    return false;
+  while (s[i] == ' ' || s[i] == '\t' || s[i] == ',' || s[i] == ':')
+    i++;
+  return s[i] == '\0';
 }
 
 // Set the ACTIVE mode's shift on `axis` to `cm` absolute (cm == 0 clears it).
@@ -3931,11 +4028,11 @@ bool gotoCell(long col, long row)
 //                                         { vertical, horizontal }
 // SIGN: + = target moves AWAY from that axis' home switch as the index rises,
 // - = toward it. These are MAGNITUDES from home - see gotoBuildTarget().
-float SKEW_X_PER_COL_CM[GRID_MODE_COUNT]    = {0.0, 0.0};
-float SKEW_X_PER_ROW_CM[GRID_MODE_COUNT]    = {0.0, 0.0};
+float SKEW_X_PER_COL_CM[GRID_MODE_COUNT] = {0.0, 0.0};
+float SKEW_X_PER_ROW_CM[GRID_MODE_COUNT] = {0.0, 0.0};
 float SKEW_X_PER_COLROW_CM[GRID_MODE_COUNT] = {0.0, 0.0};
-float SKEW_Y_PER_COL_CM[GRID_MODE_COUNT]    = {0.115, 0.13};
-float SKEW_Y_PER_ROW_CM[GRID_MODE_COUNT]    = {0.0, 0.0};
+float SKEW_Y_PER_COL_CM[GRID_MODE_COUNT] = {0.115, 0.13};
+float SKEW_Y_PER_ROW_CM[GRID_MODE_COUNT] = {0.0, 0.0};
 float SKEW_Y_PER_COLROW_CM[GRID_MODE_COUNT] = {0.0, 0.0};
 
 // A fixed build-placement correction, independent of cell index. This is
@@ -3986,7 +4083,7 @@ float BUILD_PLACEMENT_OFFSET_Y_CM[GRID_MODE_COUNT] = {0.0, 0.0};
 long buildPlacementOffsetSteps(uint8_t axis)
 {
   float cm = (axis == AXIS_X) ? BUILD_PLACEMENT_OFFSET_X_CM[gridMode]
-                               : BUILD_PLACEMENT_OFFSET_Y_CM[gridMode];
+                              : BUILD_PLACEMENT_OFFSET_Y_CM[gridMode];
   return lround(cm * xyStepsPerCmOf(axis));
 }
 
@@ -4006,8 +4103,7 @@ long buildSkewSteps(uint8_t axis, long col, long row)
                                   : SKEW_Y_PER_ROW_CM[gridMode];
   float perColRow = (axis == AXIS_X) ? SKEW_X_PER_COLROW_CM[gridMode]
                                      : SKEW_Y_PER_COLROW_CM[gridMode];
-  float cm = perCol * (float)col + perRow * (float)row
-           + perColRow * (float)col * (float)row;
+  float cm = perCol * (float)col + perRow * (float)row + perColRow * (float)col * (float)row;
   return lround(cm * xyStepsPerCmOf(axis));
 }
 
@@ -4015,6 +4111,20 @@ long buildSkewSteps(uint8_t axis, long col, long row)
 // lock checks around this call. Both axes always move; [0,0] never reaches
 // here, because buildBlock() refuses the feeder before anything picks up.
 bool gotoBuildTarget(long col, long row, int8_t rotation)
+{
+  // The B path: no per-command nudge, only the compiled skew / placement tables.
+  return gotoBuildTargetOffset(col, row, rotation, 0.0, 0.0);
+}
+
+// As gotoBuildTarget(), plus a per-command (dx,dy) nudge in cm MAGNITUDES from
+// each home switch (+ away from home, Rule 0). Used by the P (CORRECTION) verb
+// to move the holder to where a displaced block actually is: the nudge enters
+// the SAME magnitude-space `correction` slot as buildPlacementOffsetSteps() and
+// buildSkewSteps(), so it is converted to a signed axis position exactly once,
+// with the clamp that keeps a bad value on the machine. extraXcm/extraYcm are 0
+// for the place leg, so a P re-place lands on the raw cell like any B.
+bool gotoBuildTargetOffset(long col, long row, int8_t rotation,
+                           float extraXcm, float extraYcm)
 {
   if (!gridReady() || col < 0 || col > gridColsNow() || row < 0 || row > gridRowsNow())
     return false;
@@ -4059,7 +4169,11 @@ bool gotoBuildTarget(long col, long row, int8_t rotation)
   long *targets[AXIS_COUNT] = {&targetX, &targetY};
   for (uint8_t axis = AXIS_X; axis <= AXIS_Y; axis++)
   {
-    long correction = buildPlacementOffsetSteps(axis) + buildSkewSteps(axis, col, row);
+    // The per-command P nudge is a magnitude in "cm away from home", the same
+    // convention buildPlacementOffsetSteps() / buildSkewSteps() use, so it adds
+    // straight into this term with no direction factor of its own.
+    float extraCm = (axis == AXIS_X) ? extraXcm : extraYcm;
+    long correction = buildPlacementOffsetSteps(axis) + buildSkewSteps(axis, col, row) + lround(extraCm * xyStepsPerCmOf(axis));
     if (correction == 0)
       continue;
 
@@ -4085,8 +4199,7 @@ bool gotoBuildTarget(long col, long row, int8_t rotation)
     // Reported in the convention BUILD_PLACEMENT_OFFSET_* / SKEW_* are written
     // in: + is AWAY from the home switch, never the raw signed step delta,
     // which reads inverted on X.
-    Serial.print((float)(magnitude - axisStepsFromHome(axis, original))
-                 / xyStepsPerCmOf(axis), 3);
+    Serial.print((float)(magnitude - axisStepsFromHome(axis, original)) / xyStepsPerCmOf(axis), 3);
     Serial.println(F(" cm from home)"));
 
     // The clamp biting means the correction pushed the target off the machine,
@@ -5100,6 +5213,232 @@ bool buildBlock(long col, long row, long level, int8_t wantRot, bool manualPicku
   return true;
 }
 
+// ------------------------------------------------------------
+// P  -  the operator CORRECTION verb: pick a block already on
+//       the board and set it down where it belongs.
+// ------------------------------------------------------------
+//
+// UNFLASHED / UNVERIFIED ON HARDWARE. Written for
+// docs/features/correction-action.md, syntax-checked with a stub-Arduino g++
+// harness only. Anything touching motion / limits / Z must be flashed and
+// watched on the physical rig before it is trusted (AGENTS.md).
+//
+// It reuses buildBlock()'s helpers wholesale - the only new geometry is the
+// (dx,dy) nudge into gotoBuildTargetOffset(), which is the established
+// "move the machine without moving the grid" pattern (the same slot
+// buildSkewSteps() uses). No STEP stream: the Pi's replace_block() waits on the
+// terminal ack alone, so the fourteen-phase protocol is untouched.
+//
+// Failure discipline, exactly like buildBlock():
+//   * before any motion  -> buildReject(): SAFE, nothing moved, retryable
+//   * part way through    -> buildAbort(): HELD, the claw may hold a block,
+//                            NEEDS A HUMAN - no retry
+//   * placed but unparked -> HELD, same as buildBlock()
+
+const float REPLACE_MAX_NUDGE_CM = 3.0; // a runaway dx/dy is a bad reading
+
+bool replaceBlock(long pcol, long prow, long plevel,
+                  float dx, float dy,
+                  long qcol, long qrow, long qlevel)
+{
+  Serial.println();
+  Serial.println(F("======================================"));
+  Serial.print(F("CORRECTION  pick ["));
+  Serial.print(pcol);
+  Serial.print(F(","));
+  Serial.print(prow);
+  Serial.print(F("] L"));
+  Serial.print(plevel);
+  Serial.print(F("  nudge ("));
+  Serial.print(dx, 2);
+  Serial.print(F(", "));
+  Serial.print(dy, 2);
+  Serial.print(F(") cm  ->  place ["));
+  Serial.print(qcol);
+  Serial.print(F(","));
+  Serial.print(qrow);
+  Serial.print(F("] L"));
+  Serial.println(qlevel);
+  Serial.println(F("======================================"));
+
+  // ---- validation, all of it, before anything moves ----
+
+  if (!gridReady())
+    return buildReject("grid needs both X/Y software limits");
+
+  if (pcol < 0 || pcol > gridColsNow() || prow < 0 || prow > gridRowsNow() ||
+      qcol < 0 || qcol > gridColsNow() || qrow < 0 || qrow > gridRowsNow())
+    return buildReject("cell out of range");
+
+  if (cellIsFeeder(pcol, prow) || cellIsFeeder(qcol, qrow))
+    return buildReject("the feeder cell is not a correction target");
+
+  if (cellIsBeltBlocked(pcol, prow) || cellIsBeltBlocked(qcol, qrow))
+    return buildReject("cell blocked by feeder belt");
+
+  long maxLevel = maxBuildLevel();
+  if (plevel < 0 || plevel > maxLevel || qlevel < 0 || qlevel > maxLevel)
+    return buildReject("level out of range");
+
+  if (dx > REPLACE_MAX_NUDGE_CM || dx < -REPLACE_MAX_NUDGE_CM ||
+      dy > REPLACE_MAX_NUDGE_CM || dy < -REPLACE_MAX_NUDGE_CM)
+    return buildReject("pick nudge exceeds the safety limit");
+
+  if (!limitEnabledAt(AXIS_Z, homeEndOf(AXIS_Z)) ||
+      !limitEnabledAt(AXIS_Z, travelEndOf(AXIS_Z)))
+    return buildReject("a correction needs both Z limit switches");
+
+  if (Z_TRAVEL_STEPS <= 0 || Z_TRAVEL_CM <= 0.0 || BLOCK_HEIGHT_CM <= 0.0)
+    return buildReject("Z calibration is not usable");
+
+  // Reject an impossible compensated holder target before the claw grips.
+  int8_t rot = buildRotationForMode();
+  long tmp;
+  if (!cellTargetPosition(AXIS_X, pcol, rot, &tmp) ||
+      !cellTargetPosition(AXIS_Y, prow, rot, &tmp) ||
+      !cellTargetPosition(AXIS_X, qcol, rot, &tmp) ||
+      !cellTargetPosition(AXIS_Y, qrow, rot, &tmp))
+    return buildReject("tool offset puts a target outside the X/Y travel");
+
+  // ---- past validation: the machine moves from here ----
+
+  if (!zGoTop())
+  {
+    buildAbort("could not raise Z clear before the pick");
+    return false;
+  }
+  buildPause();
+
+  rotateClawTo(rot);
+  buildPause();
+
+  openServoAndWait();
+  buildPause();
+
+  // Over the block where it ACTUALLY is: cell (pcol,prow) plus the (dx,dy)
+  // nudge, applied in the same magnitude-space slot as the skew tables.
+  if (!gotoBuildTargetOffset(pcol, prow, rot, dx, dy))
+  {
+    buildAbort("could not reach the displaced block's position");
+    return false;
+  }
+  buildPause();
+
+  if (!zGoLevel(plevel))
+  {
+    buildAbort("Z did not reach the pick level");
+    return false;
+  }
+  buildPause();
+
+  closeServoAndWait();
+
+  buildPause();
+
+  if (!zGoTop())
+  {
+    buildAbort("could not lift the block to carry height");
+    return false;
+  }
+  buildPause();
+
+  // To where it BELONGS: cell (qcol,qrow), no nudge - a raw B-style target.
+  if (!gotoBuildTarget(qcol, qrow, rot))
+  {
+    buildAbort("could not reach the destination cell");
+    return false;
+  }
+  buildPause();
+
+  if (!zGoLevel(qlevel))
+  {
+    buildAbort("Z did not reach the place level");
+    return false;
+  }
+  buildPause();
+
+  openServoAndWait();
+
+  // The block is down. From here a failure is a warning, not an abort - the
+  // correction itself has succeeded, exactly as in buildPark().
+  countPlacedBlock(qlevel);
+
+  bool parked = true;
+  if (!zGoTop())
+  {
+    Serial.println(F("  !! could not raise Z - NOT parking X/Y (would drag the stack)."));
+    parked = false;
+  }
+  else if (!goToOrigin())
+  {
+    Serial.println(F("  !! X/Y did not reach the origin."));
+    parked = false;
+  }
+  else
+  {
+    rotateClawTo(ROT_NONE);
+  }
+
+  Serial.println();
+  Serial.println(F("======================================"));
+  Serial.print(F("CORRECTION COMPLETE - block moved to ["));
+  Serial.print(qcol);
+  Serial.print(F(","));
+  Serial.print(qrow);
+  Serial.print(F("] level "));
+  Serial.println(qlevel);
+  Serial.println(parked ? F("PARKED - ready for the next command.")
+                        : F("!! BLOCK IS PLACED, BUT PARKING FAILED - check the rig."));
+  Serial.println(F("======================================"));
+
+  if (parked)
+  {
+    ackStart(F("OK"));
+    ackField(F("col"), qcol);
+    ackField(F("row"), qrow);
+    ackField(F("level"), qlevel);
+    Serial.println();
+  }
+  else
+  {
+    ackReason(F("HELD"), F("block placed but parking failed"));
+  }
+  return true;
+}
+
+void handleReplaceCommand(const char *args)
+{
+  long pcol, prow, plevel, qcol, qrow, qlevel;
+  float dx = 0.0, dy = 0.0;
+
+  // Every attempt gets a sequence number, malformed ones included, so a bad
+  // command still produces an ack instead of a Pi-side timeout.
+  ackSeq++;
+
+  if (!parseReplaceArgs(args, &pcol, &prow, &plevel, &dx, &dy,
+                        &qcol, &qrow, &qlevel))
+  {
+    statBadCommands++;
+    Serial.println();
+    Serial.println(F("  ERROR - use:  P <pcol> <prow> <plevel> <dx_cm> <dy_cm> <qcol> <qrow> <qlevel>"));
+    Serial.println(F("  Pick the block at [pcol,prow] (plus the signed cm nudge) and"));
+    Serial.println(F("  place it on [qcol,qrow]. dx/dy are + away from each home switch."));
+    ackReason(F("ERR"), F("expected: P pcol prow plevel dx_cm dy_cm qcol qrow qlevel"));
+    return;
+  }
+
+  statBuildCommands++;
+
+  ackStart(F("RECV"));
+  ackWord(F("cmd"), F("P"));
+  ackField(F("col"), pcol);
+  ackField(F("row"), prow);
+  ackField(F("level"), plevel);
+  Serial.println();
+
+  replaceBlock(pcol, prow, plevel, dx, dy, qcol, qrow, qlevel);
+}
+
 // ============================================================
 // PHYSICAL LIMIT SWITCHES
 // ============================================================
@@ -5795,8 +6134,7 @@ void printGridConfig()
     // fixed offset. It used to print the skew alone while sitting directly
     // under the fixed-offset line, which read as the total and understated
     // every horizontal X correction by the whole placement offset.
-    long exampleSteps = buildSkewSteps(axis, gridColsNow(), 0)
-                        + buildPlacementOffsetSteps(axis);
+    long exampleSteps = buildSkewSteps(axis, gridColsNow(), 0) + buildPlacementOffsetSteps(axis);
     Serial.print(F("             e.g. col "));
     Serial.print(gridColsNow());
     Serial.print(F(" row 0 -> "));

@@ -57,6 +57,21 @@ export interface Supervision {
   reason: string | null;
   judged_at_ms: number | null;
   acknowledged: boolean;
+  /** The operator CORRECTION action (`docs/features/correction-action.md`).
+   *  `correctable` is true ONLY for a MOVED / DISPLACED verdict the claw may
+   *  safely return: vertical mode, level 0, the block axis-aligned, no taller
+   *  neighbour stack, the destination clear, and (DISPLACED) the displacement
+   *  in the 0.5-1.2 cm band. `correction_reason` always says what the state is
+   *  in a sentence — either "the claw can move it back" or exactly why not.
+   *  The browser NEVER acts on `pick_offset_cm`: `/api/supervision/correct`
+   *  re-derives everything server-side (DESIGN.md §8, no client-side verdict). */
+  correctable?: boolean;
+  correction_reason?: string | null;
+  /** The cell the block belongs on — where the operator will watch it land. */
+  correction_cell?: Point | null;
+  correction_level?: number | null;
+  /** Debug/telemetry only. Not an instruction. */
+  pick_offset_cm?: [number, number] | null;
 }
 
 export interface StateModel {
@@ -104,8 +119,18 @@ export interface StateModel {
    *  build result — the server needs a still, settled scene to form it. */
   vision_verification?: string | null;
   supervision?: Supervision;
+  /** The outcome of the last operator CORRECTION action this session, or null.
+   *  The banner shows it; the runner resumes only after the board re-verifies. */
+  last_correction?: CorrectionResult | null;
   views: Record<string, boolean>;
   geometry: Geometry | null;
+}
+
+export interface CorrectionResult {
+  result: "placed" | "rejected" | "aborted";
+  reason: string | null;
+  cell: Point;
+  verdict: "MOVED" | "DISPLACED";
 }
 
 /** One serial line, timestamped on arrival because the rig sends no clock. */

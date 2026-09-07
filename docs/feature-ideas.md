@@ -498,6 +498,13 @@ evidence into the next verdict.
 Evaluated once per quiet window, comparing `observed` against
 `ledger.expected_occupancy(mode)`:
 
+> **Superseded — the built classifier is
+> [placement-supervision.md](features/placement-supervision.md) D9.** It adds
+> `NOT_DETECTED`, refines the one-sided rows (P1), and splits `MOVED` into
+> `MOVED` (relocated to a valid cell) and `DISPLACED` (knocked into the build
+> area on no site) keyed to the build-area rectangle (P9). The table below is
+> the original sketch, kept for its reasoning.
+
 | Condition | Verdict | Severity |
 | --- | --- | --- |
 | sets equal | `VERIFIED` | — |
@@ -535,12 +542,15 @@ the feeder. So the repair vocabulary today is exactly one entry:
 | Verdict | Repair available now |
 | --- | --- |
 | `REMOVED [a,b]` | **automatic** — re-issue `B a b <level>`. Feed a block, place it back. Already in the vocabulary. |
-| `MOVED [a,b] → [c,d]` | **none.** Stop, name both cells, ask the operator to clear `[c,d]`, re-verify, then re-issue `B a b`. |
+| `MOVED [a,b] → [c,d]` | **operator CORRECTION** (`features/correction-action.md`): `RETURN BLOCK TO CELL` on the banner grips the block on `[c,d]`, lifts, and places it on `[a,b]`. Gated: vertical mode, level 0, axis-aligned, no taller neighbour, `[a,b]` clear. Otherwise still "stop and ask". |
+| `DISPLACED [a,b]` | **operator CORRECTION**, same control — grips the block where it lies in the gap and re-places it on `[a,b]`. Extra gate: the displacement must fall in the 0.5–1.2 cm band (a `DISPLACED` centroid is already ≥ half a block off its cell, so this band is narrow — see the doc). The firmware `P` verb it drives is **unflashed / unverified on hardware**. |
 | `FOREIGN` / `DISAGREES` | **none, by design.** Stop and show. |
 
-Do not soften this. A `MOVED` block sitting on `[c,d]` may be a cell the plan
-needs later, and placing into it is a collision. Half-repairing is worse than
-stopping.
+Do not soften this **for the notify-only default**. A `MOVED` block sitting on
+`[c,d]` may be a cell the plan needs later, and placing into it is a collision.
+Half-repairing is worse than stopping. The CORRECTION action does not soften it
+either: it re-checks `[a,b]` is clear server-side, refuses if not, and is one
+attempt per verdict event.
 
 **Repair before advancing the plan, and re-verify after.** A repair that is not
 re-verified is a guess with extra steps.

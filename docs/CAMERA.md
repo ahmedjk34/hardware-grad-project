@@ -558,8 +558,10 @@ Plans: [placement-supervision.md](features/placement-supervision.md) ·
 ### M3b — the continuous verdict *(the demonstrable milestone)* — **DONE**
 
 - [x] Whole-board occupancy diff in every quiet window while parked
-- [x] D9 verdicts, refined by P1: `VERIFIED` / `NOT_DETECTED` / `REMOVED` /
-      `MOVED` / `FOREIGN` / `DISAGREES`
+- [x] D9 verdicts, refined by P1 and P9: `VERIFIED` / `NOT_DETECTED` /
+      `REMOVED` / `MOVED` / `DISPLACED` / `FOREIGN` / `DISAGREES`. `MOVED` and
+      `DISPLACED` are one event split by landing — onto another valid cell, or
+      into the build area on no site — and both are amber (progress.md P9)
 - [x] ~~No `FOREIGN` below `MIN_LATTICE_BLOCKS` (6)~~ — D10 removed once the
       holder came off the rig (progress.md P8). `FOREIGN` / `DISAGREES` are now
       live at any detection count
