@@ -441,7 +441,7 @@ with `python/tests/test_grid.py` extended to cover the new verb.
    the map's error (0.27 cm mean, 2.07 px max) plus centroid noise plus parallax
    model error: call it ±0.3–0.5 cm. Clearance being proper settles whether the
    jaws *fit*; it does not settle how far off-centre they can close and still
-   grip rather than shove. `SERVO_CLOSE_ANGLE = 54` is calibrated for a block
+   grip rather than shove. `SERVO_CLOSE_ANGLE = 144` is calibrated for a block
    presented squarely by the feeder, not one approached with 0.4 cm of slop.
    **This is the cheapest high-value experiment available** — place a block
    deliberately 0.5 cm off and see whether the claw grips it or knocks it.

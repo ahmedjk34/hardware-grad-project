@@ -569,7 +569,8 @@ for constant, expected_by_mode in placement_offset_defaults.items():
     for mode_name, expected in expected_by_mode.items():
         check(f"build placement offset {constant}[{mode_name}]", actual[mode_name] == expected,
               f"firmware {actual[mode_name]}, expected {expected}")
-check("live gripper close angle is 54 degrees", firmware_number("SERVO_CLOSE_ANGLE") == 54)
+check("live gripper open angle is 90 degrees", firmware_number("SERVO_OPEN_ANGLE") == 90)
+check("live gripper close angle is 144 degrees", firmware_number("SERVO_CLOSE_ANGLE") == 144)
 
 # The feeder belt sits above ground, so build phase 5 drops a fixed distance
 # below the TOP switch instead of ground-seeking. Firmware-only, no rig.json
@@ -641,8 +642,8 @@ for standalone_name in ("build_vertical_grid", "build_horizontal_grid"):
           and "buildYSkewSteps" not in standalone
           and "buildPlacementOffsetSteps(axis)" in standalone)
     close = re.search(r"const int SERVO_CLOSE_ANGLE = (\d+);", standalone)
-    check(f"{standalone_name} close angle is 54 degrees",
-          close is not None and int(close.group(1)) == 54)
+    check(f"{standalone_name} close angle is 144 degrees",
+          close is not None and int(close.group(1)) == 144)
 
 paired_values = {
     "X_TRAVEL_CM": from_cfg.workspace_width_cm,
