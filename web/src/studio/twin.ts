@@ -180,6 +180,19 @@ export interface TwinScene {
    *  of `state.shift_cm`; the twin never sets it. */
   shift?: Shift;
   targetId: string | null;
+  /** Supervision, as a SEPARATE OVERLAY LAYER keyed by cell — deliberately
+   *  NOT a sixth `TwinAppearance`. The twin has exactly five, `twin.test.ts`
+   *  asserts them, and they are its documented contract about what the RIG is
+   *  doing with a block. A verdict is a statement about the BOARD, from a
+   *  different instrument, and folding it into the appearance enum would let
+   *  one of them overwrite the other. The twin is also the quietest of the
+   *  four surfaces: it is a mirror, not a siren, and it never invents this —
+   *  every field here is a straight copy of the server's own object. */
+  supervision: {
+    cells: [number, number][];
+    unjudged: [number, number][];
+    severity: "none" | "amber" | "red";
+  };
 
   // ── What the rig said it is doing ───────────────────────────────────────
   /** The visual state, mapped from the phase the FIRMWARE reported. */
@@ -593,6 +606,14 @@ export function twinScene(state: StateModel | null, model: Model, progress: Twin
     mode: state?.mode ?? null,
     shift: liveShift,
     targetId: target?.id ?? null,
+    supervision: {
+      // VERIFIED marks nothing: the twin does not celebrate, and 40 green
+      // cells a build would make the amber one invisible.
+      cells: (state?.supervision && state.supervision.verdict !== "VERIFIED"
+        ? state.supervision.cells : []) as [number, number][],
+      unjudged: (state?.supervision?.unjudged ?? []) as [number, number][],
+      severity: state?.supervision?.severity ?? "none",
+    },
     phase,
     phaseLabel: phase === "idle" || phase === "target" ? null : build.label,
     phaseStep: build.step,

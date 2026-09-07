@@ -77,7 +77,7 @@ export interface RunState {
   pendingConfirm: "build" | "mode" | null;
   selectedCommand: string | null;
   stopAfterCurrent: boolean;
-  pauseReason: "stale" | "operator-stop" | "server-running" | null;
+  pauseReason: "stale" | "operator-stop" | "server-running" | "board-verdict" | null;
   mismatch: { program: string; rig: string } | null;
   failure: string | null;
   readOnly: boolean;
@@ -123,6 +123,13 @@ export type RunEvent =
   | { type: "reset"; now: number }
   | { type: "socket"; connected: boolean; now: number }
   | { type: "server-build-state"; buildState: ServerBuildState; now: number }
+  /** The board no longer matches the plan. Amber PAUSES, red STOPS, and
+   *  neither ever reaches `locked` — LOCKED means the claw's position is
+   *  unknown and needs a human plus a service restart, while a verdict is a
+   *  statement about the BOARD. Conflating them would make a recoverable
+   *  situation look unrecoverable. The severity is the SERVER's; the runner
+   *  never decides how bad a verdict is. */
+  | { type: "board-verdict"; severity: "amber" | "red"; verdict: string; now: number }
   | { type: "transport-error"; reason: string; now: number };
 
 export interface Turn { state: RunState; effects: Effect[] }
@@ -302,6 +309,26 @@ export function step(state: RunState, event: RunEvent): Turn {
       return noEffects({ ...next, phase: "paused", pauseReason: "server-running" });
     }
     return noEffects(next);
+  }
+
+  if (event.type === "board-verdict") {
+    // Nothing to interrupt when the run is not going anywhere, and a locked
+    // session outranks everything.
+    if (state.phase === "idle" || state.phase === "done" || state.phase === "locked"
+        || state.readOnly) {
+      return noEffects(state);
+    }
+    if (event.severity === "red") {
+      // STOP the program. Continuing to place into a board you no longer
+      // understand is how the claw hits something. `stopped-mismatch` is the
+      // existing "the run ended because the world disagreed" phase; this is
+      // the same class of fact about a different disagreement.
+      return noEffects({ ...state, phase: "stopped-mismatch", inFlight: false,
+        pauseReason: null, failure: `board verdict: ${event.verdict}`,
+        finishedAt: event.now });
+    }
+    return noEffects({ ...state, phase: "paused", pauseReason: "board-verdict",
+      failure: `board verdict: ${event.verdict}` });
   }
 
   if (event.type === "transport-error") {

@@ -88,7 +88,41 @@ describe("runner reducer", () => {
     expect(turn.state.log).toEqual([]);
   });
 
-  it("stops on a command mismatch and shows both strings verbatim", () => {
+  it("pauses on an amber board verdict and stops on a red one, never locking", () => {
+    // D11 rendered. LOCKED means the claw's position is unknown and needs a
+    // human plus a service restart; a verdict is a statement about the BOARD.
+    // Conflating them would make a recoverable situation look unrecoverable.
+    let turn = start([build("a", 3, 2, 1), build("b", 4, 2, 1)]);
+    turn = dispatch(turn.state, { type: "selected", command: "B 3 2 1", now: 110 });
+    const amber = dispatch(turn.state, {
+      type: "board-verdict", severity: "amber", verdict: "REMOVED", now: 200,
+    });
+    expect(amber.state.phase).toBe("paused");
+    expect(amber.state.pauseReason).toBe("board-verdict");
+    expect(amber.effects).toEqual([]);
+
+    const red = dispatch(turn.state, {
+      type: "board-verdict", severity: "red", verdict: "FOREIGN", now: 200,
+    });
+    // Continuing to place into a board you no longer understand is how the
+    // claw hits something, so red ENDS the run rather than pausing it.
+    expect(red.state.phase).toBe("stopped-mismatch");
+    expect(red.state.inFlight).toBe(false);
+    expect(red.state.failure).toContain("FOREIGN");
+    expect(red.effects).toEqual([]);
+  });
+
+  it("never lets a board verdict reach the locked phase", () => {
+    for (const severity of ["amber", "red"] as const) {
+      let turn = start([build("a", 3, 2, 1)]);
+      turn = dispatch(turn.state, { type: "selected", command: "B 3 2 1", now: 110 });
+      turn = dispatch(turn.state, { type: "board-verdict", severity, verdict: "X", now: 200 });
+      expect(turn.state.phase).not.toBe("locked");
+      expect(turn.state.readOnly).toBe(false);
+    }
+  });
+
+  it("stops on a command mismatch and shows both strings verbatim", () =>{
     let turn = start([build("a", 3, 2, 1)]);
     turn = dispatch(turn.state, { type: "selected", command: "B 3 2 0", now: 110 });
     turn = dispatch(turn.state, { type: "verified", actual: "B 3 2 0", now: 111 });

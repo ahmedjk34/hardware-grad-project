@@ -532,21 +532,30 @@ Plans: [placement-supervision.md](features/placement-supervision.md) ·
 
 ### M3b — the continuous verdict *(the demonstrable milestone)*
 
-- [ ] Whole-board occupancy diff in every quiet window while parked
-- [ ] D9 verdicts: `VERIFIED` / `NOT_DETECTED` / `REMOVED` / `MOVED` / `FOREIGN` / `DISAGREES`
-- [ ] No `FOREIGN` below `MIN_LATTICE_BLOCKS` (6)
-- [ ] `SupervisionModel` published; `POST /api/supervision/ack`
-- [ ] Runner: `board-verdict` event → pause on amber, stop on red, **never `LOCKED`**
-- [ ] **Camera overlay first** — a per-cell class in `GridOverlay.tsx`, exactly
-      how `blocked` cells already work. Cheapest surface and the one the
-      operator is actually looking at
-- [ ] Supervision banner (new component)
-- [ ] Twin overlay layer — **not** a sixth `TwinAppearance`
-- [ ] `unjudged` cells drawn as a **hatch, not a colour**, with a count and reason
-- [ ] `--danger-text: #FF8A8A` token added (measured: `--danger` fails the 7:1
-      state-text bar — see the UI section's §6.5)
-- [ ] UI tests per the plan's §6.11, including the token contrast unit test
-- [ ] **Update §0 and §6a of this file** — the camera now asserts
+- [x] Whole-board occupancy diff in every quiet window while parked
+- [x] D9 verdicts, refined by P1: `VERIFIED` / `NOT_DETECTED` / `REMOVED` /
+      `MOVED` / `FOREIGN` / `DISAGREES`
+- [x] No `FOREIGN` below `MIN_LATTICE_BLOCKS` (6)
+- [x] `SupervisionModel` published whole; `POST /api/supervision/ack`, which
+      also **resets the hysteresis** so the re-check after a dismissal is built
+      from fresh evidence rather than from frames taken while a hand was over
+      the board (D12)
+- [x] Runner: `board-verdict` → pause on amber, stop on red, **never `LOCKED`**
+- [x] **Camera overlay first** — a per-cell class in `GridOverlay.tsx`, exactly
+      how `blocked` cells work. The SVG `<title>` names the cell; the banner
+      stays the authoritative text
+- [x] `SupervisionBanner.tsx` — the only surface allowed to be an alarm.
+      **No banner for `VERIFIED`**; `BUSY` / `QUIET` / `NO_MEMORY` take no
+      state colour at all
+- [x] Twin overlay layer (`studio/scene/Supervision.tsx`) — **not** a sixth
+      `TwinAppearance`; `twin.test.ts` asserts the five are still five
+- [x] `unjudged` cells drawn as a 45° **hatch, not a colour**, with a count and
+      a reason in the banner and a `<title>` per cell
+- [x] `--danger-text: #FF8A8A` added (7.86:1). `--danger` itself is left alone —
+      `LOCKED` depends on it, and state colour never carries body copy
+- [x] UI tests per the plan's §6.11, including `tokens.test.ts`, which reads the
+      real stylesheet so a future palette edit cannot silently break the bar
+- [x] **§0 and §6a of this file updated** — the camera now asserts
 
 ### Future — recorded, not scheduled
 

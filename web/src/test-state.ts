@@ -22,6 +22,12 @@ export const BASE_STATE: StateModel = {
   gantry_connected: true, feeder_connected: true, hardware_ready: true,
   cell_phase: "idle", feeder_transaction_id: null, feeder_state: "idle",
   feeder_error: null,
+  vision_verification: null,
+  supervision: {
+    state: "QUIET", verdict: null, severity: "none", cells: [], mode: "vertical",
+    expected: [], observed: [], unjudged: [], reason: null, judged_at_ms: null,
+    acknowledged: false,
+  },
   views: {}, geometry: null,
 };
 

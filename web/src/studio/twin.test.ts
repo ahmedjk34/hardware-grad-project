@@ -49,6 +49,39 @@ const at = (overrides: Partial<BuildProgress> = {}): BuildProgress =>
      eventId: 10, ...overrides });
 
 
+describe("supervision is a LAYER on the twin, not a sixth appearance", () => {
+  it("keeps the appearance vocabulary at exactly five", () => {
+    const supervised = state({
+      supervision: {
+        state: "VERDICT", verdict: "FOREIGN", severity: "red", cells: [[4, 2]],
+        mode: "vertical", expected: [], observed: [], unjudged: [[1, 1]],
+        reason: null, judged_at_ms: 1, acknowledged: false,
+      },
+    });
+    const scene = twinScene(supervised, model, emptyTwinProgress(), live);
+    // The five are the twin's documented contract about what the RIG is doing
+    // with a block. A verdict is a statement about the BOARD, from a different
+    // instrument, and it must not be able to overwrite one with the other.
+    const five = ["ghost", "target", "building", "placed", "rejected"];
+    expect(scene.blocks.every(block => five.includes(block.appearance))).toBe(true);
+    expect(scene.supervision.cells).toEqual([[4, 2]]);
+    expect(scene.supervision.unjudged).toEqual([[1, 1]]);
+    expect(scene.supervision.severity).toBe("red");
+  });
+
+  it("marks nothing for VERIFIED — the twin does not celebrate", () => {
+    const supervised = state({
+      supervision: {
+        state: "VERDICT", verdict: "VERIFIED", severity: "none", cells: [],
+        mode: "vertical", expected: [], observed: [], unjudged: [],
+        reason: null, judged_at_ms: 1, acknowledged: false,
+      },
+    });
+    expect(twinScene(supervised, model, emptyTwinProgress(), live).supervision.cells)
+      .toEqual([]);
+  });
+});
+
 describe("twinScene — Plan 4 §9.2, row by row", () => {
   it("a model is loaded: every remaining block is a ghost and nothing animates", () => {
     const scene = twinScene(state(), model, emptyTwinProgress(), live);

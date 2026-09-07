@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
-from rig.supervisor import Verdict
+from rig.supervisor import STATES, Verdict
 from web.geometry import build_geometry
 
 
@@ -35,6 +35,73 @@ class SupervisionState:
     def severity(self) -> str:
         """``amber`` / ``red`` / ``none``. A verdict NEVER produces LOCKED."""
         return self.verdict.severity if self.verdict is not None else "none"
+
+
+class SupervisionModel(BaseModel):
+    """What the observer says about the board — ONE field, four readers.
+
+    The requirement that supervision "appears everywhere and stays in sync" is
+    met **structurally, not by discipline**: the server publishes this object
+    and every surface renders it. **No surface re-derives a verdict.** Four
+    renderers of one field cannot disagree, so "sync" is not a thing anyone has
+    to maintain — and DESIGN.md §8's "no client-side safety logic" holds by
+    construction rather than by review.
+
+    Read the `state`/`verdict` split carefully, because the UI depends on it:
+    `BUSY`, `QUIET` and `NO_MEMORY` are **not faults** and take no state
+    colour. BUSY is the normal condition for the whole of a build; colouring it
+    amber would leave the console amber most of the time and kill the reserved
+    palette. Not looking is not the same as finding something wrong.
+    """
+
+    state: Literal["NO_MEMORY", "NO_MAP", "WARMING", "BUSY", "QUIET", "VERDICT"]
+    verdict: Literal["VERIFIED", "NOT_DETECTED", "REMOVED",
+                     "MOVED", "FOREIGN", "DISAGREES"] | None
+    #: `amber` pauses the runner, `red` stops it. NEVER `LOCKED` — that means
+    #: the claw's position is unknown and needs a human plus a service restart,
+    #: and a verdict is a statement about the BOARD, not about the machine.
+    severity: Literal["none", "amber", "red"]
+    #: The cells the verdict names. For MOVED they are ordered [from, to].
+    cells: list[tuple[int, int]]
+    mode: str
+    #: Both sides, so a DISAGREES banner can show expected against observed.
+    expected: list[tuple[int, int]]
+    observed: list[tuple[int, int]]
+    #: D6's refusals — expected top level at or above the ceiling. Drawn as a
+    #: HATCH, never a colour: an absence of state must not take a state colour.
+    unjudged: list[tuple[int, int]]
+    #: Why it is not judging, when `state` is not VERDICT.
+    reason: str | None
+    judged_at_ms: int | None
+    #: D12. The operator has dealt with this one, whether by putting the block
+    #: back or by choosing not to. Cleared the moment the verdict changes.
+    acknowledged: bool
+
+
+def supervision_model(reading, *, acknowledged: bool = False) -> SupervisionModel:
+    """Fold one `SupervisionState` into the published object."""
+    if reading is None:
+        return SupervisionModel(
+            state="NO_MEMORY", verdict=None, severity="none", cells=[],
+            mode="", expected=[], observed=[], unjudged=[],
+            reason="NO MEMORY — the board is only tracked from the first "
+                   "build after a restart",
+            judged_at_ms=None, acknowledged=False)
+    verdict = reading.verdict
+    assert reading.state in STATES, reading.state
+    return SupervisionModel(
+        state=reading.state,
+        verdict=None if verdict is None else verdict.verdict,
+        severity=reading.severity,
+        cells=[] if verdict is None else [list(cell) for cell in verdict.cells],
+        mode="" if verdict is None else verdict.mode,
+        expected=[] if verdict is None else [list(c) for c in verdict.expected],
+        observed=[] if verdict is None else [list(c) for c in verdict.observed],
+        unjudged=[] if verdict is None else [list(c) for c in verdict.unjudged],
+        reason=reading.reason,
+        judged_at_ms=reading.judged_at_ms,
+        acknowledged=acknowledged,
+    )
 
 
 class StateModel(BaseModel):
@@ -110,6 +177,8 @@ class StateModel(BaseModel):
     #: The runner log row and the thesis run report's Markdown column both
     #: read it. None when no build has settled in this session.
     vision_verification: str | None
+    #: M3b. The board's verdict, published whole. See `SupervisionModel`.
+    supervision: SupervisionModel
     views: dict[str, bool]
     geometry: dict[str, Any] | None
 
@@ -171,6 +240,9 @@ def build_state(app) -> StateModel:
         feeder_error=app.state.feeder_error,
         **progress.as_state_fields(),
         vision_verification=getattr(app.state, "vision_verification", None),
+        supervision=supervision_model(
+            getattr(app.state, "supervision", None),
+            acknowledged=bool(getattr(app.state, "supervision_acknowledged", False))),
         views=dict(app.state.views),
         geometry=build_geometry(frame, controller.selected) if frame is not None else None,
     )

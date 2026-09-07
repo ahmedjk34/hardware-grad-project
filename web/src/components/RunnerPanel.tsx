@@ -200,6 +200,21 @@ export function RunnerPanel({ state, connected, modelId, api, delay, onActiveCha
     applyEvent({ type: "build-verified", verification, now: Date.now() });
   }, [verification, applyEvent]);
 
+  // D11, rendered: amber pauses, red stops. The SERVER decided the severity —
+  // the runner reads it and never computes one, which is why four surfaces
+  // showing this cannot disagree with each other.
+  const supervision = state.supervision;
+  const boardSeverity = supervision?.severity ?? "none";
+  const boardVerdict = supervision?.verdict ?? null;
+  const acknowledged = supervision?.acknowledged ?? false;
+  useEffect(() => {
+    if (!boardVerdict || boardSeverity === "none" || acknowledged) return;
+    applyEvent({
+      type: "board-verdict", severity: boardSeverity as "amber" | "red",
+      verdict: boardVerdict, now: Date.now(),
+    });
+  }, [boardVerdict, boardSeverity, acknowledged, applyEvent]);
+
   const isActive = activePhase(run.phase);
   useEffect(() => onActiveChange?.(isActive), [isActive, onActiveChange]);
   useEffect(() => {
@@ -405,7 +420,8 @@ export function RunnerPanel({ state, connected, modelId, api, delay, onActiveCha
 
       {run.phase === "paused" && (
         <div className="runner-result is-paused" role="status">
-          <strong>{run.pauseReason === "stale" ? "STALE — RUN PAUSED" : "RUN PAUSED"}</strong>
+          <strong>{run.pauseReason === "stale" ? "STALE — RUN PAUSED"
+            : run.pauseReason === "board-verdict" ? "BOARD — RUN PAUSED" : "RUN PAUSED"}</strong>
           <span>{run.failure ?? (run.pauseReason === "operator-stop" ? "Stopped after the completed block." : "No next command will be sent.")}</span>
           {!run.inFlight && connected && (
             <div className="row">

@@ -421,6 +421,27 @@ Two things the trace shows that were previously only argued:
   "the scene was not still" precedes "there is nothing to compare it to" — and
   worth knowing before a UI renders the first frame after a restart.
 
+### F19 — D12's dismissal cannot be a per-cell mute, and the code says why
+
+D12 asks for two things that pull against each other: the notification carries
+its own dismissal, *and* **"after a dismissal the cell is re-checked in the next
+quiet window before the runner continues."**
+
+Implemented as: `POST /api/supervision/ack` sets `acknowledged` **and resets the
+supervisor's hysteresis**, and `_note_supervision` clears `acknowledged` the
+moment the reading CHANGES — a different verdict, or the same verdict naming a
+different cell. So an acknowledgement silences the banner for that event only;
+the next window re-judges from scratch, and if the block is still gone the
+verdict comes back.
+
+That is the intended behaviour and it is worth stating plainly, because it will
+look like a bug the first time someone dismisses a `REMOVED` and watches it
+return: **a repair that is not re-verified is a guess with extra steps, and that
+applies just as much to a human's repair as to a machine's.** The hysteresis
+reset is what stops the re-check being made of frames taken while the
+operator's hands were over the board. A persistent "I removed this
+deliberately, stop asking" mark is future work, and D12 already says so.
+
 ### F17 — The per-build check cannot use a frame difference without Gate 0b
 
 D8a specifies the per-build check as *"a frame difference against the pre-build

@@ -259,6 +259,34 @@ async def view(request: ViewRequest, http: Request) -> StateModel:
     return _state(app)
 
 
+@router.post("/supervision/ack", response_model=StateModel)
+async def acknowledge_supervision(http: Request) -> StateModel:
+    """D12. The operator says "I have dealt with this", and the board is re-checked.
+
+    Acknowledging means the operator has handled it — whether they put the
+    block back or chose not to. It is deliberately **not** "ignore this cell
+    from now on": a repair that is not re-verified is a guess with extra steps,
+    and that applies just as much to a human's repair as to a machine's. So the
+    acknowledgement clears the flag on THIS event only, and the supervisor's
+    hysteresis is reset so the next verdict is built from fresh evidence rather
+    than from frames gathered while the operator's hands were over the board.
+
+    Available while a build is running, unlike every mutating route here: it
+    moves nothing, and a verdict that paused the runner has to be dismissible
+    before the runner can be allowed on. There is no "re-place it" button —
+    automatic repair is M4, and a button implying the machine will fix it would
+    be a lie about what is built.
+    """
+    app = http.app
+    app.state.supervision_acknowledged = True
+    supervisor = getattr(app.state, "supervisor", None)
+    if supervisor is not None:
+        supervisor.reset()
+    build_log.placements.note("operator acknowledged the verdict")
+    _signal(app)
+    return _state(app)
+
+
 @router.post("/build", response_model=StateModel)
 async def build(request: BuildRequest, http: Request) -> StateModel:
     app = http.app

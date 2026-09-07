@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { CellGeometry, Point, StateModel } from "../types";
+import type { CellGeometry, Point, StateModel, Supervision } from "../types";
 
 function points(polygon: Point[]) {
   return polygon.map(point => point.join(",")).join(" ");
@@ -16,6 +16,26 @@ function corners(polygon: Point[], fraction = 0.28): string[] {
     ];
     return points([towards(before), point, towards(after)]);
   });
+}
+
+/** The cells one verdict names, as a lookup. The SERVER decided these; this
+ *  only asks "is [col,row] in the list the server sent". Nothing is derived. */
+function cellKeys(cells: Point[] | undefined): Set<string> {
+  return new Set((cells ?? []).map(([col, row]) => `${col},${row}`));
+}
+
+/** §6.9: name the cell in the first four words, say what to do, and never say
+ *  "error" for something the machine may have got right. Used for the SVG
+ *  `<title>` on each marked cell — the overlay is not text, so every marked
+ *  cell carries one, and the banner remains the authoritative sentence. */
+export function cellTitle(verdict: string | null, col: number, row: number): string {
+  if (verdict === "REMOVED") return `[${col},${row}] — a block the plan placed is gone`;
+  if (verdict === "NOT_DETECTED") return `[${col},${row}] — the block just placed was not seen`;
+  if (verdict === "MOVED") return `[${col},${row}] — the board no longer matches the plan here`;
+  if (verdict === "FOREIGN") return `[${col},${row}] — something is here the plan did not put here`;
+  if (verdict === "DISAGREES") return `[${col},${row}] — this cell differs from the plan`;
+  if (verdict === "VERIFIED") return `[${col},${row}] — seen in frame`;
+  return `[${col},${row}]`;
 }
 
 function bounds(polygon: Point[]) {
@@ -60,6 +80,15 @@ export function GridOverlay({ state, onSelect, onHover, selectable = true }: {
     if (contains(point)) onSelect(point);
   };
 
+  // ONE server field. `supervision.cells` are the cells the server's verdict
+  // names and `supervision.unjudged` the ones it refused; the browser filters
+  // a list it already has and adds a class, exactly as `blocked` works today.
+  const supervision: Supervision | undefined = state.supervision;
+  const verdictCells = cellKeys(supervision?.verdict === "VERIFIED" ? [] : supervision?.cells);
+  const unjudged = cellKeys(supervision?.unjudged);
+  const severity = supervision?.severity ?? "none";
+  const verdictName = supervision?.verdict ?? null;
+
   const selected = geometry.selected;
   const levelBox = selected ? bounds(selected.polygon) : null;
 
@@ -87,6 +116,35 @@ export function GridOverlay({ state, onSelect, onHover, selectable = true }: {
           strokeWidth={1.5 * stroke}
           points={points(cell.polygon)}
         />
+      ))}
+      {/* Supervision, drawn over the grid and under the detections. A cell a
+          verdict names takes the state colour; a cell the verdict REFUSED to
+          judge takes a 45° hatch and no colour at all, because an absence of
+          state must not be dressed as a state (DESIGN.md §2). */}
+      <defs>
+        <pattern id="sv-hatch" width="8" height="8" patternUnits="userSpaceOnUse"
+                 patternTransform="rotate(45)">
+          <line className="sv-hatch-line" x1="0" y1="0" x2="0" y2="8" strokeWidth={2} />
+        </pattern>
+      </defs>
+      {showGrid && geometry.grid.filter(cell => unjudged.has(`${cell.col},${cell.row}`)).map(cell => (
+        <polygon
+          key={`sv-unjudged-${cell.col}-${cell.row}`}
+          className="sv-unjudged"
+          points={points(cell.polygon)}
+        >
+          <title>not checked — this cell's expected top level is above the detection ceiling</title>
+        </polygon>
+      ))}
+      {showGrid && geometry.grid.filter(cell => verdictCells.has(`${cell.col},${cell.row}`)).map(cell => (
+        <polygon
+          key={`sv-verdict-${cell.col}-${cell.row}`}
+          className={`sv-verdict sv-${severity}`}
+          strokeWidth={2.5 * stroke}
+          points={points(cell.polygon)}
+        >
+          <title>{cellTitle(verdictName, cell.col, cell.row)}</title>
+        </polygon>
       ))}
       {/* Belt-blocked cells: struck through, same read as the 3D Studio. */}
       {showGrid && geometry.grid.filter(cell => cell.blocked).map(cell => (

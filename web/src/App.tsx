@@ -12,6 +12,7 @@ import { RigLog } from "./components/RigLog";
 import { Shortcuts } from "./components/Shortcuts";
 import { StatusBar } from "./components/StatusBar";
 import { BuildBanner } from "./components/BuildBanner";
+import { SupervisionBanner } from "./components/SupervisionBanner";
 import { ResultToast } from "./components/ResultToast";
 import { Calibrate } from "./components/Calibrate";
 import { store } from "./consoleStore";
@@ -107,6 +108,12 @@ export function App() {
       <StatusBar state={state} connected={snapshot.connected} />
       <LockedBanner state={state} />
       {state.build_state !== "LOCKED" && <BuildBanner state={state} connected={snapshot.connected} />}
+      {/* Above the camera and full-bleed, never a floating toast — a floater
+          can cover the video, which is the one thing the operator needs. */}
+      <SupervisionBanner
+        state={state}
+        onAcknowledge={() => { void fetch("/api/supervision/ack", { method: "POST" }); }}
+      />
 
       <div className="workspace">
         <div className="pane-camera">

@@ -29,6 +29,34 @@ export type BuildPhaseStatus =
 /** What one phase is expected to do. Coarse on purpose — see the firmware. */
 export type BuildPhaseAction = "move" | "grip" | "release" | "rotate" | "park";
 
+/** The observer's own state. BUSY / QUIET / NO_MEMORY are NOT faults and take
+ *  no state colour — BUSY is the normal condition for a whole build. */
+export type SupervisionPhase =
+  | "NO_MEMORY" | "NO_MAP" | "WARMING" | "BUSY" | "QUIET" | "VERDICT";
+
+export type SupervisionVerdict =
+  | "VERIFIED" | "NOT_DETECTED" | "REMOVED" | "MOVED" | "FOREIGN" | "DISAGREES";
+
+/** ONE server field, four readers. Nothing here is re-derived in the browser:
+ *  four renderers of one field cannot disagree, which is why "stays in sync"
+ *  is not something anyone has to maintain. */
+export interface Supervision {
+  state: SupervisionPhase;
+  verdict: SupervisionVerdict | null;
+  /** `amber` pauses the runner, `red` stops it. NEVER `LOCKED`. */
+  severity: "none" | "amber" | "red";
+  /** The cells named. For MOVED they are ordered [from, to]. */
+  cells: Point[];
+  mode: string;
+  expected: Point[];
+  observed: Point[];
+  /** D6's refusals. Drawn as a HATCH, never a colour. */
+  unjudged: Point[];
+  reason: string | null;
+  judged_at_ms: number | null;
+  acknowledged: boolean;
+}
+
 export interface StateModel {
   mode: "vertical" | "horizontal";
   cols: number;
@@ -70,6 +98,10 @@ export interface StateModel {
   build_release_confirmed: boolean;
   /** The event this progress was folded from. Used to break ties — see store. */
   serial_event_id: number;
+  /** One sentence about the placement that just settled. Arrives AFTER the
+   *  build result — the server needs a still, settled scene to form it. */
+  vision_verification?: string | null;
+  supervision?: Supervision;
   views: Record<string, boolean>;
   geometry: Geometry | null;
 }

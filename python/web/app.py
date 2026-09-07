@@ -217,6 +217,7 @@ async def _supervise(app: FastAPI, frame, job: BuildJob, loop,
         #: window, and the short sentence that comes out of it.
         app.state.pending_check = None
         app.state.vision_verification = None
+        app.state.supervision_acknowledged = False
         _note_supervision(app, "BUSY", "MODE LATCH — waiting for the new grid", None)
         return
 
@@ -303,6 +304,11 @@ def _note_supervision(app: FastAPI, state: str, reason, verdict) -> None:
     if signature == app.state.supervision_signature:
         return
     app.state.supervision_signature = signature
+    # D12's dismissal is per EVENT, not per cell. A new verdict — or the same
+    # verdict moving to a different cell — is a new thing to look at, so the
+    # acknowledgement does not carry over. There is no persistent "I removed
+    # this deliberately, stop asking" mark in v1.
+    app.state.supervision_acknowledged = False
     build_log.placements.verdict(state, reason, verdict)
 
 
@@ -349,6 +355,7 @@ def _publish_build_result(app: FastAPI, outcome) -> None:
     else:
         app.state.pending_check = None
         app.state.vision_verification = None
+        app.state.supervision_acknowledged = False
     app.state.progress.on_result(result, event.event_id, locked=locked)
     # build.log + serial.log: the settled outcome and the total elapsed, closing
     # this build's section.
@@ -416,6 +423,7 @@ def create_app(options: ConsoleAppOptions | None = None) -> FastAPI:
         #: window, and the short sentence that comes out of it.
         app.state.pending_check = None
         app.state.vision_verification = None
+        app.state.supervision_acknowledged = False
 
         def _serial_line(line: str) -> None:
             """On the loop. One raw line: the log AND one durable event.

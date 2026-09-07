@@ -325,6 +325,119 @@ def test_an_uncalibrated_frame_resolves_the_check_rather_than_leaving_it(monkeyp
     assert app.state.pending_check is None
 
 
+# --- M3b: one field, four readers ------------------------------------------ #
+
+def test_the_published_model_is_flat_and_carries_the_severity():
+    """No surface re-derives a verdict — so the SERVER has to send the severity.
+
+    Four renderers of one field cannot disagree, which is what makes "appears
+    everywhere and stays in sync" structural rather than a discipline anyone
+    has to keep.
+    """
+    from rig.supervisor import Verdict
+    from web.state import SupervisionState, supervision_model
+
+    verdict = Verdict(verdict="FOREIGN", cells=((4, 2),), mode="vertical",
+                      expected=((1, 1),), observed=((1, 1), (4, 2)),
+                      unjudged=((3, 3),))
+    model = supervision_model(SupervisionState(
+        state="VERDICT", reason=None, verdict=verdict, judged_at_ms=7))
+    assert model.state == "VERDICT" and model.verdict == "FOREIGN"
+    assert model.severity == "red"
+    # Pydantic narrows to the declared tuple type; it is a JSON array on the
+    # wire either way. Exact CELLS, never a count.
+    assert model.cells == [(4, 2)]
+    assert model.expected == [(1, 1)] and model.observed == [(1, 1), (4, 2)]
+    assert model.unjudged == [(3, 3)]
+    assert model.acknowledged is False
+
+
+def test_an_amber_verdict_publishes_as_amber_and_never_as_locked():
+    from rig.supervisor import AMBER_VERDICTS, RED_VERDICTS, Verdict
+    from web.state import SupervisionState, supervision_model
+
+    for name in AMBER_VERDICTS + RED_VERDICTS:
+        model = supervision_model(SupervisionState(
+            state="VERDICT", reason=None, judged_at_ms=1,
+            verdict=Verdict(verdict=name, cells=((1, 1),), mode="vertical",
+                            expected=(), observed=(), unjudged=())))
+        assert model.severity in ("amber", "red")
+        assert model.severity != "locked"
+    assert "LOCKED" not in set(AMBER_VERDICTS) | set(RED_VERDICTS)
+
+
+def test_a_refusal_publishes_no_verdict_and_no_cells():
+    """BUSY is the normal condition for a whole build. It names no cell and
+    carries no verdict, so nothing downstream can paint it as a fault."""
+    from web.state import SupervisionState, supervision_model
+
+    model = supervision_model(SupervisionState(
+        state="BUSY", reason="RIG MOVING", verdict=None, judged_at_ms=3))
+    assert model.verdict is None and model.cells == []
+    assert model.severity == "none"
+    assert model.reason == "RIG MOVING"
+
+
+def test_a_fresh_process_publishes_NO_MEMORY_before_any_frame():
+    from web.state import supervision_model
+    model = supervision_model(None)
+    assert model.state == "NO_MEMORY" and model.verdict is None
+    assert "restart" in model.reason
+
+
+def test_the_state_snapshot_carries_supervision_and_survives_a_mode_latch(tmp_path):
+    app = create_app(ConsoleAppOptions(
+        mock=True,
+        settings_path=mock_settings(tmp_path),
+        workspace_map_path=tmp_path / "workspace_map.json",
+    ))
+
+    async def scenario():
+        async with LifespanManager(app):
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport,
+                                         base_url="http://test") as client:
+                before = (await client.get("/api/state")).json()
+                acked = (await client.post("/api/supervision/ack")).json()
+                return before, acked
+
+    before, acked = asyncio.run(scenario())
+    assert before["supervision"]["state"] == "NO_MEMORY"
+    assert before["supervision"]["verdict"] is None
+    assert before["vision_verification"] is None
+    # D12: the ack is available even mid-build — it moves nothing, and a
+    # verdict that paused the runner has to be dismissible. It answers with the
+    # whole state, like every other command route.
+    assert "supervision" in acked and "acknowledged" in acked["supervision"]
+
+
+def test_acknowledging_is_per_event_and_a_new_reading_clears_it():
+    """D12's dismissal is per EVENT, not a persistent "stop asking" mark.
+
+    "After a dismissal the cell is re-checked in the next quiet window before
+    the runner continues" — a repair that is not re-verified is a guess with
+    extra steps, and that applies to a human's repair as much as a machine's.
+    """
+    from web.app import _note_supervision
+    from rig.supervisor import Verdict
+
+    app = fake_app()
+    removed = Verdict(verdict="REMOVED", cells=((2, 1),), mode="vertical",
+                      expected=((1, 1), (2, 1)), observed=((1, 1),), unjudged=())
+    _note_supervision(app, "VERDICT", None, removed)
+    app.state.supervision_acknowledged = True
+
+    # The SAME verdict again is the same event: the ack stands.
+    _note_supervision(app, "VERDICT", None, removed)
+    assert app.state.supervision_acknowledged is True
+
+    # The same verdict at a DIFFERENT cell is a new thing to look at.
+    moved = Verdict(verdict="REMOVED", cells=((1, 1),), mode="vertical",
+                    expected=((1, 1), (2, 1)), observed=((2, 1),), unjudged=())
+    _note_supervision(app, "VERDICT", None, moved)
+    assert app.state.supervision_acknowledged is False
+
+
 # --- the real wiring exists ------------------------------------------------ #
 
 def test_the_lifespan_owns_a_ledger_the_controller_writes_to(tmp_path):

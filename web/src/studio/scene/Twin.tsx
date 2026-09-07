@@ -35,6 +35,7 @@ import { BlockBatch } from "./Blocks";
 import { BlockShadows } from "./BlockShadows";
 import { Envelope } from "./Envelope";
 import { Lattice } from "./Lattice";
+import { SupervisionLayer } from "./Supervision";
 import { tokenColor } from "./theme";
 import { RigOrbitControls } from "./RigOrbitControls";
 
@@ -217,6 +218,11 @@ function TwinScene3D({ scene, synced, mode }: {
 
       <Envelope box={box} />
       <Lattice mode={mode} shift={scene.shift} />
+      {/* The plan-space echo. A separate layer, never a sixth appearance. */}
+      <SupervisionLayer mode={mode} shift={scene.shift}
+                        cells={scene.supervision.cells}
+                        unjudged={scene.supervision.unjudged}
+                        severity={scene.supervision.severity} />
       <BlockShadows blocks={placed} />
       {BATCHED.flatMap(appearance => MODES.map(blockMode => {
         const blocks = groups[appearance][blockMode];

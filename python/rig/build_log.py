@@ -307,6 +307,13 @@ class PlacementLog:
         with self._lock:
             self._sink.write(f"{_stamp()}  CHECK     {sentence}")
 
+    def note(self, text: str) -> None:
+        """Anything else about the board worth a line — an operator ack."""
+        if not self._sink.enabled:
+            return
+        with self._lock:
+            self._sink.write(f"{_stamp()}  NOTE      {text}")
+
     def verdict(self, state: str, reason, verdict) -> None:
         """One CHANGE in what the observer says about the board.
 
