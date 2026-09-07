@@ -1,9 +1,19 @@
 # Removed-block compensation — noticing, and then deciding what to do about it
 
-**Status: not implemented. The *idle* half is already fully designed and should
-not be redesigned. The *mid-build* half — what the request is really about — is
-designed here for the first time, and it is the hardest feature in this
-document set.**
+**Status: the detection half is now BUILT; the compensation half is not.**
+
+[Placement supervision](placement-supervision.md) shipped, and it already
+**notices** a removed block: the continuous verdict runs in every quiet window
+while the rig is parked, names the exact cell, and **pauses the runner**. It
+also turned out not to be an idle-time activity at all — Gate 0 measured the
+quiet window opening in **42–47% of frames during a running program**, ~9 usable
+windows a minute, so mid-*program* detection needs none of the machinery this
+document once assumed.
+
+What is still unbuilt is everything after "noticing": deciding what to do,
+re-planning, or re-placing. That is supervision's **M4**, and it is deliberately
+off — *a machine that re-places a block a human just deliberately removed is
+infuriating*, and there is still no way to tell the two apart.
 
 ---
 
@@ -16,8 +26,10 @@ the set-difference classifier and the five verdicts (`VERIFIED`, `MOVED`,
 `REMOVED`, `FOREIGN BLOCK`, `BOARD DISAGREES`), with milestones M1–M5 and a full
 list of known limits.
 
-**Read it first. Do not restate it, do not re-derive it, and do not implement a
-second detector beside it.** Everything below assumes it exists and adds only
+**Read [placement-supervision.md](placement-supervision.md) and its
+[build record](placement-supervision-progress.md) first — they are the built
+code and they correct several of Appendix A's claims.** Do not restate them, do
+not re-derive them, and do not implement a second detector beside them. Everything below assumes it exists and adds only
 what it deliberately excluded:
 
 > **A.6, Not doing: "Verifying during a build. The firmware is deaf mid-command
@@ -63,11 +75,11 @@ one thing from this file, take that one.
 | Per-step camera thumbnails in the run report | **exists** | `run-report.ts`, `runner-driver.ts` — raw evidence images, **not** vision verification |
 | An optional `vision_verification` field the UI already reads | **exists, never populated** | [RunnerPanel.tsx](../../web/src/components/RunnerPanel.tsx) — the Python backend never sets it |
 | 10 Hz detections off the live feed, off-lattice ones rejected | **exists** | `ConsolePipeline`, `ProcessedFrame.detections`, `block_outline._lattice_filter` |
-| those detections **labelled with a cell** | **does not exist** — `_lattice_filter` discards its indices; pixel → cell is `WorkspaceMap.cell_at` and belongs to the supervisor. See [placement-supervision.md §2a](placement-supervision.md#2a-three-things-the-earlier-designs-got-wrong) |
+| those detections **labelled with a cell** | **BUILT** — `rig.supervisor.observe()` does it. Note the original claim, which was wrong: — `_lattice_filter` discards its indices; pixel → cell is `WorkspaceMap.cell_at` and belongs to the supervisor. See [placement-supervision.md §2a](placement-supervision.md#2a-three-things-the-earlier-designs-got-wrong) |
 | Support / centre-of-mass maths over a model | **exists** | [web/src/studio/validate.ts](../../web/src/studio/validate.ts) — support ratio, toppling test, `levelCeiling` |
 | A twin that refuses to invent state | **exists** | [twin.ts](../../web/src/studio/twin.ts) — and its rules apply to anything built here |
-| Server-side record of what has been placed | **does not exist** | Appendix A M1, `PlacementLedger` |
-| The supervisor and its verdicts | **does not exist** | Appendix A M2–M3 |
+| Server-side record of what has been placed | **BUILT** — `rig/placement_ledger.py` | was Appendix A M1 |
+| The supervisor and its verdicts | **BUILT** — `rig/supervisor.py`, published as `SupervisionModel`, rendered on four surfaces, and it pauses the runner on amber | was Appendix A M2–M3 |
 | Any plan-repair vocabulary | **does not exist** | this document |
 | A firmware verb that retrieves a placed block | **does not exist** | Appendix A M5 |
 

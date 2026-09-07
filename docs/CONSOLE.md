@@ -136,16 +136,30 @@ chooses every target).
    an *approximate* grid computed from `config/rig.json` geometry — drawn
    amber, labelled `APPROXIMATION ONLY`. Calibration only refines the
    pixel-to-cell mapping; it is never required to place a block.
-7. **There are two grids, latched by mode.** `vertical` (7 × 6 addressable,
+7a. **The camera now asserts, and it still never moves the rig.** Since
+   placement supervision landed, a detected block changes what the console says
+   about whether a build was correct, and a board verdict pauses or stops the
+   runner. Three limits on that are load-bearing: a verdict **never** produces
+   `LOCKED` (that is reserved for "the claw's position is unknown"), the machine
+   **never** repairs anything by itself, and every verdict is refused outright
+   unless the rig is parked, the map is calibrated and the scene has been still
+   for a settle window. See [CAMERA.md](CAMERA.md) §0 and
+   [features/placement-supervision.md](features/placement-supervision.md).
+8. **There are two grids, latched by mode.** `vertical` (7 × 6 addressable,
    6 × 5 positive build cells) and `horizontal` (3 × 10 addressable, 2 × 9
    positive). `[0,0]` is the feeder in both. Switching mode changes what every coordinate means, so it
    clears any selection, and entering `horizontal` requires X/Y to be homed
    first. See AGENTS.md §3.
-8. **The camera pipeline is heavy and already built.** Colour correction,
+9. **The camera pipeline is heavy and already built.** Colour correction,
    fisheye undistortion, block detection, printed-grid detection all run
    before this console sees a frame — detection on background workers at a
    lower rate, the main loop using the last completed result. Nothing here
-   reimplements any of it.
+   reimplements any of it. Supervision does not either: it consumes the
+   detections the pipeline already produced, adds no detector and takes no
+   extra frame. Its one piece of blocking work — a full-frame difference — goes
+   to the **same single-threaded executor** as `process_once` and
+   `encode_jpeg`, so the pipeline still has exactly one owner thread, and it is
+   ordered **last** in the loop turn so it can never delay a build result.
 
 ---
 
@@ -155,7 +169,8 @@ chooses every target).
   ┌─────────────────────────────────────────────┐
   │  React PWA  (phone / tablet / desktop)       │
   │  - MJPEG <img> video layer                   │
-  │  - SVG overlay layer (grid, hover, selection)│
+  │  - SVG overlay layer (grid, hover, selection,│
+  │    and the board verdict's per-cell marks)   │
   │  - WebSocket state store                     │
   │  - REST calls for every action                │
   └───────────────┬─────────────────────────────┘
@@ -180,6 +195,7 @@ chooses every target).
   │  GET  /api/stream.mjpg   raw video            │
   │  POST /api/select|deselect|level|mode|view    │
   │  POST /api/build         (echoes command)     │
+  │  POST /api/supervision/ack (dismiss a verdict)│
   │  POST /api/calibration/* (corners / sheet /   │
   │                            placed-block)      │
   └───────────────┬───────────────┬──────────────┘
@@ -206,8 +222,10 @@ chooses every target).
 | `vision/mock_camera.py` → `MockCamera` | renders blocks at real grid cells plus a printed-lattice stand-in, so detection is exercisable off the Pi |
 | `rig/console_pipeline.py` → `ConsolePipeline`, `ProcessedFrame` | the headless capture+detect loop; owns exactly one camera, applies orientation then colour correction exactly once, does **not** own a serial `Rig` |
 | `web/app.py` | FastAPI app factory, one-owner lifespan, `GET /api/state`, `WS /api/events` |
-| `web/state.py` | Pydantic snapshot model |
-| `web/routes_command.py` | select / select-axis / deselect / level / mode / view / build, all guarded through `BuildController` |
+| `web/state.py` | Pydantic snapshot model, including `vision_verification` and the `SupervisionModel` block — **one field, four readers, no surface re-derives a verdict** |
+| `web/routes_command.py` | select / select-axis / deselect / level / mode / shift / view / build, all guarded through `BuildController`, plus `POST /api/supervision/ack` — the one mutating route allowed **during** a build, because it moves nothing and a verdict that paused the runner has to be dismissible |
+| `rig/placement_ledger.py` → `PlacementLedger` | the as-built memory: what the machine was told to place and what the firmware said came of it. Pure data, no OpenCV, `PLACED` only, keyed by mode, **never reloaded from disk as authority** |
+| `rig/supervisor.py` | the board's observer: D5's interlocks, pixel→cell, hysteresis, the classifier. Consumes `ProcessedFrame.detections` and a `WorkspaceMap`; adds no detector and takes no extra frames |
 | `web/routes_calibration.py` | corner calibration, printed-sheet calibration, and the placed-block calibration sub-flow |
 | `web/mjpeg.py` | one latest-JPEG slot shared across clients, no encoding while nobody is subscribed |
 | `web/geometry.py` | cached grid polygons + current selection/detection geometry for `StateModel` |

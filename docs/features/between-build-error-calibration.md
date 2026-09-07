@@ -203,8 +203,9 @@ web/src/…                  edit  a suggestion strip; before/after; provenance
 `block_outline` that consumes `ProcessedFrame.detections` and the `WorkspaceMap`,
 adds no detector, and takes no extra frames.
 
-**The ledger hook is shared with placement supervision.** If both features are
-built, build `PlacementLedger` once — this feature needs "which cell was
+**The ledger hook is shared with placement supervision, and it is now BUILT.**
+`rig/placement_ledger.py` exists, written at the one `BuildController` hook. Do
+not build a second one — this feature needs "which cell was
 commanded, and did it settle" for exactly the same reason.
 
 ---

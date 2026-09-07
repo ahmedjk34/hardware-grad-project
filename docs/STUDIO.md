@@ -1292,6 +1292,55 @@ first in the diff.
 Newest first. One entry per landed change; note anything that contradicts the
 plan or that a future reader could not infer.
 
+### Placement supervision reaches the runner and the twin
+
+Two of the four surfaces placement supervision publishes to are the Studio's,
+and both take the **server's** verdict verbatim. Nothing here derives one, which
+is why four renderers of one field cannot drift apart. The full design is
+[features/placement-supervision.md](features/placement-supervision.md) §6; what
+changed inside the Studio:
+
+**The runner reacts to the board, and never locks on it.** A new `board-verdict`
+RunEvent carries the server's `severity`. **Amber pauses** — a new
+`pauseReason: "board-verdict"`, and `RunnerPanel` reads `BOARD — RUN PAUSED`.
+**Red stops** the program into `stopped-mismatch`, because continuing to place
+into a board you no longer understand is how the claw hits something. Neither
+ever reaches the `locked` phase, and `runner.test.ts` asserts that for both
+severities: `LOCKED` means the claw's position is unknown and needs a human plus
+a service restart, while a verdict is a statement about the **board**. Nothing
+about the run's own state machine changed — an idle or finished runner ignores a
+verdict entirely.
+
+**The run log gains the camera's answer, one event later than you would expect.**
+`RunLogEntry.verification` has existed and been emitted by `run-report.ts` since
+M7, and nothing ever populated it. It does now — but it could not be filled at
+`build-settled`, and this is the part a future reader could not infer: the
+server cannot form the verdict at settle time. The rig has only just parked, and
+a verdict needs a still, settled scene, which is **another ~0.6 s at the
+pipeline's measured 8.6–8.7 Hz**. So the row is written on the result with
+whatever the server has (`checking — waiting for a still frame`) and a second
+`build-verified` event patches it in place. Re-delivering the same sentence is a
+no-op; there is no row to patch before the first build settles.
+
+**The twin gets an overlay LAYER, not a sixth `TwinAppearance`.**
+`scene.supervision` carries the named cells, the refused (`unjudged`) cells and
+the severity, and `studio/scene/Supervision.tsx` draws them over the lattice —
+an outline for a marked cell, a 45° hatch for a refused one, no fill and no
+motion. The five appearances are untouched and `twin.test.ts` asserts they are
+still five. The reason for the separation is not tidiness: the five say what the
+**rig** is doing with a block, a verdict says what the **board** looks like from
+a different instrument, and folding either into the other lets one overwrite the
+other's meaning. The twin is deliberately the quietest of the four surfaces — it
+is a mirror, not a siren — and it marks nothing at all for `VERIFIED`.
+
+**New token, and a measurement that contradicts DESIGN.md's own warning.**
+`--danger-text: #FF8A8A` was added because `--danger` `#FF5C5C` measures
+**5.89:1** on `--surface` and fails DESIGN.md §7's 7:1 state-text bar — while
+amber, which that section warned about, passes at 8.75:1. `--danger` itself is
+unchanged; `LOCKED` depends on it and it is clear as an icon, an edge and a
+filled chip. `web/src/tokens.test.ts` reads the real stylesheet and pins all of
+it, including the failure, so a palette edit cannot break the bar in silence.
+
 ### `RunnerPanel` gains a `CLEAR` button
 
 `RunnerPanel`'s header shows a `CLEAR` button once a run reaches a terminal or

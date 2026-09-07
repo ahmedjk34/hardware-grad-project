@@ -1,14 +1,28 @@
 # Placement supervision — the machine knows what it built, and checks
 
-**Status: Gate 0 passed, M1 complete, M2 logic complete and unwired. This is
-the build plan.**
+**Status: BUILT. Gate 0 passed on the rig, M1, M2, M3a and M3b are complete
+and wired. M4 and M5 remain future work.** This document is now both the plan
+and the record of what was built from it — every deviation is marked in place.
+
+> **Not yet watched on hardware.** Every path here is tested, and Gate 0's
+> constants were measured on the rig — but the wired code has never seen a real
+> frame, because there is no camera on the development desktop. M2's last open
+> item is a bench session.
 
 > **Read [placement-supervision-progress.md](placement-supervision-progress.md)
 > alongside this document.** It is the build record: the Gate 0 measurements
-> taken on the rig, ten findings, and the two places where the decisions below
-> were found to be wrong — D9's `DISAGREES` rows (over-conservative, see its
-> P1) and D10's stated rationale (the conclusion holds, the reason given does
-> not). The placeholder constants in D5 are superseded by measurements there.
+> taken on the rig, **twenty numbered findings**, and the seven P-decisions.
+> **Six places in this document were found to be wrong on contact with the rig
+> or the code**, and every one of them is corrected in place below:
+>
+> | | what was wrong | finding |
+> | --- | --- | --- |
+> | D5 | the placeholder constants | measured — §1 of the record |
+> | D5 | `cell_phase == "idle"` never becomes true again after block one | F14 |
+> | D8a | wants a per-cell frame-difference threshold nobody has measured | F17 |
+> | D9 | `DISAGREES` was over-conservative on one-sided changes | P1 |
+> | D10 | the conclusion holds, the reason given does not | F9 / P3 |
+> | §2b | "zero client work" — half of it was a timing impossibility | F18 |
 
 This document **merges and supersedes** two earlier descriptions of the same
 foundation: [feature-ideas.md §1.4 / Appendix A](../feature-ideas.md#appendix-a--placement-supervision-full-design)
@@ -139,10 +153,23 @@ runner.ts:42          RunLogEntry.verification
 run-report.ts:43      already emits it as a Markdown table column
 ```
 
-**Publishing one string field from Python lights up the runner log *and* the
-thesis run report with zero client work.** M3a is therefore far cheaper than it
-looks, and it should be built before the continuous mode for exactly that
-reason.
+**Half of this held, and the half that did not is instructive (F18).**
+
+The **run report is genuinely free** — `run-report.ts` already emits the column.
+The **runner log row was not**, and not because the wiring was missing: it is
+there and it works. `RunnerPanel` reads `vision_verification` *at the moment of
+the `build_result` event*, and **the verdict cannot exist at that moment** — the
+rig has only just parked, and D5 requires a still, settled scene, which is
+another ~0.6 s at the measured 8.6-8.7 Hz. At settle time the field necessarily
+reads `checking — waiting for a still frame`.
+
+Delaying `build_result` until the check resolves was rejected outright: it is
+the terminal event and the ordering around it is already tight (F15). So M3a
+added one `build-verified` RunEvent, ~10 lines in `runner.ts`, which patches the
+newest build row in place. **The browser still never derives a verdict** — it
+renders the server's sentence verbatim.
+
+M3a was still far cheaper than it looks, and was still built first.
 
 ---
 
@@ -391,6 +418,10 @@ nobody thought to ask it to. The **repair** path (M4) is what gets a toggle.
 
 ## 4. Where it lives
 
+**Every line of this is now built.** Two files were added that the plan did not
+anticipate: `web/src/components/SupervisionBanner.tsx` and
+`web/src/studio/scene/Supervision.tsx`.
+
 ```
 python/rig/placement_ledger.py   NEW   D2/D3 — the memory. Pure, no I/O beyond
                                        the append-only log. No OpenCV.
@@ -407,7 +438,18 @@ web/src/types.ts                 edit  the two new state fields
 web/src/studio/runner.ts         edit  a "board-verdict" RunEvent → pause/stop
 web/src/components/GridOverlay.tsx  edit  a per-cell class on the LIVE VIDEO —
                                        same mechanism as `blocked` cells today
-web/src/components/…             edit  banner (new), runner strip, twin overlay
+web/src/components/SupervisionBanner.tsx
+                                 NEW   the only surface allowed to alarm
+web/src/studio/scene/Supervision.tsx
+                                 NEW   the twin's overlay LAYER — not a sixth
+                                       TwinAppearance
+web/src/components/RunnerPanel.tsx
+                                 edit  build-verified + board-verdict dispatch
+web/src/style.css                edit  + --danger-text, the cell/hatch/banner
+                                       classes, the ONE-SHOT pulse
+web/src/tokens.test.ts           NEW   the contrast bar, read off the real
+                                       stylesheet so a palette edit cannot
+                                       break it in silence
 ```
 
 **This is the error detector**, and it is deliberately **not** in `vision/`.
@@ -440,11 +482,17 @@ The requirement — *appears everywhere and stays in sync* — is met
 surface renders it. **No surface re-derives a verdict locally.** Four renderers
 of one field cannot disagree, so "sync" is not a thing anyone has to maintain.
 
+As built, with one field added — `severity`. It is here because **no surface may
+re-derive a verdict**, and "is this amber or red" is exactly the kind of thing
+four renderers would each work out for themselves and eventually disagree about.
+The server decides once.
+
 ```python
 class SupervisionModel(BaseModel):
     state: Literal["NO_MEMORY", "NO_MAP", "WARMING", "BUSY", "QUIET", "VERDICT"]
     verdict: Literal["VERIFIED", "NOT_DETECTED", "REMOVED",
                      "MOVED", "FOREIGN", "DISAGREES"] | None
+    severity: Literal["none", "amber", "red"]   # ADDED — never "locked"
     cells: list[tuple[int, int]]          # the cells the verdict names
     mode: str                             # which lattice it was judged in
     expected: list[tuple[int, int]]       # both sets, for DISAGREES
@@ -469,7 +517,9 @@ also compares this feature against [Stage 15](stage-15-placement-correction.md),
 the *other* camera-based error detector, and explains why they get their
 detections by different routes. The short version is the point of this feature:
 
-| | today | after |
+**Done.** The "after" column is the present tense as of M3a/M3b.
+
+| | before | now |
 | --- | --- | --- |
 | the camera is a… | monitor + calibration instrument | **instrument that asserts** |
 | detections are… | drawn | drawn **and read** |
@@ -728,7 +778,7 @@ Inheriting DESIGN.md §8, plus this feature's own:
 
 ## 7. Milestones
 
-### M1 — the memory *(no vision, testable alone)*
+### M1 — the memory *(no vision, testable alone)* — **BUILT**
 
 `placement_ledger.py` + the one `BuildController` hook + the append-only log.
 
@@ -747,27 +797,52 @@ inherits them rather than writing a second occupancy model.
 modes' lattices separate, collapses levels to a column correctly, admits only
 `PLACED`, and reports `NO MEMORY` after a restart.
 
-### M2 — the observer *(report only, no verdicts)*
+### M2 — the observer *(report only, no verdicts)* — **BUILT AND WIRED**
 
 `supervisor.py`: the D5 interlocks, the **pixel → cell step via
 `WorkspaceMap.cell_at`** (§2a.1 — this is real work, not an inherited input),
 the D7 hysteresis, and the D6 ceiling. Publishes `state` and `observed` only.
 
-**Gate:** watch it on the real bench for a session. Does the quiet window ever
-open during a program? How many settled frames actually arrive between two
-ops? Those numbers decide whether `SETTLE_N = 3` is achievable mid-program or
-only between jobs.
+**Gate: PASSED, on the rig, 2026-09-07.** The quiet window opens in **42-47% of
+frames during a running program**, with ~9 runs of ≥5 consecutive quiet frames a
+minute — so `SETTLE_N = 3` is comfortably achievable mid-program, not only
+between jobs. A hand over the board reads **105× the parked median**, so the
+threshold sits in a wide empty band rather than on a judgement call. Full
+numbers in the record's §1.
 
-### M3a — the per-build verdict *(the cheap, high-value one — do it first)*
+**Two corrections to this milestone, both from the code rather than the rig:**
+
+- D5's parked interlock is `PARKED_CELL_PHASES = ("idle", "complete")`, **not**
+  `cell_phase == "idle"`. `CellOrchestrator._phase("complete")` is terminal and
+  sticky, so `"idle"` would have wedged supervision at `BUSY` for every session
+  after the first placed block — silently (F14).
+- `_supervise` runs **last** in the driver loop turn, after the build result is
+  published. Any `await` between `job.poll()` and `_publish_build_result` lets a
+  state snapshot claim `last_result=placed` before the terminal event (F15).
+
+**Still open:** a bench session. Nothing here has seen a real frame.
+
+### M3a — the per-build verdict *(the cheap, high-value one — do it first)* — **BUILT**
 
 The classifier at one trigger: `_publish_build_result`. Frame-difference against
 the pre-build frame, narrow question, `vision_verification` published.
 
-**Free downstream:** the runner log row and the run-report Markdown column light
-up with no client change (§2b). That is thesis evidence for every placement,
-for the cost of one string field.
+**Free downstream — half of it (F18).** The run-report Markdown column *is*
+free: `run-report.ts` already emits `RunLogEntry.verification`. The runner log
+row was not, and the reason is timing rather than missing wiring —
+`RunnerPanel` reads the field at the `build_result` event, and the verdict
+cannot exist then. It needed one `build-verified` RunEvent that patches the row
+in place. The browser still derives nothing; it renders the server's sentence.
 
-### M3b — the continuous verdict *(the demonstrable milestone)*
+**And the check is narrower than D8a hoped (F17).** A frame difference against
+the pre-build frame needs a per-cell change threshold that has never been
+measured, so it was not built. What ships: decisive at level 0, decisive at any
+judged level when the cell reads **empty**, `unconfirmed` at levels 1-2 with the
+cell occupied — an overhead camera cannot tell a stack that grew from one that
+did not — and `unchecked` at the D6 ceiling. **Gate 0b** is the measurement that
+would lift the `unconfirmed` row.
+
+### M3b — the continuous verdict *(the demonstrable milestone)* — **BUILT**
 
 Whole-board occupancy in every quiet window while parked. D9 verdicts, D11
 pause/stop, D12 dismissal, **all four surfaces per §6** — and build the **camera
@@ -776,6 +851,10 @@ actually looking at.
 
 **This is the one to demo:** lift a block off the board and the cell lights up
 on the live video while the console names it.
+
+Built as specified, with `--danger-text: #FF8A8A` added per §6.5 and
+`tokens.test.ts` reading the real stylesheet so a future palette edit cannot
+break the 7:1 bar in silence.
 
 ### M4 — future: bounded automatic repair
 
@@ -805,7 +884,10 @@ and `PASSED`/`FAILED` lists, and `FakeRig` is the pattern (fakes over mocks).
 | --- | --- |
 | `tests/test_placement_ledger.py` | append/reload, per-mode separation, level collapse to a column, `PLACED`-only admission, `NO MEMORY` after restart, the two Stage 15 predicates |
 | `tests/test_supervisor.py` | every D9 row from synthetic cell sets; hysteresis needs `N of M`; each D5 interlock independently suppresses a verdict; counters **reset rather than decay** on a tripped interlock; D6 refuses level ≥ 3; D10 suppresses `FOREIGN` below 6 detections; D13 resets on a mode change |
-| `tests/test_supervisor_frames.py` | against the two reference boards in `python/captures/`: full board → `VERIFIED`; one cell erased → `REMOVED [c,r]` naming the **exact** cell; a block relocated → `MOVED`; a detection in a gap → `FOREIGN`; the holder's offcuts never produce `FOREIGN` |
+| `tests/test_supervisor_frames.py` | **built differently, and stronger.** Not the reference stills — the **four Gate 0 rig traces** in `docs/measurements/`, 1398 frames the rig actually produced, replayed through the shipped `Supervisor`. Reproduces the measured distribution to within a tenth of a percent, names the exact residual cell `(2,0)`, and replays the pre-fix merged reading to measure it emitting `FOREIGN` in 99.4% of windows on a correct board |
+| `tests/web_supervision_test.py` | **new.** The seam: what `web/app.py` hands the supervisor, the mode-latch suspension, the repeated-sequence guard, D5's parked gate including the `complete` trap, and the per-build check's four outcomes |
+| `web/src/tokens.test.ts` | **new.** Reads the real stylesheet and asserts every colour that carries a state WORD clears 7:1, and pins the fact that `--danger` itself does not |
+| `web/src/components/SupervisionBanner.test.tsx` | **new.** No banner for `VERIFIED`; no state colour for BUSY/QUIET/NO_MEMORY; `role` by severity; the cell named in the dismiss label; the hatch is not a colour |
 | `tests/web_state_test.py` | `vision_verification` and the supervision block appear in the snapshot and survive a mode latch |
 | `web/src/studio/runner.test.ts` | a `board-verdict` event pauses on `REMOVED`, stops on `DISAGREES`, and never reaches `locked` |
 | existing | `test_block_outline.py`'s timing guard must still pass — supervision adds no detector work |
@@ -814,7 +896,7 @@ and `PASSED`/`FAILED` lists, and `FakeRig` is the pattern (fakes over mocks).
 count-only assertion passes on a board renumbered by one cell, which is the
 failure that matters.
 
-Standard gate afterwards:
+**Every one of these passes.** Standard gate afterwards:
 
 ```bash
 python3 python/tests/test_grid.py     # firmware <-> config pairing
@@ -822,7 +904,13 @@ cd web && npx vitest run              # Studio / coords / Twin
 cd python && python3 -m pytest tests/ # the rest
 ```
 
-Known pre-existing failures, **not** regressions: `mock_camera_test.py`,
+`python/tests/` is **fully green — 94 passed, 0 failed.** The three failures
+that used to be waved through as pre-existing were defects in the tests
+themselves and were fixed alongside this work (record F20). The one remaining
+red is `test_grid.py`'s `zGoPickup()` check — a firmware/AGENTS.md paired value
+and not this feature's (F10 / P5).
+
+Still expected to fail on a clean checkout, for missing fixtures:
 `test_combined_grid`, `test_color_tuning`, `test_camera_performance`,
 `test_block_outline`.
 
@@ -855,6 +943,14 @@ Known pre-existing failures, **not** regressions: `mock_camera_test.py`,
    relative to whichever block sorts first, so the ceiling in D6 is *typical*,
    not guaranteed. Reasoned from the code, **not measured**. See
    [parallax §4a](camera-parallax-and-levels.md#4a-a-subtlety-that-makes-the-ceiling-approximate-not-exact).
+7b. **A placement at level 1 or 2 can be reported as `unconfirmed`, not
+   verified** (F17). The per-build check is decisive at level 0, and decisive at
+   any judged level when the cell reads *empty* — that is a tower that fell. But
+   a cell that was already occupied stays occupied whether the new block landed
+   or not, and an overhead camera cannot tell the two apart. D8a wanted a frame
+   difference against the pre-build frame to close this; that needs a per-cell
+   change threshold nobody has measured, and a guessed threshold must never
+   reach a rig. **Gate 0b** is the measurement that would lift it.
 8. **The lattice filter's 30 % self-disable is weakest exactly when the board is
    most wrong** (F7 / P4). `block_outline` keeps every detection when a
    recovered lattice would reject more than 30 % of what it saw

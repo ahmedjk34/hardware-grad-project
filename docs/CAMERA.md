@@ -85,7 +85,12 @@ is the whole camera-side product:
 | `stale`, `captured_at`, `sequence`, `image_size`, `paper_status` | freshness and bookkeeping |
 
 **Nothing is stored as an image beyond the latest frame.** There is no frame
-history, no recording, no buffer of past boards.
+history, no recording, no buffer of past boards. Supervision holds **one extra
+reference**: the previous accepted frame's `view`, as the baseline for D5's
+scene-quiet difference. It is a reference to an array the pipeline already made
+and freed on the next frame — not a copy, not a buffer, and never written to
+disk. What supervision persists is a set of cells, a counter per cell, and
+timestamps.
 
 ---
 
@@ -116,6 +121,7 @@ Defaults: `{"grid": True, "detect": True, "paper": False, "overlay": True}`
 | **`paper`** | printed calibration-sheet tracking. Off by default; toggling it on is what starts the tracker |
 | **`overlay`** | master switch for all of the above |
 | *(always on)* | hover-cell highlight; selected cell with halo and corner ticks |
+| *(always on, when `grid` is)* | **the board's verdict** — the cells a supervision verdict names take the state colour as a 2px+ stroke and a low-opacity fill, and cells the machine **refused** to judge take a 45° hatch and no colour at all. Each carries an SVG `<title>`. It is the same mechanism `blocked` cells use, over a list the browser already has, and the browser decides nothing: `state.supervision.cells` and `.unjudged` are the server's |
 
 ### 3c. The camera as an input device
 
@@ -197,8 +203,8 @@ Two rules that survive every feature:
 
 ## 5. "Where is the error detector? Isn't it part of the camera?"
 
-**There isn't one. And when it is built, it will deliberately not live in the
-camera.**
+**There is one now — and it deliberately does not live in the camera.** The
+reasoning below is why, and it survived the build unchanged.
 
 ### 5a. Why it cannot be part of `vision/`
 
@@ -227,7 +233,7 @@ designed error detectors do, for the same reason:
 
 | Module | Feature | `vision/` touched? |
 | --- | --- | --- |
-| `rig/supervisor.py` | [placement supervision](features/placement-supervision.md) | no — consumes `ProcessedFrame.detections` |
+| `rig/supervisor.py` **(built)** | [placement supervision](features/placement-supervision.md) | no — consumes `ProcessedFrame.detections` |
 | `rig/stage15.py` + `rig/placement_check.py` | [Stage 15](features/stage-15-placement-correction.md) | no — *"calls the existing detector with different arguments"* |
 
 Neither adds a detector, neither modifies a module in `vision/`, and neither
@@ -258,21 +264,30 @@ solves indices relative to `detections[0]` purely to decide keep/reject and then
 Earlier design drafts asserted the opposite. See
 [placement-supervision.md §2a](features/placement-supervision.md#2a-three-things-the-earlier-designs-got-wrong).
 
-### 5c. The gap, stated plainly
+### 5c. The gap — CLOSED
+
+Every row of this table used to read "does not exist". The table is kept because
+it is the clearest statement of what was missing and what filled it.
 
 | Piece | State |
 | --- | --- |
-| detections, 10 Hz, off-lattice ones rejected | **exists** |
-| cell ⇄ pixel geometry | **exists** |
-| a record of what the machine has placed | **does not exist** — `web/state.py` carries a selection and `last_result`, nothing cumulative; `BuildJob` has no history; the firmware's `countPlacedBlock()` is a **histogram** and does not record the cell |
-| anything comparing the two | **does not exist** |
-| a UI field waiting for the answer | **exists and is never populated** — `vision_verification`, read defensively in [RunnerPanel.tsx:182](../web/src/components/RunnerPanel.tsx#L182), carried through the runner event → log row → run-report column. The whole client path is wired; only the server's opinion is missing |
+| detections, 10 Hz, off-lattice ones rejected | **exists** — unchanged, and supervision adds none |
+| cell ⇄ pixel geometry | **exists** — `WorkspaceMap.cell_at`, and the consumer's own work to call it |
+| a record of what the machine has placed | **exists** — `rig/placement_ledger.py`. Pure data, `PLACED` only, keyed by mode, appended at the single `BuildController` hook. Written to `logs/placements.log` for the record and **never reloaded as authority**: a reloaded ledger would describe a board nobody has looked at since the process died |
+| anything comparing the two | **exists** — `rig/supervisor.py`. The subtraction, one layer above the camera, with D5's interlocks in front of it |
+| a UI field waiting for the answer | **exists and is populated** — `vision_verification`. The run-report column was free as predicted; the runner log row needed one `build-verified` event, because the verdict arrives ~0.6 s after the result the row is written from |
+
+**One thing the ledger still cannot do, and it is a limit not a bug:** it records
+*"a block was placed at [3,2]"*, never *"block #17"*. Twenty-nine identical
+wooden rectangles carry no identity, so when two cells empty and two fill in the
+same window, no memory can pair them. That is precisely what `BOARD DISAGREES`
+exists to say, and why it declines to guess instead of guessing.
 
 ---
 
 ## 6. The two camera-based features, and how they differ
 
-Both are designed, neither is built, and both make the camera assert something.
+**Supervision is built; Stage 15 is not.** Both make the camera assert something.
 They are **not** the same feature at different resolutions — they ask different
 questions and, crucially, **they get their detections by different routes.**
 
@@ -393,6 +408,7 @@ Geometry, not effort. State these rather than discovering them in a demo.
 | **Cannot see a block underneath another** | the view is overhead; a level-1 block hides the level-0 block completely. Occlusion, not resolution |
 | **Cannot see a block taken off the top of a stack** | the cell stays occupied, so an occupancy check is unchanged. The only possible fix is `block_levels`' side-sliver height, which is **not validated on real frames** |
 | **Cannot see above level 3** | parallax pushes an elevated block past `LATTICE_SNAP` (0.34 cells) and `_lattice_filter` silently discards it. See [features/camera-parallax-and-levels.md](features/camera-parallax-and-levels.md) |
+| **Cannot confirm a block added to an existing stack** | the cell was occupied before and is occupied after; an overhead view cannot tell a stack that grew from one that did not. Supervision reports `unconfirmed` at levels 1-2 rather than claiming either way. The cell reading *empty* is still decisive — that is a tower that fell. Closing this needs a measured per-cell change threshold (Gate 0b) |
 | **Cannot resolve a sub-cell nudge** | 0.34-cell snap plus the map's own 0.27 cm flattening error. A block pushed a few millimetres still reads as the same cell |
 | **Is unreliable on a sparse board** | `_lattice_filter` skips entirely below `MIN_LATTICE_BLOCKS` (6) and disables itself if it would reject >30 %. The holder's offcuts beside `[0,0]` can then read as blocks — which is the *common* state early in every build |
 | **Cannot see through the gantry** | the arm crosses the board during a build. This is why every check is a between-ops activity |
@@ -406,19 +422,23 @@ it were cheap. [feature-ideas.md §3.5](feature-ideas.md).
 
 ---
 
-## 8. Status board — what we are adding
+## 8. Status board — what was added
+
+**Placement supervision is complete: Gate 0, M1, M2, M3a and M3b are all
+ticked.** What remains under it is future work that was scoped out on purpose.
 
 **Tick a box when it lands, and in the same commit update the prose above that
-it makes false.** §0 says the camera "never makes an assertion the system acts
-on" — the first ticked box in M3a makes that sentence wrong, and a living doc
-that still says it is worse than no doc.
+it makes false.** That rule has already been paid once: §0 used to say the
+camera *"never makes an assertion the system acts on"*, and M3a made the
+sentence wrong. It was corrected in the M3a commit, which is the only way this
+stays a living document rather than an archive.
 
 Plans: [placement-supervision.md](features/placement-supervision.md) ·
 **[the build record + Gate 0 measurements](features/placement-supervision-progress.md)** ·
 [stage-15-placement-correction.md](features/stage-15-placement-correction.md) ·
 [camera-parallax-and-levels.md](features/camera-parallax-and-levels.md)
 
-### Gate 0 — de-risk before building anything
+### Gate 0 — de-risk before building anything — **PASSED on the rig, 2026-09-07**
 
 - [x] **Throwaway measurement script**, rig parked, ~60 s. Log per frame: the
       channel-max frame-difference energy fraction, the detection count, and
@@ -443,7 +463,7 @@ Plans: [placement-supervision.md](features/placement-supervision.md) ·
       42–47% of frames quiet, ~9 runs of ≥5 consecutive quiet frames per
       minute. Supervision is not restricted to between-job checks.
 
-### M1 — the memory *(no camera involvement at all)*
+### M1 — the memory *(no camera involvement at all)* — **DONE**
 
 - [x] `python/rig/placement_ledger.py` — per cell: mode, col, row, level,
       result, `placed_at`. Pure data, no OpenCV.
@@ -454,7 +474,7 @@ Plans: [placement-supervision.md](features/placement-supervision.md) ·
 - [x] Refuses to load a reloaded ledger as authority → reports `NO MEMORY`
 - [x] `python/tests/test_placement_ledger.py` — 42 checks
 
-### M2 — the observer *(report only, no verdicts)*
+### M2 — the observer *(report only, no verdicts)* — **DONE except the bench**
 
 - [x] `python/rig/supervisor.py` — carrying Gate 0's **measured** constants
 - [x] Interlocks: gantry parked · **`frame.calibrated`** · scene quiet · settled N-of-M
@@ -487,11 +507,13 @@ Plans: [placement-supervision.md](features/placement-supervision.md) ·
 - [x] Per-cell hysteresis; counters **reset**, not decay, on a tripped interlock
 - [x] Level-3 ceiling: refuse to judge cells whose expected top level is ≥ 3
 - [x] Hysteresis reset on `frame.grid_mode` change
-- [ ] Exposed as a state field, watched on the bench for a session — the
-      reading is held on `app.state.supervision` and every CHANGE is written to
-      `logs/placements.log`, but **nothing is published to the client yet**;
-      that is M3b. **Unverified on hardware: there is no camera on the dev
-      desktop, so the quiet gate has only ever run on synthetic arrays here**
+- [x] Exposed as a state field — held on `app.state.supervision`, published as
+      `SupervisionModel` by M3b, and every CHANGE written to
+      `logs/placements.log` (per change, never per frame)
+- [ ] **Watched on the bench for a session.** THE ONE OPEN ITEM. There is no
+      camera on the development desktop, so the quiet gate has only ever run
+      here on synthetic arrays — Gate 0 measured the numbers on the rig, but
+      this code has never seen a real frame
 - [x] `python/tests/test_supervisor.py` — **73 checks**, synthetic cell sets only
 - [x] **D9 refined (P1)** — a one-sided change of any size is NAMED, not
       dismissed: N missing with nothing gained is `REMOVED` naming all N, N
@@ -509,7 +531,7 @@ Plans: [placement-supervision.md](features/placement-supervision.md) ·
       replays the pre-fix merged reading to show it emitting FOREIGN in 99.4%
       of windows on a board that was entirely correct
 
-### M3a — the per-build verdict *(cheapest high-value step)*
+### M3a — the per-build verdict *(cheapest high-value step)* — **DONE**
 
 - [x] **Armed** at `_publish_build_result`, on the `PLACED` branch only, from
       the ledger entry that build just appended
@@ -522,15 +544,17 @@ Plans: [placement-supervision.md](features/placement-supervision.md) ·
       cell; `unconfirmed` at levels 1-2 with the cell occupied, because an
       overhead camera cannot tell a stack that grew from one that did not;
       `unchecked` at the level-3 ceiling. **Never the word "error"**
-- [ ] **The free win was overstated.** The run-report column IS free — it
-      already reads `RunLogEntry.verification`. The runner log row needed one
-      `build-verified` event, because the verdict arrives ~0.6 s AFTER the
-      result the row is written from (progress.md F18)
+- [x] **The free win, half of it.** The run-report column IS free — it already
+      reads `RunLogEntry.verification`. The runner log row was not: the verdict
+      arrives ~0.6 s AFTER the result the row is written from, so it needed one
+      `build-verified` event to patch the row in place (progress.md F18)
+- [ ] **Gate 0b** — the per-cell change threshold that would let this confirm a
+      placement at level 1 or 2 instead of reporting `unconfirmed` (F17)
 - [x] `python/tests/web_supervision_test.py` + `web/src/studio/runner.test.ts`
       extended
 - [x] **§0 and §6a of this file corrected** — the camera now asserts
 
-### M3b — the continuous verdict *(the demonstrable milestone)*
+### M3b — the continuous verdict *(the demonstrable milestone)* — **DONE**
 
 - [x] Whole-board occupancy diff in every quiet window while parked
 - [x] D9 verdicts, refined by P1: `VERIFIED` / `NOT_DETECTED` / `REMOVED` /

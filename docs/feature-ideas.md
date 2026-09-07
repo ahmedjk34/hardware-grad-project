@@ -65,7 +65,7 @@ block glowing in the exact place it will physically land, and the rest of the
 design faintly behind it. Near-AR, on hardware you already own, with maths that
 is already written and tested.
 
-### 1.4 Placement supervision  ★ fully designed, not started
+### 1.4 Placement supervision  ★ BUILT
 
 After each `PLACED`, compare the detections against the cell the model expected
 to fill: `VERIFIED`, `NOT DETECTED`, `UNEXPECTED BLOCK AT [c,r]`. Run the same
@@ -84,20 +84,27 @@ frames.
 > are not true (most importantly: **detections are not labelled with cells**,
 > so the pixel → cell step is real work, not an inherited input).
 
-**Not implemented.** No `rig/placement_ledger.py`, no `rig/supervisor.py`;
-`web/state.py` carries no cumulative occupancy record. The only related code
-in the repo is the Studio runner's per-step camera-thumbnail capture
-(`web/src/studio/run-report.ts`, `runner-driver.ts`) — a raw image embedded in
-the Markdown report, not vision-based verification — plus an optional
-`vision_verification` field read defensively in
-`web/src/components/RunnerPanel.tsx` that the Python backend never populates.
-That field is **not** dead weight: the whole client path behind it (runner
-event → log row → run-report column) is already wired, so populating it from
-Python is the cheapest high-value step in the plan.
+**Implemented.** `rig/placement_ledger.py` is the memory, `rig/supervisor.py`
+is the subtraction, `web/app.py` runs it once per accepted frame, and
+`web/state.py` publishes `vision_verification` plus a `SupervisionModel` that
+four surfaces render. `vision_verification` is populated — the run-report column
+was free as predicted, and the runner log row needed one extra event because the
+verdict cannot exist until ~0.6 s after the result the row is written from.
+
+**Gate 0 was measured on the rig on 2026-09-07** and settled the risk this idea
+lived or died on: a hand over the board reads **105× the parked median**, and
+the quiet window opens in 42–47% of frames *during a running program*. So
+supervision is not restricted to a between-jobs activity.
+
+What is **not** built: M4's bounded automatic repair, and M5's lift of the
+level-3 detection ceiling. And nothing here has been watched on hardware —
+there is no camera on the development desktop.
 
 Appendix A is kept below for its reasoning — the decisions and why they were
-made — but the milestones, the file list and the known limits now live in the
-plan file.
+made. **The milestones, the file list and the known limits live in the plan
+file, and several of Appendix A's claims about the code are wrong; the plan's
+§2a says which.** Read the plan and its build record, not this, for what was
+actually built.
 
 ### 1.5 Colour-aware planning and next-block guidance — built in Studio
 
@@ -312,7 +319,7 @@ index; the files hold the decisions.
 
 | # | Feature | Status | Difficulty |
 | --- | --- | --- | --- |
-| 4.0 | [Placement supervision](features/placement-supervision.md) — the memory, the observer, the classifier. **The build plan for §1.4**, merging Appendix A and Stage 15 §3 | not started — designed; **build M1 first, everything below needs it** | 4 / 5 |
+| 4.0 | [Placement supervision](features/placement-supervision.md) — the memory, the observer, the classifier. **The build plan for §1.4**, merging Appendix A and Stage 15 §3 | **BUILT** — Gate 0 measured, M1/M2/M3a/M3b landed. M4 (repair) and M5 (ceiling) remain. Unwatched on hardware | 4 / 5 |
 | 4.1 | [Running-bond grid shift](features/running-bond-grid-shift.md) — half-pitch course offsets, Studio + Twin + compiler + `POST /api/shift` (was "grid shift in the twin", now folded in) | **built**; firmware `shiftX`/`shiftY` unchanged | 3 / 5 |
 | 4.2 | [Stage 15 — between-job placement correction](features/stage-15-placement-correction.md) — find the one outlier block after a job parks, pick it up and re-place it, re-verify; never touches the grid | not started — design agreed; supersedes 4.4; its as-built memory is 4.0 M1 | 3 / 5 |
 | 4.3 | [Removed-block compensation](features/removed-block-compensation.md) | not started — extends 4.0 from idle-time to mid-program | 5 / 5 |
@@ -336,7 +343,26 @@ need a server-side record of what was placed. **Build it once**, in 4.0.
 
 ---
 
-## Appendix A — Placement supervision, full design
+## Appendix A — Placement supervision, SUPERSEDED design
+
+> **HISTORICAL. Do not build from this.** The feature is built, and the
+> authorities are [features/placement-supervision.md](features/placement-supervision.md)
+> (what it does) and
+> [features/placement-supervision-progress.md](features/placement-supervision-progress.md)
+> (what was measured and what changed). This appendix is kept for the reasoning
+> that survived, and because two of its claims about the code are **false** and
+> a future reader who finds only this would repeat them:
+>
+> - it says `_lattice_filter` *"already labels every detection with an integer
+>   cell"*. **It does not** — it solves indices relative to `detections[0]`
+>   purely to decide keep/reject and then discards them. Pixel → cell is the
+>   supervisor's own work.
+> - it proposes **reloading the ledger** on startup as authority. That was
+>   rejected: a reloaded ledger describes a board nobody has looked at since the
+>   process died, and what consumes it drives a claw.
+>
+> Its decision numbering (D4–D7 here) does **not** match the built design's
+> (D1–D14 there).
 
 This is the complete design for §1.4 above, kept in full rather than left to
 rot in a separate, now-deleted plan file. Nothing described here is built —
@@ -362,7 +388,7 @@ board should look like**, **knowing when you are allowed to look**, and
 | cell ⇄ pixel geometry | **exists** — `WorkspaceMap`, `rig/workspace.py` |
 | 10 Hz analysis off the live feed | **exists** — `ConsolePipeline`, `ProcessedFrame.detections` |
 | per-build text log | **exists** — `rig/build_log.py` (a stopwatch, not a state model) |
-| **a server-side record of what has been placed** | **does not exist** — `web/state.py` carries a selection and `last_result`, nothing cumulative |
+| **a server-side record of what has been placed** | ~~does not exist~~ **BUILT** — `rig/placement_ledger.py`. This table describes the repo as it was when Appendix A was written; see [features/placement-supervision.md](features/placement-supervision.md) for what exists now |
 | **a firmware verb that retrieves an already-placed block** | **does not exist** — `B` is pick-from-feeder-then-place; there is no pick-from-cell |
 | client-side model of a structure | exists but is the browser's — `web/src/studio/twin.ts`, not authoritative |
 

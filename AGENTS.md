@@ -1371,6 +1371,25 @@ drift, the same way `draw_machine_grid` already is. In `rig_build_v1.py` the
 `forbidden_during_build`), refused on a stale camera, and it clears the current
 selection.
 
+**`rig/supervisor.py` is a CONSUMER of the feed, not a part of it.** It reads
+`ProcessedFrame.detections` and a calibrated `WorkspaceMap` and adds no
+detector, no second analysis path and no extra frame. Three rules it depends on,
+which anyone editing the pipeline has to preserve:
+
+- **`process_once` returning the same `ProcessedFrame` twice is meaningful.**
+  It re-delivers the last frame, `replace`d, when only staleness changed. The
+  supervisor keys on `frame.sequence` so one capture cannot supply two readings.
+  If that field ever stops identifying a capture, supervision breaks silently.
+- **`view` is a fresh, read-only array per capture.** Supervision keeps a
+  reference to the previous one as its frame-difference baseline. If the
+  pipeline ever starts reusing a buffer, that difference becomes zero and every
+  frame reads "quiet" — the fail-*open* direction, and the dangerous one.
+- **Its frame difference goes on the same single-threaded executor** as
+  `process_once` and `encode_jpeg`, and it is ordered **last** in the driver
+  loop turn, after the build result is published. See
+  `docs/features/placement-supervision-progress.md` F15 for what happens
+  otherwise.
+
 `vision/block_detector.py` must not assume one connected colour component is
 one block. Touching standard blocks produce L, U, cross, side-by-side and
 end-to-end unions. Colour proposes the component; straight edges, internal
@@ -1420,6 +1439,23 @@ The firmware owns all of it. If the Pi needs one of these numbers, it parses the
 
 **The dividing line:** `rig.json` owns what can change without reflashing. The
 firmware owns what cannot.
+
+## `docs/measurements/` is evidence, and one of its files is a test fixture
+
+`docs/measurements/gate0_*.csv` are the four Gate 0 traces taken on the rig on
+2026-09-07 — 1398 frames of real pipeline output. They are the evidence behind
+every constant in `rig/supervisor.py`, **and** `python/tests/test_supervisor_frames.py`
+replays them on every run. Deleting one deletes a regression.
+
+Adding one means saying in
+`docs/features/placement-supervision-progress.md` §1.2 which board it was taken
+on and **whether the blocks were rig-placed**. That is not bookkeeping: a
+hand-scattered board is a different measurement regime, not a weaker one (F4),
+and a run taken on one proves nothing about the detector.
+
+Changing `QUIET_DIFF_FRACTION`, `SETTLE_N` or `SETTLE_M` means re-running
+`python/tools/measure_quiet_window.py` on the rig and updating that section in
+the same commit. They are measured values, not defaults.
 
 ## `config/lens_profile.json` is not config
 

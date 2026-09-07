@@ -1,6 +1,13 @@
 # Stage 15 — between-job placement correction
 
-**Status: design agreed, not implemented.**
+**Status: design agreed, not implemented — but §3's prerequisite is now BUILT.**
+
+The as-built memory this feature called a prerequisite shipped with
+[placement supervision](placement-supervision.md) M1, and it was built to serve
+both: `rig/placement_ledger.py` carries **this feature's own D5/D6 safety
+predicates**, `is_top_of_column()` and `has_taller_neighbour()`, so Stage 15
+inherits them rather than writing a second occupancy model that could disagree.
+See §3 for what changed and what did not.
 
 This supersedes [between-build-error-calibration.md](between-build-error-calibration.md)
 as the design we are actually building. That document designed its *reading (a)*
@@ -322,9 +329,33 @@ explicit per-action operator command, which is reason enough for opt-in.
 
 ---
 
-## 3. The as-built memory
+## 3. The as-built memory — **BUILT**
 
-**It does not exist today.** Verified:
+`python/rig/placement_ledger.py`, built as
+[placement supervision](placement-supervision.md) M1 and covered by
+`tests/test_placement_ledger.py` (42 checks). It is written at one hook —
+`BuildController.build()`'s `PLACED` branch — reaches the controller through an
+optional `ledger=` field so that `BuildController` still knows nothing about
+OpenCV, and it admits `PLACED` only.
+
+**Three things this section asked for that it delivers**, and one it does not:
+
+- per cell the top level, and when — `expected_top_level()`, `placements()`
+- D5 and D6's predicates — `is_top_of_column()`, `has_taller_neighbour()`, with
+  an empty cell sorting **below** level 0 so any neighbour with a block on it is
+  taller, which is the answer that keeps the claw safe
+- in-process only; refuse after a restart — `has_memory` is False on a fresh
+  process and supervision reports `NO MEMORY`. It *is* appended to
+  `logs/placements.log` for the thesis record, and that file is **never read
+  back**
+- **it does not store the rotation.** That was dropped deliberately: rotation is
+  a property of the active grid, so it is identical to the mode the ledger is
+  already keyed by, and a second copy is a copy that drifts. Anywhere below that
+  says "the rotation that placed it", read "the mode it was placed in".
+
+The audit that established it was missing is kept below, because it is the
+evidence that no *other* part of the system already knew this and it is still
+true of every one of those places:
 
 - `countPlacedBlock()` ([:4038](../../arduino/build_vertical_grid/build_vertical_grid.ino#L4038))
   is a histogram — `statBlocksAtLevel[level]++`. It does not record the cell.
@@ -334,9 +365,9 @@ explicit per-action operator command, which is reason enough for opt-in.
 - `compile.ts` emits ops carrying `col`/`row`/`level`/mode — but that is the
   **plan**, not the as-built.
 
-So it is a prerequisite, not a detail. It holds, per cell: the top level, the
-rotation that placed it, and when. D5, D6 and D7 are all enforced from it, which
-makes it the safety backbone of the feature and not merely bookkeeping.
+So it was a prerequisite, not a detail — and it is now met. D5, D6 and D7 are
+all enforced from it, which makes it the safety backbone of the feature and not
+merely bookkeeping.
 
 **In-process only, not persisted.** A server restart loses the board state, and
 stage 15 must then **refuse** — "no as-built memory; run a job first" — rather
@@ -437,7 +468,9 @@ with `python/tests/test_grid.py` extended to cover the new verb.
 - **Writing anything to the grid, the lattice origin, `error_offset_*`,
   `shift_*`, or `config/rig.json`'s geometry.** Ever. (§1a)
 - **Inferring levels from vision.** Memory is authoritative (D3).
-- **Persisting the as-built memory.** In-process only; refuse after a restart (§3).
+- **Persisting the as-built memory *as authority*.** In-process only; refuse
+  after a restart (§3). It *is* written to `logs/placements.log` as evidence,
+  and nothing ever reads that file back.
 - **Systematic drift calibration.** That is the predecessor document's feature and
   it remains unbuilt.
 
@@ -487,7 +520,7 @@ day one, and it is independently useful even if stage C is never built.
 
 | File | Holds |
 | --- | --- |
-| `python/rig/placement_ledger.py` | the as-built memory (§3): per cell the top level, its rotation, when. Plus the D5/D6 predicates — `is_top_of_column`, `has_taller_neighbour`. Pure, no I/O. |
+| `python/rig/placement_ledger.py` | **BUILT.** The as-built memory (§3): per cell the top level and when, keyed by mode (rotation ≡ mode, so it is not stored separately). Plus the D5/D6 predicates — `is_top_of_column`, `has_taller_neighbour`. Pure, no OpenCV. |
 | `python/rig/placement_check.py` | D4 parallax, D7 matching, D8 banding. `parallax_excess(level, x_cm, y_cm) -> (dx, dy)`, `match(predictions, detections) -> matches`, `judge(error_cm) -> IGNORE / CORRECT / REFUSE`. Pure functions, no camera, no rig, no OpenCV. |
 | `python/rig/stage15.py` | the orchestration: take the parked frame, run its own `detect_aligned_blocks(frame, grid=None)`, project through the `WorkspaceMap`, parallax-correct, match, judge, return a report. Advisory only in stage A — it returns findings and does nothing with them. |
 | `python/tests/test_placement_ledger.py` | |

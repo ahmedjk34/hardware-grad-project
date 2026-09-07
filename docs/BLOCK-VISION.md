@@ -483,6 +483,21 @@ this work and unchanged by it.
 
 ## 7. If you are extending this
 
+- **There is now a fourth layer above these, and it reaches past nothing.**
+  `rig/supervisor.py` consumes `ProcessedFrame.detections` and a calibrated
+  `WorkspaceMap` and asks whether the board matches what the machine was told to
+  build. It adds no detector, takes no extra frame and modifies nothing here —
+  the layering rule holds. Two things it learned the hard way are worth knowing
+  before you touch `_lattice_filter`:
+  **it is not a board-membership test.** It fits an *infinite* lattice from the
+  detections themselves, so an object well off the board can land within
+  `LATTICE_SNAP` of an integer index and survive — measured on the rig, one
+  off-board object persisted in **523 of 524 frames** with the filter engaged.
+  Only a calibrated `WorkspaceMap` answers "is this on the board".
+  And **`cell_at` returning `None` means three different things** — on the board
+  between sites, in the grid's margin, or outside the envelope entirely — which
+  the supervisor splits with `normalized_at`. Merging them made a completely
+  correct board read as `FOREIGN` in 99.8% of windows.
 - **Adding a rejection rule?** Put it in layer 2 or 3, never layer 1 — layer 1
   must stay a pure shape hypothesis, or the calibrator loses the freedom to
   make its own decisions.

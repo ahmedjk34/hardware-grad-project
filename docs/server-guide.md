@@ -251,9 +251,9 @@ block.
 
 ## 7. Run logs
 
-A real server run (`python -m web`, with or without `--mock`) appends to two
-plain-text files under `logs/` at the repository root. Both are git-ignored,
-both are opened in append mode, so they accumulate across runs; delete them
+A real server run (`python -m web`, with or without `--mock`) appends to three
+plain-text files under `logs/` at the repository root. All are git-ignored and
+opened in append mode, so they accumulate across runs; delete them
 yourself when they get large. `pytest` never writes to them — only the
 `main()` entry point turns them on, via `rig.build_log.configure()`.
 
@@ -269,6 +269,20 @@ yourself when they get large. `pytest` never writes to them — only the
   A stall on the cable or a slow phase shows up directly as a large delta in
   the second column. The terminal ack and a one-line `-- final: …` summary
   close each build.
+
+- **`logs/placements.log`** — the board's own timeline: what was placed, and
+  what the camera made of it. One `PLACED` line per confirmed placement (the
+  as-built record behind `rig/placement_ledger.py`), one `CHECK` line per
+  settled build carrying the camera's sentence about it, and one line each time
+  the observer **changes** what it says about the board — a verdict, or a
+  refusal such as `NO MAP` / `NO MEMORY`. Deliberately per *change* and not per
+  frame: at the pipeline's measured 8.6–8.7 Hz a line a frame would be half a
+  million entries an hour and the one that mattered would be unfindable.
+
+  **Nothing ever reads this file back.** It is evidence, not authority — a
+  reloaded ledger would claim to describe a board nobody has looked at since the
+  process died, and what consumes the ledger drives a claw. After a restart the
+  console reports `NO MEMORY` and refuses every verdict until the first build.
 
 Placed-block calibration drives the rig through the same serial link, so its
 traffic also appears in `logs/serial.log`; it does not get a `logs/build.log`

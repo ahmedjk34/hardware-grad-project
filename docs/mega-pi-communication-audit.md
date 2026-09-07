@@ -78,7 +78,22 @@ again can have a late previous terminal ACK complete the new call incorrectly.
 The normal server starts the camera pipeline, opens/configures the Mega before
 ASGI accepts requests, then starts its camera driver. Shutdown cancels the
 driver, waits indefinitely for any build worker, stops the camera, closes the
-serial port, and shuts down the camera executor (`web/app.py:328-360`).
+serial port, and shuts down the camera executor.
+
+**One ordering rule inside that driver loop is load-bearing for this audit.**
+Between `job.poll()` taking a settled outcome and `_publish_build_result`
+emitting the durable `build_result` event, `controller.last_result` already
+reads `placed` while nothing on the wire says so yet. **Any `await` in that gap**
+hands the event loop to a queued `_cell_phase` / `_serial_*` callback, each of
+which publishes a state snapshot — and that snapshot then claims
+`last_result=placed` *before* the terminal event, breaking the "the phases came
+before the result" guarantee this document rests on.
+
+The gap is therefore kept free of awaits. The JPEG encode and the supervisor's
+frame difference both run **outside** it: supervision is ordered last in the
+loop turn for exactly this reason. `web_events_test.py`'s "no frame claims a
+placement early" is the test that catches a regression here, and it did catch
+one — see `docs/features/placement-supervision-progress.md` F15.
 
 ### Other live-capable clients
 

@@ -9,15 +9,25 @@ the repo actually contains today, and kept only while the feature is unbuilt.
 touches and delete the file**, exactly as [plans/README.md](../../plans/README.md)
 requires. A second, drifting description of built code is worse than none.
 
+**One deliberate exception: [placement supervision](placement-supervision.md)
+and its [build record](placement-supervision-progress.md) are kept after
+landing.** Six of that design's own decisions were found to be wrong on contact
+with the rig or the code, and the corrections — with the measurements behind
+them — are the part a future reader needs. The living docs
+([CAMERA.md](../CAMERA.md), [DESIGN.md](../DESIGN.md),
+[CONSOLE.md](../CONSOLE.md), [STUDIO.md](../STUDIO.md)) carry what the system
+*does*; those two carry **why it does it that way and what was tried first**.
+Neither describes code that the living docs also describe.
+
 | Feature | Status | Difficulty | The one-sentence version |
 | --- | --- | --- | --- |
 | [Running-bond grid shift](running-bond-grid-shift.md) | **built** (unflashed firmware unchanged) | 3 / 5 | A level can carry a half-pitch course offset on the run axis so a block bridges the joint of the two beneath it — Studio, Twin, compiled program and `POST /api/shift` all agree; supersedes the row below. |
 | [Grid shift in the twin](grid-shift-in-the-twin.md) | **folded into** running-bond grid shift | 2–3 / 5 | Every web coordinate function already takes a `shift`; the twin is the one caller that never passes one, because the server never publishes it. |
-| [Placement supervision](placement-supervision.md) | **not started** — designed, this is the build plan; **merges and supersedes** Appendix A's `PlacementLedger` and Stage 15 §3's as-built memory | 4 / 5 | Give the rig a memory of what it placed, a quiet-window look at the board, and the discipline to say when they disagree — per-build *and* continuously, so it also catches a human moving a block. |
-| [Camera parallax and levels](camera-parallax-and-levels.md) | **future work** — deliberately ignored by supervision v1 | 2 / 5 | The workspace map is fitted to one plane, so a stacked block is reported displaced away from the camera — predictably. Ignoring it costs a hard detection ceiling at level 3. |
-| [Stage 15 — between-job placement correction](stage-15-placement-correction.md) | **not started** — design agreed; supersedes between-build error calibration; its as-built memory is now [placement supervision](placement-supervision.md) M1 | 3 / 5 | After a job parks, find the one block meaningfully out of place, pick it up and set it down properly, re-verify — an outlier repair, never a calibration, never touches the grid. |
+| [Placement supervision](placement-supervision.md) | **BUILT** — Gate 0 measured on the rig, M1/M2/M3a/M3b landed; M4 (repair) and M5 (lift the ceiling) remain future work. **Not yet watched on hardware.** Kept, with [its build record](placement-supervision-progress.md), because six of its own decisions were found wrong in the building and the corrections are the useful part | 4 / 5 | Give the rig a memory of what it placed, a quiet-window look at the board, and the discipline to say when they disagree — per-build *and* continuously, so it also catches a human moving a block. |
+| [Camera parallax and levels](camera-parallax-and-levels.md) | **future work** — deliberately ignored by supervision v1, whose level-3 ceiling is now **enforced in code**: `rig.supervisor.LEVEL_CEILING`, and refused cells are listed as `unjudged` rather than silently skipped | 2 / 5 | The workspace map is fitted to one plane, so a stacked block is reported displaced away from the camera — predictably. Ignoring it costs a hard detection ceiling at level 3. |
+| [Stage 15 — between-job placement correction](stage-15-placement-correction.md) | **not started** — design agreed; supersedes between-build error calibration. **Its as-built memory is now built**: `PlacementLedger`, including Stage 15's own D5/D6 safety predicates `is_top_of_column()` and `has_taller_neighbour()` | 3 / 5 | After a job parks, find the one block meaningfully out of place, pick it up and set it down properly, re-verify — an outlier repair, never a calibration, never touches the grid. |
 | [Between-build error calibration](between-build-error-calibration.md) | **DEFERRED (2026-09-06)** — superseded by Stage 15; measurement half exists in the code, no feedback path | 4 / 5 | Turn a *population* of placement residuals into a bounded correction to the grid origin. Deferred in favour of per-stage outlier repair; un-defer only if [§3.1](../feature-ideas.md#31-placement-repeatability-and-backlash---highest-value-per-line) shows a systematic bias, which per-block repair cannot fix. |
-| [Removed-block compensation](removed-block-compensation.md) | **not started** — idle half already designed in [Appendix A](../feature-ideas.md#appendix-a--placement-supervision-full-design) | 5 / 5 | Mid-*command* verification is impossible; mid-*program* verification is not, because the runner already stops between every block. |
+| [Removed-block compensation](removed-block-compensation.md) | **its detection half is BUILT** — placement supervision's continuous verdict already catches a removed block mid-program and pauses the runner. What remains unbuilt is the *compensation*: re-planning or re-placing, which is supervision's M4 | 5 / 5 | Mid-*command* verification is impossible; mid-*program* verification is not, because the runner already stops between every block. |
 
 ## Read these first
 

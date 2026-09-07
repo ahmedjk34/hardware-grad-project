@@ -91,6 +91,7 @@ component should contain a raw hex value.
   --ready:       #3DD68C;  /* READY, PLACED, calibrated, live camera */
   --motion:      #F0A73E;  /* RUNNING, STALE, APPROXIMATION ONLY, REJECTED */
   --danger:      #FF5C5C;  /* LOCKED, ABORTED, disconnected */
+  --danger-text: #FF8A8A;  /* red at BODY size — see §7's measurement */
 
   /* workpiece palette — object colour, never state colour */
   --block-red:    #FF6B6B;  /* these five match web/geometry.py _colour_name() */
@@ -112,6 +113,22 @@ workspace, not a machine state, so §2's "colour is reserved" rule is intact.
 **Semantic rule for amber vs red.** Amber = *degraded but recoverable, or the
 machine is moving*. Red = *stop, a human is required*. `REJECTED` is amber —
 nothing moved, the selection is still yours. `ABORTED` is red — it is over.
+
+**`--danger-text` is not a fourth state colour.** It is `--danger` at a
+lightness that clears §7's contrast bar, for the rare place a red word has to be
+read at body size. It never appears as a fill, an edge or a dot; those stay
+`--danger`, which is where `LOCKED` gets its weight.
+
+**Placement supervision's verdicts map onto these three and add nothing.**
+`MOVED` / `REMOVED` / `NOT DETECTED` are amber and pause the runner; `FOREIGN` /
+`BOARD DISAGREES` are red and stop it. **A verdict never produces `LOCKED`** —
+that is reserved for "the claw's position is unknown", and a verdict is a
+statement about the *board*, not the *machine*. Conflating them would make a
+recoverable situation look unrecoverable. Supervision's own non-verdict states —
+`BUSY`, `QUIET`, `NO MEMORY` — take **no state colour at all**: `BUSY` is the
+normal condition for the whole of a build, so colouring it amber would leave the
+console amber most of the time and spend the palette on nothing. **Not looking
+is not the same as finding something wrong.**
 
 **A light theme is optional and lower priority.** If added, it is for a
 sunlit-bench scenario only, and it must keep the identical state semantics.
@@ -357,13 +374,54 @@ with age in ms, socket chip, session uptime. Every item is a chip: `--r-sm`,
 - Pair each with a distinct short sound and, on mobile, a `navigator.vibrate`
   pattern. The operator is looking at the rig, not the screen; this is a real
   usability feature, not decoration. Make it mutable and remember the choice.
+  *(Not yet built for supervision's verdicts. The banner, the colour, the icon,
+  the ARIA roles and the dismiss control are; sound and haptics are not.)*
+- **The supervision banner follows all of the above plus one rule of its own: a
+  `VERIFIED` verdict gets NO banner.** A forty-block build would produce forty
+  green bars, and a console that celebrates every success trains the operator to
+  ignore it — and then the one amber bar that matters is ignored too. The good
+  case lives in the runner log row and one 200 ms cell pulse on the video.
+- **Cells the machine could not judge get a 45° hatch, never a colour.** An
+  absence of state is not a state, and dressing it as one spends the reserved
+  palette on nothing. The count and the reason go in the banner — never a silent
+  skip.
+- **One pulse on a new verdict, never a loop.** A cell that throbs forever
+  becomes wallpaper in about ninety seconds and the operator stops seeing the
+  exact thing the feature exists to show. Honour `prefers-reduced-motion`: the
+  tint appears instantly there and nothing is lost, because nothing is conveyed
+  by motion alone.
 
 ---
 
 ## 7. Accessibility and field conditions
 
-- Contrast: body text ≥ 4.5:1 on its own surface, state text ≥ 7:1. Check the
-  amber on `--surface` specifically; amber is the one that usually fails.
+- Contrast: body text ≥ 4.5:1 on its own surface, state text ≥ 7:1.
+  **MEASURED, and the warning that used to sit here was wrong.** It said "check
+  the amber specifically; amber is the one that usually fails". Against
+  `--surface` `#14181C`:
+
+  | token | vs `--surface` | vs `--void` | verdict |
+  | --- | --- | --- | --- |
+  | `--ready` `#3DD68C` | 9.51:1 | 10.38:1 | passes |
+  | `--motion` `#F0A73E` | **8.75:1** | 9.55:1 | **passes — amber was never the problem** |
+  | `--danger` `#FF5C5C` | **5.89:1** | 6.43:1 | **FAILS the 7:1 state-text bar** |
+  | `--danger-text` `#FF8A8A` | 7.86:1 | 8.58:1 | passes |
+  | `--text` `#E6EDF3` | 15.10:1 | — | |
+  | `--text-dim` `#9AA7B2` | 7.26:1 | — | |
+
+  Two rules follow, and both are in force:
+
+  1. **State colour never carries body copy.** The state is carried by the icon,
+     the plate edge and a bold uppercase chip; the sentence is `--text` at
+     15:1. `--void` on a filled `--ready` / `--motion` / `--danger` plate
+     measures 10.38 / 9.55 / 6.43:1, and a chip at ≥ 18.66 px bold is WCAG
+     "large text" against a 3:1 bar, so all three are clear.
+  2. **Where red must be text-sized, use `--danger-text`.** Do **not** lighten
+     `--danger` itself — the `LOCKED` treatment depends on that exact value.
+
+  `web/src/tokens.test.ts` reads the real stylesheet and asserts all of this,
+  including that `--danger` still fails, so a future palette edit cannot break
+  the bar in silence or delete `--danger-text` without meeting its reason.
 - Focus is visible everywhere: `outline: 2px solid var(--signal);
   outline-offset: 2px`. Keyboard operation matters — the Pi may be driven from a
   bench keyboard.
@@ -389,6 +447,12 @@ with age in ms, socket chip, session uptime. Every item is a chip: `--r-sm`,
   browser is untrusted by design — the UI mirrors server state, it does not
   decide it.
 - No layout that pushes BUILD below the fold on a phone.
+- No client-side verdict about the board. The browser renders the server's
+  opinion and never computes one — which is also why four surfaces showing one
+  verdict cannot drift apart.
+- No "re-place it" button. Automatic repair is not built, and a control implying
+  the machine will fix it is a lie about what exists — the same rule as the
+  banned Retry.
 
 ---
 

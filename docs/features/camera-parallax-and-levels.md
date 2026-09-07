@@ -1,7 +1,16 @@
 # Camera parallax and levels — why a stacked block is not where it looks
 
 **Status: FUTURE WORK. Not built, and deliberately IGNORED by
-[placement supervision](placement-supervision.md) v1.**
+[placement supervision](placement-supervision.md) v1 — which has now shipped,
+so §4's price is being paid in production.**
+
+The ceiling is **enforced in code**: `rig.supervisor.LEVEL_CEILING = 3`, and
+`unjudged_cells()` refuses every cell whose expected top level reaches it.
+Refused cells are never reported `NOT DETECTED` or `REMOVED` — above the ceiling
+an absent detection is a *filter artifact*, and reporting it would be the
+feature lying. They are listed on screen as `unjudged`, drawn with a 45° hatch
+rather than a colour, and counted with their reason in the banner. Lifting this
+document's arithmetic into `config/rig.json` is what raises that constant.
 
 This document exists because ignoring parallax is a *choice with a measurable
 price*, and the price has to be written down somewhere the next person will

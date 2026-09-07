@@ -10,8 +10,14 @@ were placeholders and are now measured; two of its decisions were found to be
 wrong or under-specified; and one defect in the first implementation would have
 stopped the machine permanently on a correct board.
 
-**Status at time of writing: Gate 0 PASSED. M1 complete. M2 logic complete and
-unwired. P1-P4, P6 and P7 resolved. M3a / M3b not started.**
+**Status: COMPLETE. Gate 0 passed on the rig. M1, M2, M3a and M3b are built,
+wired and tested. All seven P-decisions are resolved. M4 and M5 remain future
+work, deliberately.**
+
+> **Nothing here has been watched on hardware.** Every path is tested and Gate
+> 0's constants were measured on the rig, but the wired code has never seen a
+> real frame — there is no camera on the development desktop. A bench session is
+> M2's last open item.
 
 ---
 
@@ -32,6 +38,10 @@ unwired. P1-P4, P6 and P7 resolved. M3a / M3b not started.**
 | **P1-P7 put to the user** | P1 yes, P2 yes, P5 left to the user; P3/P4/P6/P7 done in passing |
 | P1 + P2 built | `classify()`'s one-sided rows, `note_regime()`; 73 checks |
 | P6 + P7 built | CSVs committed, replayed through the real `Supervisor`; 23 checks |
+| **M2 wired** | supervisor into `_drive_pipeline`; two defects found (F14, F15) |
+| **M3a built** | per-build verdict; two more design corrections (F17, F18) |
+| **M3b built** | `SupervisionModel`, the ack route, all four UI surfaces |
+| The three "pre-existing" test failures fixed | all three were test bugs (F20); `pytest` is 94/0 |
 
 ---
 
@@ -839,9 +849,18 @@ Note F12 before trusting them: three of the four predate the
 | `python/rig/placement_ledger.py` | D2/D3/D4/D13 + Stage 15's two predicates. Pure data |
 | `python/rig/build_log.py` | third `PlacementLog` sink → `logs/placements.log` |
 | `python/rig/build_controller.py` | one call on the `PLACED` branch, behind `ledger=None` |
-| `python/rig/supervisor.py` | `locate`, `observe`, `classify`, `_CellHistory`, `Interlocks`, `Supervisor` |
+| `python/rig/supervisor.py` | `locate`, `observe`, `classify`, `verify_placement`, `quiet_fraction`, `_CellHistory`, `Interlocks`, `Supervisor` |
+| `python/web/app.py` | `_supervise`, `_resolve_pending_check`, `_note_supervision`; ledger + supervisor owned by the lifespan |
+| `python/web/state.py` | `SupervisionState`, `SupervisionModel`, `vision_verification` |
+| `python/web/routes_command.py` | `POST /api/supervision/ack` (D12) |
+| `web/src/components/SupervisionBanner.tsx` | the only surface allowed to alarm |
+| `web/src/components/GridOverlay.tsx` | the per-cell verdict mark and the unjudged hatch |
+| `web/src/studio/scene/Supervision.tsx` | the twin's overlay layer — not a sixth appearance |
+| `web/src/studio/runner.ts` | `board-verdict` and `build-verified` events |
+| `web/src/tokens.test.ts` | the contrast bar, read off the real stylesheet |
+| `python/tests/web_supervision_test.py` | **26 tests** over the server seam |
 | `python/tests/test_placement_ledger.py` | **42 checks** |
-| `python/tests/test_supervisor.py` | **73 checks** — P1's rows and P2's crossing included |
+| `python/tests/test_supervisor.py` | **83 checks** — P1's rows, P2's crossing and D8a's sentences |
 | `python/tests/test_supervisor_frames.py` | **23 checks** — the four rig traces, replayed |
 | `docs/measurements/gate0_*.csv` | the four Gate 0 traces, now committed (P7) |
 
@@ -850,22 +869,27 @@ Test gate at time of writing:
 | suite | result |
 | --- | --- |
 | `test_placement_ledger.py` | 42 passed, 0 failed |
-| `test_supervisor.py` | 73 passed, 0 failed |
+| `test_supervisor.py` | 83 passed, 0 failed |
 | `test_supervisor_frames.py` | 23 passed, 0 failed |
-| `test_grid.py` | 233 passed, **1 failed** — F10, firmware drift, not this work |
-| `npx vitest run` | 40 files, 530 tests, all passed |
-| `pytest tests/` | 65 passed, 3 failed — 2 documented pre-existing (`mock_camera_test.py`), 1 flaky (F11) |
+| `web_supervision_test.py` | 26 passed, 0 failed |
+| `test_grid.py` | 233 passed, **1 failed** — F10, firmware drift, not this work and left alone by decision (P5) |
+| `npx vitest run` | **42 files, 552 tests, all passed** |
+| `pytest tests/` | **94 passed, 0 failed** — the three that used to fail were test bugs (F20) |
 
-### Not built
+### Not built — and these are the only things left
 
-- **The supervisor is not wired into `web/app.py`.** No `ConsolePipeline`
-  integration, no frame difference on the executor. `Supervisor` is
-  constructible and fully tested but nothing constructs one at runtime.
-- M3a — the per-build verdict and `vision_verification`
-- M3b — `SupervisionModel`, `POST /api/supervision/ack`, all four UI surfaces
-- `docs/CAMERA.md` §0 and §6a still say the camera "never makes an assertion the
-  system acts on". **Still true** — nothing asserts yet. It becomes false the
-  moment M3a lands and must be corrected in that same commit.
+- **A bench session.** The one item that cannot be done from this desk.
+- **Gate 0b** — the per-cell change threshold that would let the per-build check
+  confirm a placement at level 1 or 2 rather than reporting `unconfirmed` (F17).
+- **M4** — bounded automatic repair, deliberately off.
+- **M5** — lifting the level-3 ceiling.
+- **F10 / P5** — `test_grid.py`'s firmware drift. Not this feature's, by
+  decision.
+
+`docs/CAMERA.md` §0 and §6a **have been corrected**: the camera now makes an
+assertion the system acts on, and those sections say so — along with the three
+things that did *not* change (it never moves the rig, a verdict never `LOCK`s,
+and `vision/` is untouched).
 
 ---
 
