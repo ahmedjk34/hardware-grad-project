@@ -56,9 +56,13 @@ function signed(value: number): string {
 }
 
 /** A cheap fingerprint of everything a save would persist about the geometry —
- *  used to tell a clean build from one with unsaved edits. */
-function signatureOf(blocks: Model["blocks"], order: Model["order"], name: string): string {
-  return JSON.stringify({ blocks, order, name });
+ *  used to tell a clean build from one with unsaved edits. `bondShifts` counts:
+ *  an applied grid shift is unsaved work, and the post-save signature has to
+ *  include it or a shifted model reads as "saved" the instant it is applied. */
+function signatureOf(
+  blocks: Model["blocks"], order: Model["order"], name: string, bondShifts?: Model["bondShifts"],
+): string {
+  return JSON.stringify({ blocks, order, name, bondShifts: bondShifts ?? null });
 }
 
 export default function Studio() {
@@ -99,7 +103,7 @@ export default function Studio() {
 
   const model = history.present;
   const currentSignature = useMemo(
-    () => signatureOf(model.blocks, model.order, modelDocument.name),
+    () => signatureOf(model.blocks, model.order, modelDocument.name, model.bondShifts),
     [model, modelDocument.name],
   );
   /** An empty, never-saved build is not "unsaved work" — there is nothing to
@@ -254,6 +258,16 @@ export default function Studio() {
     setNonce(value => value + 1);
   }, [model.blocks]);
 
+  /** The GRID SHIFT panel tells us which course its selector is on and the
+   *  offset to draw the lattice with. Idempotent so the panel's effect, which
+   *  re-fires on every course / offset change, cannot spin the render loop; a
+   *  `null` is the panel's unmount cleanup and leaves the last course showing
+   *  (it is inert in the vertical grid anyway). */
+  const previewCourse = useCallback((level: number, cm: number | null) => {
+    if (cm === null) return;
+    setPendingShift(prev => (prev && prev.level === level && prev.cm === cm ? prev : { level, cm }));
+  }, []);
+
   const applyFix = useCallback((fix: DiagnosticFix) => {
     const edit = fix.edit;
     if (edit.type === "reorder" && typeof edit.id === "string" && typeof edit.toIndex === "number") {
@@ -275,10 +289,17 @@ export default function Studio() {
    */
   const captureCurrent = useCallback(async (): Promise<StudioModel> => {
     const thumbnail = await capture.current?.(modelBoxScene(model.blocks, shifts));
+    // The editor's running-bond courses live on `model`, not on `modelDocument`;
+    // without this the applied grid shift is dropped on every save and the model
+    // reopens — and builds — unshifted. An empty map clears any stale snapshot.
+    const bonded = model.bondShifts && Object.keys(model.bondShifts).length > 0;
+    const carried: StudioModel = { ...modelDocument };
+    delete carried.bondShifts;
     return {
-      ...modelDocument,
+      ...carried,
       blocks: model.blocks,
       order: model.order,
+      ...(bonded ? { bondShifts: model.bondShifts } : {}),
       modified: new Date().toISOString(),
       ...(thumbnail === undefined ? {} : { thumbnail }),
     };
@@ -305,7 +326,7 @@ export default function Studio() {
       }
       setModelDocument(document);
       setSavedId(document.id);
-      setSavedSignature(signatureOf(document.blocks, document.order, document.name));
+      setSavedSignature(signatureOf(document.blocks, document.order, document.name, document.bondShifts));
       setSavedTick(tick => tick + 1);
       setToast({ kind: "ok", text: `Saved “${document.name}”` });
     } catch (error) {
@@ -362,7 +383,7 @@ export default function Studio() {
     setHeldLevel(null);
     // An example is a starting point, not a saved slot: the next save forks it.
     setSavedId(isExampleId(incoming.id) ? null : incoming.id);
-    setSavedSignature(signatureOf(incoming.blocks, incoming.order, incoming.name));
+    setSavedSignature(signatureOf(incoming.blocks, incoming.order, incoming.name, incoming.bondShifts));
     nextId.current = incoming.blocks.reduce(
       (highest, block) => Math.max(highest, Number(/\d+$/.exec(block.id)?.[0] ?? 0) + 1), 1,
     );
@@ -442,7 +463,7 @@ export default function Studio() {
                      maxLevel={model.blocks.reduce((m, b) => Math.max(m, b.level), 0)}
                      ceiling={THEORETICAL_LEVEL_CEILING}
                      orphanCount={diagnostics.filter(d => d.code === "CLIPPED_BY_SHIFT").length}
-                     onPreview={(level, cm) => setPendingShift(cm === null ? null : { level, cm })}
+                     onPreview={previewCourse}
                      onSetBond={(level, offsetCm) => {
                        setPendingShift(null);
                        commit({ type: "setBond", mode, level, offsetCm });

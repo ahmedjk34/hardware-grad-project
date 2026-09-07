@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
 import type { StateModel, Supervision, SupervisionVerdict } from "../types";
+import { CorrectionControl } from "./CorrectionControl";
 
 /** DESIGN.md §4's shape vocabulary, extended by two. Never colour alone: every
  *  state carries a WORD and a SHAPE, because video sits behind half of these
@@ -62,51 +62,6 @@ function statusLine(supervision: Supervision): string {
   if (supervision.state === "WARMING") return "SETTLING — gathering evidence.";
   if (supervision.state === "BUSY") return supervision.reason ?? "NOT WATCHING";
   return "WATCHING";
-}
-
-/** The CORRECTION control (docs/features/correction-action.md). It is shown ONLY
- *  when the server says `correctable` — vertical mode, level 0, the block
- *  axis-aligned, no taller neighbour, the destination clear, and (DISPLACED) the
- *  displacement in the 0.5-1.2 cm band. It is a two-step confirm: a correction
- *  drives the claw into a finished structure, so it never fires on one click,
- *  and the copy never reads as "the machine already fixed this". */
-function CorrectionControl({ supervision, onCorrect }: {
-  supervision: Supervision;
-  onCorrect: () => void;
-}) {
-  const [confirming, setConfirming] = useState(false);
-  // Reset the confirm state whenever the verdict/cell changes underneath us.
-  const key = `${supervision.verdict}:${(supervision.correction_cell ?? []).join(",")}`;
-  useEffect(() => setConfirming(false), [key]);
-
-  const cell = supervision.correction_cell;
-  const where = cell ? `column ${cell[0]} row ${cell[1]}` : "its planned cell";
-
-  if (!confirming) {
-    return (
-      <button type="button" className="sv-correct" onClick={() => setConfirming(true)}
-              aria-label={`Return the block to ${where} — the claw will pick it up and set it down`}>
-        RETURN BLOCK TO CELL
-      </button>
-    );
-  }
-  return (
-    <span className="sv-correct-confirm" role="group"
-          aria-label="Confirm returning the block">
-      <span className="sv-correct-warn">
-        The claw will pick the block up from where it is and set it on{" "}
-        {cell ? `[${cell[0]},${cell[1]}]` : "its cell"}. Watch the rig. Runs once.
-      </span>
-      <button type="button" className="sv-correct-go"
-              onClick={() => { setConfirming(false); onCorrect(); }}>
-        RUN
-      </button>
-      <button type="button" className="sv-correct-cancel"
-              onClick={() => setConfirming(false)}>
-        CANCEL
-      </button>
-    </span>
-  );
 }
 
 export function SupervisionBanner({ state, onAcknowledge, onCorrect }: {

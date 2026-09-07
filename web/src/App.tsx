@@ -14,6 +14,7 @@ import { StatusBar } from "./components/StatusBar";
 import { BuildBanner } from "./components/BuildBanner";
 import { SupervisionBanner } from "./components/SupervisionBanner";
 import { SupervisionActivity } from "./components/SupervisionActivity";
+import { requestCorrection } from "./components/CorrectionControl";
 import { ResultToast } from "./components/ResultToast";
 import { Calibrate } from "./components/Calibrate";
 import { store } from "./consoleStore";
@@ -110,13 +111,7 @@ export function App() {
       <SupervisionBanner
         state={state}
         onAcknowledge={() => { void fetch("/api/supervision/ack", { method: "POST" }); }}
-        onCorrect={() => {
-          void fetch("/api/supervision/correct", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ confirm: true }),
-          });
-        }}
+        onCorrect={requestCorrection}
       />
 
       <div className="workspace">
@@ -142,7 +137,7 @@ export function App() {
           <RunnerPanel state={state} connected={snapshot.connected}
                        modelId={runnerModelId ?? ""} onActiveChange={setRunnerActive}
                        progress={snapshot.progress} lastResult={snapshot.lastResult} />
-          <SupervisionActivity state={state} />
+          <SupervisionActivity state={state} onCorrect={requestCorrection} />
           <RigLog log={snapshot.log} defaultOpen={false} gap={snapshot.gap} />
         </div>
 

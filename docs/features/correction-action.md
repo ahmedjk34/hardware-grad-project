@@ -64,7 +64,7 @@ this feature is 80 % that document — and
 | the route | `POST /api/supervision/correct` | confirm-gated, one attempt per verdict event, re-derives safety server-side, drives `rig.replace_block()`, locks on `HELD`, resets hysteresis on success (D12). Sync on a worker thread, like `/mode`. |
 | firmware | `arduino/build_test_v1/build_test_v1.ino` | the `P` verb + `gotoBuildTargetOffset()` + an 8-field parser. **Unflashed / unverified.** `arduino/tools/pcheck/check.sh` is the stub-Arduino syntax check. |
 | link + mock | `rig/link.py` `replace_block()`, `rig/mock_board.py` `_handle_replace()` | same three-word contract and abort discipline as `build()`. |
-| UI | `web/src/components/SupervisionBanner.tsx` | `RETURN BLOCK TO CELL` → a two-step confirm → `POST`. Shown only on `correctable`; otherwise the reason is shown. No state colour — it is an operator action, not a machine state. |
+| UI | `web/src/components/CorrectionControl.tsx` (shared), rendered by `SupervisionBanner.tsx` (`#/`) **and** `SupervisionActivity.tsx` (`#/build`) | `RETURN BLOCK TO CELL` → a two-step inline confirm → `POST /api/supervision/correct`. Shown only on `correctable`; otherwise the reason is shown. No state colour — it is an operator action, not a machine state. |
 
 **Correction 1 — `MOVED` is the *safer* case, not the worse one.** The audit
 first dismissed `MOVED` as "a full pitch away". That is the *travel* distance;
@@ -509,44 +509,54 @@ and needs, all of them:
 
 ---
 
-## F. UI
+## F. UI — as built
 
-- **Where:** `web/src/components/SupervisionBanner.tsx`, inside the loud-verdict
-  `<section>`, **only** when `supervision.correctable === true` (a server flag —
-  the browser never derives it; [DESIGN.md §8](../DESIGN.md#8-what-must-not-be-done),
-  *"No client-side verdict about the board"*). The server sets `correctable`
-  only when: **`mode == "vertical"`**; verdict is `DISPLACED`; level 0; magnitude in `[0.5, 1.2]` cm;
-  `detection.angle` within a few degrees of the mode axis; `has_taller_neighbour`
-  false for every touched cell; `[a,b]` reads empty; the `P` verb / `replace_block`
-  is available; and no build/program is running. Otherwise the button is **not
-  rendered** (§E.3), and the banner keeps its existing "straighten it by hand"
-  copy.
-- **The control:** a real `<button type="button">`, ≥ 44 × 44 px, label
+The control is one shared component, `web/src/components/CorrectionControl.tsx`,
+rendered on **two** surfaces so it is reachable from both routes:
+
+| Route | Surface | File |
+| --- | --- | --- |
+| `#/` (console) | the supervision **banner**, inside the loud-verdict `<section>` | `SupervisionBanner.tsx` |
+| `#/build` (building mode) | the **detector-activity panel** (`SupervisionActivity`), above the log — building mode uses toasts, not banners, and the panel is `defaultOpen` there. The MOVED/DISPLACED toast also gains the line *"RETURN BLOCK TO CELL is available in the detector panel."* when the server judges the pick safe. | `SupervisionActivity.tsx`, `buildmode/BuildMode.tsx` |
+
+Both call `requestCorrection()` → `POST /api/supervision/correct` (the one place
+the request shape lives).
+
+- **Shown only** when `supervision.correctable === true` — a server flag the
+  browser never derives ([DESIGN.md §8](../DESIGN.md#8-what-must-not-be-done)).
+  The server (`web/state.py assess_frame_correction`) sets it only when: verdict
+  is `MOVED` or `DISPLACED`; **`mode == "vertical"`**; level 0; the block within
+  `ANGLE_TOLERANCE_DEG` of a grid axis; no neighbour stack above level 0 beside
+  either the pick or the place cell; the plan cell reads empty; and — for
+  `DISPLACED` only — the pick offset in `[CORRECT_BAND_MIN_CM,
+  CORRECT_BAND_MAX_CM]` = `[0.5, 1.2]` cm. `MOVED` is not band-gated (the grip
+  is on a real cell). Otherwise the control is **not rendered** and
+  `correction_reason` is shown instead — *"Cannot return it by claw: …"*.
+- **The control:** `RETURN BLOCK TO CELL` (`<button>`, ≥ 44 px),
   `aria-label="Return the block to column {a} row {b} — the claw will pick it up
-  and set it down"`. Text on the button: `RETURN BLOCK TO CELL`. **Never**
-  past-tense, never "Fix", never "Correct" — the machine has not done anything
-  yet. It sits **after** the existing `DISMISS` in tab order (dismiss is always
-  safe; acting is not).
-- **Confirm step:** a `role="dialog" aria-modal="true"` panel — *"The claw will
-  move to where the block is now, grip it, and place it on [a,b]. Watch the rig.
-  This runs once."* Buttons `RUN` / `CANCEL`. `Esc` cancels (unlike the red
-  banner, where `Esc` must not dismiss — D11).
-- **Route:** `POST /api/supervision/correct`, mirroring `/api/supervision/ack`'s
-  shape, guarded by `require_mutable`, `require_fresh_camera`, `_latching`, the
-  not-during-run check and the one-attempt-per-event latch. It calls
-  `rig.link.Rig.replace_block(...)` on the `BuildJob` worker thread (it blocks
-  for tens of seconds) and publishes the result like a build.
-- **After:** the banner shows `CORRECTING — watch the rig` (dim, not a state
-  colour — it is motion the operator started, like `BUSY`), then on the terminal
-  ack either `RE-CHECKING [a,b]` until D12's re-verify resolves, or the `HELD`
-  lock treatment if the grip aborted.
-- **ARIA / a11y:** inherits [placement-supervision.md §6.7](placement-supervision.md#67-accessibility--the-checklist-this-must-pass).
-  The button is not inside the `role="alert"` live region's announced text; its
-  own `aria-label` carries the cell. Disabled states are never used here — the
-  button is present-and-actionable or absent, so there is no "disabled with
-  reason" to render (the *reason it is absent* belongs in the banner sentence:
-  *"…straighten it by hand; it is too far off its cell for the claw to grip
-  safely."*).
+  and set it down"`. Never past-tense, never "Fix". It sits **after** DISMISS in
+  the banner's markup (dismiss is always safe; acting is not).
+- **Confirm step:** a two-step inline confirm (not a modal, to keep it working
+  the same in the toast-free banner and the panel): the first click swaps the
+  button for *"The claw will pick the block up from where it is and set it on
+  [a,b]. Watch the rig. Runs once."* + `RUN` / `CANCEL`. It resets whenever the
+  verdict or cell changes underneath it.
+- **Route:** `POST /api/supervision/correct` (`CorrectRequest{confirm}`), guarded
+  by `require_mutable` (not during a build / latch / lock), `require_fresh_camera`,
+  a calibrated-map check, and a **one-attempt-per-verdict-event latch**
+  (`app.state.correction_attempted_signature`, cleared by `_note_supervision`
+  when the reading changes). It **re-runs `assess_frame_correction` on the
+  current frame** and refuses with the reason if anything changed — the published
+  flag is never trusted. Sync on a worker thread (like `/mode` / `/shift`);
+  `rig.replace_block()` holds `rig._inflight` for the whole move.
+- **After:** on `placed`/`rejected` the supervisor's hysteresis is reset so the
+  next quiet window re-verifies (D12) and the ack is cleared. On `HELD` /
+  `aborted` the **controller is locked** (`locked_reason`) — a `HELD` claw is a
+  machine fact, the one case a correction is allowed to lock. `StateModel.last_correction`
+  carries `{result, reason, cell, verdict}` for the log.
+- **a11y:** the control is not inside the `role="alert"` announced text; its
+  `aria-label` carries the cell. No disabled states — present-and-actionable or
+  absent, with the reason line taking its place.
 
 ---
 
@@ -663,17 +673,27 @@ abort discipline, `mock_board.py` mock `P`, `test_link.py` for the ack shape and
 **Blocked on** Stage 15 Stage B's two bench measurements coming back favourable,
 and on the sketch-canonical question (blocker 9).
 
-### Phase 3 — the button (only after Phase 2 is flashed and §E.1 is superseded)
+### Phase 3 — the button — **BUILT**
 
 | File | Change |
 | --- | --- |
-| `web/src/components/SupervisionBanner.tsx` | the button + confirm dialog (§F). |
-| `python/web/routes_command.py` | `POST /api/supervision/correct` — guards, one-shot latch, worker-thread dispatch, D12 re-verify hook. |
-| `web/src/studio/runner.ts` | a `correction-started` / `correction-settled` event pair; the runner stays paused through it and only resumes after D12's re-check passes. |
-| `web/src/components/RunnerPanel.tsx` | log the correction and its re-verify result — thesis evidence. |
-| `python/web/state.py` | `CORRECTING` / `RE-CHECKING` observer sub-states (dim, no state colour). |
-| `docs/DESIGN.md §8`, `docs/features/placement-supervision.md §6.10 / D11` | the operator-initiated carve-out — **same commit**, with changelog per the living-doc rule. |
-| `docs/STUDIO.md` | if the button lands in the Studio UI — same commit, changelog. |
+| `web/src/components/CorrectionControl.tsx` **(new)** | the shared control + two-step confirm + `requestCorrection()` (§F). |
+| `web/src/components/SupervisionBanner.tsx` | renders it on `#/`, plus the "cannot return it by claw: …" reason line. |
+| `web/src/components/SupervisionActivity.tsx` | renders it on `#/build` (above the log), via a new `onCorrect?` prop. |
+| `web/src/components/buildmode/BuildMode.tsx` | passes `onCorrect`; the MOVED/DISPLACED toast points at the panel when `correctable`. |
+| `web/src/App.tsx`, `web/src/style.css` | wire `requestCorrection`; the control's classes. |
+| `python/web/routes_command.py` | `POST /api/supervision/correct` — guards, one-shot latch (`correction_attempted_signature`), worker-thread dispatch, re-runs `assess_frame_correction`, locks on `HELD`, resets hysteresis on success (D12). |
+| `python/web/state.py` | `assess_frame_correction()` (the shared assessor), `SupervisionModel` correction fields, `StateModel.last_correction`. |
+| `python/web/app.py` | `_assess_correction` wrapper; `_note_supervision` clears the latch on a new verdict. |
+| `docs/DESIGN.md §8`, `placement-supervision.md §6.10 / D11`, `CONSOLE.md`, `feature-ideas.md D8` | the operator-initiated carve-out. |
+
+**Not built:** a `CORRECTING` / `RE-CHECKING` observer sub-state and a
+`runner.ts` `correction-started/-settled` event pair. The existing pause/ack
+machinery covers it: the runner is already paused on the amber verdict; after
+the correction the server re-verifies and either the verdict clears (banner goes,
+operator resumes) or a new one appears. `last_correction` + the re-checked
+verdict are what the operator and the run report see. Wire the explicit runner
+events if a session shows the implicit flow is unclear.
 
 ### Tests
 
@@ -688,11 +708,15 @@ and on the sketch-canonical question (blocker 9).
 - `web_supervision_test.py` — the route's guards: refused during a build,
   refused on a stale camera, refused on a second press of an unchanged verdict,
   D12 re-verify runs before the runner resumes.
-- `SupervisionBanner.test.tsx` / `runner.test.ts` — button only on `correctable`;
-  confirm dialog `Esc`-cancels; the runner stays paused across the correction
-  and resumes only on a passing re-check.
-- `test_grid.py` — the `P` verb's argument shape, paired against every flashed
-  sketch.
+- `SupervisionBanner.test.tsx` / `SupervisionActivity.test.tsx` — the control
+  renders only on `correctable`; it confirms before it fires `onCorrect`; CANCEL
+  backs out; nothing for `REMOVED` / `FOREIGN` / an acknowledged verdict.
+- `web_supervision_test.py` — `_supervise` publishes a ready `Correction` for an
+  in-band DISPLACED / a MOVED, suppresses it (with reason) out of band /
+  rotated / horizontal; the route confirms, re-derives, one-shots per event,
+  locks on `HELD`, re-verifies on success, refuses during a build.
+- `test_grid.py` — the `P` verb's shape (routed, reuses the build helpers, no
+  STEP stream, magnitude-space nudge, `gotoBuildTarget` still the zero-nudge path).
 - Standard gate: `python3 python/tests/test_grid.py` (the `zGoPickup()` failure
   is F10/P5, pre-existing, **do not fix here**); `cd web && npx vitest run`;
   `cd python && python3 -m pytest tests/`.

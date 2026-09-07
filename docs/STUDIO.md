@@ -1292,6 +1292,30 @@ first in the diff.
 Newest first. One entry per landed change; note anything that contradicts the
 plan or that a future reader could not infer.
 
+### Fix: an applied grid shift was lost on save, and snapped back on Apply
+
+Three bugs in the GRID SHIFT panel path, all in `Studio.tsx` / `panels/GridShift.tsx`:
+
+1. **Apply snapped the lattice back.** `previewShift` fell back to
+   `resolveShift(mode, level: heldLevel ?? 0, …)` once the pending preview
+   cleared, and course 0 never carries a bond offset — so unless a scrubber
+   level was held, the committed course's grid was drawn unshifted. `GridShift`
+   now emits the focused course's **committed** offset (not `null`) whenever the
+   incrementer is clean, so the viewport keeps following the panel's course
+   selector. `Studio` takes it through a stable, idempotent `previewCourse`
+   callback (a `null` — the panel's unmount cleanup — is a no-op, leaving the
+   last course showing; it is inert in the vertical grid regardless).
+2. **Save dropped `bondShifts`.** `captureCurrent` spread `modelDocument` and
+   the fresh `blocks` / `order` but never `model.bondShifts`, so every save
+   persisted the model unshifted — it reopened, and **built**, with no course
+   offsets. It now writes `model.bondShifts` (and strips a stale snapshot when
+   the map is empty). Reopen restores it via `structureOf`, and `compile`
+   already falls back to `model.bondShifts`, so the build now respects it.
+3. **An applied shift did not count as unsaved work.** `signatureOf` ignored
+   `bondShifts`; applying or clearing a course left the SAVE dot dark and the
+   `beforeunload` guard disarmed. It now hashes `bondShifts` too, at all three
+   call sites (current / post-save / on-open).
+
 ### Supervision verdict `DISPLACED` — a block knocked off its cell into a gap
 
 New amber verdict between `MOVED` and `FOREIGN`. `MOVED` is a relocation to

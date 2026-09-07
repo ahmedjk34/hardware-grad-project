@@ -22,6 +22,7 @@ import { CameraView } from "../CameraView";
 import { Icon } from "../Icon";
 import { RunnerPanel } from "../RunnerPanel";
 import { SupervisionActivity } from "../SupervisionActivity";
+import { requestCorrection } from "../CorrectionControl";
 import { TwinPanel, rememberModelId, storedModelId } from "../TwinPanel";
 import { BuildLibrary } from "./BuildLibrary";
 import { ToastStack } from "./ToastStack";
@@ -141,7 +142,8 @@ export function BuildMode() {
     if (verdict === previousBoardVerdict.current) return;
     previousBoardVerdict.current = verdict;
     dismissWhere("board:");
-    if (supervision.judged_at_ms === null) return;
+    // `verdict` being truthy means `supervision` is set — narrow it for TS.
+    if (!supervision || supervision.judged_at_ms === null) return;
     const cells = supervision.cells.map(([col, row]) => `[${col},${row}]`).join(", ");
     const copy = {
       VERIFIED: ["success", "BOARD VERIFIED", cells ? `${cells} matches the plan.` : "The board matches the plan."],
@@ -152,7 +154,13 @@ export function BuildMode() {
       FOREIGN: ["error", "UNEXPECTED BLOCK", cells ? `${cells} is occupied but not planned.` : "A block is outside a board cell."],
       DISAGREES: ["error", "BOARD DISAGREES", `${supervision.cells.length} cells differ from the plan.`],
     } as const;
-    const [kind, title, detail] = copy[verdict];
+    const [kind, title, baseDetail] = copy[verdict];
+    // The detector panel below is open in building mode, so the CORRECTION
+    // control is already on screen when the server judges the pick safe — point
+    // at it rather than adding a button the toast primitive does not have.
+    const detail = (verdict === "MOVED" || verdict === "DISPLACED") && supervision.correctable
+      ? `${baseDetail} RETURN BLOCK TO CELL is available in the detector panel.`
+      : baseDetail as string;
     push({ key: `board:${supervision.judged_at_ms}`, kind, title, detail, sticky: supervision.severity === "red" });
   }, [supervision, push, dismissWhere]);
 
@@ -231,7 +239,8 @@ export function BuildMode() {
 
       <ToastStack toasts={toasts} onDismiss={dismiss} />
       <aside className="bm-activity" hidden={!activityOpen}>
-        <SupervisionActivity state={state} defaultOpen className="bm-activity-panel" />
+        <SupervisionActivity state={state} defaultOpen className="bm-activity-panel"
+                             onCorrect={requestCorrection} />
       </aside>
       <BuildLibrary open={libraryOpen} mode={state.mode} currentId={modelId}
                     onPick={pickModel} onClose={() => setLibraryOpen(false)} />

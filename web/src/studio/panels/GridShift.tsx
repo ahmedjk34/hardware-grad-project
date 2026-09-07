@@ -22,8 +22,9 @@ export interface GridShiftProps {
   maxLevel?: number;
   ceiling?: number;
   orphanCount?: number;
-  /** Called as the incrementer turns, so the viewport lattice moves live.
-   *  `cm === null` means "nothing pending, show the committed grid". */
+  /** Which course the viewport lattice should be drawn on, and its offset in cm:
+   *  the pending value while the incrementer is turned, the committed value
+   *  otherwise. `cm === null` is only the unmount cleanup — "stop following me". */
   onPreview?: (level: number, cm: number | null) => void;
   /** Apply: commit this course's offset (or clear it with `null`). */
   onSetBond: (level: number, offsetCm: [number, number] | null) => void;
@@ -75,11 +76,14 @@ function GridShiftControl({
 
   const dirty = Math.abs(pending - committed) > 1e-6;
 
-  // Drive the live preview: the pending offset while it differs, else nothing.
+  // Drive the viewport lattice: the pending offset while the incrementer is
+  // turned, otherwise the *committed* offset for the focused course. Emitting
+  // the committed value (not `null`) is what keeps the grid where APPLY put it
+  // instead of snapping back to the base lattice the moment the preview clears.
   useEffect(() => {
-    onPreview?.(clamp(course, 1, ceiling), dirty ? pending : null);
+    onPreview?.(clamp(course, 1, ceiling), dirty ? pending : committed);
     return () => onPreview?.(clamp(course, 1, ceiling), null);
-  }, [course, ceiling, pending, dirty, onPreview]);
+  }, [course, ceiling, pending, committed, dirty, onPreview]);
 
   const nudge = (dir: -1 | 1) => setPending(p => clamp(p + dir * step, -step, step));
   const vec = (v: number): [number, number] => (axis === "x" ? [v, 0] : [0, v]);

@@ -1,6 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import type { StateModel, Supervision, SupervisionVerdict } from "../types";
 import { Icon } from "./Icon";
+import { CorrectionControl } from "./CorrectionControl";
 
 type ActivityKind = "success" | "warn" | "error" | "info";
 interface Activity { id: string; at: number; kind: ActivityKind; title: string; detail: string; }
@@ -68,15 +69,34 @@ export function useSupervisionActivity(state: StateModel) {
   return useSyncExternalStore(subscribe, snapshot, snapshot);
 }
 
-export function SupervisionActivity({ state, defaultOpen = false, className = "" }: {
+export function SupervisionActivity({ state, defaultOpen = false, className = "",
+                                     onCorrect }: {
   state: StateModel;
   defaultOpen?: boolean;
   className?: string;
+  /** When given, a live CORRECTION prompt is shown above the log for a
+   *  MOVED / DISPLACED verdict. This is the surface `#/build` acts on — the
+   *  console also has it in the SupervisionBanner. */
+  onCorrect?: () => void;
 }) {
   const activity = useSupervisionActivity(state);
   const [open, setOpen] = useState(defaultOpen);
+  const supervision = state.supervision;
+  const showCorrection = !!onCorrect && !!supervision
+    && (supervision.verdict === "MOVED" || supervision.verdict === "DISPLACED")
+    && !supervision.acknowledged;
   return (
     <section className={`supervision-activity ${className}`}>
+      {showCorrection && supervision && (
+        <div className="sv-activity-correction">
+          {supervision.correctable
+            ? <CorrectionControl supervision={supervision} onCorrect={onCorrect!}
+                                 className="sv-correct-panel" />
+            : supervision.correction_reason
+              ? <span className="sv-correct-why">Cannot return it by claw: {supervision.correction_reason}</span>
+              : null}
+        </div>
+      )}
       <header>
         <div>
           <h2><Icon name="waiting" size={14} />Detector activity</h2>
