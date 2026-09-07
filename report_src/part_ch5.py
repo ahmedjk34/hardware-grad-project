@@ -270,7 +270,7 @@ def chapter_5(rep):
         "Across all sixteen logged builds and the commissioning runs that preceded them, "
         "**no block was dropped, crushed or lost from the claw during a carry**. Every build "
         "reached its phase-11 release and its terminal `OK`. The grip is a single fixed closed "
-        "angle of 54 degrees in the current source, tuned until the jaws hold a block "
+        "angle of 144 degrees in the current source, tuned until the jaws hold a block "
         "firmly without marking it, and it is not adjusted per block or per level.")
     rep.p(
         "The failure mode the design guards against is not a weak grip but a **mistimed** one: "

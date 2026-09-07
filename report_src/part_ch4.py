@@ -397,8 +397,8 @@ def chapter_4(rep):
         "boot report from the logged 3 September session prints `fixed 0.000 cm`. The margin was "
         "introduced after that session and the board has not been re-flashed since the log was "
         "taken. **The sixteen builds analysed in Chapter 5 ran with no fixed Z "
-        "margin.** The same log shows the gripper closing at 50 degrees where the source now "
-        "says 54, and the tool offsets all reading 0.000 where the source now carries "
+        "margin.** The same log shows the gripper closing at 50 degrees where the current source now "
+        "says 180, and the tool offsets all reading 0.000 where the source now carries "
         "(+0.9, -0.3) for CW. Every one of those is a source change made after the log; none of "
         "them affects the timings the chapter reports.")
 

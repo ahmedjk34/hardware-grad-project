@@ -356,8 +356,8 @@ def chapter_2(rep):
         "orientations needs. The end effector is a mechanical claw instead.")
     rep.defs([
         ("What it is", "A 3D-printed two-jaw gripper driven by a single hobby servo on Mega "
-                       "pin 6, with exactly two commanded positions: OPEN at 0 degrees and "
-                       "CLOSE at 54 degrees. The jaws close on the middle of the block, across "
+                       "pin 6, with exactly two commanded positions: OPEN at 100 degrees and "
+                       "CLOSE at 180 degrees. The jaws close on the middle of the block, across "
                        "its 2.2 cm face."),
         ("Rotation", "A 28BYJ-48 stepper through a ULN2003 driver turns the whole claw a "
                      "quarter turn, 512 of its 2,048 steps per output revolution, at 10 rpm. "

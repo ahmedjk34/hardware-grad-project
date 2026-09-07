@@ -492,7 +492,7 @@ convert -density 130 -background white fig-wiring-uno.svg fig-wiring-uno.png
 | 10 | TB6600 #2 ENABLE | active LOW |
 | 11 | TB6600 #3 DIR | Z axis |
 | 12 | TB6600 #3 STEP | **no ENABLE line fitted** |
-| 6 | Gripper servo signal | OPEN 90°, CLOSE 144° |
+| 6 | Gripper servo signal | OPEN 100°, CLOSE 180° |
 | 28 | Z bottom limit switch | NC + pull-up, Z zero / GROUND reference |
 | 29 | Z top limit switch | NC + pull-up, far-end stop, does not redefine zero |
 | 30 | X limit switch | NC + pull-up, X home / zero |

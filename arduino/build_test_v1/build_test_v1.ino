@@ -240,10 +240,10 @@ const int SERVO_PIN = 6;
 // The feeder is calibrated for a tighter opening when both X/Y home switches
 // are physically active. The home-switch check is made at the instant
 // O/openServo() runs.
-// Build gripper calibration: each original jaw angle was shifted +90 degrees.
-const int SERVO_HOME_OPEN_ANGLE = 90;
-const int SERVO_OPEN_ANGLE = 90;
-const int SERVO_CLOSE_ANGLE = 144;
+// Build gripper calibration.
+const int SERVO_HOME_OPEN_ANGLE = 100;
+const int SERVO_OPEN_ANGLE = 100;
+const int SERVO_CLOSE_ANGLE = 180;
 
 // The servo is commanded and then forgotten - nothing reports back
 // when it has actually arrived. The build sequence must not start

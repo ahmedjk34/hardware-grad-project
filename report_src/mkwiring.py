@@ -164,7 +164,7 @@ mega_right = [
     {"pin": "31", "to": "LIMIT SW  Y",      "note": "NC, pull-up  |  Y home / zero"},
     {"pin": "28", "to": "LIMIT SW  Z bottom","note": "NC, pull-up  |  Z zero, GROUND ref"},
     {"pin": "29", "to": "LIMIT SW  Z top",  "note": "NC, pull-up  |  far-end stop only"},
-    {"pin": "6",  "to": "GRIPPER SERVO",    "note": "OPEN 0 deg / CLOSE 54 deg", "col": PWR5},
+    {"pin": "6",  "to": "GRIPPER SERVO",    "note": "OPEN 100 deg / CLOSE 180 deg", "col": PWR5},
     {"pin": "38", "to": "ULN2003  IN1",     "note": "black", "col": PWR5},
     {"pin": "36", "to": "ULN2003  IN2",     "note": "green", "col": PWR5},
     {"pin": "39", "to": "ULN2003  IN3",     "note": "blue",  "col": PWR5},

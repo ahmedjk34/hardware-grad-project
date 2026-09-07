@@ -148,8 +148,8 @@ def chapter_3(rep):
     rep.defs([
         ("What it does", "Holds one block through the carry, the traverse and the descent, and "
                          "releases it on command."),
-        ("Inputs", "One PWM channel on Mega pin 6. Two commanded positions only: `O` opens to 0 "
-                   "degrees, `C` closes to 54 degrees. `V <angle>` sets an arbitrary angle from "
+        ("Inputs", "One PWM channel on Mega pin 6. Two commanded positions only: `O` opens to 100 "
+                   "degrees, `C` closes to 180 degrees. `V <angle>` sets an arbitrary angle from "
                    "0 to 180 for bench work."),
         ("Outputs", "None. The servo is commanded and forgotten; nothing reports when the jaws "
                     "have arrived."),

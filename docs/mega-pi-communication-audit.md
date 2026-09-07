@@ -185,7 +185,7 @@ multi-character commands require LF/CR.
 | `9` | raw console | `printGrid()` | no motion; ASCII map | prose |
 | `?` | raw console | `printInstructions()` | no motion; help/banner | prose |
 | `Z` | raw console | prints build config and level table | no motion | prose |
-| `O` | raw console | `openServo()` | opens to home-specific 0° or normal open angle | `SERVO: OPEN`; returns before servo settle |
+| `O` | raw console | `openServo()` | opens to the build gripper's 100° position (home and normal open are currently identical) | `SERVO: OPEN`; returns before servo settle |
 | `C` | raw console | `closeServo()` | closes servo | `SERVO: CLOSE`; returns before servo settle |
 | `V <0..180>` | `servo_test.py` or raw console; e.g. `V 45` | `parseNumbers` → `setServoAngle` | arbitrary servo angle | `SERVO: ANGLE`; servo tool sleeps 150 ms but does not validate response |
 | `A <-360..360>` | `Rig.rotate_aux`; e.g. `A -45` | strict signed parser → `rotateAuxStepperDegrees` | blocking relative aux turn; no position sensor | waits for prose `AUX STEPPER: done.` up to 30 s |
