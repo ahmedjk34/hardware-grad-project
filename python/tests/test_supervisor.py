@@ -140,6 +140,64 @@ check("a detection with no .angle attribute defaults to 0.0, never raises",
       bare.cell_angles_deg == (0.0,))
 
 
+# --- observe() carries the block's OWN measured footprint (Phase 0) -------- #
+#
+# `block_outline._rectify` hands back the lattice bearing and the population
+# median size for every block. Supervision reads `own_angle` and projects the
+# detection's own `box` to cm instead — a misplaced block IS the wrong size or
+# angle, and the CORRECTION action's consistency check has to see that.
+
+class SizedDetection:
+    def __init__(self, center, own_angle, box):
+        self.center, self.own_angle, self.box = center, own_angle, box
+
+
+def box_at_cm(cx, cy, long_cm, short_cm):
+    """The four px corners of an axis-aligned block centred at ``(cx, cy)`` cm."""
+    hw, hh = long_cm / 2.0, short_cm / 2.0
+    return [at_cm(cx - hw, cy - hh), at_cm(cx + hw, cy - hh),
+            at_cm(cx + hw, cy + hh), at_cm(cx - hw, cy + hh)]
+
+
+sized = observe([SizedDetection(at_cm(*centre), 1.0,
+                                box_at_cm(centre[0], centre[1], 6.0, 2.2)),
+                 SizedDetection(at_cm(gap_x, centre[1]), 2.0,
+                                box_at_cm(gap_x, centre[1], 6.0, 2.2))],
+                MAP, SIZE)
+check("the ON-CELL block's footprint is projected to ~ (6.0, 2.2) cm",
+      len(sized.cell_sizes_cm) == 1
+      and abs(sized.cell_sizes_cm[0][0] - 6.0) < 0.3
+      and abs(sized.cell_sizes_cm[0][1] - 2.2) < 0.3,
+      str(sized.cell_sizes_cm))
+check("the GAP block's footprint rides alongside gap_points_cm, one per in_gap",
+      len(sized.gap_sizes_cm) == sized.in_gap == 1
+      and abs(sized.gap_sizes_cm[0][0] - 6.0) < 0.3,
+      str(sized.gap_sizes_cm))
+
+merged = observe([SizedDetection(at_cm(gap_x, centre[1]), 0.0,
+                                 box_at_cm(gap_x, centre[1], 9.4, 2.2))],
+                 MAP, SIZE)
+check("a merged two-block blob projects at its true oversized length",
+      bool(merged.gap_sizes_cm) and merged.gap_sizes_cm[0][0] > 8.5,
+      str(merged.gap_sizes_cm))
+
+
+class RectifiedDetection:
+    """What `_rectify` leaves: `angle` is the lattice bearing, `own_angle` is not."""
+
+    angle = 42.0
+
+    def __init__(self, center):
+        self.center, self.own_angle, self.box = center, 3.0, None
+
+
+ra = observe([RectifiedDetection(at_cm(*centre))], MAP, SIZE)
+check("observe() reads own_angle, never the rectified lattice bearing",
+      ra.cell_angles_deg == (3.0,), str(ra.cell_angles_deg))
+check("a detection whose box will not project keeps a (0, 0) size, never raises",
+      ra.cell_sizes_cm == ((0.0, 0.0),), str(ra.cell_sizes_cm))
+
+
 # --- D9, every row --------------------------------------------------------- #
 
 full = {(1, 1), (2, 1), (3, 1), (1, 2), (2, 2), (3, 2)}

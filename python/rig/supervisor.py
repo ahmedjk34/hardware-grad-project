@@ -151,6 +151,15 @@ class Observation:
     #: centre of the block on the *wrong* cell to correct a MOVED verdict.
     cell_points_cm: tuple[tuple[Cell, tuple[float, float]], ...] = ()
     cell_angles_deg: tuple[float, ...] = ()
+    #: Map-frame `(long_cm, short_cm)` footprint of each `in_gap` detection, from
+    #: the block's OWN measured box (`BlockDetection.own_size`), NOT the lattice
+    #: median — a misplaced block IS the wrong size, and the CORRECTION action's
+    #: consistency check needs to see that. Parallel to `gap_points_cm`; `(0, 0)`
+    #: when the map cannot project the box. Empty for every other consumer.
+    gap_sizes_cm: tuple[tuple[float, float], ...] = ()
+    #: Same, for the first detection on each occupied cell. Parallel to
+    #: `cell_points_cm`.
+    cell_sizes_cm: tuple[tuple[float, float], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -255,6 +264,28 @@ def point_cm(workspace, point, image_size):
     return (float(u) * grid.workspace_width_cm, float(v) * grid.workspace_height_cm)
 
 
+def _box_size_cm(workspace, box, image_size):
+    """`(long_cm, short_cm)` extent of a detection box via its projected corners.
+
+    Axis-aligned in cm on purpose: the CORRECTION action only ever acts on a
+    block within `ANGLE_TOLERANCE_DEG` of the grid, so the cm bounding box of
+    the four projected corners is the footprint its consistency check wants.
+    None when the map has no physical grid or a corner will not project.
+    """
+    corners = []
+    for point in box if box is not None else ():
+        cm = point_cm(workspace, (float(point[0]), float(point[1])), image_size)
+        if cm is None:
+            return None
+        corners.append(cm)
+    if len(corners) < 4:
+        return None
+    xs = [c[0] for c in corners]
+    ys = [c[1] for c in corners]
+    width, height = max(xs) - min(xs), max(ys) - min(ys)
+    return (max(width, height), min(width, height))
+
+
 def observe(detections, workspace, image_size) -> Observation:
     """Pixel -> cell for every detection. This is the supervisor's own work.
 
@@ -284,13 +315,21 @@ def observe(detections, workspace, image_size) -> Observation:
     cells = []
     gap_points: list[tuple[float, float]] = []
     gap_angles: list[float] = []
+    gap_sizes: list[tuple[float, float]] = []
     cell_points: dict[Cell, tuple[float, float]] = {}
     cell_angles: dict[Cell, float] = {}
+    cell_sizes: dict[Cell, tuple[float, float]] = {}
     counts = {name: 0 for name in PLACEMENTS}
     for detection in detections:
         cell, placement = locate(workspace, detection.center, image_size)
         counts[placement] += 1
-        angle = float(getattr(detection, "angle", 0.0) or 0.0)
+        # `own_angle` / `own_size` are the block's pre-rectification measurement
+        # — `block_outline._rectify` would otherwise hand back the lattice
+        # bearing and the population median for every block, correct or not.
+        angle = float(getattr(detection, "own_angle", None)
+                      if getattr(detection, "own_angle", None) is not None
+                      else getattr(detection, "angle", 0.0) or 0.0)
+        size = _box_size_cm(workspace, getattr(detection, "box", None), image_size)
         if cell is not None:
             cells.append(cell)
             if cell not in cell_points:
@@ -298,6 +337,7 @@ def observe(detections, workspace, image_size) -> Observation:
                 if cm is not None:
                     cell_points[cell] = cm
                     cell_angles[cell] = angle
+                    cell_sizes[cell] = size if size is not None else (0.0, 0.0)
         elif placement == "gap":
             # `locate` only returns "gap" when `mapped_grid` is set, so this
             # projection cannot come back None here.
@@ -305,13 +345,16 @@ def observe(detections, workspace, image_size) -> Observation:
             if cm is not None:
                 gap_points.append(cm)
                 gap_angles.append(angle)
+                gap_sizes.append(size if size is not None else (0.0, 0.0))
     return Observation(cells=_sorted(set(cells)), in_gap=counts["gap"],
                        off_board=counts["margin"] + counts["outside"],
                        detections=len(detections),
                        gap_points_cm=tuple(gap_points),
                        gap_angles_deg=tuple(gap_angles),
+                       gap_sizes_cm=tuple(gap_sizes),
                        cell_points_cm=tuple(cell_points.items()),
-                       cell_angles_deg=tuple(cell_angles[c] for c in cell_points))
+                       cell_angles_deg=tuple(cell_angles[c] for c in cell_points),
+                       cell_sizes_cm=tuple(cell_sizes[c] for c in cell_points))
 
 
 def verify_placement(cell: Cell, level: int, occupied, *,

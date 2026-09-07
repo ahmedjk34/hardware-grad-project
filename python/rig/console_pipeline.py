@@ -147,9 +147,14 @@ class ConsolePipeline:
         # any exception into "analysis failed" with zero detections. A wrapper
         # that did not accept them would therefore show an EMPTY overlay
         # forever, with the reason only in the worker's error field.
+        # `include_rejected`: off-lattice detections stay in the list, tagged
+        # `on_lattice=False`. Supervision needs them - a block knocked off its
+        # site is the whole point of a DISPLACED verdict - and with the holder
+        # gone from the rig there is nothing off the lattice that is not a real
+        # block. The overlay draws them at their measured position, unnormalised.
         self.analysis = AnalysisWorker(
             lambda frame, **kwargs: detect_aligned_blocks(
-                frame, grid=self.grid, **kwargs),
+                frame, grid=self.grid, include_rejected=True, **kwargs),
             max_hz=self.analysis_hz)
         self.camera = open_camera(self.camera_backend or backend, size, device)
         self.camera.apply(sensor)

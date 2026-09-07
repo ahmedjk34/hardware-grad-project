@@ -3,27 +3,51 @@
 **Status: BUILT on the Pi and in the UI; the firmware `P` verb is written and
 stub-syntax-checked but UNFLASHED / UNVERIFIED ON HARDWARE.** Phases 1–3 below
 are complete and gated. The two Stage-15 bench measurements (jaw capture
-tolerance, placement repeatability) are still not done, so the correction band
-bounds are provisional constants and the whole path is conservative and
+tolerance, placement repeatability) are still not done, so the correction
+tolerances are provisional constants and the whole path is conservative and
 operator-initiated. `DESIGN.md §8` and `placement-supervision.md §6.10 / D11`
-have been amended with the operator-initiated carve-out.
+have been amended with the operator-initiated carve-out. **2026-09-07:** the
+`DISPLACED` distance ceiling was replaced by a geometry + descent-corridor
+check — see the update note below.
 
 > **Feasibility as built: the button drives a real closed loop — supervision
 > verdict → server re-checks safety → firmware `P` verb → re-verify.** It is
 > scoped to **vertical mode, level 0, axis-aligned blocks, no taller neighbour,
 > destination clear**. `MOVED` (block squarely on the wrong cell) is the clean
-> case — the grip happens on a real cell. `DISPLACED` (block in a gap) is
-> gated further to a **0.5–1.2 cm displacement band**, which is geometrically
-> narrow: a `DISPLACED` centroid is already ≥ half a block off its cell (that is
-> what put it in the gap), so in vertical X the correctable window is roughly
-> `[1.1, 1.2]` cm and in Y it is empty. Widening it is a bench-measurement call.
+> case — the grip happens on a real cell. `DISPLACED` (block in a gap) keeps
+> the **0.5 cm floor** but no longer has a distance ceiling — see the
+> 2026-09-07 update below.
 > Everything shares [Stage 15](stage-15-placement-correction.md)'s `P` verb,
 > `link.replace_block()`, and `PlacementLedger` safety predicates.
 
 > **Before trusting it on hardware:** flash the `P` verb and watch it on the
 > rig; do [Stage 15 Stage B](stage-15-placement-correction.md#stage-b--two-bench-measurements-gates-stage-c)'s
-> two measurements; then revisit `CORRECT_BAND_MIN_CM` / `CORRECT_BAND_MAX_CM`
-> in `python/rig/placement_check.py`.
+> two measurements; then revisit `CORRECT_BAND_MIN_CM`, `SIZE_TOLERANCE_CM` and
+> `JAW_CLEARANCE_CM` in `python/rig/placement_check.py`.
+
+> **Update — 2026-09-07: the DISPLACED `1.2 cm` ceiling is gone.** The audit
+> that produced it noted it was a blunt proxy for "is there room to get a jaw
+> down beside the block" that never checked whether the neighbour was there,
+> and that the resulting correctable window was ~1 mm in vertical X and empty
+> in Y. It is replaced, in `rig/placement_geometry.py`, by two checks that
+> model the real hazard:
+>
+> * **`consistency`** — the detection must be one axis-aligned block, one
+>   displacement off: nominal footprint (not two touching blocks), not reaching
+>   past a neighbour (`beyond ≈ 0`), within `ANGLE_TOLERANCE_DEG`. Fed the
+>   block's OWN measured size via `Observation.gap_sizes_cm` / `cell_sizes_cm`
+>   (plumbed 2026-09-07: `BlockDetection.own_size` / `own_angle`, and
+>   `detect_aligned_blocks(include_rejected=True)` so an off-lattice block
+>   reaches the supervisor at all).
+> * **`corridor_clear`** — only the drift axis matters. If the cell the block
+>   slid toward is empty (`ledger` + observation), there is nothing to foul at
+>   any displacement. If it is occupied, the still-open part of that gap
+>   (`gap_len − cov.gap`) must clear `JAW_CLEARANCE_CM`.
+>
+> Net effect: a block displaced far along an axis whose neighbour is empty —
+> the whole of vertical Y in a normal build — is now correctable. `MOVED` is
+> unchanged (still `MOVED_PICK_SANITY_CM`). `SIZE_TOLERANCE_CM = 0.8` and
+> `JAW_CLEARANCE_CM = 0.4` are provisional, Stage 15 Stage B.
 
 **Difficulty: 4 / 5**, unevenly distributed — most of the code is easy, nearly
 all of the risk sits in two rows.

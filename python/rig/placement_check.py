@@ -39,13 +39,19 @@ Narrow on purpose (the audit)
 2. **Level 0 only.** Supervision applies no parallax correction, so a verdict
    at level 1-2 carries 0.9-1.9 cm of uncorrected, directional parallax that
    the pick point would inherit whole.
-3. **A band, not a threshold** (Stage 15 D8), applied to the PICK offset. Below
+3. **A floor and a geometry check, not a distance band.** Below
    :data:`CORRECT_BAND_MIN_CM` a nudge is not worth disturbing a settled block
-   for; above :data:`CORRECT_BAND_MAX_CM` a re-place would drag the block's edge
-   into its neighbour, so it is a refusal and a human, not a clamp. **Both
-   bounds are provisional** — Stage 15 Stage B (jaw capture tolerance,
-   placement repeatability) is the bench measurement that would confirm the
-   band is not empty. Named here so a measurement changes one line.
+   for — that floor stays. The old ``1.2 cm`` ceiling is gone: it was a blunt
+   proxy for "is there room to get a jaw down beside the block", and it never
+   checked whether the neighbour was even there. In its place, per
+   :mod:`rig.placement_geometry`: a **consistency** check (one axis-aligned
+   block, one displacement off — not two blocks, not reaching past a neighbour,
+   not rotated) and a **descent-corridor** check (if the cell the block drifted
+   toward is occupied, the still-open part of that gap must clear the jaw). A
+   block displaced far along an axis whose neighbour is empty is now
+   correctable. :data:`SIZE_TOLERANCE_CM` and :data:`JAW_CLEARANCE_CM` are
+   **provisional** — Stage 15 Stage B (jaw capture tolerance, placement
+   repeatability). Named here so a measurement changes one line.
 
 The offset is a MAP-FRAME DIFFERENTIAL
 -------------------------------------
@@ -66,10 +72,23 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 
-#: The correction band, in cm, applied to the PICK offset magnitude.
-#: PROVISIONAL — Stage 15 Stage B measures both bounds.
+from rig.placement_geometry import (
+    axis_coverage, consistency, corridor_clear, drift_axis,
+)
+
+#: The correction FLOOR, in cm. Below this the pick offset is not worth a
+#: pick-lift-place cycle — the machine's own placement repeatability would add
+#: more error than the nudge removes. PROVISIONAL — Stage 15 Stage B.
 CORRECT_BAND_MIN_CM = 0.5
-CORRECT_BAND_MAX_CM = 1.2
+
+#: How far the block's measured footprint may sit from the nominal block size
+#: before the detection is not trusted as one block (two touching blocks read
+#: as one oversized blob). PROVISIONAL — Stage 15 Stage B.
+SIZE_TOLERANCE_CM = 0.8
+
+#: The clear gap a descending jaw needs beside a block when the neighbour cell
+#: it drifted toward is occupied. PROVISIONAL — Stage 15 Stage B.
+JAW_CLEARANCE_CM = 0.4
 
 #: A block more than this many degrees off the grid axis cannot be gripped by
 #: grid-aligned jaws: a 20 deg rotation presents a ~4 cm face to a 2.2 cm jaw
@@ -89,7 +108,7 @@ SUPPORTED_MODES = ("vertical",)
 #: Stricter than supervision's level-3 ceiling: a correction is level 0 only.
 MAX_CORRECTION_LEVEL = 0
 
-Band = str  # "IGNORE" | "CORRECT" | "REFUSE"
+Band = str  # "IGNORE" | "CORRECT"
 
 
 @dataclass(frozen=True)
@@ -122,12 +141,15 @@ class Correction:
 
 
 def judge_band(magnitude_cm: float) -> Band:
-    """Where a pick-offset magnitude falls relative to the correction band."""
-    if magnitude_cm < CORRECT_BAND_MIN_CM:
-        return "IGNORE"
-    if magnitude_cm > CORRECT_BAND_MAX_CM:
-        return "REFUSE"
-    return "CORRECT"
+    """Is a pick-offset magnitude above the correction floor.
+
+    ``"IGNORE"`` below :data:`CORRECT_BAND_MIN_CM`, ``"CORRECT"`` at or above it.
+    There is no upper ``"REFUSE"`` any more — a large displacement is judged by
+    :func:`rig.placement_geometry.consistency` and
+    :func:`rig.placement_geometry.corridor_clear`, which model *why* it is
+    dangerous instead of capping the distance.
+    """
+    return "IGNORE" if magnitude_cm < CORRECT_BAND_MIN_CM else "CORRECT"
 
 
 def correction_offset(observed_cm: tuple[float, float],
@@ -162,7 +184,9 @@ def assess(*, verdict: str, mode: str,
            map_pick_centre_cm: tuple[float, float] | None, angle_deg: float,
            plan_cell_clear: bool, taller_neighbour_pick: bool,
            taller_neighbour_place: bool,
-           pick_is_top_of_column: bool) -> tuple[Correction | None, str]:
+           pick_is_top_of_column: bool, grid=None,
+           measured_size_cm: tuple[float, float] | None = None,
+           drift_neighbour_occupied: bool = False) -> tuple[Correction | None, str]:
     """May the claw correct this verdict? Returns ``(Correction | None, reason)``.
 
     ``plan_cell`` / ``plan_level`` is where the block belongs (the ledger's
@@ -170,6 +194,15 @@ def assess(*, verdict: str, mode: str,
     physically on or beside — equal to ``plan_cell`` for DISPLACED, the wrong
     cell ``[c,d]`` for MOVED. ``observed_cm`` is the block's measured centre and
     ``map_pick_centre_cm`` is ``mapped_grid.cell_center_cm(where_cell)``.
+
+    ``grid`` is the :class:`rig.grid.MachineGrid` for this mode; with it, a
+    DISPLACED block is gated by :mod:`rig.placement_geometry` (consistency +
+    descent corridor) instead of a fixed distance ceiling. ``measured_size_cm``
+    is the block's own detected footprint ``(long, short)`` — the consistency
+    check falls back to the nominal block when it is None.
+    ``drift_neighbour_occupied`` says whether the cell the block slid toward
+    carries anything; an empty neighbour is not a corridor hazard at any
+    displacement.
 
     ``reason`` is always a sentence: with a :class:`Correction` it says the
     block can be returned and how far it is off; with ``None`` it says exactly
@@ -220,16 +253,37 @@ def assess(*, verdict: str, mode: str,
         return correction, (f"the block is on {list(where_cell)} instead of "
                             f"{list(plan_cell)}; the claw can move it back")
 
-    # DISPLACED: the block is in a gap beside its own cell. The pick offset is
-    # how far it is from that cell centre, and the band gates it.
-    band = judge_band(magnitude)
-    if band == "IGNORE":
+    # DISPLACED: the block is in a gap beside its own cell. The floor still
+    # applies; the ceiling is replaced by a geometry + corridor check.
+    if judge_band(magnitude) == "IGNORE":
         return _reject(f"the block is only {magnitude:.2f} cm off its cell — below "
                        f"the {CORRECT_BAND_MIN_CM:g} cm floor, not worth disturbing")
-    if band == "REFUSE":
-        return _reject(f"the block is {magnitude:.2f} cm off its cell — beyond the "
-                       f"{CORRECT_BAND_MAX_CM:g} cm limit; its edge is against a "
-                       f"neighbour, so clear it by hand")
+    if grid is not None:
+        cov_x = axis_coverage(observed_centre=observed_cm[0],
+                              planned_centre=map_pick_centre_cm[0],
+                              block_len=grid.block_x_cm, gap_len=grid.gap_x_cm,
+                              pitch=grid.pitch_x_cm)
+        cov_y = axis_coverage(observed_centre=observed_cm[1],
+                              planned_centre=map_pick_centre_cm[1],
+                              block_len=grid.block_y_cm, gap_len=grid.gap_y_cm,
+                              pitch=grid.pitch_y_cm)
+        nominal = (max(grid.block_x_cm, grid.block_y_cm),
+                   min(grid.block_x_cm, grid.block_y_cm))
+        verdict_geom = consistency(
+            cov_x=cov_x, cov_y=cov_y,
+            measured_size_cm=measured_size_cm or nominal, nominal_size_cm=nominal,
+            angle_deg=angle_deg, size_tolerance_cm=SIZE_TOLERANCE_CM,
+            angle_tolerance_deg=ANGLE_TOLERANCE_DEG)
+        if not verdict_geom.ok:
+            return _reject(verdict_geom.reason)
+        axis = drift_axis(cov_x, cov_y)
+        cov = cov_x if axis == "x" else cov_y
+        gap_len = grid.gap_x_cm if axis == "x" else grid.gap_y_cm
+        corridor_ok, corridor_reason = corridor_clear(
+            cov, neighbour_occupied=drift_neighbour_occupied, gap_len=gap_len,
+            jaw_clearance_cm=JAW_CLEARANCE_CM)
+        if not corridor_ok:
+            return _reject(corridor_reason)
     correction = Correction(
         verdict="DISPLACED", pick_cell=(int(plan_cell[0]), int(plan_cell[1])),
         pick_level=int(plan_level), place_cell=(int(plan_cell[0]), int(plan_cell[1])),

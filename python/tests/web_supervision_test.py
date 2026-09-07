@@ -171,6 +171,10 @@ def test_a_still_correct_board_reaches_a_VERIFIED_verdict():
     assert seen[1].verdict.verdict == "VERIFIED"
     assert seen[1].verdict.expected == ((1, 1), (2, 1))
     assert seen[1].severity == "none"
+    # No offending block, so no advisory residual.
+    assert seen[1].residual_cm is None
+    from web.state import supervision_model
+    assert supervision_model(seen[1]).residual_cm is None
 
 
 def test_a_missing_block_names_the_exact_cell():
@@ -241,18 +245,43 @@ def test_a_DISPLACED_block_inside_the_band_publishes_a_ready_correction():
     assert model.correctable is True
     assert model.correction_cell == (2, 1) and model.correction_level == 0
     assert model.pick_offset_cm is not None and abs(model.pick_offset_cm[0] - 1.15) < 0.05
+    # ADVISORY residual — "how far off", published, gates nothing.
+    assert sv.residual_cm is not None and abs(sv.residual_cm - 1.15) < 0.05
+    assert model.residual_cm is not None and abs(model.residual_cm - 1.15) < 0.05
 
 
-def test_a_DISPLACED_block_past_the_band_offers_no_correction_but_says_why():
+def test_a_DISPLACED_block_far_off_with_a_clear_neighbour_is_now_corrected():
+    """The old 1.2 cm ceiling is gone. 1.9 cm off, straight, nothing in the way
+
+    the block slid toward -> the claw returns it. `dx` carries the real 1.9 cm.
+    """
     from web.state import supervision_model
-    app = fake_app()
-    gap = at_gap((2, 1), (3, 1))  # the midpoint: 1.9 cm off -> REFUSE
+    app = fake_app()  # ledger [1,1] and [2,1]; [3,1] is empty
+    gap = at_gap((2, 1), (3, 1))  # the midpoint: 1.9 cm off toward the empty [3,1]
     seen = drive(app, [frame_at(1, cells=((1, 1),), extra=(gap,)),
                        frame_at(2, cells=((1, 1),), extra=(gap,))])
     sv = seen[-1]
     assert sv.verdict.verdict == "DISPLACED"
+    assert sv.correction is not None
+    assert abs(sv.correction.dx_cm - 1.9) < 0.05 and abs(sv.correction.dy_cm) < 0.05
+    assert supervision_model(sv).correctable is True
+    assert sv.residual_cm is not None and abs(sv.residual_cm - 1.9) < 0.05
+
+
+def test_a_DISPLACED_block_toward_an_occupied_neighbour_is_refused_by_hand():
+    """Same 1.9 cm displacement, but [3,1] now holds a block: the descending
+
+    jaw would shove it. The corridor check refuses and says to clear it by hand.
+    """
+    from web.state import supervision_model
+    app = fake_app(cells=((1, 1), (2, 1), (3, 1)))
+    gap = at_gap((2, 1), (3, 1))  # 1.9 cm off toward the OCCUPIED [3,1]
+    seen = drive(app, [frame_at(1, cells=((1, 1), (3, 1)), extra=(gap,)),
+                       frame_at(2, cells=((1, 1), (3, 1)), extra=(gap,))])
+    sv = seen[-1]
+    assert sv.verdict.verdict == "DISPLACED"
     assert sv.correction is None
-    assert "beyond" in sv.correction_reason and "by hand" in sv.correction_reason
+    assert "by hand" in sv.correction_reason
     assert supervision_model(sv).correctable is False
 
 
@@ -577,7 +606,8 @@ def test_acknowledging_is_per_event_and_a_new_reading_clears_it():
 # hardware — `rig.replace_block` is a fake that returns a BuildResult.
 
 def _correct_app(*, verdict_name="DISPLACED", off_cm=8.75, angle=0.0,
-                 replace_result=None, locked=False, job_running=False):
+                 replace_result=None, locked=False, job_running=False,
+                 occupied_neighbour=False):
     import threading
     from rig.link import BuildResult, PLACED
     from rig.supervisor import Verdict
@@ -586,9 +616,10 @@ def _correct_app(*, verdict_name="DISPLACED", off_cm=8.75, angle=0.0,
     y = GRID.cell_center_cm(2, 1)[1]
     if verdict_name == "DISPLACED":
         extra = (at_cm_point(off_cm, y, angle),)
-        cells_seen = ((1, 1),)
+        cells_seen = ((1, 1), (3, 1)) if occupied_neighbour else ((1, 1),)
+        observed = cells_seen
         verdict = Verdict(verdict="DISPLACED", cells=((2, 1),), mode="vertical",
-                          expected=((1, 1), (2, 1)), observed=((1, 1),), unjudged=())
+                          expected=((1, 1), (2, 1)), observed=observed, unjudged=())
     else:  # MOVED
         extra = ()
         cells_seen = ((1, 1), (3, 1))
@@ -600,6 +631,8 @@ def _correct_app(*, verdict_name="DISPLACED", off_cm=8.75, angle=0.0,
     ledger = PlacementLedger()
     ledger.append("vertical", 1, 1, 0, BuildResult(PLACED))
     ledger.append("vertical", 2, 1, 0, BuildResult(PLACED))
+    if occupied_neighbour:
+        ledger.append("vertical", 3, 1, 0, BuildResult(PLACED))
 
     sent = []
 
@@ -695,14 +728,16 @@ def test_correct_is_one_shot_per_verdict_event():
     assert len(sent) == 1  # the rig was asked exactly once
 
 
-def test_correct_refuses_an_out_of_band_DISPLACED_with_the_reason():
+def test_correct_refuses_a_DISPLACED_toward_an_occupied_neighbour_with_the_reason():
     from fastapi import HTTPException
-    http, _, sent = _correct_app(off_cm=9.5)  # the gap midpoint: 1.9 cm -> REFUSE
+    # 1.9 cm off toward [3,1], which now holds a block: the route re-checks the
+    # descent corridor and refuses rather than trust the published flag.
+    http, _, sent = _correct_app(off_cm=9.5, occupied_neighbour=True)
     try:
         _call_correct(http)
         assert False
     except HTTPException as exc:
-        assert exc.status_code == 409 and "beyond" in exc.detail
+        assert exc.status_code == 409 and "by hand" in exc.detail
     assert sent == []
 
 

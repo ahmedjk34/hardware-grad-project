@@ -19,10 +19,15 @@ feed the same advantage without making it a calibration:
    decomposition, anything touching the frame border, and - the reason this
    module knows about lattices at all - objects that are wooden and
    block-shaped but do not sit where the grid says a block goes. The holder's
-   two thin offcuts beside ``[0,0]`` are exactly that.
+   two thin offcuts beside ``[0,0]`` are exactly that. ``include_rejected``
+   keeps that last group in the list instead, tagged ``on_lattice=False`` and
+   never rectified, for a caller (supervision) that needs to see a block
+   knocked off its site.
 2. **Draw a rectangle, not a contour.** Every surviving block is redrawn as a
    true rectangle with the population's own size. A recovered lattice supplies
-   its bearing; without one, each block keeps its measured bearing.
+   its bearing; without one, each block keeps its measured bearing. The pre-
+   rectification size and bearing are preserved on each detection as
+   ``measured_*`` / ``own_size`` / ``own_angle``.
 
 Note what is NOT on that list: detecting harder. The obvious move was to borrow
 the calibrator's full-resolution, illumination-flattened settings, and measured
@@ -158,7 +163,13 @@ def _lattice_filter(detections, grid):
 
     kept, rejected = [], []
     for index, detection in enumerate(detections):
-        (kept if error[index] <= LATTICE_SNAP else rejected).append(detection)
+        if error[index] <= LATTICE_SNAP:
+            kept.append(detection)
+        else:
+            # Tagged, not dropped: `detect_aligned_blocks(include_rejected=True)`
+            # hands these to supervision so a block knocked off its site is
+            # still seen. `_rectify` leaves a tagged block its own geometry.
+            rejected.append(replace(detection, on_lattice=False))
     # If the "lattice" rejects most of what it saw, it is not the board's
     # lattice - keep everything rather than hide real blocks.
     if len(kept) < 0.7 * len(detections):
@@ -188,13 +199,33 @@ def _rectify(detections, bearing):
         # Not a population - still square each box up to its own rotated rect,
         # which is straighter than the segmentation contour it replaces.
         return [replace(item, contour=np.asarray(item.box, dtype=np.int32)
-                        .reshape(-1, 1, 2))
+                        .reshape(-1, 1, 2),
+                        measured_width=item.width, measured_height=item.height,
+                        measured_angle=item.angle)
                 for item in detections]
 
-    long_med = float(np.median([item.size[0] for item in detections]))
-    short_med = float(np.median([item.size[1] for item in detections]))
+    # The population size is taken from the ON-LATTICE blocks only. An
+    # off-lattice detection (present when `include_rejected=True`) is a
+    # misplaced or foreign block; letting it drag the median would blur every
+    # correctly placed outline toward it.
+    basis = [item for item in detections if item.on_lattice] or detections
+    long_med = float(np.median([item.size[0] for item in basis]))
+    short_med = float(np.median([item.size[1] for item in basis]))
     out = []
     for item in detections:
+        # Keep the block's own geometry alongside the shared one - supervision
+        # reads `own_size` / `own_angle`, because a misplaced block IS the wrong
+        # size or angle and must not be normalised away.
+        measured = dict(measured_width=item.width, measured_height=item.height,
+                        measured_angle=item.angle)
+        if not item.on_lattice:
+            # A block off the lattice keeps its own size and bearing; it is the
+            # thing the overlay and supervision must show as it really is.
+            out.append(replace(
+                item,
+                contour=np.asarray(item.box, dtype=np.int32).reshape(-1, 1, 2),
+                **measured))
+            continue
         item_bearing = item.angle if bearing is None else bearing
         # minAreaRect's angle names the WIDTH side, and the rectangle below is
         # built long-side-first, so the bearing is offset by a quarter turn.
@@ -205,13 +236,14 @@ def _rectify(detections, bearing):
             box=box.round().astype(np.int32),
             contour=box.round().astype(np.int32).reshape(-1, 1, 2),
             width=short_med, height=long_med, angle=item_bearing,
+            **measured,
         ))
     return out
 
 
 def detect_aligned_blocks(frame: np.ndarray, *, grid=None,
                           edge_tolerance: float = EDGE_TOLERANCE_PX,
-                          rectify: bool = True,
+                          rectify: bool = True, include_rejected: bool = False,
                           **detector_kwargs) -> list[BlockDetection]:
     """Detect blocks and return them as clean, grid-aligned rectangles.
 
@@ -223,6 +255,12 @@ def detect_aligned_blocks(frame: np.ndarray, *, grid=None,
     every rectangle is drawn on the recovered lattice bearing. Without a
     recovered lattice the outlines are still squared up and given a common
     size, but each keeps its measured angle.
+
+    ``include_rejected`` keeps the off-lattice detections in the returned list,
+    tagged ``on_lattice=False`` and never rectified. The pipeline passes it so
+    supervision sees a block knocked off its site (a DISPLACED verdict is
+    precisely about one). It was safe to drop them only while the holder's
+    offcuts were the only thing off the lattice; that holder is off the rig.
     """
     if frame is None or frame.ndim != 3 or frame.shape[2] != 3:
         raise ValueError("detect_aligned_blocks expects a BGR colour image")
@@ -259,7 +297,9 @@ def detect_aligned_blocks(frame: np.ndarray, *, grid=None,
     if not detections:
         return []
 
-    detections, _rejected, bearing = _lattice_filter(detections, grid)
+    detections, rejected, bearing = _lattice_filter(detections, grid)
+    if include_rejected and rejected:
+        detections = list(detections) + rejected
     if rectify:
         detections = _rectify(detections, bearing)
     return sorted(detections, key=lambda item: (item.center[1], item.center[0]))

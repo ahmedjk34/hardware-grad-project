@@ -9,6 +9,7 @@ from typing import Any, Literal
 from pydantic import BaseModel
 
 from rig.placement_check import Correction, assess as _assess
+from rig.placement_geometry import residual_cm as _residual_cm
 from rig.supervisor import STATES, Verdict
 from web.geometry import build_geometry
 
@@ -38,6 +39,10 @@ class SupervisionState:
     #: never trusts the published flag (DESIGN.md §8).
     correction: Correction | None = None
     correction_reason: str | None = None
+    #: ADVISORY — straight-line cm from the offending block to its planned cell
+    #: centre, for a MOVED / DISPLACED verdict. Published for the operator to
+    #: read "how far off"; it never gates anything and takes no state colour.
+    residual_cm: float | None = None
 
     @property
     def severity(self) -> str:
@@ -86,17 +91,23 @@ class SupervisionModel(BaseModel):
     #: back or by choosing not to. Cleared the moment the verdict changes.
     acknowledged: bool
     #: The operator CORRECTION action (`docs/features/correction-action.md`).
-    #: `correctable` is True ONLY for a DISPLACED verdict the claw may safely
-    #: return: vertical mode, level 0, displacement in the 0.5-1.2 cm band, the
-    #: block axis-aligned, no taller neighbour, the cell clear. `False` the rest
-    #: of the time, and `correction_reason` always says why in a sentence the UI
-    #: shows verbatim. The browser NEVER acts on `pick_offset_cm` — the route
-    #: re-derives everything server-side. Motion, so it is server-authoritative.
+    #: `correctable` is True ONLY for a MOVED or DISPLACED verdict the claw may
+    #: safely return: vertical mode, level 0, the block axis-aligned, no taller
+    #: neighbour, the cell clear, the pick offset above the 0.5 cm floor, and —
+    #: for DISPLACED — the detection consistent with one block and the cell it
+    #: drifted toward not fouling the descent corridor (`rig.placement_geometry`).
+    #: `False` the rest of the time, and `correction_reason` always says why in a
+    #: sentence the UI shows verbatim. The browser NEVER acts on `pick_offset_cm`
+    #: — the route re-derives everything server-side. Motion, server-authoritative.
     correctable: bool = False
     correction_reason: str | None = None
     correction_cell: tuple[int, int] | None = None
     correction_level: int | None = None
     pick_offset_cm: tuple[float, float] | None = None
+    #: ADVISORY — cm the offending block is from its planned cell centre, for a
+    #: MOVED / DISPLACED verdict. Display-only; it gates nothing and has no
+    #: state colour. None for every other verdict and state.
+    residual_cm: float | None = None
 
 
 def supervision_model(reading, *, acknowledged: bool = False) -> SupervisionModel:
@@ -130,6 +141,7 @@ def supervision_model(reading, *, acknowledged: bool = False) -> SupervisionMode
         correction_level=None if correction is None else correction.place_level,
         pick_offset_cm=None if correction is None
         else (round(correction.dx_cm, 3), round(correction.dy_cm, 3)),
+        residual_cm=getattr(reading, "residual_cm", None),
     )
 
 
@@ -143,6 +155,20 @@ def _neighbour_stack_above_0(top_levels: dict, cell) -> bool:
     col, row = cell
     return any(top_levels.get((col + dx, row + dy), -1) >= 1
                for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)))
+
+
+def _drift_neighbour(cell, centre_cm, observed_cm):
+    """The orthogonal neighbour a displaced block has slid toward.
+
+    Chosen by the larger component of ``observed − centre`` — a single-cell
+    displacement is essentially 1-D. Returns ``(col, row)``.
+    """
+    col, row = cell
+    dx = observed_cm[0] - centre_cm[0]
+    dy = observed_cm[1] - centre_cm[1]
+    if abs(dx) >= abs(dy):
+        return (col + (1 if dx >= 0 else -1), row)
+    return (col, row + (1 if dy >= 0 else -1))
 
 
 def assess_frame_correction(*, ledger, workspace, observation, state: str,
@@ -169,8 +195,9 @@ def assess_frame_correction(*, ledger, workspace, observation, state: str,
     top_levels = ledger.expected_top_level(mode)
     occupied = set(observation.cells)
     cell_points = dict(observation.cell_points_cm)
-    cell_angles = dict(zip((c for c, _ in observation.cell_points_cm),
-                           observation.cell_angles_deg))
+    cell_order = [c for c, _ in observation.cell_points_cm]
+    cell_angles = dict(zip(cell_order, observation.cell_angles_deg))
+    cell_sizes = dict(zip(cell_order, observation.cell_sizes_cm))
 
     if name == "DISPLACED":
         if len(verdict.cells) != 1 or len(observation.gap_points_cm) != 1:
@@ -180,6 +207,8 @@ def assess_frame_correction(*, ledger, workspace, observation, state: str,
         observed_cm = observation.gap_points_cm[0]
         angle_deg = (observation.gap_angles_deg[0]
                      if observation.gap_angles_deg else 0.0)
+        measured_size_cm = (observation.gap_sizes_cm[0]
+                            if observation.gap_sizes_cm else None)
     else:  # MOVED — cells are (from, to)
         if len(verdict.cells) != 2:
             return None, "the block's position in the frame could not be pinned down"
@@ -187,8 +216,12 @@ def assess_frame_correction(*, ledger, workspace, observation, state: str,
         where_cell = (int(verdict.cells[1][0]), int(verdict.cells[1][1]))
         observed_cm = cell_points.get(where_cell)
         angle_deg = cell_angles.get(where_cell, 0.0)
+        measured_size_cm = cell_sizes.get(where_cell)
         if observed_cm is None:
             return None, "the block's position in the frame could not be pinned down"
+
+    if measured_size_cm in (None, (0.0, 0.0)):
+        measured_size_cm = None
 
     plan_level = top_levels.get(plan_cell)
     map_pick_centre_cm = None if grid is None else grid.cell_center_cm(*where_cell)
@@ -199,6 +232,12 @@ def assess_frame_correction(*, ledger, workspace, observation, state: str,
     else:
         pick_is_top = top_levels.get(where_cell, -1) <= 0
 
+    drift_neighbour_occupied = False
+    if map_pick_centre_cm is not None:
+        drift_cell = _drift_neighbour(where_cell, map_pick_centre_cm, observed_cm)
+        drift_neighbour_occupied = (drift_cell in occupied
+                                    or top_levels.get(drift_cell, -1) >= 0)
+
     return _assess(
         verdict=name, mode=mode, plan_cell=plan_cell, plan_level=plan_level,
         where_cell=where_cell, observed_cm=observed_cm,
@@ -206,8 +245,44 @@ def assess_frame_correction(*, ledger, workspace, observation, state: str,
         plan_cell_clear=plan_cell not in occupied,
         taller_neighbour_pick=_neighbour_stack_above_0(top_levels, where_cell),
         taller_neighbour_place=_neighbour_stack_above_0(top_levels, plan_cell),
-        pick_is_top_of_column=pick_is_top,
+        pick_is_top_of_column=pick_is_top, grid=grid,
+        measured_size_cm=measured_size_cm,
+        drift_neighbour_occupied=drift_neighbour_occupied,
     )
+
+
+def frame_residual_cm(*, observation, workspace, verdict, mode) -> float | None:
+    """How far the offending block is from its planned cell centre, in cm.
+
+    ADVISORY. Published on `SupervisionModel.residual_cm` so the operator sees
+    "how far off"; it gates nothing. Set for a MOVED or DISPLACED verdict when
+    the map can place both points in cm — for DISPLACED the block's gap
+    detection, for MOVED the detection on the cell it landed on — else None.
+    """
+    if verdict is None or verdict.verdict not in ("MOVED", "DISPLACED"):
+        return None
+    grid = getattr(workspace, "mapped_grid", None)
+    if grid is None or not verdict.cells:
+        return None
+    plan_cell = (int(verdict.cells[0][0]), int(verdict.cells[0][1]))
+
+    if verdict.verdict == "DISPLACED":
+        if len(observation.gap_points_cm) != 1:
+            return None
+        observed_cm = observation.gap_points_cm[0]
+    else:  # MOVED — cells are (from, to); the block sits on the 'to' cell
+        if len(verdict.cells) != 2:
+            return None
+        where = (int(verdict.cells[1][0]), int(verdict.cells[1][1]))
+        observed_cm = dict(observation.cell_points_cm).get(where)
+        if observed_cm is None:
+            return None
+
+    try:
+        planned_centre = grid.cell_center_cm(*plan_cell)
+    except ValueError:
+        return None
+    return round(_residual_cm(observed_cm, planned_centre), 2)
 
 
 class StateModel(BaseModel):

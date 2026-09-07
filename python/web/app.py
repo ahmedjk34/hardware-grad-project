@@ -56,6 +56,7 @@ from web.routes_command import router as command_router
 from web.routes_calibration import router as calibration_router
 from web.state import (
     StateModel, SupervisionState, assess_frame_correction, build_state,
+    frame_residual_cm,
 )
 
 
@@ -257,7 +258,11 @@ async def _supervise(app: FastAPI, frame, job: BuildJob, loop,
         observation=observation, interlocks=interlocks)
     correction, correction_reason = _assess_correction(
         app, frame, observation, state, verdict)
-    _note_supervision(app, state, reason, verdict, correction, correction_reason)
+    residual_cm = frame_residual_cm(
+        observation=observation, workspace=frame.workspace, verdict=verdict,
+        mode=frame.grid_mode)
+    _note_supervision(app, state, reason, verdict, correction, correction_reason,
+                      residual_cm)
     _resolve_pending_check(app, state, verdict)
 
 
@@ -299,7 +304,8 @@ def _resolve_pending_check(app: FastAPI, state: str, verdict) -> None:
 
 
 def _note_supervision(app: FastAPI, state: str, reason, verdict,
-                      correction=None, correction_reason=None) -> None:
+                      correction=None, correction_reason=None,
+                      residual_cm=None) -> None:
     """Hold the latest reading, and log it once per CHANGE.
 
     Not once per frame: at the measured 8.6-8.7 Hz a per-frame line would be
@@ -314,7 +320,8 @@ def _note_supervision(app: FastAPI, state: str, reason, verdict,
     """
     app.state.supervision = SupervisionState(
         state=state, reason=reason, verdict=verdict, judged_at_ms=now_ms(),
-        correction=correction, correction_reason=correction_reason)
+        correction=correction, correction_reason=correction_reason,
+        residual_cm=residual_cm)
     signature = (state, None if verdict is None else verdict.verdict,
                  () if verdict is None else verdict.cells)
     if signature == app.state.supervision_signature:

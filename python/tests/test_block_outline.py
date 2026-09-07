@@ -144,6 +144,25 @@ for name, expected in BOARDS.items():
     check(f"{label}: nothing is detected against the frame edge",
           not touching, f"{len(touching)} at the border")
 
+    # `include_rejected=True` is what the pipeline passes so supervision sees a
+    # block knocked off its site. The holder's two offcuts are the off-lattice
+    # case on these boards: kept in the list, tagged, never normalised.
+    with_rejected = detect_aligned_blocks(image, grid=grid, include_rejected=True)
+    off_lattice = [d for d in with_rejected if not d.on_lattice]
+    check(f"{label}: include_rejected keeps the off-lattice detections, tagged",
+          len(off_lattice) >= 1
+          and len(with_rejected) == len(after) + len(off_lattice),
+          f"{len(with_rejected)} = {len(after)} on-lattice + {len(off_lattice)} off")
+    check(f"{label}: the default drops them — the overlay is unchanged",
+          all(d.on_lattice for d in after) and len(after) == expected)
+    check(f"{label}: a rectified block still carries its OWN measured geometry",
+          all(d.measured_width is not None and d.measured_angle is not None
+              for d in with_rejected if d.on_lattice)
+          and len({round(d.own_size[0], 3) for d in with_rejected if d.on_lattice}) > 1,
+          "own_size varies block to block; the drawn size does not")
+    check(f"{label}: an off-lattice block keeps its own size, not the median",
+          all(d.measured_width is not None for d in off_lattice))
+
     # The holder's offcuts sit beside [0,0], which is the bottom-left block.
     # Two outlines closer together than a block is wide would be one of them.
     centres = sorted((d.center for d in after), key=lambda c: (c[1], c[0]))

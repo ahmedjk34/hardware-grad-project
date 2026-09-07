@@ -47,10 +47,43 @@ class BlockDetection:
     solidity: float
     confidence: float
     hue: float
+    #: ``block_outline._rectify`` overwrites ``width`` / ``height`` / ``angle``
+    #: with the population median and the recovered lattice bearing so a board
+    #: reads as one grid. Supervision needs the block's OWN measured geometry —
+    #: a misplaced block IS the wrong size or angle — so ``_rectify`` copies the
+    #: pre-rectification values here first. None on a detection that never went
+    #: through ``_rectify`` (``rectify=False``, or the plain detector).
+    measured_width: float | None = None
+    measured_height: float | None = None
+    measured_angle: float | None = None
+    #: False once ``block_outline._lattice_filter`` decides this detection does
+    #: not sit on the lattice the other blocks describe. Kept in the list rather
+    #: than dropped (``detect_aligned_blocks(include_rejected=True)``) so
+    #: supervision can see a block knocked off its site — the very thing a
+    #: DISPLACED verdict is about.
+    on_lattice: bool = True
 
     @property
     def size(self) -> tuple[float, float]:
         return max(self.width, self.height), min(self.width, self.height)
+
+    @property
+    def own_size(self) -> tuple[float, float]:
+        """``(long, short)`` from the block's OWN measurement, pre-rectification.
+
+        Falls back to :attr:`size` when ``measured_*`` was never populated, so a
+        caller can always ask this and get the most block-specific answer there
+        is.
+        """
+        if self.measured_width is not None and self.measured_height is not None:
+            return (max(self.measured_width, self.measured_height),
+                    min(self.measured_width, self.measured_height))
+        return self.size
+
+    @property
+    def own_angle(self) -> float:
+        """The block's OWN measured bearing, pre-rectification (else :attr:`angle`)."""
+        return self.measured_angle if self.measured_angle is not None else self.angle
 
 
 @dataclass

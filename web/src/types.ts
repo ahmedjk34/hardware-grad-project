@@ -60,9 +60,10 @@ export interface Supervision {
   /** The operator CORRECTION action (`docs/features/correction-action.md`).
    *  `correctable` is true ONLY for a MOVED / DISPLACED verdict the claw may
    *  safely return: vertical mode, level 0, the block axis-aligned, no taller
-   *  neighbour stack, the destination clear, and (DISPLACED) the displacement
-   *  in the 0.5-1.2 cm band. `correction_reason` always says what the state is
-   *  in a sentence — either "the claw can move it back" or exactly why not.
+   *  neighbour stack, the destination clear, the pick offset above the 0.5 cm
+   *  floor, and (DISPLACED) the detection consistent with one block whose
+   *  descent corridor is clear. `correction_reason` always says what the state
+   *  is in a sentence — either "the claw can move it back" or exactly why not.
    *  The browser NEVER acts on `pick_offset_cm`: `/api/supervision/correct`
    *  re-derives everything server-side (DESIGN.md §8, no client-side verdict). */
   correctable?: boolean;
@@ -72,6 +73,9 @@ export interface Supervision {
   correction_level?: number | null;
   /** Debug/telemetry only. Not an instruction. */
   pick_offset_cm?: [number, number] | null;
+  /** ADVISORY — cm the offending block is from its planned cell centre, for a
+   *  MOVED / DISPLACED verdict. Display-only; gates nothing, no state colour. */
+  residual_cm?: number | null;
 }
 
 export interface StateModel {

@@ -16,10 +16,13 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from rig.grid import MachineGrid  # noqa: E402
 from rig.placement_check import (  # noqa: E402
-    ANGLE_TOLERANCE_DEG, CORRECT_BAND_MAX_CM, CORRECT_BAND_MIN_CM,
+    ANGLE_TOLERANCE_DEG, CORRECT_BAND_MIN_CM, JAW_CLEARANCE_CM, SIZE_TOLERANCE_CM,
     Correction, assess, axis_deviation_deg, correction_offset, judge_band,
 )
+
+GRID = MachineGrid.from_config(mode="vertical")
 
 PASSED, FAILED = [], []
 
@@ -29,15 +32,16 @@ def check(name, condition, detail=""):
     print(f"{'ok  ' if condition else 'FAIL'}  {name:60} {detail}")
 
 
-# --- judge_band --------------------------------------------------------------- #
+# --- judge_band: a floor now, no ceiling -------------------------------------- #
 
 check("a 0.3 cm offset is below the floor -> IGNORE", judge_band(0.3) == "IGNORE")
-check("the floor itself is inside the band -> CORRECT",
+check("the floor itself is above the floor -> CORRECT",
       judge_band(CORRECT_BAND_MIN_CM) == "CORRECT")
-check("a 0.9 cm offset is inside the band -> CORRECT", judge_band(0.9) == "CORRECT")
-check("the ceiling itself is inside the band -> CORRECT",
-      judge_band(CORRECT_BAND_MAX_CM) == "CORRECT")
-check("a 1.5 cm offset is past the ceiling -> REFUSE", judge_band(1.5) == "REFUSE")
+check("a 0.9 cm offset clears the floor -> CORRECT", judge_band(0.9) == "CORRECT")
+check("a 1.5 cm offset is NOT refused by distance any more -> CORRECT",
+      judge_band(1.5) == "CORRECT")
+check("even a 5 cm offset clears the floor -> CORRECT (geometry gates it, not distance)",
+      judge_band(5.0) == "CORRECT")
 
 
 # --- correction_offset: the map-frame differential, with the sign --------------- #
@@ -68,13 +72,16 @@ check("45 deg is the worst case", abs(axis_deviation_deg(45.0) - 45.0) < 1e-9)
 
 def displaced(*, offset_cm=0.9, angle=0.0, mode="vertical", plan_level=0,
               plan_clear=True, taller_pick=False, taller_place=False,
-              top_of_col=True):
+              top_of_col=True, grid=GRID, measured_cm=None, drift_occ=False):
+    # [2,1] centre in vertical is (7.6, 7.6) cm - matches GRID.cell_center_cm.
     return assess(
         verdict="DISPLACED", mode=mode, plan_cell=(2, 1), plan_level=plan_level,
         where_cell=(2, 1), observed_cm=(7.6 + offset_cm, 7.6),
         map_pick_centre_cm=(7.6, 7.6), angle_deg=angle,
         plan_cell_clear=plan_clear, taller_neighbour_pick=taller_pick,
-        taller_neighbour_place=taller_place, pick_is_top_of_column=top_of_col)
+        taller_neighbour_place=taller_place, pick_is_top_of_column=top_of_col,
+        grid=grid, measured_size_cm=measured_cm,
+        drift_neighbour_occupied=drift_occ)
 
 
 corr, reason = displaced(offset_cm=0.9)
@@ -90,9 +97,26 @@ check("DISPLACED command_args is the eight-arg P shape",
 
 corr, reason = displaced(offset_cm=0.3)
 check("DISPLACED below the floor -> refused, says 'below'", corr is None and "below" in reason)
+
+# The old 1.2 cm ceiling is gone. A block 1.9 cm off, straight, with an EMPTY
+# neighbour is now correctable - the pick is along the axis it drifted and
+# nothing is in the way.
 corr, reason = displaced(offset_cm=1.9)
-check("DISPLACED past the ceiling -> refused, says 'beyond' and 'by hand'",
-      corr is None and "beyond" in reason and "by hand" in reason)
+check("DISPLACED 1.9 cm off with an empty neighbour -> corrected (no distance ceiling)",
+      isinstance(corr, Correction), reason)
+check("  ... and the offset carried is the real 1.9 cm displacement",
+      corr is not None and abs(corr.dx_cm - 1.9) < 1e-9)
+
+# ... but the SAME displacement with the neighbour occupied fouls the corridor.
+corr, reason = displaced(offset_cm=1.9, drift_occ=True)
+check("DISPLACED 1.9 cm off toward an OCCUPIED neighbour -> refused, 'by hand'",
+      corr is None and "by hand" in reason, reason)
+
+# A detection the wrong size is two touching blocks, not one displaced one.
+corr, reason = displaced(offset_cm=0.9, measured_cm=(4.5, 2.3))
+check("DISPLACED whose measured footprint is not a block -> refused",
+      corr is None and "block" in reason, reason)
+
 corr, reason = displaced(angle=20.0)
 check("a rotated DISPLACED block -> refused, says 'rotated'",
       corr is None and "rotated" in reason)
@@ -126,7 +150,7 @@ def moved(*, off_cm=0.4, angle=0.0, sane=True, plan_level=0, plan_clear=True,
         where_cell=where, observed_cm=(11.4 + off_cm, 7.6),
         map_pick_centre_cm=(11.4, 7.6), angle_deg=angle,
         plan_cell_clear=plan_clear, taller_neighbour_pick=taller_pick,
-        taller_neighbour_place=taller_place, pick_is_top_of_column=sane)
+        taller_neighbour_place=taller_place, pick_is_top_of_column=sane, grid=GRID)
 
 
 corr, reason = moved(off_cm=0.4)
@@ -152,10 +176,12 @@ check("MOVED with the destination occupied -> refused",
       corr is None and "not clear" in reason)
 
 
-# --- the band bounds are the provisional constants, flagged as such -------- #
+# --- the gate constants are provisional, flagged as such ------------------- #
 
-check("the band is the provisional Stage 15 D8 band",
-      CORRECT_BAND_MIN_CM == 0.5 and CORRECT_BAND_MAX_CM == 1.2)
+check("the correction floor is the provisional Stage 15 constant",
+      CORRECT_BAND_MIN_CM == 0.5)
+check("the geometry-gate tolerances are provisional Stage 15 B constants",
+      SIZE_TOLERANCE_CM == 0.8 and JAW_CLEARANCE_CM == 0.4)
 
 
 print(f"\n{len(PASSED)} passed, {len(FAILED)} failed")
