@@ -1118,13 +1118,16 @@ long GRID_ROWS[GRID_MODE_COUNT] = {5, 9};
 // Fixed-capacity table: GRID_BLOCKED_MAX slots per mode, the first
 // GRID_BLOCKED_COUNT[mode] of which are live. {-1,-1} pads the unused tail.
 const uint8_t GRID_BLOCKED_MAX = 8;
-long GRID_BLOCKED_COUNT[GRID_MODE_COUNT] = {3, 0};
+// MANUAL variant: there is no feeder belt, so nothing fouls these cells and
+// the list is empty in both modes. (Stock build_test_v1 blocks vertical
+// [0,1] [1,0] [1,1] here.) [0,0] is still the always-on feeder no-op.
+long GRID_BLOCKED_COUNT[GRID_MODE_COUNT] = {0, 0};
 long GRID_BLOCKED_COL[GRID_MODE_COUNT][GRID_BLOCKED_MAX] = {
-  { 0,  1,  1, -1, -1, -1, -1, -1},   // vertical: [0,1] [1,0] [1,1]
+  {-1, -1, -1, -1, -1, -1, -1, -1},   // vertical
   {-1, -1, -1, -1, -1, -1, -1, -1}    // horizontal
 };
 long GRID_BLOCKED_ROW[GRID_MODE_COUNT][GRID_BLOCKED_MAX] = {
-  { 1,  0,  1, -1, -1, -1, -1, -1},   // vertical: [0,1] [1,0] [1,1]
+  {-1, -1, -1, -1, -1, -1, -1, -1},   // vertical
   {-1, -1, -1, -1, -1, -1, -1, -1}    // horizontal
 };
 
