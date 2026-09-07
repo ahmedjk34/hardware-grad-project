@@ -131,7 +131,16 @@ def test_events_send_initial_update_and_heartbeat(tmp_path):
             assert updated["state"]["command"] == "B 3 5 0"
             assert updated["event_id"] > initial["event_id"]
 
+            # A heartbeat is what arrives when nothing else has anything to
+            # say — but the pipeline driver is still publishing geometry
+            # snapshots at `geometry_hz`, and one of those can land inside the
+            # 20 ms heartbeat window. That is correct behaviour, not a missing
+            # heartbeat: this test is about the heartbeat EXISTING, so skip
+            # past any state snapshots rather than racing them. Measured before
+            # this loop went in: the assertion failed on 5 of 10 clean runs.
             heartbeat = json.loads(events.recv())
+            while heartbeat["type"] == "state":
+                heartbeat = json.loads(events.recv())
             assert heartbeat["type"] == "heartbeat"
             assert heartbeat["event_id"] > updated["event_id"]
     finally:

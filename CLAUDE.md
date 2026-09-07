@@ -53,10 +53,15 @@ cd python && python3 -m pytest tests/  # the rest
 firmware constants, `config/rig.json`, and the documented values — it is the
 check that catches a knob edited in one place only.
 
-Known pre-existing failures, **not** regressions: `mock_camera_test.py`
-(frame-pump timing and mock block detection), plus `test_combined_grid`,
-`test_color_tuning`, `test_camera_performance` and `test_block_outline` on a
-clean checkout, which want fixtures/assets that are not in the repo.
+`python/tests/` is **fully green** — 94 passed, 0 failed. The three failures
+that used to be waved through as "pre-existing" were all defects in the tests
+themselves and are fixed; see
+`docs/features/placement-supervision-progress.md` F20 for what each one was
+actually measuring. **A new failure there is a real failure.**
+
+Still expected to fail on a clean checkout: `test_combined_grid`,
+`test_color_tuning`, `test_camera_performance` and `test_block_outline`, which
+want fixtures/assets that are not in the repo.
 
 ## Environment notes
 

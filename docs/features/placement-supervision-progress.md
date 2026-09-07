@@ -550,6 +550,42 @@ runs fail on a clean tree, and 5 of 10 with this work applied.** Identical, so
 it is untouched by supervision — but "intermittent" undersells it. It is a
 coin-flip, and any future bisect over this suite has to know that.
 
+### F20 — The three "pre-existing" test failures were all test bugs, and are fixed
+
+F11 and F16 recorded these as pre-existing and left them. Asked to fix them, all
+three turned out to be defects in the TESTS, not in the code under test. None of
+them needed a behaviour change.
+
+**`web_state_test::test_events_send_initial_update_and_heartbeat`** — 5 of 10
+runs on a clean tree (F16). It forced a state message and then demanded that the
+*very next* frame be a heartbeat. But the pipeline driver is still publishing
+geometry snapshots at `geometry_hz`, and with `heartbeat_s=0.02` in that test
+one of them lands inside the 20 ms window roughly half the time. That is correct
+server behaviour. The test now skips past state snapshots to find the heartbeat.
+**0 of 10 after the fix.**
+
+**`mock_camera_test::test_frame_pump_advances_then_becomes_stale_when_mock_is_frozen`**
+— a race in the test. `camera.freeze()` cannot un-read a frame the reader thread
+is already holding: it can be between `read()` returning and `LatestFramePump`
+storing the result, so exactly one more sequence may land after the freeze. The
+test sampled its baseline before that frame landed and then asserted "never
+advanced again", when the claim it exists to make is "**stops** advancing". It
+now lets the in-flight frame settle before taking the baseline.
+
+**`mock_camera_test::test_warm_mock_blocks_are_detected_at_their_real_grid_cells`**
+— a bad fixture, and an instructive one. It placed a block at `(3,5)`, which is
+the outermost row. The mock maps the whole grid into the frame, so that row's
+centre sits half a block from the frame edge: `(3,5)` lands at **y = 14.4 px on
+a 720 px frame**, and a 36 px block is clipped by ~4 px, which drops it below
+the contour checks. So the test was measuring the frame boundary, not the thing
+its name claims. **A real camera sees well past the grid and nothing on the rig
+behaves this way** — it is a property of the mock's framing alone. Moved to an
+interior cell, with the reason written down so nobody "fixes" the detector for it.
+
+The one failure that remains is **F10**, `test_grid.py`'s `zGoPickup()` check.
+That is a firmware/AGENTS.md paired value, it is the user's own change, and
+`arduino/` is out of this work's scope — P5, decided.
+
 ### F11 — One pytest failure is flaky, not a regression
 
 `web_state_test.py::test_events_send_initial_update_and_heartbeat` fails

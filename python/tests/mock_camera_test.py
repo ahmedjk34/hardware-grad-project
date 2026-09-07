@@ -51,6 +51,13 @@ def test_frame_pump_advances_then_becomes_stale_when_mock_is_frozen():
         assert wait_for(lambda: pump.snapshot().sequence > sequence) is not None
 
         camera.freeze()
+        # `freeze()` cannot un-read a frame the reader thread is already
+        # holding: it can be between `read()` returning and the pump storing
+        # the result, so ONE more sequence may land after the freeze. Sampling
+        # `frozen_sequence` before that lands is what made this test fail — it
+        # asserted "never advances again" when the claim is "STOPS advancing".
+        # Let the in-flight frame settle, then take the reading.
+        time.sleep(0.1)
         frozen_sequence = pump.snapshot().sequence
         time.sleep(STALE_FRAME_AFTER_S + 0.1)
         snapshot = pump.snapshot()
@@ -63,9 +70,16 @@ def test_frame_pump_advances_then_becomes_stale_when_mock_is_frozen():
 
 
 def test_warm_mock_blocks_are_detected_at_their_real_grid_cells():
+    # INTERIOR cells only, and that is a property of the mock rather than of
+    # the detector. The mock maps the whole grid into the frame, so the
+    # outermost row's centre sits half a block from the frame edge — (3,5)
+    # lands at y = 14.4 px on a 720 px frame and a 36 px block is clipped by
+    # ~4 px, which drops it below the contour checks. A real camera sees well
+    # past the grid, so nothing on the rig behaves this way. Using an edge cell
+    # here tested the frame boundary, not the claim in this test's name.
     camera = MockCamera(
         size=(960, 720),
-        blocks=((3, 5, "red"), (2, 2, "red")),
+        blocks=((3, 4, "red"), (2, 2, "red")),
         draw_printed_grid=False,
     )
     try:
