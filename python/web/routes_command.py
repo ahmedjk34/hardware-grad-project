@@ -64,6 +64,7 @@ class ViewRequest(BaseModel):
 class BuildRequest(BaseModel):
     confirm: bool
     command: str
+    feed_mode: Literal["automatic", "manual"] = "automatic"
 
 
 #: Held while a mode latch is homing X/Y. Read as "the rig is moving" by
@@ -292,10 +293,15 @@ async def build(request: BuildRequest, http: Request) -> StateModel:
     app = http.app
     require_mutable(app)
     require_fresh_camera(app)
-    if not app.state.rig.connected or not app.state.feeder.connected:
+    if not app.state.rig.connected:
         raise HTTPException(
             status_code=409,
-            detail="both Uno feeder and Mega gantry must be connected before build",
+            detail="Mega gantry must be connected before build",
+        )
+    if request.feed_mode == "automatic" and not app.state.feeder.connected:
+        raise HTTPException(
+            status_code=409,
+            detail="Uno feeder must be connected for automatic feed; use manual feed only after placing a block in the pickup area",
         )
     if not request.confirm:
         raise HTTPException(status_code=400, detail="build requires confirm=true")
@@ -304,7 +310,7 @@ async def build(request: BuildRequest, http: Request) -> StateModel:
                             detail="command does not match the current selection")
     controller = app.state.controller
     try:
-        app.state.job.start()
+        app.state.job.start(manual_feed=request.feed_mode == "manual")
     except BuildStateError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     # Open this build's section in logs/build.log now that the job is running:
@@ -313,6 +319,7 @@ async def build(request: BuildRequest, http: Request) -> StateModel:
     build_log.build.build_requested(
         request.command, selection=controller.selected,
         level=controller.level, mode=controller.mode,
+        feed_mode=request.feed_mode,
     )
     build_log.build.job_started()
     # The console's own half of the progress story: the command is ACCEPTED.

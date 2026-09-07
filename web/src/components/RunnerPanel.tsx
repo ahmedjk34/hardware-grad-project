@@ -245,7 +245,8 @@ export function RunnerPanel({ state, connected, modelId, api, delay, onActiveCha
   const op = currentOp(run);
   const operation = currentOperationText(run);
   const canStart = !!modelDocument && !!compiled?.valid && connected
-    && server.hardware_ready && server.build_state === "READY";
+    && (style === "dry" || (style === "step" ? server.gantry_connected : server.hardware_ready))
+    && server.build_state === "READY";
 
   // ── toasts for building mode ────────────────────────────────────────────
   // Purely a mirror of state this panel already derives. The console mounts
@@ -357,7 +358,9 @@ export function RunnerPanel({ state, connected, modelId, api, delay, onActiveCha
 
       {run.phase === "awaiting-confirm" && run.pendingConfirm === "build" && (
         <BuildButton state={server} connected={connected}
-                     onBuild={() => applyEvent({ type: "confirm", now: Date.now() })} />
+                     onBuild={(_command, feedMode) => applyEvent({
+                       type: "confirm", feedMode, now: Date.now(),
+                     })} />
       )}
 
       {!compact && run.inFlight && run.style !== "dry" && (

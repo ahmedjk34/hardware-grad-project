@@ -226,3 +226,34 @@ def test_feeder_failure_and_operator_cancel_never_send_mega_build(tmp_path):
                                for line in second.state.mock_board.written)
 
     asyncio.run(scenario())
+
+
+def test_manual_feed_build_skips_the_uno_and_runs_the_same_mega_command(tmp_path):
+    app = create_app(ConsoleAppOptions(
+        mock=True, settings_path=mock_settings(tmp_path),
+        workspace_map_path=tmp_path / "workspace_map.json", build_seconds=0.1,
+    ))
+
+    async def scenario():
+        async with LifespanManager(app):
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport,
+                                         base_url="http://test") as client:
+                await wait_for_state(client, lambda state: state["camera"] == "LIVE")
+                assert (await select_cell(client, app)).status_code == 200
+                feeder_writes = list(app.state.mock_feeder.writes)
+                response = await client.post("/api/build", json={
+                    "confirm": True,
+                    "command": "B 3 5 0",
+                    "feed_mode": "manual",
+                })
+                assert response.status_code == 200
+                assert response.json()["build_state"] == "RUNNING"
+                done = await wait_for_state(
+                    client, lambda state: state["last_result"] == "placed")
+                assert done["build_state"] == "READY"
+                assert app.state.mock_feeder.writes == feeder_writes
+                assert sum(line.startswith("B ")
+                           for line in app.state.mock_board.written) == 1
+
+    asyncio.run(scenario())

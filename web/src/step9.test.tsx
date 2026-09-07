@@ -12,6 +12,16 @@ const state = (overrides: Partial<StateModel> = {}): StateModel => testState({ c
 
 describe("Step 9 confirmed build safety UI", () => {
   it("requires a second tap with the exact displayed command", () => { const build = vi.spyOn(api, "build").mockResolvedValue(state()); render(<BuildButton state={state()} connected />); fireEvent.click(screen.getByRole("button", { name: "BUILD" })); expect(screen.getByRole("button", { name: "CONFIRM B 3 5 0" })).toBeEnabled(); fireEvent.click(screen.getByRole("button", { name: "CONFIRM B 3 5 0" })); expect(build).toHaveBeenCalledWith("B 3 5 0"); });
+  it("offers manual feed after arming and identifies it to the caller", () => {
+    const onBuild = vi.fn();
+    render(<BuildButton state={state({ feeder_connected: false, hardware_ready: false })}
+                        connected onBuild={onBuild} />);
+    fireEvent.click(screen.getByRole("button", { name: "BUILD" }));
+    expect(screen.getByText(/place one block in the pickup area/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "CONFIRM B 3 5 0" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "FEED MANUALLY" }));
+    expect(onBuild).toHaveBeenCalledWith("B 3 5 0", "manual");
+  });
   it("shows moving banner and disables every control", () => { render(<><BuildBanner state={state({ build_state: "RUNNING" })} connected /><ControlPanel state={state({ build_state: "RUNNING" })} connected onBuild={() => {}} /></>); expect(screen.getByText(/cannot be interrupted/)).toBeInTheDocument(); screen.getAllByRole("button").forEach(button => expect(button).toBeDisabled()); });
   it("shows terminal placed and rejected states correctly", () => { const { rerender } = render(<ResultToast state={state({ selected: null, last_result: "placed" })} />); expect(screen.getByText(/PLACED/)).toHaveClass("placed"); rerender(<ResultToast state={state({ last_result: "rejected", last_result_reason: "safe refusal" })} />); expect(screen.getByText(/safe refusal/)).toHaveClass("rejected"); });
   it("has no retry control when locked", () => { render(<><BuildBanner state={state({ build_state: "LOCKED", locked_reason: "held" })} connected /><ControlPanel state={state({ build_state: "LOCKED" })} connected onBuild={() => {}} /></>); expect(screen.getByText(/SESSION LOCKED/)).toBeInTheDocument(); expect(screen.queryByRole("button", { name: /retry/i })).toBeNull(); });

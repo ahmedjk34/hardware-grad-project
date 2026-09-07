@@ -57,7 +57,7 @@ class BuildJob:
         thread = self._thread
         return thread is not None and thread.is_alive()
 
-    def start(self) -> None:
+    def start(self, *, manual_feed: bool = False) -> None:
         """Send the controller's selected command on a worker thread."""
         if self.running:
             raise BuildStateError(BUSY_MESSAGE)
@@ -67,8 +67,10 @@ class BuildJob:
             raise BuildStateError("select a camera grid cell first")
         with self._lock:
             self._outcome = None
-        self._thread = threading.Thread(target=self._run, name="rig-build",
-                                        daemon=True)
+        self._thread = threading.Thread(
+            target=self._run, args=(bool(manual_feed),), name="rig-build",
+            daemon=True,
+        )
         self._thread.start()
 
     def poll(self) -> BuildOutcome | None:
@@ -84,9 +86,15 @@ class BuildJob:
         if thread is not None:
             thread.join(timeout)
 
-    def _run(self) -> None:
+    def _run(self, manual_feed: bool = False) -> None:
         try:
-            outcome = BuildOutcome(result=self._controller.build(timeout=self._timeout))
+            if manual_feed:
+                outcome = BuildOutcome(result=self._controller.build(
+                    timeout=self._timeout, manual_feed=True))
+            else:
+                # Preserve compatibility with commissioning controllers that
+                # implement the historical build(timeout=...) surface.
+                outcome = BuildOutcome(result=self._controller.build(timeout=self._timeout))
         except BuildStateError as exc:
             outcome = BuildOutcome(error=exc)
         except RigError as exc:

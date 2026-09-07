@@ -20,6 +20,7 @@
  * machine's position is not.
  */
 import type { BuildPhaseAction } from "../types";
+import type { FeedMode } from "../api";
 import type { ModeName } from "./coords";
 import type { Op } from "./compile";
 
@@ -92,7 +93,7 @@ export interface RunState {
 export type Effect =
   | { kind: "select"; col: number; row: number; level: number; dry?: true }
   | { kind: "verify"; expect: string; actual: string | null }
-  | { kind: "build"; command: string; dry: boolean }
+  | { kind: "build"; command: string; dry: boolean; feedMode?: FeedMode }
   | { kind: "mode"; mode: ModeName; command: string; dry: boolean }
   /** A `shiftX` / `shiftY` latch — the running-bond course change. Moves
    *  nothing; the reducer issues it without a confirm gate in every style. */
@@ -103,7 +104,7 @@ export type RunEvent =
   | { type: "start"; program: Op[]; style: RunStyle; modelName: string; colours: Record<string, string>; now: number }
   | { type: "selected"; command: string | null; now: number }
   | { type: "verified"; actual: string | null; now: number }
-  | { type: "confirm"; now: number }
+  | { type: "confirm"; now: number; feedMode?: FeedMode }
   | { type: "build-running"; now: number }
   | { type: "build-step"; commandSeq: number | null; step: number; total: number;
       phaseId: string; label: string; action: BuildPhaseAction;
@@ -194,7 +195,7 @@ function advance(state: RunState, now: number): Turn {
   };
 }
 
-function issueBuild(state: RunState, now: number): Turn {
+function issueBuild(state: RunState, now: number, feedMode: FeedMode = "automatic"): Turn {
   const blocked = guarded(state);
   if (blocked) return blocked;
   const op = state.program[state.cursor];
@@ -207,7 +208,10 @@ function issueBuild(state: RunState, now: number): Turn {
       // about this one until the rig says something about it.
       progress: noProgress(),
     },
-    effects: [{ kind: "build", command: op.text, dry: state.style === "dry" }],
+    effects: [{
+      kind: "build", command: op.text, dry: state.style === "dry",
+      ...(feedMode === "manual" ? { feedMode } : {}),
+    }],
   };
 }
 
@@ -367,7 +371,7 @@ export function step(state: RunState, event: RunEvent): Turn {
   if (event.type === "confirm") {
     if (state.phase !== "awaiting-confirm") return noEffects(state);
     if (state.pendingConfirm === "mode") return issueMode(state, event.now);
-    if (state.pendingConfirm === "build") return issueBuild(state, event.now);
+    if (state.pendingConfirm === "build") return issueBuild(state, event.now, event.feedMode);
     return noEffects(state);
   }
 

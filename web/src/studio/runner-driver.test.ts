@@ -75,6 +75,17 @@ describe("runner effect driver with a mocked API", () => {
     expect(events).toEqual([{ type: "build-running", now: 52 }]);
   });
 
+  it("forwards an explicit manual-feed build without changing its command", async () => {
+    const { api, calls } = mockApi();
+    await executeEffect({
+      kind: "build", command: "B 3 2 1", dry: false, feedMode: "manual",
+    }, {
+      api, state: () => state(), dispatch: () => {}, now: () => 52,
+    });
+    expect(api.build).toHaveBeenCalledWith("B 3 2 1", "manual");
+    expect(calls).toEqual(["build:B 3 2 1"]);
+  });
+
   it("posts a mode only after the reducer has emitted it", async () => {
     const { api, calls } = mockApi();
     const events: RunEvent[] = [];

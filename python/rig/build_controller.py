@@ -134,7 +134,7 @@ class BuildController:
             home_before_horizontal=home_before_horizontal,
         )
 
-    def build(self, timeout: float = 300.0) -> BuildResult:
+    def build(self, timeout: float = 300.0, *, manual_feed: bool = False) -> BuildResult:
         """Run one selected cell operation; lock if physical state is unknown."""
         if self.locked:
             raise BuildStateError(self.locked_reason)
@@ -147,6 +147,9 @@ class BuildController:
                 # Commissioning/tests may still use a staged block and address
                 # the Mega directly. Production injects CellOrchestrator.
                 result = self.rig.build(col, row, self.level, timeout=timeout)
+            elif manual_feed:
+                result = self.orchestrator.place_manually_staged_block(
+                    col, row, self.level, timeout=timeout)
             else:
                 result = self.orchestrator.place_block(
                     col, row, self.level, timeout=timeout)

@@ -1,4 +1,10 @@
-"""The Raspberry Pi-owned physical handoff: Uno FEED, then Mega BUILD."""
+"""The Raspberry Pi-owned physical handoff into one Mega BUILD.
+
+Production normally stages with ``Uno FEED``.  The operator console may also
+explicitly attest that a block has already been placed in the pickup area; that
+manual path skips only the Uno command and keeps the same operation lock and
+post-staging safety rules.
+"""
 
 from __future__ import annotations
 
@@ -38,6 +44,7 @@ class CellOrchestrator:
 
     def place_block(self, col: int, row: int, level: int,
                     timeout: float = 300.0) -> BuildResult:
+        """Stage with the Uno, then run the selected Mega placement."""
         if self.locked_reason is not None:
             raise CellError(
                 f"cell orchestrator is locked: {self.locked_reason}; restart after inspection")
@@ -53,29 +60,60 @@ class CellOrchestrator:
                     "pickup state requires inspection",
                 )
             self._phase("ready_for_pick")
-            try:
-                self._phase("placing")
-                result = self.gantry.build(col, row, level, timeout=timeout)
-            except RigError as exc:
-                return self._abort(
-                    f"gantry failed after feeder staged transaction "
-                    f"{self.last_feed.request_id}; pickup/claw state is unknown: {exc}",
-                )
-            if str(result) != PLACED:
-                # SAFE on the Mega means no gantry movement, but a block was
-                # already staged; another FEED would intentionally double-load.
-                return self._abort(
-                    f"gantry returned {result} after feeder staged transaction "
-                    f"{self.last_feed.request_id}: {result.reason or 'no reason'}; "
-                    "pickup state requires inspection",
-                )
-            self._phase("complete")
-            return result
+            return self._place_staged_block(
+                col, row, level, timeout=timeout,
+                staged_description=f"feeder staged transaction {self.last_feed.request_id}",
+            )
         finally:
             # No automatic cleanup on a failure after staging: that locks the
             # controller instead, because only a person can establish pickup
             # state at that point.
             self._operation.release()
+
+    def place_manually_staged_block(self, col: int, row: int, level: int,
+                                    timeout: float = 300.0) -> BuildResult:
+        """Place a block the operator attests is already in the pickup area.
+
+        This is deliberately a separate entry point rather than a fake feeder
+        success: no Uno transaction occurred.  Once accepted, however, the
+        pickup area is occupied and every Mega failure has the same lockout
+        consequence as the automatic path.
+        """
+        if self.locked_reason is not None:
+            raise CellError(
+                f"cell orchestrator is locked: {self.locked_reason}; restart after inspection")
+        if not self._operation.acquire(blocking=False):
+            raise CellError("another physical cell operation already owns the pickup area")
+        try:
+            self.last_feed = None
+            self._phase("ready_for_pick")
+            return self._place_staged_block(
+                col, row, level, timeout=timeout,
+                staged_description="operator-confirmed manual block",
+            )
+        finally:
+            self._operation.release()
+
+    def _place_staged_block(self, col: int, row: int, level: int, *,
+                            timeout: float, staged_description: str) -> BuildResult:
+        """Run the common Mega half after either staging method succeeded."""
+        try:
+            self._phase("placing")
+            result = self.gantry.build(col, row, level, timeout=timeout)
+        except RigError as exc:
+            return self._abort(
+                f"gantry failed after {staged_description}; "
+                f"pickup/claw state is unknown: {exc}",
+            )
+        if str(result) != PLACED:
+            # SAFE on the Mega means no gantry movement, but a block was
+            # already staged; another feed would intentionally double-load.
+            return self._abort(
+                f"gantry returned {result} after {staged_description}: "
+                f"{result.reason or 'no reason'}; pickup state requires inspection",
+            )
+        self._phase("complete")
+        return result
 
     def cancel(self) -> bool:
         """Actively STOP only while Uno owns the physical operation."""

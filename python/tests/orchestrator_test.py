@@ -63,6 +63,28 @@ def test_happy_path_order_and_three_blocks_are_strictly_sequential():
     ]
 
 
+def test_manual_staging_skips_uno_but_keeps_the_mega_placement():
+    timeline = []
+    feeder = StubFeeder(timeline)
+    cell = CellOrchestrator(feeder, StubGantry(timeline))
+    assert cell.place_manually_staged_block(2, 1, 0) == PLACED
+    assert timeline == ["B210", "MEGA_PLACED"]
+    assert cell.last_feed is None
+    assert cell.phase == "complete"
+
+
+def test_manual_staging_still_locks_if_the_staged_block_is_not_placed():
+    timeline = []
+    cell = CellOrchestrator(StubFeeder(timeline), StubGantry(
+        timeline, [BuildResult(REJECTED, "cell out of range")]))
+    result = cell.place_manually_staged_block(2, 1, 0)
+    assert result == ABORTED
+    assert "operator-confirmed manual block" in result.reason
+    assert "pickup state requires inspection" in result.reason
+    with pytest.raises(CellError, match="orchestrator is locked"):
+        cell.place_manually_staged_block(3, 1, 0)
+
+
 def test_feeder_error_never_calls_mega():
     timeline = []
     feeder = StubFeeder(timeline, [FeederError("stage_timeout")])

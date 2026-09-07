@@ -741,6 +741,21 @@ svg.grid-overlay.selectable { cursor: crosshair; }
 }
 
 .build-block { display: grid; gap: var(--s2); }
+.manual-feed-note {
+  margin: 0;
+  max-width: 34rem;
+  color: var(--text-dim);
+  font: var(--t-xs);
+  line-height: 1.45;
+}
+.btn-manual-feed {
+  border-color: var(--motion);
+  color: var(--motion);
+  cursor: pointer;
+}
+.btn-manual-feed:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--motion) 12%, transparent);
+}
 
 .reason {
   display: flex;

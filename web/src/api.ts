@@ -22,7 +22,9 @@ export const shift = (mode: "vertical" | "horizontal", x_cm: number, y_cm: numbe
   post<StateModel>("shift", { mode, x_cm, y_cm });
 export const select = (x: number, y: number, img_w: number, img_h: number) => post<StateModel>("select", { x, y, img_w, img_h });
 export const selectAxis = (axis: "col" | "row", value: number) => post<StateModel>("select/axis", { axis, value });
-export const build = (command: string) => post<StateModel>("build", { confirm: true, command });
+export type FeedMode = "automatic" | "manual";
+export const build = (command: string, feedMode: FeedMode = "automatic") =>
+  post<StateModel>("build", { confirm: true, command, feed_mode: feedMode });
 export const stop = () => post<StateModel>("stop");
 
 export interface BlockCalibrationReport {

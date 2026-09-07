@@ -191,7 +191,7 @@ class BuildLog:
                 sink.write(rule)
 
     def build_requested(self, command: str, *, selection, level: int,
-                        mode: str | None) -> None:
+                        mode: str | None, feed_mode: str = "automatic") -> None:
         self._t0 = time.monotonic()
         self._pending = None
         if not self._sink.enabled:
@@ -199,7 +199,8 @@ class BuildLog:
         self._sink.write("")
         self._sink.write("-" * 78)
         self._sink.write(f"BUILD  {_stamp()}  {command}")
-        self._sink.write(f"  selection={selection}  level={level}  mode={mode}")
+        self._sink.write(
+            f"  selection={selection}  level={level}  mode={mode}  feed_mode={feed_mode}")
         self._sink.write(f"  {self._rel():>8}  request accepted by /api/build")
 
     def job_started(self) -> None:
