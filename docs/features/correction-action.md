@@ -511,16 +511,23 @@ and needs, all of them:
 
 ## F. UI — as built
 
-The control is one shared component, `web/src/components/CorrectionControl.tsx`,
-rendered on **two** surfaces so it is reachable from both routes:
+**One surface, both routes: the `SupervisionBanner`.** It is full-bleed above
+the camera on `#/` **and** `#/build` — a paused runner and a claw action must
+not be an ephemeral toast. `web/src/components/CorrectionControl.tsx` is the
+shared control it embeds; `requestCorrection()` there is the one place the
+`POST /api/supervision/correct` request shape lives.
 
-| Route | Surface | File |
-| --- | --- | --- |
-| `#/` (console) | the supervision **banner**, inside the loud-verdict `<section>` | `SupervisionBanner.tsx` |
-| `#/build` (building mode) | the **detector-activity panel** (`SupervisionActivity`), above the log — building mode uses toasts, not banners, and the panel is `defaultOpen` there. The MOVED/DISPLACED toast also gains the line *"RETURN BLOCK TO CELL is available in the detector panel."* when the server judges the pick safe. | `SupervisionActivity.tsx`, `buildmode/BuildMode.tsx` |
+| Route | How the banner is placed |
+| --- | --- |
+| `#/` (console) | a direct child of `.app`, under the build banners, as it always was. |
+| `#/build` (building mode) | a middle grid row between the top bar and the camera/twin split (`grid-template-rows: var(--bar-h) auto minmax(0,1fr)`), so it collapses to nothing when idle. `<SupervisionBanner … quiet />` — `quiet` drops the calm "WATCHING" / "SETTLING" strip so the spare screen only lights up for a real verdict (or a genuinely-degraded `NO MAP`). Building mode keeps a brief `BOARD VERIFIED` **toast** for the good case only (the banner shows nothing for `VERIFIED`). |
 
-Both call `requestCorrection()` → `POST /api/supervision/correct` (the one place
-the request shape lives).
+`SupervisionActivity` is the read-only **history** on both routes — it no longer
+carries a control, so the two surfaces cannot say different things. Layout: the
+banner is `flex-wrap`; the chip, a `.sv-body` column (sentence · DISAGREES sets
+· `UNCHECKED` count · the correction control / its confirm), and `DISMISS`
+(`margin-left:auto`, last in the markup) each wrap cleanly rather than
+overflowing the bar.
 
 - **Shown only** when `supervision.correctable === true` — a server flag the
   browser never derives ([DESIGN.md §8](../DESIGN.md#8-what-must-not-be-done)).
@@ -678,10 +685,10 @@ and on the sketch-canonical question (blocker 9).
 | File | Change |
 | --- | --- |
 | `web/src/components/CorrectionControl.tsx` **(new)** | the shared control + two-step confirm + `requestCorrection()` (§F). |
-| `web/src/components/SupervisionBanner.tsx` | renders it on `#/`, plus the "cannot return it by claw: …" reason line. |
-| `web/src/components/SupervisionActivity.tsx` | renders it on `#/build` (above the log), via a new `onCorrect?` prop. |
-| `web/src/components/buildmode/BuildMode.tsx` | passes `onCorrect`; the MOVED/DISPLACED toast points at the panel when `correctable`. |
-| `web/src/App.tsx`, `web/src/style.css` | wire `requestCorrection`; the control's classes. |
+| `web/src/components/SupervisionBanner.tsx` | embeds the control + the "cannot return it by claw: …" reason line; new `.sv-body` wrapping layout; `quiet` prop; softened MOVED/DISPLACED wording when `correctable`. |
+| `web/src/components/buildmode/BuildMode.tsx` | renders `<SupervisionBanner … quiet />` as a grid row; the old per-verdict toast logic dropped (banner replaces it), `BOARD VERIFIED` toast kept for the good case. |
+| `web/src/components/SupervisionActivity.tsx` | reverted to a read-only history — the control lives only on the banner, so the two surfaces cannot disagree. |
+| `web/src/App.tsx`, `web/src/style.css` | wire `requestCorrection` on the banner; the banner's wrapping layout + the `.buildmode` grid row. |
 | `python/web/routes_command.py` | `POST /api/supervision/correct` — guards, one-shot latch (`correction_attempted_signature`), worker-thread dispatch, re-runs `assess_frame_correction`, locks on `HELD`, resets hysteresis on success (D12). |
 | `python/web/state.py` | `assess_frame_correction()` (the shared assessor), `SupervisionModel` correction fields, `StateModel.last_correction`. |
 | `python/web/app.py` | `_assess_correction` wrapper; `_note_supervision` clears the latch on a new verdict. |
@@ -708,9 +715,11 @@ events if a session shows the implicit flow is unclear.
 - `web_supervision_test.py` — the route's guards: refused during a build,
   refused on a stale camera, refused on a second press of an unchanged verdict,
   D12 re-verify runs before the runner resumes.
-- `SupervisionBanner.test.tsx` / `SupervisionActivity.test.tsx` — the control
-  renders only on `correctable`; it confirms before it fires `onCorrect`; CANCEL
-  backs out; nothing for `REMOVED` / `FOREIGN` / an acknowledged verdict.
+- `SupervisionBanner.test.tsx` — the control renders only on `correctable`; it
+  confirms before it fires `onCorrect`; CANCEL backs out; nothing for `REMOVED` /
+  `FOREIGN` / an acknowledged verdict; the sentence softens when the claw pick is
+  offered; `.sv-body` keeps the sentence + control + DISMISS in one wrapping bar;
+  `quiet` hides the calm strip but not a real verdict or `NO MAP`.
 - `web_supervision_test.py` — `_supervise` publishes a ready `Correction` for an
   in-band DISPLACED / a MOVED, suppresses it (with reason) out of band /
   rotated / horizontal; the route confirms, re-derives, one-shots per event,

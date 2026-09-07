@@ -161,6 +161,48 @@ describe("the supervision banner", () => {
       r.unmount();
     }
   });
+
+  it("keeps the sentence, the control and DISMISS in one wrapping bar", () => {
+    // The layout regression this guards: the confirm prompt used to push DISMISS
+    // off the edge. Sentence + control live in .sv-body; DISMISS is the last
+    // child so it never precedes the control in tab order.
+    const { container } = render(
+      <SupervisionBanner state={correctable()} onAcknowledge={() => {}} onCorrect={() => {}} />);
+    const banner = container.querySelector(".banner.supervision")!;
+    const body = banner.querySelector(".sv-body")!;
+    expect(body.querySelector(".sv-sentence")).toBeTruthy();
+    expect(body.querySelector(".sv-correct")).toBeTruthy();
+    expect(banner.lastElementChild).toHaveClass("sv-ack");
+    // Confirm expands inside .sv-body, not as a sibling that overflows the row.
+    fireEvent.click(screen.getByRole("button", { name: /Return the block/ }));
+    expect(body.querySelector(".sv-correct-confirm")).toBeTruthy();
+  });
+
+  it("softens the sentence when the claw pick is offered", () => {
+    render(<SupervisionBanner state={correctable({ verdict: "DISPLACED" })}
+                              onAcknowledge={() => {}} onCorrect={() => {}} />);
+    const text = screen.getByRole("status").textContent ?? "";
+    expect(text).toContain("Return it with the claw");
+    // and NOT the by-hand-only wording it uses when the claw cannot help
+    expect(text).not.toContain("not on a site");
+  });
+
+  it("hides the calm strip under `quiet` but still shows a real verdict", () => {
+    // #/build passes `quiet`: no "WATCHING" chrome on the spare screen.
+    const watching = render(
+      <SupervisionBanner state={state({ state: "QUIET", verdict: null, severity: "none", cells: [] })}
+                         quiet onAcknowledge={() => {}} />);
+    expect(watching.container.textContent).toBe("");
+    watching.unmount();
+    // ...but NO MAP is genuinely degraded and a real verdict still shows.
+    const noMap = render(
+      <SupervisionBanner state={state({ state: "NO_MAP", verdict: null, severity: "none", cells: [] })}
+                         quiet onAcknowledge={() => {}} />);
+    expect(noMap.container.textContent).toContain("NO MAP");
+    noMap.unmount();
+    const verdict = render(<SupervisionBanner state={correctable()} quiet onAcknowledge={() => {}} />);
+    expect(verdict.getByRole("status")).toHaveClass("sv-amber");
+  });
 });
 
 describe("the camera overlay — the surface the operator is looking at", () => {
@@ -172,7 +214,7 @@ describe("the camera overlay — the surface the operator is looking at", () => 
         { col: 3, row: 1, polygon: [[0, 0], [10, 0], [10, 10], [0, 10]] },
         { col: 4, row: 1, polygon: [[20, 0], [30, 0], [30, 10], [20, 10]] },
       ],
-    } as StateModel["geometry"],
+    } as unknown as StateModel["geometry"],
     views: { grid: true, detect: true },
   });
 

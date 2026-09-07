@@ -22,6 +22,7 @@ import { CameraView } from "../CameraView";
 import { Icon } from "../Icon";
 import { RunnerPanel } from "../RunnerPanel";
 import { SupervisionActivity } from "../SupervisionActivity";
+import { SupervisionBanner } from "../SupervisionBanner";
 import { requestCorrection } from "../CorrectionControl";
 import { TwinPanel, rememberModelId, storedModelId } from "../TwinPanel";
 import { BuildLibrary } from "./BuildLibrary";
@@ -119,49 +120,29 @@ export function BuildMode() {
     }
   }, [snapshot.connected, push, dismiss]);
 
-  // The detector is authoritative. Each judged observation becomes one toast;
-  // its full history stays in the activity drawer instead of stacking alerts.
+  // The detector's own verdicts get the SAME persistent SupervisionBanner the
+  // console uses — a paused runner and a claw action must not be an ephemeral
+  // toast. The full history lives in the activity drawer. The one thing worth a
+  // toast is the GOOD case: the banner shows nothing for VERIFIED, so a brief
+  // "BOARD VERIFIED" is the only positive feedback the operator gets.
   const supervision = state?.supervision;
   useEffect(() => {
     const verdict = supervision?.verdict ?? null;
-    // Opening #/build is not itself a board change. Remember the status we
-    // inherited and alert only when the detector subsequently changes it.
     if (!boardToastReady.current) {
       boardToastReady.current = true;
       previousBoardVerdict.current = verdict;
       return;
     }
-    // A verdict is a state, not a stream. A persistent REMOVED must alert once,
-    // then live in the activity log until the detector reaches a different
-    // conclusion. Clearing the verdict also clears its old toast immediately.
-    if (!verdict) {
-      previousBoardVerdict.current = null;
-      dismissWhere("board:");
-      return;
-    }
     if (verdict === previousBoardVerdict.current) return;
     previousBoardVerdict.current = verdict;
-    dismissWhere("board:");
-    // `verdict` being truthy means `supervision` is set — narrow it for TS.
-    if (!supervision || supervision.judged_at_ms === null) return;
-    const cells = supervision.cells.map(([col, row]) => `[${col},${row}]`).join(", ");
-    const copy = {
-      VERIFIED: ["success", "BOARD VERIFIED", cells ? `${cells} matches the plan.` : "The board matches the plan."],
-      NOT_DETECTED: ["warn", "BLOCK NOT DETECTED", cells ? `${cells} was not seen after placement.` : "The placed block was not seen."],
-      REMOVED: ["warn", "BLOCK REMOVED", `${cells} is no longer on the board.`],
-      MOVED: ["warn", "BLOCK MOVED", `${cells} no longer matches the plan.`],
-      DISPLACED: ["warn", "BLOCK DISPLACED", cells ? `${cells} was knocked off its cell into a gap.` : "A block was knocked off its cell into a gap."],
-      FOREIGN: ["error", "UNEXPECTED BLOCK", cells ? `${cells} is occupied but not planned.` : "A block is outside a board cell."],
-      DISAGREES: ["error", "BOARD DISAGREES", `${supervision.cells.length} cells differ from the plan.`],
-    } as const;
-    const [kind, title, baseDetail] = copy[verdict];
-    // The detector panel below is open in building mode, so the CORRECTION
-    // control is already on screen when the server judges the pick safe — point
-    // at it rather than adding a button the toast primitive does not have.
-    const detail = (verdict === "MOVED" || verdict === "DISPLACED") && supervision.correctable
-      ? `${baseDetail} RETURN BLOCK TO CELL is available in the detector panel.`
-      : baseDetail as string;
-    push({ key: `board:${supervision.judged_at_ms}`, kind, title, detail, sticky: supervision.severity === "red" });
+    if (verdict === "VERIFIED" && supervision && supervision.judged_at_ms !== null) {
+      const named = supervision.cells.map(([col, row]) => `[${col},${row}]`).join(", ");
+      push({ key: `board:${supervision.judged_at_ms}`, kind: "success",
+             title: "BOARD VERIFIED",
+             detail: named ? `${named} matches the plan.` : "The board matches the plan." });
+    } else {
+      dismissWhere("board:");
+    }
   }, [supervision, push, dismissWhere]);
 
   if (!state) return (
@@ -205,6 +186,15 @@ export function BuildMode() {
         </span>
       </header>
 
+      {/* The same persistent banner the console uses. `quiet` drops the calm
+          "WATCHING" strip so the spare screen only lights up for a real verdict
+          (or a genuinely-degraded NO MAP). It collapses to nothing otherwise. */}
+      <SupervisionBanner
+        state={state} quiet
+        onAcknowledge={() => { void fetch("/api/supervision/ack", { method: "POST" }); }}
+        onCorrect={requestCorrection}
+      />
+
       <div className="bm-split">
         <section className="bm-pane bm-pane-camera">
           <CameraView state={state} connected={snapshot.connected} />
@@ -239,8 +229,7 @@ export function BuildMode() {
 
       <ToastStack toasts={toasts} onDismiss={dismiss} />
       <aside className="bm-activity" hidden={!activityOpen}>
-        <SupervisionActivity state={state} defaultOpen className="bm-activity-panel"
-                             onCorrect={requestCorrection} />
+        <SupervisionActivity state={state} defaultOpen className="bm-activity-panel" />
       </aside>
       <BuildLibrary open={libraryOpen} mode={state.mode} currentId={modelId}
                     onPick={pickModel} onClose={() => setLibraryOpen(false)} />

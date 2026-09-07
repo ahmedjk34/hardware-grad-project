@@ -137,7 +137,7 @@ export function App() {
           <RunnerPanel state={state} connected={snapshot.connected}
                        modelId={runnerModelId ?? ""} onActiveChange={setRunnerActive}
                        progress={snapshot.progress} lastResult={snapshot.lastResult} />
-          <SupervisionActivity state={state} onCorrect={requestCorrection} />
+          <SupervisionActivity state={state} />
           <RigLog log={snapshot.log} defaultOpen={false} gap={snapshot.gap} />
         </div>
 

@@ -472,8 +472,8 @@ check("replaceBlock reuses the build helpers, not a second motion path",
       and "gotoBuildTargetOffset(pcol, prow, rot, dx, dy)" in sketch
       and "gotoBuildTarget(qcol, qrow, rot)" in sketch)
 check("the P nudge enters gotoBuildTargetOffset's magnitude-space slot",
-      re.search(r"buildPlacementOffsetSteps\(axis\) \+ buildSkewSteps\(axis, col, row\)\s*\n"
-                r"\s*\+ lround\(extraCm \* xyStepsPerCmOf\(axis\)\)", sketch) is not None)
+      re.search(r"buildPlacementOffsetSteps\(axis\)\s*\+\s*buildSkewSteps\(axis, col, row\)\s*"
+                r"\+\s*lround\(extraCm \* xyStepsPerCmOf\(axis\)\)", sketch) is not None)
 check("gotoBuildTarget still exists as the zero-nudge B path",
       re.search(r"bool gotoBuildTarget\(long col, long row, int8_t rotation\)\s*\{.*?"
                 r"return gotoBuildTargetOffset\(col, row, rotation, 0\.0, 0\.0\);",

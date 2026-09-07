@@ -586,64 +586,59 @@ svg.grid-overlay.selectable { cursor: crosshair; }
 }
 
 /* --- the supervision banner ---------------------------------------------- */
-/* Full-bleed above the camera, never a floating toast: a floater can cover the
-   video, which is the one thing the operator needs to see. */
-.banner.supervision { display: flex; align-items: center; gap: var(--s2); }
+/* Full-bleed above the camera on BOTH routes (#/ and #/build), never a floating
+   toast: a floater can cover the video, which is the one thing the operator
+   needs to see. It wraps rather than truncating — a paused runner is worth two
+   lines of vertical space. */
+.banner.supervision {
+  display: flex; flex-wrap: wrap; align-items: flex-start;
+  column-gap: var(--s2); row-gap: var(--s2);
+}
 .banner.supervision.sv-amber { background: var(--motion-deep); border-color: var(--motion); }
 .banner.supervision.sv-red   { background: var(--danger-deep); border-color: var(--danger); }
 /* The state is carried by the icon, the plate edge and the bold chip. The
    SENTENCE is --text at 15:1, because neither amber nor red clears 7:1 as
    body copy on this ground — DESIGN.md §7, measured. */
 .banner.supervision .sv-chip {
+  flex: 0 0 auto; align-self: center;
   font-family: var(--font-mono); font-weight: 700; font-size: 1.05rem;
-  letter-spacing: .08em; padding: 0 var(--s1); border-radius: 3px;
+  letter-spacing: .08em; padding: 2px var(--s1); border-radius: 3px;
   color: var(--void); white-space: nowrap;
 }
 .banner.supervision.sv-amber .sv-chip { background: var(--motion); }
 .banner.supervision.sv-red   .sv-chip { background: var(--danger); }
+/* The body carries the sentence, the DISAGREES sets, the UNCHECKED count and
+   the correction control — stacked, so a long sentence + a confirm prompt does
+   not overflow the bar sideways. */
+.banner.supervision .sv-body {
+  flex: 1 1 22rem; min-width: 0;
+  display: flex; flex-direction: column; align-items: flex-start; gap: var(--s2);
+}
 .banner.supervision .sv-sentence { color: var(--text); }
 .banner.supervision .sv-sets { color: var(--text-dim); font-family: var(--font-mono); }
-.banner.supervision .sv-limits { color: var(--text-faint); margin-left: auto; }
+.banner.supervision .sv-limits { color: var(--text-faint); font-family: var(--font-mono); }
 /* ≥ 44 x 44, because a rig-mounted tablet is driven by a thumb. */
-.banner.supervision .sv-ack { min-width: 44px; min-height: 44px; }
+.banner.supervision .sv-ack {
+  flex: 0 0 auto; align-self: center; margin-left: auto;
+  min-width: 44px; min-height: 44px;
+}
 
 /* CORRECTION control (docs/features/correction-action.md). It is an action the
    operator starts, not a machine state, so it takes NO reserved state colour —
-   it reads as a deliberate control, and it confirms before it moves anything.
-   It sits before DISMISS in the flex row but AFTER it in tab order (markup). */
-.banner.supervision .sv-correct,
-.banner.supervision .sv-correct-go,
-.banner.supervision .sv-correct-cancel {
-  min-height: 44px; padding: 0 var(--s2); font-family: var(--font-mono);
+   it reads as a deliberate control, and it confirms before it moves anything. */
+.sv-correct, .sv-correct-go, .sv-correct-cancel {
+  min-height: 40px; padding: 0 var(--s2); font-family: var(--font-mono);
   font-weight: 700; letter-spacing: .06em; border-radius: 3px;
   border: 1px solid var(--text-dim); background: transparent; color: var(--text);
   cursor: pointer;
 }
-.banner.supervision .sv-correct:hover,
-.banner.supervision .sv-correct-go:hover { border-color: var(--text); }
-.banner.supervision .sv-correct-confirm { display: flex; align-items: center; gap: var(--s1); }
-.banner.supervision .sv-correct-warn { color: var(--text); font-size: .9rem; }
-.banner.supervision .sv-correct-why { color: var(--text-dim); font-size: .9rem; }
-.banner.supervision .sv-correct-go { border-color: var(--motion); }
-
-/* Same control, hosted in the detector-activity panel (the surface #/build acts
-   on). Reuse the banner rules for the buttons; just give the row some room. */
-.sv-activity-correction {
+.sv-correct:hover, .sv-correct-go:hover { border-color: var(--text); }
+.sv-correct-go { border-color: var(--motion); }
+.sv-correct-confirm {
   display: flex; flex-wrap: wrap; align-items: center; gap: var(--s1);
-  padding: var(--s2); border-bottom: 1px solid var(--line);
 }
-.sv-activity-correction .sv-correct,
-.sv-activity-correction .sv-correct-go,
-.sv-activity-correction .sv-correct-cancel {
-  min-height: 44px; padding: 0 var(--s2); font-family: var(--font-mono);
-  font-weight: 700; letter-spacing: .06em; border-radius: 3px;
-  border: 1px solid var(--text-dim); background: transparent; color: var(--text);
-  cursor: pointer;
-}
-.sv-activity-correction .sv-correct-go { border-color: var(--motion); }
-.sv-activity-correction .sv-correct-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s1); }
-.sv-activity-correction .sv-correct-warn { color: var(--text); font-size: .9rem; }
-.sv-activity-correction .sv-correct-why { color: var(--text-dim); font-size: .9rem; }
+.sv-correct-warn { flex: 1 1 16rem; color: var(--text); font-size: .9rem; }
+.sv-correct-why { color: var(--text-dim); font-size: .9rem; }
 
 .sv-status { color: var(--text-dim); font-family: var(--font-mono); }
 .sv-status.sv-faint { color: var(--text-faint); }
@@ -2029,11 +2024,22 @@ svg.grid-overlay.selectable { cursor: crosshair; }
 .buildmode {
   height: 100%;
   display: grid;
-  grid-template-rows: var(--bar-h) minmax(0, 1fr);
+  /* bar · supervision banner (collapses to 0 when idle) · the split */
+  grid-template-rows: var(--bar-h) auto minmax(0, 1fr);
   overflow: hidden;
   background:
     radial-gradient(120% 80% at 50% -20%, #0E1319 0%, transparent 60%),
     var(--void);
+}
+/* The console renders the banner full-bleed; in building mode it is the middle
+   grid row, so it must not add its own outer margin and its bottom rule is the
+   divider between it and the split. */
+.buildmode > .banner.supervision,
+.buildmode > .sv-status { margin: 0; }
+.buildmode > .sv-status {
+  padding: var(--s2) var(--s4);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
 }
 
 .bm-bar {
