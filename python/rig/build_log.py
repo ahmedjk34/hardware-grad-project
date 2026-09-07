@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Append-only run logs for the rig build pipeline.
 
-Two files under ``logs/`` at the repository root, both git-ignored, both opened
+Three files under ``logs/`` at the repository root, all git-ignored, all opened
 in append mode so every server run adds to them rather than replacing them:
 
 ``logs/build.log``
@@ -15,6 +15,13 @@ in append mode so every server run adds to them rather than replacing them:
     Every line to and from the Arduino, each stamped with the wall clock AND
     the gap since the previous serial line. A stall on the cable or a slow
     firmware phase shows up directly as a large delta in the second column.
+
+``logs/placements.log``
+    One line per confirmed placement — the as-built record behind
+    :mod:`rig.placement_ledger`. Written for the thesis record and **never read
+    back**: a reloaded ledger would claim to describe a board nobody has looked
+    at since the process died, and what consumes the ledger drives a claw. See
+    ``docs/features/placement-supervision.md`` D3.
 
 Disabled by default. Importing this module costs nothing and every logging
 call is a cheap no-op until :func:`configure` is called, which
@@ -85,6 +92,7 @@ class _Sink:
 
 _build_sink = _Sink()
 _serial_sink = _Sink()
+_placement_sink = _Sink()
 
 
 class SerialLog:
@@ -259,14 +267,46 @@ class BuildLog:
             self._sink.write(f"  {self._rel():>8}  {text}")
 
 
+class PlacementLog:
+    """``logs/placements.log`` — one line per confirmed placement.
+
+    Called from the ``BuildJob`` worker thread rather than the event loop, so
+    unlike :class:`BuildLog` this one keeps a lock.
+
+    Write-only, deliberately. Nothing in the process reads this file back: it
+    is evidence, not authority.
+    """
+
+    def __init__(self, sink: _Sink) -> None:
+        self._sink = sink
+        self._lock = threading.Lock()
+
+    def session(self, message: str) -> None:
+        if not self._sink.enabled:
+            return
+        with self._lock:
+            self._sink.write("")
+            self._sink.write(f"### {_stamp()}  {message}")
+
+    def placed(self, placement) -> None:
+        """One admitted ledger entry. ``placement`` is a ``Placement``."""
+        if not self._sink.enabled:
+            return
+        with self._lock:
+            self._sink.write(
+                f"{_stamp()}  {placement.mode:<10} "
+                f"[{placement.col},{placement.row}] level={placement.level}")
+
+
 #: Module singletons. One server process, one of each — see AGENTS.md on the
 #: console owning exactly one camera and one serial link.
 serial = SerialLog(_serial_sink)
 build = BuildLog(_build_sink)
+placements = PlacementLog(_placement_sink)
 
 
 def configure(*, log_dir: Path | str = DEFAULT_LOG_DIR, enabled: bool = True) -> None:
-    """Point the two logs at ``<log_dir>/{build,serial}.log`` and start writing.
+    """Point the logs at ``<log_dir>/{build,serial,placements}.log`` and write.
 
     Idempotent and safe to call before anything else. ``enabled=False`` leaves
     every logging call a no-op, which is the state the test-suite relies on.
@@ -276,3 +316,4 @@ def configure(*, log_dir: Path | str = DEFAULT_LOG_DIR, enabled: bool = True) ->
     directory = Path(log_dir)
     _build_sink.open(directory / "build.log")
     _serial_sink.open(directory / "serial.log")
+    _placement_sink.open(directory / "placements.log")

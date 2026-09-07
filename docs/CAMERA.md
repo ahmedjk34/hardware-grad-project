@@ -380,7 +380,104 @@ it were cheap. [feature-ideas.md §3.5](feature-ideas.md).
 
 ---
 
-## 8. If you are extending this
+## 8. Status board — what we are adding
+
+**Tick a box when it lands, and in the same commit update the prose above that
+it makes false.** §0 says the camera "never makes an assertion the system acts
+on" — the first ticked box in M3a makes that sentence wrong, and a living doc
+that still says it is worse than no doc.
+
+Plans: [placement-supervision.md](features/placement-supervision.md) ·
+[stage-15-placement-correction.md](features/stage-15-placement-correction.md) ·
+[camera-parallax-and-levels.md](features/camera-parallax-and-levels.md)
+
+### Gate 0 — de-risk before building anything
+
+- [x] **Throwaway measurement script**, rig parked, ~60 s. Log per frame: the
+      channel-max frame-difference energy fraction, the detection count, and
+      what `WorkspaceMap.cell_at` assigns each detection to.
+      → `python/tools/measure_quiet_window.py`. Its analysis half is verified
+      on synthetic rows; **the camera half is unrun** — there is no camera on
+      the dev desktop, so this has to be run on the Pi.
+- [ ] **Answer three questions from it:** does the quiet window ever open, and
+      how often? Is detection stable frame to frame? Do cells assign
+      consistently? → sets `QUIET_DIFF_FRACTION`, `SETTLE_N`, `SETTLE_M` from
+      measurement instead of guesswork.
+- [ ] **If the quiet window never opens, stop and re-plan.** Supervision would
+      sit at `BUSY` forever and silently do nothing. This is the single biggest
+      risk and it costs half a day to retire.
+
+### M1 — the memory *(no camera involvement at all)*
+
+- [x] `python/rig/placement_ledger.py` — per cell: mode, col, row, level,
+      result, `placed_at`. Pure data, no OpenCV.
+- [x] Hook in `BuildController.build()` on the `PLACED` branch only
+- [x] `expected_occupancy(mode)`, `expected_top_level(mode)`
+- [x] `is_top_of_column()`, `has_taller_neighbour()` — Stage 15's D5/D6 predicates
+- [x] Append-only `logs/placements.log`, `build_log.py` conventions
+- [x] Refuses to load a reloaded ledger as authority → reports `NO MEMORY`
+- [x] `python/tests/test_placement_ledger.py` — 42 checks
+
+### M2 — the observer *(report only, no verdicts)*
+
+- [x] `python/rig/supervisor.py` — **the three Gate 0 constants are still
+      `None` and `Supervisor` refuses to construct without explicit values**,
+      so nothing can start on a guessed threshold
+- [x] Interlocks: gantry parked · **`frame.calibrated`** · scene quiet · settled N-of-M
+- [x] **pixel → cell via `WorkspaceMap.cell_at`** — real work, not an inherited
+      input (§5b); `None` in a gap is *signal*
+- [ ] Frame difference **on the executor**, not the event loop — blocked on
+      Gate 0: the supervisor is deliberately NOT wired into `web/app.py` yet
+- [x] Per-cell hysteresis; counters **reset**, not decay, on a tripped interlock
+- [x] Level-3 ceiling: refuse to judge cells whose expected top level is ≥ 3
+- [x] Hysteresis reset on `frame.grid_mode` change
+- [ ] Exposed as a state field, watched on the bench for a session
+- [x] `python/tests/test_supervisor.py` — 55 checks, synthetic cell sets only
+- [ ] `python/tests/test_supervisor_frames.py` — the reference boards in
+      `python/captures/`
+
+### M3a — the per-build verdict *(cheapest high-value step)*
+
+- [ ] Classifier triggered at `_publish_build_result`
+- [ ] Publish `vision_verification: str | None` on `StateModel`
+- [ ] **Verify the free win:** runner log row and run-report column light up
+      with **no client change** (§5c)
+- [ ] `python/tests/web_state_test.py` extended
+
+### M3b — the continuous verdict *(the demonstrable milestone)*
+
+- [ ] Whole-board occupancy diff in every quiet window while parked
+- [ ] D9 verdicts: `VERIFIED` / `NOT_DETECTED` / `REMOVED` / `MOVED` / `FOREIGN` / `DISAGREES`
+- [ ] No `FOREIGN` below `MIN_LATTICE_BLOCKS` (6)
+- [ ] `SupervisionModel` published; `POST /api/supervision/ack`
+- [ ] Runner: `board-verdict` event → pause on amber, stop on red, **never `LOCKED`**
+- [ ] **Camera overlay first** — a per-cell class in `GridOverlay.tsx`, exactly
+      how `blocked` cells already work. Cheapest surface and the one the
+      operator is actually looking at
+- [ ] Supervision banner (new component)
+- [ ] Twin overlay layer — **not** a sixth `TwinAppearance`
+- [ ] `unjudged` cells drawn as a **hatch, not a colour**, with a count and reason
+- [ ] `--danger-text: #FF8A8A` token added (measured: `--danger` fails the 7:1
+      state-text bar — see the UI section's §6.5)
+- [ ] UI tests per the plan's §6.11, including the token contrast unit test
+- [ ] **Update §0 and §6a of this file** — the camera now asserts
+
+### Future — recorded, not scheduled
+
+- [ ] **M4** — armed automatic repair on `REMOVED`, off by default, one per cell per run
+- [ ] **Parallax** — `camera` section in `config/rig.json`, `parallax_excess()`,
+      the ruler-validation gate; lifts the level-3 ceiling
+- [ ] **Stage 15 Stage A** — measurement only, no motion
+- [ ] **Stage 15 Stage C** — the `P` verb in **both** sketches, unflashable locally
+- [ ] **Validated `block_levels`** — the only route to catching a block stolen
+      off the top of a stack
+- [ ] **[feature-ideas.md §3.1](feature-ideas.md#31-placement-repeatability-and-backlash---highest-value-per-line)**
+      — placement repeatability and backlash; gates Stage 15's correction band
+      and decides whether between-build calibration comes back off the shelf
+
+---
+
+## 9. If you are extending this
 
 - **Read [BLOCK-VISION.md](BLOCK-VISION.md) first**, especially §7.
 - **Do not add a detector.** Every feature so far has been served by

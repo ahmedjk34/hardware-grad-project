@@ -28,6 +28,12 @@ class BuildController:
     rig: object
     level: int = 0
     orchestrator: object | None = None
+    #: The as-built memory, when one is wired in. Optional so every existing
+    #: construction — the tests', the calibration paths' — is unchanged, and
+    #: PURE DATA: a `PlacementLedger` holds cells, levels, modes and
+    #: timestamps. This class deliberately knows nothing about OpenCV and
+    #: handing it a ledger must not be the thing that changes that.
+    ledger: object | None = None
     selected: tuple[int, int] | None = None
     last_result: BuildResult | None = None
     locked_reason: str | None = None
@@ -156,6 +162,12 @@ class BuildController:
                 result.reason or "build aborted; the claw or machine position may be unknown"
             )
         elif str(result) == PLACED:
+            # The one hook the as-built memory needs. It is on the PLACED
+            # branch and nowhere else: `rejected` placed nothing, and `aborted`
+            # took the branch above, where the machine's own position is
+            # unknown — that is a lock and a human, not a ledger entry.
+            if self.ledger is not None:
+                self.ledger.append(self.mode, col, row, self.level, result)
             # Requiring a fresh click prevents one Enter key repeat from placing
             # another block into the same occupied cell.
             self.selected = None
