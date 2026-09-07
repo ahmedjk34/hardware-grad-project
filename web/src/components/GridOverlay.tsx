@@ -32,6 +32,7 @@ export function cellTitle(verdict: string | null, col: number, row: number): str
   if (verdict === "REMOVED") return `[${col},${row}] — a block the plan placed is gone`;
   if (verdict === "NOT_DETECTED") return `[${col},${row}] — the block just placed was not seen`;
   if (verdict === "MOVED") return `[${col},${row}] — the board no longer matches the plan here`;
+  if (verdict === "DISPLACED") return `[${col},${row}] — a block was knocked off this cell into a gap`;
   if (verdict === "FOREIGN") return `[${col},${row}] — something is here the plan did not put here`;
   if (verdict === "DISAGREES") return `[${col},${row}] — this cell differs from the plan`;
   if (verdict === "VERIFIED") return `[${col},${row}] — seen in frame`;

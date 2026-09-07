@@ -1292,6 +1292,19 @@ first in the diff.
 Newest first. One entry per landed change; note anything that contradicts the
 plan or that a future reader could not infer.
 
+### Supervision verdict `DISPLACED` — a block knocked off its cell into a gap
+
+New amber verdict between `MOVED` and `FOREIGN`. `MOVED` is a relocation to
+another valid cell (`cells = [from, to]`, the overlay draws an arrow);
+`DISPLACED` is the same event with the block landing in the build area on no
+site (`cells = [from]`, no arrow). Both pause the runner. This is what a
+hand-nudge into a gap used to surface as — a red `FOREIGN` naming no cell.
+`SupervisionVerdict` in `types.ts` gains `"DISPLACED"`; `SupervisionActivity`,
+`SupervisionBanner`, `GridOverlay` and `BuildMode` gain a case; `runner.ts` and
+`scene/Supervision.tsx` are severity-driven and unchanged. See
+[features/placement-supervision.md](features/placement-supervision.md) D9 and
+progress.md P9.
+
 ### Supervision's sparse-board `FOREIGN` suppression removed
 
 `MIN_LATTICE_BLOCKS` / D10 is gone from `rig/supervisor.py` — the holder came

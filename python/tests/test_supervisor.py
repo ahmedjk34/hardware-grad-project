@@ -129,8 +129,36 @@ check("D9 one unexpected -> FOREIGN", verdict.verdict == "FOREIGN")
 check("FOREIGN names the EXACT cell", verdict.cells == ((4, 2),))
 
 verdict = classify("vertical", full, full, in_gap=1)
-check("D9 a detection in a GAP -> FOREIGN", verdict.verdict == "FOREIGN",
-      "a block on the board and not on a site")
+check("D9 a detection in a GAP with nothing missing -> FOREIGN",
+      verdict.verdict == "FOREIGN", "a block the plan cannot account for")
+
+# --- MOVED vs DISPLACED: same event, split by where the block landed ------ #
+# `MOVED` (one out, one onto a valid cell) is covered above. DISPLACED is the
+# same event with the block landing in the build area but on no site.
+
+verdict = classify("vertical", full, full - {(2, 2)}, in_gap=1)
+check("one out, one into the build area off every site -> DISPLACED",
+      verdict.verdict == "DISPLACED", verdict.verdict)
+check("DISPLACED names the origin cell only, no 'to'",
+      verdict.cells == ((2, 2),), str(verdict.cells))
+check("DISPLACED is amber — recoverable, the runner pauses",
+      verdict.severity == "amber" and "DISPLACED" in AMBER_VERDICTS)
+
+verdict = classify("vertical", full, (full - {(2, 2)}) | {(4, 2)}, in_gap=1)
+check("one out, one onto a cell AND something in a gap -> DISAGREES",
+      verdict.verdict == "DISAGREES", verdict.verdict)
+
+verdict = classify("vertical", full, full - {(2, 2)}, in_gap=2)
+check("one out, TWO in gaps is ambiguous -> DISAGREES",
+      verdict.verdict == "DISAGREES", verdict.verdict)
+
+verdict = classify("vertical", full, full - {(2, 2), (3, 2)}, in_gap=1)
+check("two out, one in a gap will not pair -> DISAGREES",
+      verdict.verdict == "DISAGREES", verdict.verdict)
+
+verdict = classify("vertical", full, full - {(2, 2)})
+check("one out, nothing anywhere in the build area -> REMOVED",
+      verdict.verdict == "REMOVED", verdict.verdict)
 
 # P1, decided with the user: a ONE-SIDED change of any size is named, not
 # dismissed. Identity is only needed when there is something to pair with, and

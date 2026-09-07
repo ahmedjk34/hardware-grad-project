@@ -30,6 +30,7 @@ function verdictActivity(supervision: Supervision): Activity | null {
     case "NOT_DETECTED": return { id: "", at: 0, kind: "warn", title: "Block not detected", detail: named ? `${named} was not seen after placement.` : "The placed block was not seen." };
     case "REMOVED": return { id: "", at: 0, kind: "warn", title: "Block removed", detail: `${named} is no longer on the board.` };
     case "MOVED": return { id: "", at: 0, kind: "warn", title: "Block moved", detail: `${cell(supervision.cells[0] as [number, number])} → ${cell((supervision.cells[1] ?? supervision.cells[0]) as [number, number])}.` };
+    case "DISPLACED": return { id: "", at: 0, kind: "warn", title: "Block displaced", detail: named ? `${named} was knocked off its cell into a gap.` : "A block was knocked off its cell into a gap." };
     case "FOREIGN": return { id: "", at: 0, kind: "error", title: "Unexpected block", detail: named ? `${named} is occupied but was not in the plan.` : "A block is outside a board cell." };
     case "DISAGREES": return { id: "", at: 0, kind: "error", title: "Board disagrees", detail: `${supervision.cells.length} cells differ from the plan.` };
   }

@@ -867,6 +867,41 @@ at `(2,0)` / zero FOREIGN; `hand` all BUSY; merged-reading regression still
 99.4% FOREIGN). `test_supervisor.py` 82 pass, `test_supervisor_frames.py` 21
 pass, `web_supervision_test.py` +1 new (sparse-board FOREIGN through the seam).
 
+### P9 — Split `MOVED` into `MOVED` + `DISPLACED`, keyed to the build area — **DONE**
+
+The user asked for the verdicts to be defined by *where a block is relative to
+the build area* (the rectangle of cells + the gaps between them, which
+`locate()` already derives from the grid) rather than by bare set arithmetic.
+
+- **`MOVED`** — one cell emptied, one different **cell** filled, no gap
+  detection. `cells = (from, to)`.
+- **`DISPLACED`** (new, amber) — one cell emptied, **nothing on a cell**,
+  exactly one gap detection. The block was knocked off its site but is still in
+  the build area. `cells = (from,)`, no arrow. Before this it was a red
+  `FOREIGN` that named no cell — the bug the user opened the thread with.
+- **`REMOVED`** — cells emptied and nothing arrived *anywhere in the build
+  area*. Gained `and in_gap == 0`; copy hedged to "not seen on the build grid"
+  because a block off a stack (limit 1) presents the same way.
+- **`FOREIGN`** — a block in the build area (cell or gap) that nothing having
+  left can explain.
+- Ambiguous gap counts (`in_gap >= 2`, or one-in-one-out *and* a gap) →
+  `DISAGREES`.
+
+`classify()` lost its `in_gap`-first `FOREIGN` shortcut; the branch order is now
+VERIFIED → MOVED → DISPLACED → one-sided FOREIGN → REMOVED → DISAGREES. No new
+geometry — `observe()` already returned `in_gap` vs `off_board`. Needs no block
+identity: the pairing holds because D5 guarantees the window has no occlusion
+([block-identity.md](block-identity.md), written alongside this).
+
+Plumbed through `state.py`, `types.ts`, `SupervisionActivity.tsx`,
+`SupervisionBanner.tsx`, `GridOverlay.tsx`, `BuildMode.tsx`. `runner.ts` and the
+scene overlays key off `severity`, not the verdict name, so no change there.
+
+Re-verified: Gate 0 non-merged tallies **unchanged** (`in_gap == 0` throughout);
+the merged-reading regression shifts 99.4% → 98.1% `FOREIGN` + 0.6% `DISPLACED`,
+still stops-or-pauses on ~99% of a correct board. `test_supervisor.py` 89 pass,
+`test_supervisor_frames.py` 21 pass, `pytest` 100 pass, `vitest` 556 pass.
+
 ---
 
 ## 5. What is built, and what is not

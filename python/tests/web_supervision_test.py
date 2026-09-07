@@ -69,6 +69,15 @@ def at_cell(col, row):
                                       y_cm / GRID.workspace_height_cm, SIZE))
 
 
+def at_gap(a, b):
+    """A detection halfway between two cell centres — in the deliberate gap."""
+    ax, ay = GRID.cell_center_cm(*a)
+    bx, by = GRID.cell_center_cm(*b)
+    return FakeDetection(MAP.pixel_at((ax + bx) / 2 / GRID.workspace_width_cm,
+                                      (ay + by) / 2 / GRID.workspace_height_cm,
+                                      SIZE))
+
+
 def view(fill: int = 40) -> np.ndarray:
     """One synthetic capture. Flat, so two of them differ by exactly `fill`."""
     frame = np.full((SIZE[1], SIZE[0], 3), fill, dtype=np.uint8)
@@ -76,11 +85,11 @@ def view(fill: int = 40) -> np.ndarray:
     return frame
 
 
-def frame_at(sequence, *, cells=((1, 1), (2, 1)), fill=40, calibrated=True,
-             mode="vertical"):
+def frame_at(sequence, *, cells=((1, 1), (2, 1)), extra=(), fill=40,
+             calibrated=True, mode="vertical"):
     return SimpleNamespace(
         view=view(fill), sequence=sequence, image_size=SIZE,
-        detections=tuple(at_cell(col, row) for col, row in cells),
+        detections=tuple(at_cell(col, row) for col, row in cells) + tuple(extra),
         workspace=MAP, calibrated=calibrated, grid_mode=mode, stale=False)
 
 
@@ -179,6 +188,22 @@ def test_an_unexpected_block_on_a_near_empty_board_is_FOREIGN():
     assert seen[-1].verdict.verdict == "FOREIGN"
     assert seen[-1].verdict.cells == ((4, 4),)
     assert seen[-1].severity == "red"
+
+
+def test_a_block_knocked_into_a_gap_is_DISPLACED_and_names_its_cell():
+    """One cell emptied, one detection in the build area but on no site: the
+
+    block was knocked off [2,1] into the gap. Amber, pauses, names the origin.
+    Before this it read as red FOREIGN with no cell named.
+    """
+    app = fake_app()  # ledger expects [1,1] and [2,1]
+    gap = at_gap((2, 1), (3, 1))
+    seen = drive(app, [frame_at(1, cells=((1, 1),), extra=(gap,)),
+                       frame_at(2, cells=((1, 1),), extra=(gap,))])
+    assert seen[-1].state == "VERDICT"
+    assert seen[-1].verdict.verdict == "DISPLACED"
+    assert seen[-1].verdict.cells == ((2, 1),)
+    assert seen[-1].severity == "amber"
 
 
 # --- refusal 1: the mode latch (D13) --------------------------------------- #

@@ -56,12 +56,13 @@ class SupervisionModel(BaseModel):
 
     state: Literal["NO_MEMORY", "NO_MAP", "WARMING", "BUSY", "QUIET", "VERDICT"]
     verdict: Literal["VERIFIED", "NOT_DETECTED", "REMOVED",
-                     "MOVED", "FOREIGN", "DISAGREES"] | None
+                     "MOVED", "DISPLACED", "FOREIGN", "DISAGREES"] | None
     #: `amber` pauses the runner, `red` stops it. NEVER `LOCKED` — that means
     #: the claw's position is unknown and needs a human plus a service restart,
     #: and a verdict is a statement about the BOARD, not about the machine.
     severity: Literal["none", "amber", "red"]
-    #: The cells the verdict names. For MOVED they are ordered [from, to].
+    #: The cells the verdict names. For MOVED they are ordered [from, to]; for
+    #: DISPLACED there is only the origin cell (the block landed on no site).
     cells: list[tuple[int, int]]
     mode: str
     #: Both sides, so a DISAGREES banner can show expected against observed.

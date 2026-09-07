@@ -186,6 +186,11 @@ case that matters. A speed threshold would conflate a hand, the detector's own
 centre jitter, and the gantry placing a block on purpose. Motion earns exactly
 one job, in D5: a **gate**, never a classifier.
 
+The full case — the three tiers of "identity", what each would unblock, why
+persistent re-ID is not feasible on this camera, and the cheap window-scoped
+tier that most "why not tell them apart?" questions are actually reaching for —
+is [block-identity.md](block-identity.md).
+
 ### D2 — The ledger records commands, not pixels
 
 `PlacementLedger` is the authority on what *should* be there, and everything in
@@ -303,34 +308,47 @@ This is the one that catches a hand, and it is level-blind per D4.
 Per-build catches a block that never left the claw. Continuous catches a human.
 Neither is a special case of the other, and the user asked for both.
 
-### D9 — The classifier is a set difference
+### D9 — The classifier is a set difference, keyed to the build area
 
-Evaluated against `ledger.expected_occupancy(mode)`:
+Evaluated against `ledger.expected_occupancy(mode)`. The **build area** is the
+rectangle of cells plus the deliberate gaps between them —
+[`locate()`](../../python/rig/supervisor.py) already derives it from the grid,
+splitting every detection into `cell` / `gap` (inside it) versus
+`margin` / `outside` (not).
 
 | Condition | Verdict | Severity |
 | --- | --- | --- |
 | sets equal | `VERIFIED` | — |
-| exactly one missing **and** exactly one unexpected | `MOVED [a,b] → [c,d]` | notify |
-| N cells missing, **nothing** unexpected | `REMOVED`, naming all N | notify |
-| N cells unexpected, **nothing** missing | `FOREIGN BLOCK AT`, naming all N | stop |
-| a detection maps to `cell_at → None` (a gap) | `FOREIGN` — a block is on the board, off every site | stop |
-| missing **and** unexpected, more than one either side | `BOARD DISAGREES` | **stop the program** |
+| one missing, one unexpected **cell**, no gap detection | `MOVED [a,b] → [c,d]` — relocated to a valid site | notify |
+| one missing, **nothing** on a cell, exactly one gap detection | `DISPLACED [a,b]` — knocked off its cell into the build area, on no site | notify |
+| N cells missing, **nothing** anywhere in the build area | `REMOVED`, naming all N — gone from the build grid | notify |
+| N cells unexpected **or** a gap detection, **nothing** missing | `FOREIGN`, naming the cells | stop |
+| both sides changed, or the change will not pair one-to-one | `BOARD DISAGREES` | **stop the program** |
 
-> **The two one-sided rows are a refinement of the originally approved design,
-> decided with the user as P1 and built.** The design sent every change of more
-> than one cell to `DISAGREES`. What `DISAGREES` protects against is the absence
-> of **identity** — and identity only matters when there is something to pair
-> with. Two cells emptied with nothing gained needs none: memory says both were
-> ours, the camera says both are gone. Naming them is strictly more use to an
-> operator than declining to. The systemic worry does not reach these rows
-> either: a camera bump shifts *everything*, so it presents as missing **and**
-> unexpected, or as `in_gap`, and still lands on `DISAGREES`. The reasoning in
-> full is [progress.md §3 Q8](placement-supervision-progress.md); the regression
-> is asserted in `test_supervisor.py`.
+> **`MOVED` / `DISPLACED` are one event, split by landing.** A block left the
+> cell the plan put it on. It came to rest on another valid cell (`MOVED`,
+> `cells = [from, to]`, the overlay draws an arrow) or in the build area on no
+> site at all (`DISPLACED`, `cells = [from]`, no arrow). Both are recoverable by
+> hand — straighten or re-run — so both **pause**; the split exists because the
+> operator does different things about them. Before this, a block nudged into a
+> gap was a red `FOREIGN` that named no cell.
+>
+> **The one-sided rows are a refinement of the originally approved design,
+> decided with the user as P1.** The design sent every change of more than one
+> cell to `DISAGREES`. `DISAGREES` protects against the absence of **identity**,
+> and identity only matters when there is something to pair with. N cells
+> emptied with nothing gained anywhere needs none. `test_supervisor.py` asserts
+> every row on exact cell sets.
 
-`MOVED` does **not** claim it is the same block — identical objects, no
-identity, no proof available. It does not need one: the actionable fact is that
-the board no longer matches the plan at two cells.
+Neither `MOVED` nor `DISPLACED` claims it is the same block — identical objects,
+no identity, no proof available ([block-identity.md](block-identity.md)). Neither
+needs one: exactly one cell emptied and exactly one thing arriving, in a window
+D5 guarantees is free of occlusion, has one story. The actionable fact is where
+it ended up.
+
+`DISPLACED` requires **exactly one** gap detection. One cell out with two gap
+detections, or one out plus one onto a cell *and* a gap detection, will not pair
+cleanly → `DISAGREES`.
 
 `BOARD DISAGREES` is not a failure of the classifier; it is the classifier
 declining to guess. A toppled short tower lands here, and it **stops the
@@ -381,7 +399,7 @@ removal.
 On any verdict the machine **stops or pauses and tells the operator**. It never
 moves.
 
-- `REMOVED` / `MOVED` / `NOT DETECTED` → **pause** the runner, name the cell(s).
+- `REMOVED` / `MOVED` / `DISPLACED` / `NOT DETECTED` → **pause** the runner, name the cell(s).
 - `FOREIGN` / `BOARD DISAGREES` → **stop** the program, show both sets.
 - **A supervision verdict never `LOCK`s.** `LOCKED` is reserved for "the claw's
   position is unknown" and needs a human plus a service restart. A verdict is a
@@ -501,7 +519,7 @@ The server decides once.
 class SupervisionModel(BaseModel):
     state: Literal["NO_MEMORY", "NO_MAP", "WARMING", "BUSY", "QUIET", "VERDICT"]
     verdict: Literal["VERIFIED", "NOT_DETECTED", "REMOVED",
-                     "MOVED", "FOREIGN", "DISAGREES"] | None
+                     "MOVED", "DISPLACED", "FOREIGN", "DISAGREES"] | None
     severity: Literal["none", "amber", "red"]   # ADDED — never "locked"
     cells: list[tuple[int, int]]          # the cells the verdict names
     mode: str                             # which lattice it was judged in
@@ -593,6 +611,7 @@ not a default.
 | `NOT_DETECTED` | `NOT DETECTED [c,r]` | ▲ | `--motion` | persists | amber outline + fill | **pause** | operator | `status` |
 | `REMOVED` | `REMOVED [c,r]` | ▲ | `--motion` | persists | amber outline + fill | **pause** | operator | `status` |
 | `MOVED` | `MOVED [a,b] → [c,d]` | ▲ | `--motion` | persists | amber on **both** cells, arrow between | **pause** | operator | `status` |
+| `DISPLACED` | `DISPLACED [a,b]` | ▲ | `--motion` | persists | amber outline + fill on the origin cell, no arrow | **pause** | operator | `status` |
 | `FOREIGN` | `FOREIGN BLOCK AT [c,r]` | ■ | `--danger` | persists, **cannot dismiss unacknowledged** | red outline + fill | **stop** | explicit ack | `alert` |
 | `DISAGREES` | `BOARD DISAGREES` | ■ | `--danger` | persists, **cannot dismiss unacknowledged** | red on every differing cell, expected vs observed keyed | **stop** | explicit ack | `alert` |
 
@@ -601,11 +620,12 @@ green bars. The good case must be *near-silent* — it lives in the log row and
 one brief cell pulse. A console that celebrates every success trains the
 operator to ignore it, and then the one amber bar that matters is ignored too.
 
-**Why `MOVED` is amber and `FOREIGN` is red**, when both involve a block in the
-wrong place: on `MOVED` the counts match, so the story is complete and a human
-can act on it — recoverable. On `FOREIGN` there is a block the system cannot
-account for sitting in a cell the plan may need later; placing into it is a
-collision. That is D9's "stop", and red is D9's severity column rendered.
+**Why `MOVED` and `DISPLACED` are amber and `FOREIGN` is red**, when all three
+involve a block in the wrong place: on `MOVED` / `DISPLACED` exactly one cell
+emptied and exactly one thing arrived, so the story is complete and a human can
+act on it — recoverable. On `FOREIGN` there is a block the system cannot account
+for sitting where the plan may need to place later; doing so is a collision.
+That is D9's "stop", and red is D9's severity column rendered.
 
 ### 6.3 The observer's own states — and the BUSY trap
 
@@ -745,6 +765,7 @@ someone's shoulder.
 | Verdict | Bad | Good |
 | --- | --- | --- |
 | `REMOVED` | `REMOVED` | `REMOVED [3,1] — a block the plan placed is gone. Put it back, or dismiss to continue without it.` |
+| `DISPLACED` | `MOVED` / `illegal` | `DISPLACED [2,1] — a block was knocked off its cell and is sitting in a gap, not on a site. Straighten it, or dismiss to continue. The run is paused.` |
 | `NOT_DETECTED` | `verification failed` | `NOT DETECTED [2,2] — the block just placed was not seen. The run is paused.` |
 | `FOREIGN` | `FOREIGN` | `FOREIGN BLOCK AT [4,2] — something is on a cell the plan did not fill. Clear it, then acknowledge.` |
 | `DISAGREES` | `error` | `BOARD DISAGREES — 3 cells differ. Too much changed at once to name a cause. Expected vs observed below.` |
@@ -760,8 +781,8 @@ Inheriting DESIGN.md §8, plus this feature's own:
 
 - **No toast/floating notifications.** Banners are full-bleed above the camera;
   a floater can cover the video, which is the one thing the operator needs.
-- **No red for `MOVED` or `REMOVED`.** They are recoverable. Red is "a human is
-  required and the machine has stopped".
+- **No red for `MOVED`, `DISPLACED` or `REMOVED`.** They are recoverable. Red is
+  "a human is required and the machine has stopped".
 - **No colour on `BUSY` / `QUIET` / `NO_MEMORY`** (§6.3).
 - **No banner for `VERIFIED`** (§6.2).
 - **No looping animation on a verdict** (§6.6).
@@ -892,11 +913,11 @@ and `PASSED`/`FAILED` lists, and `FakeRig` is the pattern (fakes over mocks).
 | Suite | Checks |
 | --- | --- |
 | `tests/test_placement_ledger.py` | append/reload, per-mode separation, level collapse to a column, `PLACED`-only admission, `NO MEMORY` after restart, the two Stage 15 predicates |
-| `tests/test_supervisor.py` | every D9 row from synthetic cell sets; hysteresis needs `N of M`; each D5 interlock independently suppresses a verdict; counters **reset rather than decay** on a tripped interlock; D6 refuses level ≥ 3; `in_gap` gets `N of M` too (D10 removed); D13 resets on a mode change |
+| `tests/test_supervisor.py` | every D9 row from synthetic cell sets, incl. `MOVED` vs `DISPLACED` by landing and the ambiguous gap counts that fall through to `DISAGREES`; hysteresis needs `N of M`; each D5 interlock independently suppresses a verdict; counters **reset rather than decay** on a tripped interlock; D6 refuses level ≥ 3; `in_gap` gets `N of M` too (D10 removed); D13 resets on a mode change |
 | `tests/test_supervisor_frames.py` | **built differently, and stronger.** Not the reference stills — the **four Gate 0 rig traces** in `docs/measurements/`, 1398 frames the rig actually produced, replayed through the shipped `Supervisor`. Reproduces the measured distribution to within a tenth of a percent, names the exact residual cell `(2,0)`, and replays the pre-fix merged reading to measure it emitting `FOREIGN` in 99.4% of windows on a correct board |
 | `tests/web_supervision_test.py` | **new.** The seam: what `web/app.py` hands the supervisor, the mode-latch suspension, the repeated-sequence guard, D5's parked gate including the `complete` trap, and the per-build check's four outcomes |
 | `web/src/tokens.test.ts` | **new.** Reads the real stylesheet and asserts every colour that carries a state WORD clears 7:1, and pins the fact that `--danger` itself does not |
-| `web/src/components/SupervisionBanner.test.tsx` | **new.** No banner for `VERIFIED`; no state colour for BUSY/QUIET/NO_MEMORY; `role` by severity; the cell named in the dismiss label; the hatch is not a colour |
+| `web/src/components/SupervisionBanner.test.tsx` | **new.** No banner for `VERIFIED`; no state colour for BUSY/QUIET/NO_MEMORY; `role` by severity; the cell named in the dismiss label; the hatch is not a colour; `DISPLACED` is amber, names its cell, and says "straighten it" |
 | `tests/web_state_test.py` | `vision_verification` and the supervision block appear in the snapshot and survive a mode latch |
 | `web/src/studio/runner.test.ts` | a `board-verdict` event pauses on `REMOVED`, stops on `DISAGREES`, and never reaches `locked` |
 | existing | `test_block_outline.py`'s timing guard must still pass — supervision adds no detector work |
@@ -936,6 +957,13 @@ Still expected to fail on a clean checkout, for missing fixtures:
    four-corner map carries 0.27 cm of flattening error mid-grid. A block pushed
    a few millimetres still reads as the same cell. That is Stage 15's job, and
    it must never trigger a supervision verdict at this error budget.
+3a. **`MOVED` / `DISPLACED` do not prove it is the same block.** The pairing —
+   one cell emptied, one thing arrived — is a heuristic that holds because the
+   window has no occlusion (D5), not because identity was established. See
+   [block-identity.md](block-identity.md). `REMOVED` for a cell that emptied
+   with nothing arriving in the build area is an inference too: the block *may*
+   have been taken off a stack (limit 1), so the copy says "not seen on the
+   build grid", never "outside the build area".
 4. **Occlusion is not emptiness.** A cell under the gantry, a cable or a hand is
    *unobservable*, not empty. D5 refuses to judge at all in the common case; a
    cell under a **static** occluder will read as `REMOVED` forever, which is

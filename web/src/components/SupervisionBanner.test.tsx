@@ -85,6 +85,18 @@ describe("the supervision banner", () => {
     expect(text).toContain("observed [2,1] [4,2]");
   });
 
+  it("is amber for DISPLACED, names the cell, and says to straighten it", () => {
+    render(<SupervisionBanner state={state({
+      verdict: "DISPLACED", severity: "amber", cells: [[2, 1]],
+    })} onAcknowledge={() => {}} />);
+    const text = screen.getByRole("status").textContent ?? "";
+    expect(text).toContain("[2,1]");
+    expect(text).toContain("▲");
+    expect(text).toContain("DISPLACED");
+    expect(text).toContain("Straighten it");
+    expect(text.toLowerCase()).not.toContain("error");
+  });
+
   it("states the unjudged count and reason rather than hiding it", () => {
     render(<SupervisionBanner state={state({ unjudged: [[1, 1], [2, 2], [3, 3]] })}
                               onAcknowledge={() => {}} />);

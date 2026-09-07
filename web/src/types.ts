@@ -35,7 +35,8 @@ export type SupervisionPhase =
   | "NO_MEMORY" | "NO_MAP" | "WARMING" | "BUSY" | "QUIET" | "VERDICT";
 
 export type SupervisionVerdict =
-  | "VERIFIED" | "NOT_DETECTED" | "REMOVED" | "MOVED" | "FOREIGN" | "DISAGREES";
+  | "VERIFIED" | "NOT_DETECTED" | "REMOVED" | "MOVED" | "DISPLACED"
+  | "FOREIGN" | "DISAGREES";
 
 /** ONE server field, four readers. Nothing here is re-derived in the browser:
  *  four renderers of one field cannot disagree, which is why "stays in sync"
@@ -45,7 +46,8 @@ export interface Supervision {
   verdict: SupervisionVerdict | null;
   /** `amber` pauses the runner, `red` stops it. NEVER `LOCKED`. */
   severity: "none" | "amber" | "red";
-  /** The cells named. For MOVED they are ordered [from, to]. */
+  /** The cells named. For MOVED they are ordered [from, to]; DISPLACED carries
+   *  only the origin cell (the block landed on no site). */
   cells: Point[];
   mode: string;
   expected: Point[];

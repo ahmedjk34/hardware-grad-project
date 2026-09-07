@@ -148,6 +148,7 @@ export function BuildMode() {
       NOT_DETECTED: ["warn", "BLOCK NOT DETECTED", cells ? `${cells} was not seen after placement.` : "The placed block was not seen."],
       REMOVED: ["warn", "BLOCK REMOVED", `${cells} is no longer on the board.`],
       MOVED: ["warn", "BLOCK MOVED", `${cells} no longer matches the plan.`],
+      DISPLACED: ["warn", "BLOCK DISPLACED", cells ? `${cells} was knocked off its cell into a gap.` : "A block was knocked off its cell into a gap."],
       FOREIGN: ["error", "UNEXPECTED BLOCK", cells ? `${cells} is occupied but not planned.` : "A block is outside a board cell."],
       DISAGREES: ["error", "BOARD DISAGREES", `${supervision.cells.length} cells differ from the plan.`],
     } as const;

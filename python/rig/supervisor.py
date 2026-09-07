@@ -96,7 +96,14 @@ PARKED_CELL_PHASES = ("idle", "complete")
 STATES = ("NO_MEMORY", "NO_MAP", "WARMING", "BUSY", "QUIET", "VERDICT")
 
 #: Amber — degraded but recoverable. The runner pauses.
-AMBER_VERDICTS = ("NOT_DETECTED", "REMOVED", "MOVED")
+#:
+#: MOVED and DISPLACED are the same event — a block left the cell the plan put
+#: it on — split by WHERE it ended up. MOVED landed on another valid cell;
+#: DISPLACED is still inside the build area (cells + the gaps between them) but
+#: on no site at all, knocked into a gap or against a margin. Both are
+#: recoverable by hand, so both pause rather than stop; the split exists because
+#: the operator does different things about them (re-run vs. straighten).
+AMBER_VERDICTS = ("NOT_DETECTED", "REMOVED", "MOVED", "DISPLACED")
 #: Red — stop, a human is required. The runner stops. Still never LOCKED.
 RED_VERDICTS = ("FOREIGN", "DISAGREES")
 
@@ -327,10 +334,40 @@ def classify(mode: str, expected, observed, *, top_levels=None,
     and DISAGREES are now live from the first placed block, including on block
     one after a restart with blocks still on the board.
 
-    MOVED does not claim it is the same block. Twenty-nine identical wooden
-    rectangles carry no identity and no proof is available. It does not need
-    one: the actionable fact is that the board no longer matches the plan at
-    two cells.
+    Neither MOVED nor DISPLACED claims it is the same block. Twenty-nine
+    identical wooden rectangles carry no identity and no proof is available
+    ([[block-identity]]). Neither needs one: with exactly one cell emptied and
+    exactly one thing arriving — on a cell (MOVED) or in the build area off
+    every site (DISPLACED) — the only story is that that block moved, and the
+    window it is judged in has no occlusion by construction (D5). The actionable
+    fact is where it ended up, which is what the split reports.
+
+    THE VERDICTS, keyed to the BUILD AREA — the rectangle of cells plus the
+    gaps between them, which `locate()` already draws from the grid:
+
+    * VERIFIED   — the board matches the plan.
+    * MOVED      — one cell emptied, one different cell filled. A relocation to
+                   a valid site. `cells` = (from, to).
+    * DISPLACED  — one cell emptied, one detection is in the build area but on
+                   no site (a gap or a margin). Recoverable by hand; the runner
+                   pauses. `cells` = (from,).
+    * REMOVED    — cells emptied and NOTHING arrived anywhere in the build area.
+                   By elimination the block(s) left the build area — or were
+                   taken off the top of a stack, the D4 limit. Never asserts
+                   more than "not seen on the build grid".
+    * FOREIGN    — a block is in the build area (on a cell, or in a gap) that
+                   the plan cannot account for by anything having LEFT.
+    * DISAGREES  — both sides changed, or the change cannot be paired one to
+                   one. The classifier declining to guess. Stops the program.
+
+    ``in_gap`` is the count of detections that are ON the board and not on a
+    site — never :attr:`Observation.off_board`, which is rails and offcuts.
+    The one suppression left is D6's level ceiling.
+
+    D10's sparse-board rule was removed once the holder was taken off the rig:
+    its only surviving rationale was the holder's offcuts beside ``[0,0]``
+    reading as ``gap`` -> FOREIGN, and :func:`locate` already classifies junk
+    by geometry at any detection count.
     """
     top_levels = top_levels or {}
     refused = set(unjudged_cells(top_levels))
@@ -347,40 +384,36 @@ def classify(mode: str, expected, observed, *, top_levels=None,
 
     if not missing and not unexpected and not in_gap:
         return made("VERIFIED", ())
-    # A block on the board and not on any site. Red on its own, whatever else
-    # the cell sets say — there is something the plan cannot account for.
-    if in_gap:
-        return made("FOREIGN", unexpected)
-    if len(missing) == 1 and len(unexpected) == 1:
-        # Ordered [from, to]: the UI draws an arrow between them.
+
+    # One out, one onto a valid cell: a clean relocation. `cells` ordered
+    # (from, to) — the UI draws an arrow between them.
+    if len(missing) == 1 and len(unexpected) == 1 and not in_gap:
         return made("MOVED", (missing.pop(), unexpected.pop()))
-    # ── P1: the two ONE-SIDED rows. A refinement of D9, and a deviation from
-    # the approved design, decided with the user.
+
+    # One out, exactly one thing in the build area off every site: that block
+    # was knocked into a gap. Same event as MOVED, different landing, still
+    # recoverable by hand. Needs identity no more than MOVED does — one in, one
+    # out, no occlusion in the window. `cells` = (from,); there is no "to" cell.
+    if len(missing) == 1 and not unexpected and in_gap == 1:
+        return made("DISPLACED", (next(iter(missing)),))
+
+    # ── P1: the ONE-SIDED rows. A refinement of D9, decided with the user.
     #
-    # The design sent every change of more than one cell to DISAGREES. What
-    # DISAGREES actually protects against is the absence of IDENTITY: the
-    # ledger records "a block was placed at [3,2]", never "block #17", so when
-    # two cells empty and two fill in the same window, no memory can say
-    # whether a new occupant is an old block or something new. Pairing them by
-    # proximity is exactly the data-association guess D1 rejected.
-    #
-    # But pairing only matters when there is something to pair WITH. Two cells
-    # emptied with nothing gained needs no identity at all: memory says both
-    # were ours, the camera says both are gone, and naming them is strictly
-    # more use to an operator than declining to. The systemic counter-argument
-    # does not reach these rows either — a camera bump shifts EVERYTHING, so
-    # blocks reappear at shifted cells or land in gaps, which presents as
-    # missing AND unexpected, or as `in_gap`. It does not present as clean
-    # disappearance with nothing gained.
-    if missing and not unexpected:
-        return made("REMOVED", missing)
-    if unexpected and not missing:
+    # DISAGREES protects against the absence of IDENTITY: two cells empty and
+    # two fill and no memory can say which became which. But that only matters
+    # when there is something to pair WITH. Nothing arrived anywhere in the
+    # build area -> nothing to pair -> naming the emptied cells is strictly
+    # more use than declining to. A block in the build area with nothing having
+    # left is FOREIGN for the mirror reason: the plan cannot account for it.
+    if not missing and (unexpected or in_gap):
         return made("FOREIGN", unexpected)
-    # BOTH sides changed, by more than one cell. THIS is the case that needs
-    # identity and cannot have it — not a failure of the classifier, the
-    # classifier declining to guess. Two simultaneous changes inside one
-    # half-second window means something happened this model does not describe,
-    # so it stops the program rather than pausing it.
+    if missing and not unexpected and not in_gap:
+        return made("REMOVED", missing)
+
+    # BOTH sides changed, or the change will not pair one to one (two out and
+    # one in a gap, one out and two in gaps, a shifted board). The case that
+    # needs identity and cannot have it — the classifier declining to guess.
+    # Stops the program rather than pausing it.
     return made("DISAGREES", missing | unexpected)
 
 

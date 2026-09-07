@@ -8,6 +8,7 @@ const SHAPE: Record<string, string> = {
   NOT_DETECTED: "▲",   // ▲ attention
   REMOVED: "▲",
   MOVED: "▲",
+  DISPLACED: "▲",
   FOREIGN: "■",        // ■ stop
   DISAGREES: "■",
   WARMING: "◐",        // ◐ settling
@@ -35,6 +36,8 @@ function sentence(supervision: Supervision): string {
       return `${first} — the block just placed was not seen. The run is paused.`;
     case "MOVED":
       return `${cell(cells[0])} → ${cell(cells[1] ?? cells[0])} — the board no longer matches the plan at two cells. The run is paused.`;
+    case "DISPLACED":
+      return `${first} — a block was knocked off its cell and is sitting in a gap, not on a site. Straighten it, or dismiss to continue. The run is paused.`;
     case "FOREIGN":
       return cells.length
         ? `${list(cells)} — something is on a cell the plan did not fill. Clear it, then acknowledge.`

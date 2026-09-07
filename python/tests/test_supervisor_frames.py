@@ -182,10 +182,16 @@ check("PARKED: still overwhelmingly VERIFIED with the object in frame",
       share(tally, "VERIFIED") > 95.0, f"{share(tally, 'VERIFIED'):.1f}%")
 
 # The defect itself, replayed. This is §1.9's third row, and the reason
-# `locate()`'s three-way split is load-bearing rather than tidy.
+# `locate()`'s three-way split is load-bearing rather than tidy. A few percent
+# of the windows now read DISPLACED instead of FOREIGN — where the merged
+# off-lattice count is 1 and the (2,0) miss coincides — but the machine still
+# stops-or-pauses on nearly every window of a board that was entirely correct,
+# which is the point.
 broken, _ = replay(parked, merge_off_lattice=True)
-check("F5 the PRE-FIX merged reading stops the machine on a correct board",
-      share(broken, "FOREIGN") > 95.0, f"{share(broken, 'FOREIGN'):.1f}% FOREIGN")
+check("F5 the PRE-FIX merged reading stops-or-pauses on a correct board",
+      share(broken, "FOREIGN") + share(broken, "DISPLACED") > 95.0,
+      f"{share(broken, 'FOREIGN'):.1f}% FOREIGN + "
+      f"{share(broken, 'DISPLACED'):.1f}% DISPLACED")
 
 # §1.6's honest residual: (2,0) has 97.3% recall, so ~1.35% of windows read it
 # as gone. Amber — it pauses rather than stops, and D12 covers it. Not free,
