@@ -122,6 +122,13 @@ and means the block has left the claw; it does **not** mean the build finished.
 Only the terminal `@n OK` does. `docs/ack-protocol.md` has the full field list
 and the fourteen phase identifiers.
 
+`M <col> <row> <level>` is the Web UI's manual-pick variant. It follows the
+same validated route as `B`, but after the open claw reaches the pickup height
+it announces `phase=await_manual_close` and waits. Align the block, then send
+the single `C` command to close the claw and complete the existing placement.
+While waiting, the firmware ignores every other input so a low claw cannot be
+moved accidentally. Normal `B` commands and Uno-fed builds remain automatic.
+
 **`R` and `RR` no longer jog it.** They are the grid mode latch — `R` selects
 the vertical grid, `RR` the horizontal one — and neither moves anything. See
 the next section.

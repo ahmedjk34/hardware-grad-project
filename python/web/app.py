@@ -458,6 +458,8 @@ def create_app(options: ConsoleAppOptions | None = None) -> FastAPI:
                 "eta_ms": progress.eta_ms,
             })
             app.state.progress.on_progress(progress, event.event_id)
+            if progress.phase == "await_manual_close":
+                app.state.orchestrator.manual_close_ready()
             # build.log: closes the previous phase with its measured duration and
             # opens this one, so the firmware ETA and the wall-clock time sit
             # side by side.

@@ -67,6 +67,10 @@ class BuildRequest(BaseModel):
     feed_mode: Literal["automatic", "manual"] = "automatic"
 
 
+class ManualCloseRequest(BaseModel):
+    confirm: bool = True
+
+
 #: Held while a mode latch is homing X/Y. Read as "the rig is moving" by
 #: everything that must not send down the same cable meanwhile.
 MODE_BUSY_MESSAGE = "a grid-mode latch is homing X/Y; wait for it to finish"
@@ -332,5 +336,21 @@ async def build(request: BuildRequest, http: Request) -> StateModel:
     # Nothing has moved and nothing may be claimed yet - the board has not even
     # said RECV. Everything after this comes off the wire.
     app.state.progress.command_accepted(app.state.hub.last_event_id)
+    _signal(app)
+    return _state(app)
+
+
+@router.post("/manual-close", response_model=StateModel)
+async def manual_close(request: ManualCloseRequest, http: Request) -> StateModel:
+    """Close a manual pickup only after the firmware reports it is down/open."""
+    app = http.app
+    if not request.confirm:
+        raise HTTPException(status_code=400, detail="manual close requires confirm=true")
+    if not app.state.job.running or app.state.cell_phase != "awaiting_manual_close":
+        raise HTTPException(status_code=409, detail="the claw is not waiting for manual alignment")
+    try:
+        app.state.orchestrator.close_manual_pick()
+    except (BuildStateError, RigError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     _signal(app)
     return _state(app)

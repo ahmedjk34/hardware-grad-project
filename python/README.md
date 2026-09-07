@@ -78,7 +78,9 @@ lifespan. A normal build goes through `CellOrchestrator`: it stages exactly one
 block with a correlated Uno request, then and only then calls the existing Mega
 build. The Web UI's explicit `FEED MANUALLY` confirmation is the supported
 exception: the operator first puts one block in the pickup area, and the same
-orchestrator lock then skips the Uno request and calls the Mega build. All
+orchestrator lock sends Mega `M <col> <row> <level>` instead. `M` lowers the
+open claw and waits; the UI exposes `CLOSE CLAW` only once that descent is
+confirmed, then sends the one allowed `C` to continue placement. All
 post-staging failures lock the session on either path. `rig_console.py`,
 `feeder_console.py`, and direct-Mega calibration tools are commissioning
 surfaces; do not run them alongside the server.

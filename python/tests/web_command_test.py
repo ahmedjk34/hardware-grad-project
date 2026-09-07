@@ -251,11 +251,18 @@ def test_manual_feed_build_skips_the_uno_and_runs_the_same_mega_command(tmp_path
                 assert response.json()["build_state"] == "RUNNING"
                 assert response.json()["feeder_transaction_id"] is None
                 assert response.json()["feeder_state"] == "manual"
+                ready = await wait_for_state(
+                    client, lambda state: state["cell_phase"] == "awaiting_manual_close")
+                assert ready["build_phase"] == "await_manual_close"
+                assert app.state.mock_board.written[-1] == "M 3 5 0"
+                close = await client.post("/api/manual-close", json={"confirm": True})
+                assert close.status_code == 200
+                assert app.state.mock_board.written[-1] == "C"
                 done = await wait_for_state(
                     client, lambda state: state["last_result"] == "placed")
                 assert done["build_state"] == "READY"
                 assert app.state.mock_feeder.writes == feeder_writes
-                assert sum(line.startswith("B ")
+                assert sum(line.startswith("M ")
                            for line in app.state.mock_board.written) == 1
 
     asyncio.run(scenario())

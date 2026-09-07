@@ -20,6 +20,7 @@ export interface RunnerApi {
   mode(next: "vertical" | "horizontal"): Promise<StateModel>;
   shift(mode: "vertical" | "horizontal", x_cm: number, y_cm: number): Promise<StateModel>;
   stop?(): Promise<StateModel>;
+  closeManualPick?(): Promise<StateModel>;
 }
 
 export interface DriverContext {

@@ -7,11 +7,13 @@ import type { FeedMode } from "../api";
 const CONFIRM_MS = 3000;
 const TICK_MS = 100;
 
-export function BuildButton({ state, connected, onBuild }: {
+export function BuildButton({ state, connected, onBuild, onManualClose }: {
   state: StateModel;
   connected: boolean;
   /** Runner STEP mode reuses this exact two-tap affordance, but owns the effect. */
   onBuild?: (command: string, feedMode: FeedMode) => void;
+  /** Called only after the firmware reports the claw is down and open. */
+  onManualClose?: () => void;
 }) {
   const [confirming, setConfirming] = useState(false);
   const [remaining, setRemaining] = useState(CONFIRM_MS);
@@ -38,6 +40,16 @@ export function BuildButton({ state, connected, onBuild }: {
   }, [confirming]);
 
   useEffect(() => { if (!allowed) setConfirming(false); }, [allowed]);
+
+  if (state.cell_phase === "awaiting_manual_close") return (
+    <div className="build-block manual-close-block" role="status" aria-live="polite">
+      <p className="manual-feed-note">Claw is down and open. Align the block, then close it when ready.</p>
+      <button type="button" className="btn btn-build armed"
+              onClick={() => onManualClose ? onManualClose() : void api.closeManualPick()}>
+        CLOSE CLAW
+      </button>
+    </div>
+  );
 
   if (confirming) return (
     <div className="build-block">

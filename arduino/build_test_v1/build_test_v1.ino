@@ -149,7 +149,7 @@
   Re-homing every time means lost steps never accumulate.
 
   ------------------------------------------------------------
-  BUILD SEQUENCE  (the B command)                        <<< NEW
+  BUILD SEQUENCE  (B automatic; M pauses for a manual close) <<< NEW
   ------------------------------------------------------------
     1. Z up to the TOP SWITCH                    (clear of everything)
     2. X/Y home. That IS the feeder: the lattice is centre-anchored, so
@@ -157,9 +157,8 @@
        rotates - it always presents a block standing, in both modes.
     3. Return the claw to neutral (including any manual A jog)
     4. Open the claw
-    5. Z down to the FEEDER PICKUP HEIGHT (a fixed drop below the top
-       switch - the feeder belt sits above GROUND, so a build does NOT
-       ground-seek here any more; see Z_PICKUP_DROP_FROM_TOP_CM)
+    5. Z down to the GROUND switch. M then pauses with the claw OPEN so
+       the operator can align a block and send C; B proceeds automatically.
     6. Close the claw                            (block is now held)
     7. Z up to the TOP SWITCH                    (carry height)
     8. X/Y to the requested cell
@@ -1698,6 +1697,10 @@ const char CMD_AUX_STEPPER_ANGLE = 'A'; // A <degrees> (-360..360, relative)
 const char CMD_GRID_MODE_VERTICAL = 'R';
 
 const char CMD_BUILD = 'B';   // B <col> <row> <level>
+// M follows the same validated 14-phase route as B, but pauses after the
+// open claw reaches the feeder. A later C is the operator's explicit consent
+// to close the jaws and continue. B itself must stay automatic for the Uno.
+const char CMD_MANUAL_BUILD = 'M'; // M <col> <row> <level>
 const char CMD_Z_TABLE = 'Z'; // print the Z / build calibration
 
 // ============================================================
@@ -1994,7 +1997,11 @@ void handleLine(char *line)
     break;
 
   case CMD_BUILD:
-    handleBuildCommand(line + 1);
+    handleBuildCommand(line + 1, false);
+    break;
+
+  case CMD_MANUAL_BUILD:
+    handleBuildCommand(line + 1, true);
     break;
 
   case 'R':
@@ -4467,7 +4474,8 @@ bool zGoLevel(long level)
 void printBuildUsage()
 {
   Serial.println();
-  Serial.println(F("  ERROR - use:  B <col> <row> <level>"));
+  Serial.println(F("  ERROR - use:  B <col> <row> <level>  (automatic)"));
+  Serial.println(F("              M <col> <row> <level>  (pause open at pickup; C closes)"));
   Serial.print(F("    col   0.."));
   Serial.print(gridColsNow());
   Serial.println(F("      (0 is a real cell)"));
@@ -4493,7 +4501,7 @@ void printBuildUsage()
   Serial.print(F(" ("));
   Serial.print(rotationName(buildRotationForMode()));
   Serial.println(F(")"));
-  Serial.println(F("    e.g.  B 3 5 2      or   B 3 5 0"));
+  Serial.println(F("    e.g.  B 3 5 2      or   M 3 5 0, then C"));
 }
 
 // D7: the placement rotation is derived from the ACTIVE GRID, never passed
@@ -4518,7 +4526,7 @@ bool onlySeparatorsLeft(const char *s)
   return s[i] == '\0';
 }
 
-void handleBuildCommand(const char *args)
+void handleBuildCommand(const char *args, bool manualPickup)
 {
   long v[3] = {0, 0, 0};
   uint8_t endIndex = 0;
@@ -4532,7 +4540,7 @@ void handleBuildCommand(const char *args)
   {
     statBadCommands++;
     printBuildUsage();
-    ackReason(F("ERR"), F("expected: B <col> <row> <level>"));
+    ackReason(F("ERR"), F("expected: B/M <col> <row> <level>"));
     return;
   }
 
@@ -4555,13 +4563,46 @@ void handleBuildCommand(const char *args)
   // may still reject the cell. This is the line that pins ackSeq to this B
   // for everything that follows, including every STEP.
   ackStart(F("RECV"));
-  ackWord(F("cmd"), F("B"));
+  ackWord(F("cmd"), manualPickup ? F("M") : F("B"));
   ackField(F("col"), v[0]);
   ackField(F("row"), v[1]);
   ackField(F("level"), v[2]);
   Serial.println();
 
-  buildBlock(v[0], v[1], v[2], buildRotationForMode());
+  buildBlock(v[0], v[1], v[2], buildRotationForMode(), manualPickup);
+}
+
+// The normal B path never calls this. M reaches it only after the Z axis is
+// physically down, the claw is open, and the Pi has shown the operator the
+// close control. Consume every byte except C so a queued jog/home command
+// cannot move a low claw across the feeder.
+void waitForManualClose()
+{
+  while (Serial.available() > 0)
+  {
+    Serial.read();
+  }
+
+  Serial.println(F("  >>> MANUAL PICK READY: align the block, then send C to close."));
+  while (true)
+  {
+    if (Serial.available() == 0)
+    {
+      delay(10);
+      continue;
+    }
+    char received = toUpperChar(Serial.read());
+    while (Serial.available() > 0)
+    {
+      Serial.read();
+    }
+    if (received == CMD_SERVO_CLOSE)
+    {
+      Serial.println(F("  >>> MANUAL CLOSE accepted - gripping."));
+      return;
+    }
+    Serial.println(F("  >>> still waiting for C; low claw commands are ignored."));
+  }
 }
 
 void buildPause()
@@ -4689,7 +4730,7 @@ bool buildPark()
 // One complete pick-and-place cycle. See the header comment for the
 // phases; each one bails out the moment something goes wrong,
 // because carrying on with an unknown position would crash the rig.
-bool buildBlock(long col, long row, long level, int8_t wantRot)
+bool buildBlock(long col, long row, long level, int8_t wantRot, bool manualPickup)
 {
   Serial.println();
   Serial.println(F("======================================"));
@@ -4876,6 +4917,19 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
     return false;
   }
   buildPause();
+
+  if (manualPickup)
+  {
+    // A second phase-5 announcement is intentional: the first says the Z
+    // seek started; this one is emitted only after it reached the ground and
+    // is the wire-visible truth that it is safe to align the block.
+    buildStep(5, F("await_manual_close"), F("grip"),
+              F("Align_block_then_press_CLOSE_CLAW"),
+              "Claw is down and open; waiting for the operator to close it",
+              0);
+    waitForManualClose();
+    buildPause();
+  }
 
   // ---- 6. grab it ----
 

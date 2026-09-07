@@ -5,7 +5,9 @@ import { Icon } from "./Icon";
 type ActivityKind = "success" | "warn" | "error" | "info";
 interface Activity { id: string; at: number; kind: ActivityKind; title: string; detail: string; }
 
-const CAP = 60;
+// This is a mini-log, not an audit archive. The append-only server log remains
+// the full record; the operator sees only the latest meaningful dozen facts.
+const CAP = 12;
 let items: Activity[] = [];
 const listeners = new Set<() => void>();
 const seen = new Set<string>();
@@ -21,7 +23,10 @@ function verdictActivity(supervision: Supervision): Activity | null {
   if (!verdict) return null;
   const named = cells(supervision.cells as [number, number][]);
   switch (verdict) {
-    case "VERIFIED": return { id: "", at: 0, kind: "success", title: "Board verified", detail: named ? `${named} matches the build plan.` : "The board matches the build plan." };
+    // The per-placement `vision_verification` below already says exactly which
+    // block was seen. Adding this whole-board success immediately afterwards
+    // makes every successful placement read twice, with no extra information.
+    case "VERIFIED": return null;
     case "NOT_DETECTED": return { id: "", at: 0, kind: "warn", title: "Block not detected", detail: named ? `${named} was not seen after placement.` : "The placed block was not seen." };
     case "REMOVED": return { id: "", at: 0, kind: "warn", title: "Block removed", detail: `${named} is no longer on the board.` };
     case "MOVED": return { id: "", at: 0, kind: "warn", title: "Block moved", detail: `${cell(supervision.cells[0] as [number, number])} → ${cell((supervision.cells[1] ?? supervision.cells[0]) as [number, number])}.` };
@@ -51,9 +56,11 @@ export function useSupervisionActivity(state: StateModel) {
 
   useEffect(() => {
     if (!state.vision_verification) return;
+    const detail = state.vision_verification;
+    const kind: ActivityKind = /not seen|not detected/i.test(detail) ? "warn"
+      : /unchecked|unconfirmed/i.test(detail) ? "info" : "success";
     add(`verification:${state.vision_verification}`, {
-      id: "", at: Date.now(), kind: /not seen|not detected/i.test(state.vision_verification) ? "warn" : "success",
-      title: "Placement check", detail: state.vision_verification,
+      id: "", at: Date.now(), kind, title: "Placement check", detail,
     });
   }, [state.vision_verification]);
 
@@ -72,7 +79,7 @@ export function SupervisionActivity({ state, defaultOpen = false, className = ""
       <header>
         <div>
           <h2><Icon name="waiting" size={14} />Detector activity</h2>
-          <p>Placement checks and board changes</p>
+          <p>Recent placement checks and board changes</p>
         </div>
         <span className="activity-count">{activity.length}</span>
         <button type="button" className="btn btn-ghost btn-icon" aria-expanded={open}

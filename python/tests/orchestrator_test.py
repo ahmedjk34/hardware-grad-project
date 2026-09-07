@@ -42,7 +42,7 @@ class StubGantry:
         self.timeline = timeline
         self.outcomes = list(outcomes or [])
 
-    def build(self, col, row, level, timeout=300):
+    def build(self, col, row, level, timeout=300, *, manual_pick=False):
         self.timeline.append(f"B{col}{row}{level}")
         outcome = self.outcomes.pop(0) if self.outcomes else BuildResult(PLACED)
         if isinstance(outcome, Exception):

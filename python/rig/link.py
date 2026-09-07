@@ -453,6 +453,10 @@ class Rig:
         # reading and every banner line would otherwise be kept forever.
         self._events: queue.Queue = queue.Queue(maxsize=_EVENT_QUEUE_MAX)
         self._inflight = threading.Lock()
+        # Set only after firmware has completed the manual descent.  The one
+        # allowed write while a manual build owns `_inflight` is the explicit
+        # C that the low, open claw is waiting to consume.
+        self._manual_close_ready = threading.Event()
 
         # Set by the reader thread the moment a BOOT arrives. Checked rather
         # than raised there, because the reader has nobody to raise at.
@@ -623,9 +627,11 @@ class Rig:
             # drains, and the waiter may return the moment it sees a terminal
             # ack; doing the callbacks first keeps them in wire order even
             # when the caller's thread is faster than this one.
-            if self._on_progress is not None:
-                progress = parse_progress(ack)
-                if progress is not None:
+            progress = parse_progress(ack)
+            if progress is not None:
+                if progress.phase == "await_manual_close":
+                    self._manual_close_ready.set()
+                if self._on_progress is not None:
                     self._on_progress(progress)
             if self._on_ack is not None:
                 self._on_ack(ack)
@@ -1049,8 +1055,8 @@ class Rig:
         # rather than "did it say a bad word".
         return False
 
-    def build(self, col: int, row: int, level: int,
-              timeout: float = 300.0) -> BuildResult:
+    def build(self, col: int, row: int, level: int, timeout: float = 300.0,
+              *, manual_pick: bool = False) -> BuildResult:
         """`B <col> <row> <level>` — one full pick-and-place. Blocks until done.
 
         There is no rotation argument. The active grid decides how the block is
@@ -1093,16 +1099,30 @@ class Rig:
         if level < 0:
             raise ValueError("build level cannot be negative")
 
-        command = f"B {col} {row} {level}"
+        command = f"{'M' if manual_pick else 'B'} {col} {row} {level}"
 
         if not self._inflight.acquire(blocking=False):
             raise RigBusy("a build is already running — the rig is not listening")
         try:
+            self._manual_close_ready.clear()
             self._drain()
             self.send(command)
             return self._wait_build(command, timeout)
         finally:
+            self._manual_close_ready.clear()
             self._inflight.release()
+
+    def close_manual_pick(self) -> None:
+        """Send the one permitted byte while an ``M`` build is paused low.
+
+        Firmware discards every other queued byte while it waits.  Keeping
+        this narrow exception here preserves the no-queued-command invariant
+        for every other in-flight build operation.
+        """
+        if not self._inflight.locked() or not self._manual_close_ready.is_set():
+            raise RigBusy("the claw is not waiting for a manual close")
+        self._manual_close_ready.clear()
+        self.send("C")
 
     def _wait_build(self, command: str, timeout: float) -> BuildResult:
         """One terminal ack, or the prose that says the same thing."""

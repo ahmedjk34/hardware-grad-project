@@ -22,6 +22,14 @@ describe("Step 9 confirmed build safety UI", () => {
     fireEvent.click(screen.getByRole("button", { name: "FEED MANUALLY" }));
     expect(onBuild).toHaveBeenCalledWith("B 3 5 0", "manual");
   });
+  it("changes to the close-claw control only after the rig says it is down", () => {
+    const onManualClose = vi.fn();
+    render(<BuildButton state={state({ build_state: "RUNNING", cell_phase: "awaiting_manual_close" })}
+                        connected onManualClose={onManualClose} />);
+    expect(screen.getByText(/claw is down and open/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "CLOSE CLAW" }));
+    expect(onManualClose).toHaveBeenCalledOnce();
+  });
   it("shows moving banner and disables every control", () => { render(<><BuildBanner state={state({ build_state: "RUNNING" })} connected /><ControlPanel state={state({ build_state: "RUNNING" })} connected onBuild={() => {}} /></>); expect(screen.getByText(/cannot be interrupted/)).toBeInTheDocument(); screen.getAllByRole("button").forEach(button => expect(button).toBeDisabled()); });
   it("shows terminal placed and rejected states correctly", () => { const { rerender } = render(<ResultToast state={state({ selected: null, last_result: "placed" })} />); expect(screen.getByText(/PLACED/)).toHaveClass("placed"); rerender(<ResultToast state={state({ last_result: "rejected", last_result_reason: "safe refusal" })} />); expect(screen.getByText(/safe refusal/)).toHaveClass("rejected"); });
   it("has no retry control when locked", () => { render(<><BuildBanner state={state({ build_state: "LOCKED", locked_reason: "held" })} connected /><ControlPanel state={state({ build_state: "LOCKED" })} connected onBuild={() => {}} /></>); expect(screen.getByText(/SESSION LOCKED/)).toBeInTheDocument(); expect(screen.queryByRole("button", { name: /retry/i })).toBeNull(); });

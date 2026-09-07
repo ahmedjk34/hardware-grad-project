@@ -756,6 +756,7 @@ svg.grid-overlay.selectable { cursor: crosshair; }
 .btn-manual-feed:hover:not(:disabled) {
   background: color-mix(in srgb, var(--motion) 12%, transparent);
 }
+.manual-close-block { border-left: 3px solid var(--motion); padding-left: var(--s2); }
 
 .reason {
   display: flex;
@@ -2162,7 +2163,7 @@ svg.grid-overlay.selectable { cursor: crosshair; }
   background: var(--sunken);
   border-radius: 999px;
 }
-.activity-body { max-height: 15rem; overflow-y: auto; border-top: 1px solid var(--line); }
+.activity-body { max-height: 11rem; overflow-y: auto; border-top: 1px solid var(--line); }
 .activity-empty { margin: 0; padding: var(--s3); font: var(--t-sm); color: var(--text-faint); }
 .activity-row {
   display: grid;
@@ -2247,7 +2248,7 @@ svg.grid-overlay.selectable { cursor: crosshair; }
 }
 .bm-activity[hidden] { display: none; }
 .bm-activity-panel { background: var(--plate); border-color: var(--line-strong); }
-.bm-activity-panel .activity-body { max-height: min(58vh, 32rem); }
+.bm-activity-panel .activity-body { max-height: min(42vh, 20rem); }
 
 /* ── library drawer ──────────────────────────────────────────────────────── */
 

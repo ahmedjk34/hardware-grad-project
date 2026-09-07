@@ -151,7 +151,7 @@ class StateModel(BaseModel):
     feeder_connected: bool
     hardware_ready: bool
     cell_phase: Literal["idle", "feeding", "staging", "ready_for_pick",
-                        "placing", "complete", "error"]
+                        "awaiting_manual_close", "placing", "complete", "error"]
     feeder_transaction_id: int | None
     feeder_state: str | None
     feeder_error: str | None

@@ -90,16 +90,19 @@ class CellOrchestrator:
             return self._place_staged_block(
                 col, row, level, timeout=timeout,
                 staged_description="operator-confirmed manual block",
+                manual_pick=True,
             )
         finally:
             self._operation.release()
 
     def _place_staged_block(self, col: int, row: int, level: int, *,
-                            timeout: float, staged_description: str) -> BuildResult:
+                            timeout: float, staged_description: str,
+                            manual_pick: bool = False) -> BuildResult:
         """Run the common Mega half after either staging method succeeded."""
         try:
             self._phase("placing")
-            result = self.gantry.build(col, row, level, timeout=timeout)
+            result = self.gantry.build(
+                col, row, level, timeout=timeout, manual_pick=manual_pick)
         except RigError as exc:
             return self._abort(
                 f"gantry failed after {staged_description}; "
@@ -114,6 +117,18 @@ class CellOrchestrator:
             )
         self._phase("complete")
         return result
+
+    def close_manual_pick(self) -> None:
+        """Let the explicitly paused manual build close its already-open claw."""
+        if self.phase != "awaiting_manual_close":
+            raise CellError("the claw is not waiting for a manual close")
+        self.gantry.close_manual_pick()
+        self._phase("placing")
+
+    def manual_close_ready(self) -> None:
+        """Mirror firmware's post-descent pause into the owned cell state."""
+        if self.phase == "placing":
+            self._phase("awaiting_manual_close")
 
     def cancel(self) -> bool:
         """Actively STOP only while Uno owns the physical operation."""

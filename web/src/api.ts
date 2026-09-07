@@ -25,6 +25,7 @@ export const selectAxis = (axis: "col" | "row", value: number) => post<StateMode
 export type FeedMode = "automatic" | "manual";
 export const build = (command: string, feedMode: FeedMode = "automatic") =>
   post<StateModel>("build", { confirm: true, command, feed_mode: feedMode });
+export const closeManualPick = () => post<StateModel>("manual-close", { confirm: true });
 export const stop = () => post<StateModel>("stop");
 
 export interface BlockCalibrationReport {

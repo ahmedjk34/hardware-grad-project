@@ -40,6 +40,32 @@ def test_build_returns_placed():
         rig.close()
 
 
+def test_manual_build_waits_at_the_open_claw_until_close_is_requested():
+    rig, board = make_rig(build_seconds=0.02)
+    result = []
+    worker = threading.Thread(
+        target=lambda: result.append(rig.build(3, 5, 0, timeout=1.0, manual_pick=True)))
+    try:
+        worker.start()
+        deadline = time.monotonic() + 1.0
+        while not rig._manual_close_ready.is_set() and time.monotonic() < deadline:
+            time.sleep(0.005)
+        assert rig._manual_close_ready.is_set()
+        assert "M 3 5 0" in board.written
+        assert worker.is_alive()
+        rig.close_manual_pick()
+        worker.join(1.0)
+        assert not worker.is_alive()
+        assert str(result[0]) == "placed"
+        assert board.written[-1] == "C"
+    finally:
+        if worker.is_alive():
+            if rig._manual_close_ready.is_set():
+                rig.close_manual_pick()
+            worker.join(1.0)
+        rig.close()
+
+
 def test_aborted_build_requires_a_human():
     rig, board = make_rig()
     try:

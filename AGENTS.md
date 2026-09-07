@@ -251,9 +251,12 @@ Mega: B <col> <row> <level> → terminal placement result
 The explicit Web UI **manual feed** confirmation is the one production
 exception: after the operator places one block in the feeder/pickup area and
 clicks `FEED MANUALLY`, `CellOrchestrator.place_manually_staged_block()` skips
-the Uno command and runs the same Mega `B`. It still owns the same operation
-lock, camera/selection guards, failure lockout and placement result handling;
-manual feed must never become an unguarded direct-Mega call.
+the Uno command and sends Mega `M <col> <row> <level>`. `M` performs the same
+validated approach as `B`, lowers the **open** claw, and pauses. Only after the
+firmware announces `await_manual_close` may the UI send its one `C` byte to
+close the claw and finish the same placement cycle. It still owns the same
+operation lock, camera/selection guards, failure lockout and placement result
+handling; manual feed must never become an unguarded direct-Mega call.
 
 Outside that explicit operator attestation, no Uno terminal success means no
 Mega `B`. No Mega terminal success means no next `FEED`: even a pre-motion Mega

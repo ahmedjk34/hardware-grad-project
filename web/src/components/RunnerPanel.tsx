@@ -365,6 +365,18 @@ export function RunnerPanel({ state, connected, modelId, api, delay, onActiveCha
                      })} />
       )}
 
+      {state.cell_phase === "awaiting_manual_close" && run.inFlight && (
+        <BuildButton state={server} connected={connected}
+                     onManualClose={() => {
+                       void (api?.closeManualPick ?? transportApi.closeManualPick)().catch(error =>
+                         dispatchRef.current({
+                           type: "transport-error",
+                           reason: error instanceof Error ? error.message : String(error),
+                           now: Date.now(),
+                         }));
+                     }} />
+      )}
+
       {!compact && run.inFlight && run.style !== "dry" && (
         <div className="runner-operation" role="status" aria-live="polite"
              aria-label="Current rig operation">

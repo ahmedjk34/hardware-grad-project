@@ -106,6 +106,8 @@ class MockBoard:
         self._lock = threading.Lock()
         self._next_build_failure: tuple[str, str] | None = None
         self._drop_next_build_ack = False
+        self._manual_build: tuple[int, str, str, str, tuple[str, str] | None,
+                                  int, bool] | None = None
         # The board assigns the sequence number, so the mock does too.  Seq 0
         # is reserved for BOOT/READY, exactly as in the firmware.
         self._seq = 0
@@ -201,6 +203,10 @@ class MockBoard:
             self._handle_shift(command)
         elif upper.startswith("B "):
             self._handle_build(command)
+        elif upper.startswith("M "):
+            self._handle_manual_build(command)
+        elif upper == "C" and self._manual_build is not None:
+            self._close_manual_build()
         elif upper.startswith("G "):
             self._emit((f"  ARRIVED at cell [{command[2:]}]",))
         else:
@@ -336,6 +342,74 @@ class MockBoard:
             self._emit(tuple(lines))
 
         threading.Thread(target=finish, name="mock-board-build", daemon=True).start()
+
+    def _handle_manual_build(self, command: str) -> None:
+        """`M` matches B through descent, then waits for one explicit C."""
+        parts = command.split()
+        with self._lock:
+            self._seq += 1
+            seq = self._seq
+        try:
+            _, col, row, level = parts
+            int(col), int(row), int(level)
+        except ValueError:
+            self._emit(("BUILD REJECTED - bad arguments", f"@{seq} ERR bad arguments"))
+            return
+        with self._lock:
+            failure = self._next_build_failure
+            self._next_build_failure = None
+            fail_at = self._fail_at_step
+            self._fail_at_step = 0
+            drop_ack = self._drop_next_build_ack
+            self._drop_next_build_ack = False
+        self._emit((f"@{seq} RECV cmd=M col={col} row={row} level={level}",))
+
+        def descend():
+            if failure is not None and failure[0] not in {"ABORTED", "HELD"}:
+                ack = "ERR" if failure[0] == "ERR" else "SAFE"
+                self._emit((f"BUILD REJECTED - {failure[1]}", f"@{seq} {ack} {failure[1]}"))
+                return
+            pause = self._build_seconds / 14 if self._build_seconds else 0.0
+            for step, phase, action, label in self.BUILD_PHASES[:5]:
+                self._emit((self._step_line(seq, step, phase, action, label, "begin"),))
+                if pause:
+                    time.sleep(pause)
+            self._emit((self._step_line(
+                seq, 5, "await_manual_close", "grip",
+                "Align_block_then_press_CLOSE_CLAW", "begin"),))
+            with self._lock:
+                self._manual_build = (seq, col, row, level, failure, fail_at, drop_ack)
+
+        threading.Thread(target=descend, name="mock-board-manual-descent", daemon=True).start()
+
+    def _close_manual_build(self) -> None:
+        with self._lock:
+            pending, self._manual_build = self._manual_build, None
+        if pending is None:
+            return
+        seq, col, row, level, failure, fail_at, drop_ack = pending
+
+        def finish():
+            aborting = failure is not None
+            last = fail_at if (aborting and fail_at) else self.BUILD_STEP_COUNT
+            pause = self._build_seconds / max(1, self.BUILD_STEP_COUNT - 5) if self._build_seconds else 0.0
+            for step, phase, action, label in self.BUILD_PHASES[5:last]:
+                self._emit((self._step_line(seq, step, phase, action, label, "begin"),))
+                if pause:
+                    time.sleep(pause)
+                if step == 11 and not (aborting and fail_at == 11):
+                    self._emit((self._step_line(seq, step, phase, action, label, "done"),))
+            if aborting:
+                lines = [f"BUILD ABORTED - {failure[1]}"]
+                if not drop_ack:
+                    lines.append(f"@{seq} HELD {failure[1]}")
+            else:
+                lines = [f"BUILD COMPLETE - block placed at [{col},{row}] level {level}"]
+                if not drop_ack:
+                    lines.append(f"@{seq} OK col={col} row={row} level={level}")
+            self._emit(tuple(lines))
+
+        threading.Thread(target=finish, name="mock-board-manual-close", daemon=True).start()
 
     def _emit(self, lines: tuple[str, ...]) -> None:
         for line in lines:

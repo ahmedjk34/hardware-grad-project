@@ -80,7 +80,7 @@ export interface StateModel {
   gantry_connected: boolean;
   feeder_connected: boolean;
   hardware_ready: boolean;
-  cell_phase: "idle" | "feeding" | "staging" | "ready_for_pick" | "placing" | "complete" | "error";
+  cell_phase: "idle" | "feeding" | "staging" | "ready_for_pick" | "awaiting_manual_close" | "placing" | "complete" | "error";
   feeder_transaction_id: number | null;
   feeder_state: string | null;
   feeder_error: string | null;
