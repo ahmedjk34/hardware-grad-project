@@ -283,11 +283,23 @@ Evaluated against `ledger.expected_occupancy(mode)`:
 | Condition | Verdict | Severity |
 | --- | --- | --- |
 | sets equal | `VERIFIED` | — |
-| expected cell empty, an unexpected cell occupied, counts equal | `MOVED [a,b] → [c,d]` | notify |
-| expected cell empty, no unexpected cell | `REMOVED [a,b]` | notify |
-| unexpected cell occupied, nothing missing | `FOREIGN BLOCK AT [c,d]` | stop |
+| exactly one missing **and** exactly one unexpected | `MOVED [a,b] → [c,d]` | notify |
+| N cells missing, **nothing** unexpected | `REMOVED`, naming all N | notify |
+| N cells unexpected, **nothing** missing | `FOREIGN BLOCK AT`, naming all N | stop |
 | a detection maps to `cell_at → None` (a gap) | `FOREIGN` — a block is on the board, off every site | stop |
-| more than one cell differs either way | `BOARD DISAGREES` | **stop the program** |
+| missing **and** unexpected, more than one either side | `BOARD DISAGREES` | **stop the program** |
+
+> **The two one-sided rows are a refinement of the originally approved design,
+> decided with the user as P1 and built.** The design sent every change of more
+> than one cell to `DISAGREES`. What `DISAGREES` protects against is the absence
+> of **identity** — and identity only matters when there is something to pair
+> with. Two cells emptied with nothing gained needs none: memory says both were
+> ours, the camera says both are gone. Naming them is strictly more use to an
+> operator than declining to. The systemic worry does not reach these rows
+> either: a camera bump shifts *everything*, so it presents as missing **and**
+> unexpected, or as `in_gap`, and still lands on `DISAGREES`. The reasoning in
+> full is [progress.md §3 Q8](placement-supervision-progress.md); the regression
+> is asserted in `test_supervisor.py`.
 
 `MOVED` does **not** claim it is the same block — identical objects, no
 identity, no proof available. It does not need one: the actionable fact is that
@@ -296,14 +308,30 @@ the board no longer matches the plan at two cells.
 `BOARD DISAGREES` is not a failure of the classifier; it is the classifier
 declining to guess. A toppled short tower lands here, and it **stops the
 program** rather than pausing it — two simultaneous changes in one half-second
-window means something happened this model does not describe.
+window means something happened this model does not describe. After P1 it means
+precisely *"both sides changed and I cannot pair them"*, which is the only case
+that actually needs identity.
 
 ### D10 — Sparse boards get no `FOREIGN`
 
-`_lattice_filter` skips entirely below `MIN_LATTICE_BLOCKS = 6` detections, and
-disables itself if it would reject more than 30 % (`len(kept) < 0.7 * len(...)`).
-On a nearly empty board the observed set is **unfiltered**, so the holder's
-offcuts beside `[0,0]` read as blocks.
+**The rationale first given here was wrong; the conclusion holds (F9 / P3).**
+The original reason was that below `MIN_LATTICE_BLOCKS = 6` detections
+`_lattice_filter` skips entirely, so the observed set is *unfiltered*. Per F3
+and F5 that filter was never supervision's defence against junk — it fits an
+*infinite* lattice from the detections themselves and answers "is this on the
+lattice", never "is this on the board". `locate()` is the defence, and it works
+at any detection count.
+
+The **real** reason: AGENTS.md names *"the holder's two small offcuts beside
+`[0,0]`"*. Beside `[0,0]` means **on the board**, inside the envelope, so
+`locate()` correctly classes them as `gap` and D9 makes a gap detection
+`FOREIGN`. Strictly correct, and operationally intolerable — a red
+stop-the-program verdict because two offcuts are sitting where they always sit.
+
+D10 buys **restraint about the loudest verdict** during the phase of every
+program when the board is emptiest and the junk-to-block ratio is worst. The
+same fail-open instinct as `block_outline`'s, pointed the other way: one refuses
+to hide a block, the other refuses to raise an alarm.
 
 > Below the threshold, supervision emits `VERIFIED` / `NOT DETECTED` /
 > `REMOVED` only. **Never `FOREIGN`, never `DISAGREES`.**
@@ -827,6 +855,16 @@ Known pre-existing failures, **not** regressions: `mock_camera_test.py`,
    relative to whichever block sorts first, so the ceiling in D6 is *typical*,
    not guaranteed. Reasoned from the code, **not measured**. See
    [parallax §4a](camera-parallax-and-levels.md#4a-a-subtlety-that-makes-the-ceiling-approximate-not-exact).
+8. **The lattice filter's 30 % self-disable is weakest exactly when the board is
+   most wrong** (F7 / P4). `block_outline` keeps every detection when a
+   recovered lattice would reject more than 30 % of what it saw
+   (`if len(kept) < 0.7 * len(detections): return list(detections), [], None`).
+   That is right for a drawing layer, which must never hide a block on thin
+   evidence. But it means junk rejection degrades at the moment a clean observed
+   set matters most: the `DISAGREES` case, where several blocks genuinely moved.
+   Supervision does not *depend* on that filter — F3, `locate()` is its defence
+   and works at any detection count — so this costs the input's tidiness, not
+   the classifier's correctness. Recorded because nothing else here covered it.
 
 ---
 
