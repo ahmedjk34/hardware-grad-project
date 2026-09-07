@@ -76,8 +76,12 @@ opening the camera independently.
 The production FastAPI/Studio path owns both serial ports for its full
 lifespan. A normal build goes through `CellOrchestrator`: it stages exactly one
 block with a correlated Uno request, then and only then calls the existing Mega
-build. `rig_console.py`, `feeder_console.py`, and direct-Mega calibration tools are
-commissioning surfaces; do not run them alongside the server.
+build. The Web UI's explicit `FEED MANUALLY` confirmation is the supported
+exception: the operator first puts one block in the pickup area, and the same
+orchestrator lock then skips the Uno request and calls the Mega build. All
+post-staging failures lock the session on either path. `rig_console.py`,
+`feeder_console.py`, and direct-Mega calibration tools are commissioning
+surfaces; do not run them alongside the server.
 
 `camera/gridded_camera_feed.py` reuses that feed and adds the machine grid from
 the repository-level `config/rig.json`. Positive block rectangles are

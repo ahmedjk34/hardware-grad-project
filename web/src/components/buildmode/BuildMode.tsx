@@ -21,6 +21,7 @@ import { CameraChip } from "../CameraChip";
 import { CameraView } from "../CameraView";
 import { Icon } from "../Icon";
 import { RunnerPanel } from "../RunnerPanel";
+import { SupervisionActivity } from "../SupervisionActivity";
 import { TwinPanel, rememberModelId, storedModelId } from "../TwinPanel";
 import { BuildLibrary } from "./BuildLibrary";
 import { ToastStack } from "./ToastStack";
@@ -31,6 +32,7 @@ export function BuildMode() {
   const [modelId, setModelId] = useState(storedModelId);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [controlsOpen, setControlsOpen] = useState(true);
+  const [activityOpen, setActivityOpen] = useState(false);
   const [runnerActive, setRunnerActive] = useState(false);
   const { toasts, push, dismiss } = useBuildToasts();
 
@@ -114,6 +116,25 @@ export function BuildMode() {
     }
   }, [snapshot.connected, push, dismiss]);
 
+  // The detector is authoritative. Each judged observation becomes one toast;
+  // its full history stays in the activity drawer instead of stacking alerts.
+  const supervision = state?.supervision;
+  useEffect(() => {
+    if (!supervision?.verdict || supervision.judged_at_ms === null) return;
+    const verdict = supervision.verdict;
+    const cells = supervision.cells.map(([col, row]) => `[${col},${row}]`).join(", ");
+    const copy = {
+      VERIFIED: ["success", "BOARD VERIFIED", cells ? `${cells} matches the plan.` : "The board matches the plan."],
+      NOT_DETECTED: ["warn", "BLOCK NOT DETECTED", cells ? `${cells} was not seen after placement.` : "The placed block was not seen."],
+      REMOVED: ["warn", "BLOCK REMOVED", `${cells} is no longer on the board.`],
+      MOVED: ["warn", "BLOCK MOVED", `${cells} no longer matches the plan.`],
+      FOREIGN: ["error", "UNEXPECTED BLOCK", cells ? `${cells} is occupied but not planned.` : "A block is outside a board cell."],
+      DISAGREES: ["error", "BOARD DISAGREES", `${supervision.cells.length} cells differ from the plan.`],
+    } as const;
+    const [kind, title, detail] = copy[verdict];
+    push({ key: `board:${supervision.judged_at_ms}`, kind, title, detail, sticky: supervision.severity === "red" });
+  }, [supervision, push]);
+
   if (!state) return (
     <main className="boot"><Icon name="waiting" size={28} />Connecting to rig…</main>
   );
@@ -132,6 +153,10 @@ export function BuildMode() {
         <button type="button" className="bm-librarybtn" aria-expanded={libraryOpen}
                 onClick={() => setLibraryOpen(open => !open)}>
           <Icon name="layers" size={14} />LIBRARY
+        </button>
+        <button type="button" className="bm-librarybtn" aria-expanded={activityOpen}
+                onClick={() => setActivityOpen(open => !open)}>
+          <Icon name="waiting" size={14} />ACTIVITY
         </button>
         <span className="bm-model" title={modelName ?? undefined}>
           {modelName ?? "No build selected"}
@@ -184,6 +209,9 @@ export function BuildMode() {
       </div>
 
       <ToastStack toasts={toasts} onDismiss={dismiss} />
+      <aside className="bm-activity" hidden={!activityOpen}>
+        <SupervisionActivity state={state} defaultOpen className="bm-activity-panel" />
+      </aside>
       <BuildLibrary open={libraryOpen} mode={state.mode} currentId={modelId}
                     onPick={pickModel} onClose={() => setLibraryOpen(false)} />
     </div>

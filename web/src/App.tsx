@@ -13,6 +13,7 @@ import { Shortcuts } from "./components/Shortcuts";
 import { StatusBar } from "./components/StatusBar";
 import { BuildBanner } from "./components/BuildBanner";
 import { SupervisionBanner } from "./components/SupervisionBanner";
+import { SupervisionActivity } from "./components/SupervisionActivity";
 import { ResultToast } from "./components/ResultToast";
 import { Calibrate } from "./components/Calibrate";
 import { store } from "./consoleStore";
@@ -45,10 +46,6 @@ export function App() {
   const [runnerModelId, setRunnerModelId] = useState<string | null>(null);
   const [runnerActive, setRunnerActive] = useState(false);
   const phone = usePhone();
-  // A laptop viewport can't show the camera, twin, runner AND an open log at a
-  // usable size at once. The log is the one that starts collapsed there.
-  const [shortViewport] = useState(
-    () => typeof window !== "undefined" && window.innerHeight < 900);
   const [cornerHandler, setCornerHandler] = useState<((point: [number, number], imageSize: [number, number]) => void) | null>(null);
   const changeHandler = useCallback((handler: ((point: [number, number], imageSize: [number, number]) => void) | null) => setCornerHandler(() => handler), []);
 
@@ -138,7 +135,8 @@ export function App() {
           <RunnerPanel state={state} connected={snapshot.connected}
                        modelId={runnerModelId ?? ""} onActiveChange={setRunnerActive}
                        progress={snapshot.progress} lastResult={snapshot.lastResult} />
-          <RigLog log={snapshot.log} defaultOpen={!phone && !shortViewport} gap={snapshot.gap} />
+          <SupervisionActivity state={state} />
+          <RigLog log={snapshot.log} defaultOpen={false} gap={snapshot.gap} />
         </div>
 
         <div className="pane-rail">

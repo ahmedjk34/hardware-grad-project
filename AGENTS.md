@@ -240,19 +240,28 @@ Do not guess or commit a machine-specific Uno device name. Until its real
 placeholder and production startup fails with setup instructions. Never use
 `/dev/ttyACM*` ordering to distinguish the boards.
 
-Every production placement is one indivisible Pi-owned operation:
+Every production placement is one indivisible Pi-owned operation. The normal
+path stages through the Uno:
 
 ```text
 Uno: FEED <id> → matching @id OK state=block_ready result=staged
 Mega: B <col> <row> <level> → terminal placement result
 ```
 
-No Uno terminal success means no Mega `B`. No Mega terminal success means no
-next `FEED`: even a pre-motion Mega rejection leaves the already-staged pickup
-state requiring inspection. `BuildController` + `BuildJob` remain the outer
-single-operation guard; `CellOrchestrator` owns this two-board handoff. Direct
-Mega build calls are reserved for explicit calibration/commissioning paths
-where a person has staged the block.
+The explicit Web UI **manual feed** confirmation is the one production
+exception: after the operator places one block in the feeder/pickup area and
+clicks `FEED MANUALLY`, `CellOrchestrator.place_manually_staged_block()` skips
+the Uno command and runs the same Mega `B`. It still owns the same operation
+lock, camera/selection guards, failure lockout and placement result handling;
+manual feed must never become an unguarded direct-Mega call.
+
+Outside that explicit operator attestation, no Uno terminal success means no
+Mega `B`. No Mega terminal success means no next `FEED`: even a pre-motion Mega
+rejection leaves the already-staged pickup state requiring inspection. The
+same is true after manual staging. `BuildController` + `BuildJob` remain the
+outer single-operation guard; `CellOrchestrator` owns both staging paths.
+Direct Mega build calls are reserved for explicit calibration/commissioning
+paths where a person has staged the block.
 
 ### 3. Grid dimensions — the one the firmware forgets
 

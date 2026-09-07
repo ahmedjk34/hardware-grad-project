@@ -249,6 +249,8 @@ def test_manual_feed_build_skips_the_uno_and_runs_the_same_mega_command(tmp_path
                 })
                 assert response.status_code == 200
                 assert response.json()["build_state"] == "RUNNING"
+                assert response.json()["feeder_transaction_id"] is None
+                assert response.json()["feeder_state"] == "manual"
                 done = await wait_for_state(
                     client, lambda state: state["last_result"] == "placed")
                 assert done["build_state"] == "READY"

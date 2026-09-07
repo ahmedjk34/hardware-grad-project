@@ -309,6 +309,12 @@ async def build(request: BuildRequest, http: Request) -> StateModel:
         raise HTTPException(status_code=400,
                             detail="command does not match the current selection")
     controller = app.state.controller
+    if request.feed_mode == "manual":
+        # A prior automatic cycle's transaction must not appear to belong to
+        # this manually staged block in state snapshots or run reports.
+        app.state.feeder_transaction_id = None
+        app.state.feeder_state = "manual"
+        app.state.feeder_error = None
     try:
         app.state.job.start(manual_feed=request.feed_mode == "manual")
     except BuildStateError as exc:
