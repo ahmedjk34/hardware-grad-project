@@ -11,7 +11,7 @@ wrong or under-specified; and one defect in the first implementation would have
 stopped the machine permanently on a correct board.
 
 **Status at time of writing: Gate 0 PASSED. M1 complete. M2 logic complete and
-unwired. M3a / M3b not started.**
+unwired. P1-P4, P6 and P7 resolved. M3a / M3b not started.**
 
 ---
 
@@ -29,6 +29,9 @@ unwired. M3a / M3b not started.**
 | Defect fixed + verified | Replayed the rig CSVs through the real `Supervisor` |
 | Constants set from measurement | `0.01 / 3 / 5` |
 | M2 tests extended | 63 checks, all passing |
+| **P1-P7 put to the user** | P1 yes, P2 yes, P5 left to the user; P3/P4/P6/P7 done in passing |
+| P1 + P2 built | `classify()`'s one-sided rows, `note_regime()`; 73 checks |
+| P6 + P7 built | CSVs committed, replayed through the real `Supervisor`; 23 checks |
 
 ---
 
@@ -373,6 +376,51 @@ list.
 it is failing now, and because it matters here: if the belt is gone, the cells
 around `[0,0]` are buildable again, which changes what supervision expects.
 
+### F12 — Three of the four Gate 0 CSVs predate the gap/margin/outside split
+
+Found while building the replay test (P6). Only `gate0_split.csv` carries
+`in_gap`, `margin` and `outside`; `parked`, `hand` and `program` were written by
+the earlier version of `measure_quiet_window.py` and log one merged
+`off_lattice` column.
+
+This is **F6 restated as a data fact**: the splitting instrument was built after
+the off-board object had gone, so the run that contains the object is the run
+that cannot classify it. The three older files can never answer "gap or
+outside?" and no amount of re-reading them will change that.
+
+`test_supervisor_frames.py` states this rather than working around it. It
+replays those runs with `in_gap = 0` — the reading that holds if the object is
+off the board — and separately replays the parked run with
+`in_gap = off_lattice`, which reproduces the **pre-fix merged behaviour** from
+the column the CSV actually has. Measured on replay: **99.4% FOREIGN**, against
+the 99.8% recorded in §1.9. The regression is therefore asserted from real
+data rather than from a synthetic stand-in.
+
+### F13 — The replay reproduces §1.9 to within a tenth of a percent
+
+`test_supervisor_frames.py` runs all four traces through the shipped
+`Supervisor` on every commit. Against §1.9's hand-run figures:
+
+| run | §1.9 recorded | replayed in the test |
+| --- | --- | --- |
+| split | 98.3% VERIFIED, zero false verdicts | **98.3% VERIFIED, zero false verdicts** |
+| parked | 98.1% VERIFIED, 1.3% REMOVED | **98.1% VERIFIED, 1.34% REMOVED** |
+| parked, pre-fix merge | 99.8% FOREIGN | **99.4% FOREIGN** |
+
+The residual `REMOVED` verdicts are asserted to name **exactly `(2,0)`** — the
+97.3%-recall cell — not merely to be few. A rate assertion would pass on a
+board renumbered by one cell.
+
+Two things the trace shows that were previously only argued:
+
+- **The split run sat below `MIN_LATTICE_BLOCKS` for all 172 frames** (5
+  detections, filter never engaged) and was still flawless. That is Q6's answer
+  measured rather than reasoned.
+- **The interlocks are asked before the memory is.** Frame 1 of every run has no
+  difference baseline, so it reports `BUSY`, not `NO_MEMORY`. Correct ordering —
+  "the scene was not still" precedes "there is nothing to compare it to" — and
+  worth knowing before a UI renders the first frame after a restart.
+
 ### F11 — One pytest failure is flaky, not a regression
 
 `web_state_test.py::test_events_send_initial_update_and_heartbeat` fails
@@ -511,9 +559,13 @@ informative than the truth.
 
 ---
 
-## 4. OPEN — proposed work, decisions pending
+## 4. DECIDED — the P-items, and what was done about them
 
-### P1 — Refine D9's `DISAGREES` rows *(recommended; deviates from the approved design)*
+**All seven were put to the user on 2026-09-07 and answered.** P1, P2 and P5 needed
+a human; P3, P4, P6 and P7 were done in passing. Kept in full rather than
+deleted, because the reasoning is the record.
+
+### P1 — Refine D9's `DISAGREES` rows — **DECIDED: yes. Built.**
 
 Arising from Q8.
 
@@ -532,48 +584,83 @@ reappear at shifted cells or land in gaps — so it presents as missing **and**
 unexpected, or as `in_gap`. It does not present as clean disappearance with
 nothing gained.
 
-**Side benefit:** the sparse-board special case currently in `classify()` (where
-multiple missing cells report `REMOVED` because D10 bans `DISAGREES`) becomes
-the general rule, and the special case disappears.
+**Side benefit:** the sparse-board special case that used to sit in `classify()`
+(where multiple missing cells reported `REMOVED` because D10 banned
+`DISAGREES`) became the general rule, and the special case is gone.
 
-### P2 — Reset hysteresis when the detection count crosses `MIN_LATTICE_BLOCKS`
+**Landed.** `classify()`'s two one-sided branches now name every cell on their
+side, and `DISAGREES` is reached only when both sides changed by more than one
+cell. `docs/features/placement-supervision.md` D9 carries the new table and the
+deviation is called out there. `test_supervisor.py` asserts each row on exact
+cell sets, including the shifted-board case that must still reach `DISAGREES`.
+
+### P2 — Reset hysteresis on the `MIN_LATTICE_BLOCKS` crossing — **DECIDED: yes. Built.**
 
 Arising from F8. Same argument as D13's mode reset: evidence gathered under one
 filtering regime must not judge under another. The hand-scattered run crossed
 that boundary 188 times in 522 frames.
 
-Small change to `Supervisor.step` alongside the existing `note_mode` reset.
+**Landed** as `Supervisor.note_regime()`, called from `step()` beside the
+existing `note_mode()`. It resets in **both** directions and only on a
+crossing — a detection count that moves without crossing does not disturb a
+settle in progress, which is asserted. `test_supervisor_frames.py` confirms the
+crossing is real in the measured data: 6 crossings in the 174-frame hand run,
+1 in the 524-frame rig-placed one.
 
-### P3 — Correct D10's rationale in the code
+### P3 — Correct D10's rationale in the code — **DONE**
 
-Arising from F9. The comment in `supervisor.py` currently blames the lattice
+Arising from F9. The `MIN_LATTICE_BLOCKS` docstring in `supervisor.py` and D10
+in the design now both name the holder's offcuts beside `[0,0]` and state what
+the rule actually buys — restraint about the loudest verdict when the board is
+emptiest — instead of blaming the lattice filter.
+
+The original note: The comment in `supervisor.py` currently blames the lattice
 filter. It should name the holder's offcuts beside `[0,0]`. A rule documented
 with a reason that does not hold is a rule someone later deletes correctly.
 
-### P4 — Record the 30% self-disable in the design's known limits
+### P4 — Record the 30% self-disable in the design's known limits — **DONE**
 
-Arising from F7. `placement-supervision.md` §9 lists seven known limits; this is
-an eighth and is not there.
+Arising from F7. It is now `placement-supervision.md` §9's eighth limit, with
+the point F7 makes: supervision does not *depend* on that filter (F3 —
+`locate()` is its defence and works at any detection count), so the self-disable
+costs the input's tidiness, not the classifier's correctness.
 
-### P5 — Resolve the `test_grid.py` firmware drift *(not this feature's scope)*
+### P5 — The `test_grid.py` firmware drift — **DECIDED: the user is handling it**
 
-Arising from F10. Either the firmware change is intended and `test_grid.py` +
-AGENTS.md must follow it in the same commit, or it is unintended. Needs a human
-decision; it is a paired value and AGENTS.md forbids changing one side alone.
+Arising from F10. Put to the user, who confirmed they know it is failing and
+will resolve it themselves. **Nothing in this feature touches it**, and it is
+reported as a known failure in every gate below rather than fixed here.
 
-### P6 — `test_supervisor_frames.py` against the reference boards
+It still leaves AGENTS.md stale in two places — the `Z_PICKUP_DROP_FROM_TOP_CM`
+"one documented exception" section, and §3b-bis's shipped `blocked_cells` list —
+and it still matters here: **if the belt is gone, the cells around `[0,0]` are
+buildable again, which changes what supervision expects.** That is a fact about
+the ledger's input, not about supervision's code, so nothing here needs to
+change when it is resolved.
 
-Listed in the design's §8 test table, not yet written. Uses
-`python/captures/IMAGE_TO_TEST_BLOCK_CALIBRATION.png` — a still image, no camera
-needed. The rig CSV replay (§1.9) is arguably stronger evidence and could be
-committed as a fixture-based test instead, or as well.
+### P6 — `test_supervisor_frames.py` — **DONE, as the CSV replay**
 
-### P7 — The Gate 0 CSVs are untracked in the repo root
+The design's §8 asked for the two reference stills in `python/captures/`. The
+rig CSV replay was chosen instead, for the reason §1.9 already implies: it is
+stronger evidence and needs no OpenCV. **1398 frames the rig actually produced**
+go through the shipped `Supervisor` on every run — real jitter, real dropouts,
+real off-board junk — against boards whose contents are known exactly.
 
-`gate0_parked.csv`, `gate0_hand.csv`, `gate0_program.csv`, `gate0_split.csv`.
-They are the evidence behind every constant here. Either commit them (perhaps
-under `python/captures/` or `docs/measurements/`) or delete them once this
-document is considered the record.
+It reproduces §1.9 to within a tenth of a percent (F13) and asserts exact cell
+sets throughout. The still-image test is **not** ruled out; it would test the
+detector's reading of a frame, which is a different question and one no part of
+supervision currently depends on.
+
+### P7 — The Gate 0 CSVs — **DONE: committed under `docs/measurements/`**
+
+`gate0_parked.csv`, `gate0_hand.csv`, `gate0_program.csv`, `gate0_split.csv`,
+76 KB in total. Committing rather than deleting won on two counts: they are the
+evidence behind every constant in §1, and P6 turned them into a **test fixture**
+— deleting them would now delete a regression. `test_supervisor_frames.py`
+reads them from there.
+
+Note F12 before trusting them: three of the four predate the
+`gap`/`margin`/`outside` split and carry one merged `off_lattice` column.
 
 ---
 
@@ -589,14 +676,17 @@ document is considered the record.
 | `python/rig/build_controller.py` | one call on the `PLACED` branch, behind `ledger=None` |
 | `python/rig/supervisor.py` | `locate`, `observe`, `classify`, `_CellHistory`, `Interlocks`, `Supervisor` |
 | `python/tests/test_placement_ledger.py` | **42 checks** |
-| `python/tests/test_supervisor.py` | **63 checks** |
+| `python/tests/test_supervisor.py` | **73 checks** — P1's rows and P2's crossing included |
+| `python/tests/test_supervisor_frames.py` | **23 checks** — the four rig traces, replayed |
+| `docs/measurements/gate0_*.csv` | the four Gate 0 traces, now committed (P7) |
 
 Test gate at time of writing:
 
 | suite | result |
 | --- | --- |
 | `test_placement_ledger.py` | 42 passed, 0 failed |
-| `test_supervisor.py` | 63 passed, 0 failed |
+| `test_supervisor.py` | 73 passed, 0 failed |
+| `test_supervisor_frames.py` | 23 passed, 0 failed |
 | `test_grid.py` | 233 passed, **1 failed** — F10, firmware drift, not this work |
 | `npx vitest run` | 40 files, 530 tests, all passed |
 | `pytest tests/` | 65 passed, 3 failed — 2 documented pre-existing (`mock_camera_test.py`), 1 flaky (F11) |
@@ -630,3 +720,6 @@ Test gate at time of writing:
    renumbered by one cell.
 7. **The frame difference goes on the single-threaded executor**, with the other
    OpenCV work, per AGENTS.md §7. The set maths stays on the event loop.
+8. **`docs/measurements/` is evidence, not scratch.** Those four CSVs are now a
+   test fixture. Deleting one deletes a regression; adding one means saying in
+   §1.2 which board it was taken on and whether it was rig-placed (F4).

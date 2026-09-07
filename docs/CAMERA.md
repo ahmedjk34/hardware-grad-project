@@ -445,9 +445,22 @@ Plans: [placement-supervision.md](features/placement-supervision.md) ·
 - [x] Level-3 ceiling: refuse to judge cells whose expected top level is ≥ 3
 - [x] Hysteresis reset on `frame.grid_mode` change
 - [ ] Exposed as a state field, watched on the bench for a session
-- [x] `python/tests/test_supervisor.py` — 55 checks, synthetic cell sets only
-- [ ] `python/tests/test_supervisor_frames.py` — the reference boards in
-      `python/captures/`
+- [x] `python/tests/test_supervisor.py` — **73 checks**, synthetic cell sets only
+- [x] **D9 refined (P1)** — a one-sided change of any size is NAMED, not
+      dismissed: N missing with nothing gained is `REMOVED` naming all N, N
+      unexpected with nothing missing is `FOREIGN` naming all N. `DISAGREES` is
+      now precisely "both sides changed and I cannot pair them", which is the
+      only case that actually needs block identity
+- [x] **Hysteresis resets on the `MIN_LATTICE_BLOCKS` crossing (P2)**, both
+      directions — evidence gathered under one filtering regime must not judge
+      under another, which is D13's argument applied to the other boundary
+- [x] `python/tests/test_supervisor_frames.py` — **23 checks**. The four Gate 0
+      rig traces (`docs/measurements/gate0_*.csv`, 1398 frames the rig actually
+      produced) replayed through the shipped `Supervisor`. Chosen over the
+      reference stills in `python/captures/`: stronger evidence, no OpenCV.
+      Reproduces the measured distribution to within a tenth of a percent, and
+      replays the pre-fix merged reading to show it emitting FOREIGN in 99.4%
+      of windows on a board that was entirely correct
 
 ### M3a — the per-build verdict *(cheapest high-value step)*
 
