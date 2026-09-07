@@ -56,6 +56,38 @@ describe("runner reducer", () => {
     expect(turn.effects).toEqual([{ kind: "select", col: 4, row: 2, level: 1 }]);
   });
 
+  it("patches the camera's verdict onto the build row it belongs to", () => {
+    // The verification arrives AFTER the result: the server cannot form it
+    // until the rig has parked and the scene has settled, ~0.6 s later at the
+    // pipeline's measured 8.6-8.7 Hz. The row is written first, then patched.
+    let turn = start([build("a", 3, 2, 1)]);
+    turn = dispatch(turn.state, { type: "selected", command: "B 3 2 1", now: 110 });
+    turn = dispatch(turn.state, { type: "verified", actual: "B 3 2 1", now: 111 });
+    turn = dispatch(turn.state, { type: "build-running", now: 112 });
+    turn = dispatch(turn.state, { type: "build-settled", result: "placed", reason: null, now: 712 });
+    expect(turn.state.log[0].verification).toBeUndefined();
+
+    turn = dispatch(turn.state, {
+      type: "build-verified", verification: "verified in frame at [3,2]", now: 1300,
+    });
+    expect(turn.state.log[0].verification).toBe("verified in frame at [3,2]");
+    expect(turn.effects).toEqual([]);
+    // It never invents a row, and re-delivering the same sentence is a no-op:
+    // the state field is published on every snapshot, not once.
+    expect(turn.state.log).toHaveLength(1);
+    const again = dispatch(turn.state, {
+      type: "build-verified", verification: "verified in frame at [3,2]", now: 1400,
+    });
+    expect(again.state).toBe(turn.state);
+  });
+
+  it("has no build row to patch before the first build settles", () => {
+    const turn = dispatch(start([build("a", 3, 2, 1)]).state, {
+      type: "build-verified", verification: "not detected at [3,2]", now: 200,
+    });
+    expect(turn.state.log).toEqual([]);
+  });
+
   it("stops on a command mismatch and shows both strings verbatim", () => {
     let turn = start([build("a", 3, 2, 1)]);
     turn = dispatch(turn.state, { type: "selected", command: "B 3 2 0", now: 110 });

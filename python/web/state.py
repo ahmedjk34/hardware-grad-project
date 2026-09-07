@@ -105,6 +105,11 @@ class StateModel(BaseModel):
     #: rig still has to park. See `web/progress.py`.
     build_release_confirmed: bool
     serial_event_id: int
+    #: M3a. One sentence about the placement that just settled — "verified in
+    #: frame at [3,1]", "not detected at [2,2]", "unchecked — level 3 ...".
+    #: The runner log row and the thesis run report's Markdown column both
+    #: read it. None when no build has settled in this session.
+    vision_verification: str | None
     views: dict[str, bool]
     geometry: dict[str, Any] | None
 
@@ -165,6 +170,7 @@ def build_state(app) -> StateModel:
         feeder_state=app.state.feeder_state,
         feeder_error=app.state.feeder_error,
         **progress.as_state_fields(),
+        vision_verification=getattr(app.state, "vision_verification", None),
         views=dict(app.state.views),
         geometry=build_geometry(frame, controller.selected) if frame is not None else None,
     )

@@ -12,18 +12,37 @@ work. Read that for *how*; read this for *what, where, and who*.
 
 ## 0. The one sentence
 
-> **Today the camera is a monitor and a calibration instrument. It never makes
-> an assertion the system acts on.**
+> **The camera is a monitor, a calibration instrument, and — since M3a — an
+> instrument that asserts. It now says whether a placement was seen, and the
+> run report keeps its answer.**
 
-Detections are *drawn*. Nothing **reads** them. There is no code path in which a
-detected block changes what the machine does, or changes what the console says
-about whether a build was correct.
+**This section said the opposite until M3a landed, and the line it described is
+the one the project has now crossed.** It used to read: *"Today the camera is a
+monitor and a calibration instrument. It never makes an assertion the system
+acts on."* Detections were drawn and nothing read them. That is no longer true.
 
-That is not an oversight — it is the line the project has not crossed yet.
-**Two designed-but-unbuilt features cross it, and both are camera-based:**
-[placement supervision](features/placement-supervision.md) (does the board match
-the plan?) and [Stage 15](features/stage-15-placement-correction.md) (is that one
-block off-centre?). §6 covers both, and how they use the camera differently.
+What changed, precisely:
+
+- `rig/supervisor.py` reads `ProcessedFrame.detections`, maps each one to a
+  cell, and compares the result against `rig/placement_ledger.py` — a memory of
+  the commands the machine issued.
+- Every settled placement gets a sentence in `vision_verification`, which
+  reaches the runner log row and the thesis run report's Markdown column.
+- A board verdict **pauses** the runner on amber and **stops** it on red.
+
+What has NOT changed, and is load-bearing:
+
+- **The camera never moves the rig.** Every verdict is notify-only (D11).
+  Automatic repair is M4 and is not built.
+- **A verdict never `LOCK`s the session.** `LOCKED` means the claw's position is
+  unknown and needs a human plus a service restart; a verdict is a statement
+  about the *board*, not the *machine*.
+- **Nothing in `vision/` changed**, no detector was added and no extra frame is
+  taken. The assertion is a *subtraction* one layer above the camera — §5.
+
+The other designed-but-unbuilt camera feature,
+[Stage 15](features/stage-15-placement-correction.md) (is that one block
+off-centre?), has not crossed it. §6 covers both and how they differ.
 
 ---
 
@@ -314,12 +333,19 @@ untouched.
 
 ### The role change
 
-| | today | after |
+**Done, as of M3a/M3b.** The "after" column is now the present tense.
+
+| | before | now |
 | --- | --- | --- |
 | the camera is a… | monitor + calibration instrument | **instrument that asserts** |
 | detections are… | drawn | drawn **and read** |
-| a wrong board… | looks wrong to a human who happens to be looking | **stops the machine and names the cell** |
-| the run report says… | `placed` — the firmware's own word for it | `placed` **and verified in frame** |
+| a wrong board… | looked wrong to a human who happened to be looking | **stops the machine and names the cell** |
+| the run report says… | `placed` — the firmware's own word for it | `placed` **and what the camera saw** |
+
+One honest caveat the table cannot hold: the per-build sentence is decisive at
+**level 0** and at any level where the cell reads *empty*. At levels 1-2 with
+the cell occupied it reports `unconfirmed` — an overhead camera cannot tell a
+stack that grew from one that did not. See §5's `verify_placement`.
 
 ### What supervision adds to the UI
 
@@ -485,11 +511,24 @@ Plans: [placement-supervision.md](features/placement-supervision.md) ·
 
 ### M3a — the per-build verdict *(cheapest high-value step)*
 
-- [ ] Classifier triggered at `_publish_build_result`
-- [ ] Publish `vision_verification: str | None` on `StateModel`
-- [ ] **Verify the free win:** runner log row and run-report column light up
-      with **no client change** (§5c)
-- [ ] `python/tests/web_state_test.py` extended
+- [x] **Armed** at `_publish_build_result`, on the `PLACED` branch only, from
+      the ledger entry that build just appended
+- [x] **Answered** in the first quiet window after it, by
+      `_resolve_pending_check` — the sentence cannot exist at settle time
+      (progress.md F18)
+- [x] `vision_verification: str | None` on `StateModel`, in `_SEMANTIC_FIELDS`
+      so it publishes immediately rather than on the 5 Hz geometry throttle
+- [x] `rig.supervisor.verify_placement` — decisive at level 0 and on any empty
+      cell; `unconfirmed` at levels 1-2 with the cell occupied, because an
+      overhead camera cannot tell a stack that grew from one that did not;
+      `unchecked` at the level-3 ceiling. **Never the word "error"**
+- [ ] **The free win was overstated.** The run-report column IS free — it
+      already reads `RunLogEntry.verification`. The runner log row needed one
+      `build-verified` event, because the verdict arrives ~0.6 s AFTER the
+      result the row is written from (progress.md F18)
+- [x] `python/tests/web_supervision_test.py` + `web/src/studio/runner.test.ts`
+      extended
+- [x] **§0 and §6a of this file corrected** — the camera now asserts
 
 ### M3b — the continuous verdict *(the demonstrable milestone)*
 

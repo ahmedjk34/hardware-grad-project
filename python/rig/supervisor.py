@@ -276,6 +276,52 @@ def observe(detections, workspace, image_size) -> Observation:
                        detections=len(detections))
 
 
+def verify_placement(cell: Cell, level: int, occupied, *,
+                     calibrated: bool = True) -> str:
+    """D8a's narrow question: did a block appear at the cell just commanded?
+
+    Returns the short string that becomes ``vision_verification`` — the runner
+    log row and the thesis run report's Markdown column. One placement, one
+    sentence, and it never claims more than it can see.
+
+    ``occupied`` is whether the cell reads occupied in the settled observation,
+    or None when the map refuses to answer.
+
+    THE LEVELS DIFFER, and the difference is not cosmetic:
+
+    * **level 0** — the ledger says the cell was empty before this build, so
+      empty -> occupied is decisive in both directions. This is the case the
+      run report is really about, and it is most of a short-tower build.
+    * **levels 1-2** — the cell was ALREADY occupied, so occupancy cannot
+      confirm the new block: an overhead camera sees the top of a stack whether
+      that stack grew or not. A cell that reads EMPTY is still decisive — that
+      is a tower that fell — so the negative is reported and the positive is
+      not. The design wanted a frame difference against the pre-build frame
+      here; that needs a measured per-cell change threshold nobody has taken
+      (Gate 0b, progress.md F17), and a guessed one must never reach a rig.
+    * **level >= 3** — D6. Parallax has eaten ``LATTICE_SNAP``, so an absent
+      detection is a filter artifact rather than a missing block. Refused, and
+      SAID, never silently skipped.
+
+    Never the word "error": at levels 1-2 the machine may well have got it
+    right and simply cannot prove it.
+    """
+    col, row = cell
+    if level >= LEVEL_CEILING:
+        return (f"unchecked — level {level} at [{col},{row}] is above the "
+                f"detection ceiling")
+    if not calibrated:
+        return f"unchecked — no map, [{col},{row}] was not verified in frame"
+    if occupied is None:
+        return f"unchecked — [{col},{row}] did not settle before the next build"
+    if not occupied:
+        return f"not detected at [{col},{row}]"
+    if level == 0:
+        return f"verified in frame at [{col},{row}]"
+    return (f"unconfirmed — [{col},{row}] holds a stack, and a new top block "
+            f"cannot be told from the one under it from above")
+
+
 def unjudged_cells(top_levels: dict[Cell, int]) -> tuple[Cell, ...]:
     """D6's refusals: cells whose expected top level is at or above the ceiling."""
     return _sorted(cell for cell, level in top_levels.items()

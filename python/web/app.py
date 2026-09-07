@@ -41,10 +41,12 @@ from rig.console_pipeline import ConsolePipeline
 from rig.feeder import Feeder
 from rig.mock_board import MockBoard
 from rig.mock_feeder import MockFeeder
+from rig.link import PLACED
 from rig.orchestrator import CellOrchestrator
 from rig.placement_ledger import PlacementLedger
 from rig.supervisor import (
     PARKED_CELL_PHASES, Interlocks, Supervisor, observe, quiet_fraction,
+    verify_placement,
 )
 from rig.workspace import WORKSPACE_MAP_PATH
 from web.events import EventHub, now_ms
@@ -67,6 +69,11 @@ _SEMANTIC_FIELDS = (
     "build_release_confirmed", "views",
     "gantry_connected", "feeder_connected", "cell_phase",
     "feeder_transaction_id", "feeder_state", "feeder_error",
+    # M3a. The per-build verdict is the one camera opinion the run report
+    # keeps, so it publishes IMMEDIATELY rather than waiting on the 5 Hz
+    # geometry throttle — a verification that arrives a fifth of a second late
+    # can land after the client has already written its log row.
+    "vision_verification",
 )
 
 
@@ -206,6 +213,10 @@ async def _supervise(app: FastAPI, frame, job: BuildJob, loop,
         supervisor.reset()
         app.state.supervision_baseline = None
         app.state.supervision_sequence = None
+        #: M3a. The ledger entry whose placement is waiting on its first quiet
+        #: window, and the short sentence that comes out of it.
+        app.state.pending_check = None
+        app.state.vision_verification = None
         _note_supervision(app, "BUSY", "MODE LATCH — waiting for the new grid", None)
         return
 
@@ -241,6 +252,35 @@ async def _supervise(app: FastAPI, frame, job: BuildJob, loop,
         mode=frame.grid_mode, ledger=app.state.ledger,
         observation=observation, interlocks=interlocks)
     _note_supervision(app, state, reason, verdict)
+    _resolve_pending_check(app, state, verdict)
+
+
+def _resolve_pending_check(app: FastAPI, state: str, verdict) -> None:
+    """D8a, settled: the per-build verdict, in the first quiet window after it.
+
+    Armed by `_publish_build_result` the moment a build settles PLACED, and
+    answered here — not there — because the answer does not exist yet at settle
+    time. The rig has only just parked; D5 wants a still, settled scene, which
+    at the measured 8.6-8.7 Hz is another ~0.6 s away. That timing is the one
+    thing the design's §2b got wrong about this milestone (progress.md F18).
+
+    `NO_MAP` resolves too, and says so. A run report that cannot tell "checked
+    and correct" from "never checked" is worse than one that says nothing.
+    """
+    pending = app.state.pending_check
+    if pending is None:
+        return
+    if state == "NO_MAP":
+        app.state.vision_verification = verify_placement(
+            pending.cell, pending.level, None, calibrated=False)
+    elif state == "VERDICT":
+        app.state.vision_verification = verify_placement(
+            pending.cell, pending.level, pending.cell in set(verdict.observed))
+    else:
+        return
+    app.state.pending_check = None
+    build_log.placements.verified(app.state.vision_verification)
+    publish_state(app, force=True)
 
 
 def _note_supervision(app: FastAPI, state: str, reason, verdict) -> None:
@@ -296,6 +336,19 @@ def _publish_build_result(app: FastAPI, outcome) -> None:
         # the fallback can be deleted.
         "from_prose": bool(getattr(result, "from_prose", False)),
     })
+    # M3a. Arm the per-build check on a PLACED, and only on a PLACED: the
+    # ledger admits nothing else, so there is nothing to look for otherwise.
+    # The cell comes from the ledger entry this very build just appended,
+    # which is authoritative — `controller.selected` has already been cleared
+    # to stop a key repeat placing twice into one cell.
+    placed = str(result) == PLACED if result is not None else False
+    entries = app.state.ledger.placements() if placed else ()
+    if entries:
+        app.state.pending_check = entries[-1]
+        app.state.vision_verification = "checking — waiting for a still frame"
+    else:
+        app.state.pending_check = None
+        app.state.vision_verification = None
     app.state.progress.on_result(result, event.event_id, locked=locked)
     # build.log + serial.log: the settled outcome and the total elapsed, closing
     # this build's section.
@@ -359,6 +412,10 @@ def create_app(options: ConsoleAppOptions | None = None) -> FastAPI:
         #: sequence it came from. Both are cleared by a mode latch.
         app.state.supervision_baseline = None
         app.state.supervision_sequence = None
+        #: M3a. The ledger entry whose placement is waiting on its first quiet
+        #: window, and the short sentence that comes out of it.
+        app.state.pending_check = None
+        app.state.vision_verification = None
 
         def _serial_line(line: str) -> None:
             """On the loop. One raw line: the log AND one durable event.

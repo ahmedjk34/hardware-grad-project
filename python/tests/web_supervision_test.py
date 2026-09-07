@@ -98,6 +98,7 @@ def fake_app(*, cells=((1, 1), (2, 1)), cell_phase="idle", locked=False,
                               settle_n=1, settle_m=1),
         supervision=None, supervision_signature=None,
         supervision_baseline=None, supervision_sequence=None,
+        pending_check=None, vision_verification=None,
         cell_phase=cell_phase,
         controller=SimpleNamespace(locked=locked),
         rig=SimpleNamespace(grid=SimpleNamespace(mode=mode)),
@@ -265,6 +266,63 @@ def test_an_empty_ledger_reports_NO_MEMORY_after_a_restart():
     app = fake_app(cells=())
     seen = drive(app, [frame_at(1), frame_at(2)])
     assert seen[-1].state == "NO_MEMORY" and seen[-1].verdict is None
+
+
+# --- M3a: the per-build check, armed at the settle, answered in a window --- #
+
+def _armed_app(level=0):
+    app = fake_app(cells=((1, 1), (2, 1)))
+    app.state.pending_check = app.state.ledger.placements()[-1]
+    if level:
+        app.state.ledger.append("vertical", 2, 1, level, BuildResult(PLACED))
+        app.state.pending_check = app.state.ledger.placements()[-1]
+    app.state.vision_verification = "checking — waiting for a still frame"
+    # `_resolve_pending_check` publishes; the fake app has no hub, so stand in
+    # a no-op. What is under test is the sentence, not the publish.
+    app.state.hub = None
+    return app
+
+
+def test_the_per_build_check_is_not_answerable_at_settle_time():
+    """It stays `checking` until a quiet window arrives, which is the point.
+
+    The rig has only just parked when the result settles. D5 wants a still,
+    settled scene — ~0.6 s later at the measured 8.6-8.7 Hz — so the sentence
+    cannot exist yet, and the design's "zero client work" claim does not hold.
+    """
+    app = _armed_app()
+    drive(app, [frame_at(1)])          # no baseline yet, so BUSY
+    assert app.state.vision_verification == "checking — waiting for a still frame"
+    assert app.state.pending_check is not None
+
+
+def test_a_quiet_window_answers_the_per_build_check(monkeypatch):
+    import web.app as web_app
+    monkeypatch.setattr(web_app, "publish_state", lambda app, **kw: True)
+    app = _armed_app()
+    drive(app, [frame_at(1), frame_at(2)])
+    assert app.state.vision_verification == "verified in frame at [2,1]"
+    # Answered once, then disarmed: one placement, one sentence.
+    assert app.state.pending_check is None
+
+
+def test_a_block_that_never_arrived_names_the_cell(monkeypatch):
+    import web.app as web_app
+    monkeypatch.setattr(web_app, "publish_state", lambda app, **kw: True)
+    app = _armed_app()
+    drive(app, [frame_at(1, cells=((1, 1),)), frame_at(2, cells=((1, 1),))])
+    assert app.state.vision_verification == "not detected at [2,1]"
+
+
+def test_an_uncalibrated_frame_resolves_the_check_rather_than_leaving_it(monkeypatch):
+    """A run report that cannot tell "checked" from "never checked" is worse
+    than one that says nothing."""
+    import web.app as web_app
+    monkeypatch.setattr(web_app, "publish_state", lambda app, **kw: True)
+    app = _armed_app()
+    drive(app, [frame_at(1, calibrated=False), frame_at(2, calibrated=False)])
+    assert app.state.vision_verification.startswith("unchecked — no map")
+    assert app.state.pending_check is None
 
 
 # --- the real wiring exists ------------------------------------------------ #

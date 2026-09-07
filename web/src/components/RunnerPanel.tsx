@@ -189,6 +189,17 @@ export function RunnerPanel({ state, connected, modelId, api, delay, onActiveCha
     applyEvent({ type: "server-build-state", buildState: observed.build_state, now: Date.now() });
   }, [state.build_state, lastResult, applyEvent]);
 
+  // The camera's answer lands AFTER the result. It cannot exist at settle
+  // time: the rig has only just parked, and a verdict needs a still, settled
+  // scene — another ~0.6 s at the pipeline's measured 8.6-8.7 Hz. So the log
+  // row is written on the result and patched here when the server says more.
+  // The server owns the sentence; nothing is re-derived in the browser.
+  const verification = (state as StateModel & { vision_verification?: string | null }).vision_verification ?? null;
+  useEffect(() => {
+    if (!verification) return;
+    applyEvent({ type: "build-verified", verification, now: Date.now() });
+  }, [verification, applyEvent]);
+
   const isActive = activePhase(run.phase);
   useEffect(() => onActiveChange?.(isActive), [isActive, onActiveChange]);
   useEffect(() => {

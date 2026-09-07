@@ -421,6 +421,60 @@ Two things the trace shows that were previously only argued:
   "the scene was not still" precedes "there is nothing to compare it to" — and
   worth knowing before a UI renders the first frame after a restart.
 
+### F17 — The per-build check cannot use a frame difference without Gate 0b
+
+D8a specifies the per-build check as *"a frame difference against the pre-build
+frame"*, and it is **not level-blind** because the block just placed is the top
+of its stack.
+
+The first half needs a number nobody has measured. Gate 0 measured the
+**full-frame** difference fraction that separates a still scene from a
+disturbed one; a per-cell "did this cell change enough to be a new block"
+threshold is a different quantity on a different denominator — one cell is
+~1/42 of the board, so the parked noise floor inside it does not follow from
+the full-frame one by any arithmetic. Guessing it would put an unmeasured
+threshold on a rig, which is the exact failure `Supervisor.__init__` refuses to
+allow for the other three constants.
+
+**Built without it, and the carve-out is honest rather than silent:**
+
+| level | cell reads | reported |
+| --- | --- | --- |
+| 0 | occupied | `verified in frame at [c,r]` — decisive, the ledger says it was empty |
+| 0 | empty | `not detected at [c,r]` — decisive |
+| 1-2 | empty | `not detected at [c,r]` — **still decisive; that is a tower that fell** |
+| 1-2 | occupied | `unconfirmed` — an overhead camera cannot tell a stack that grew from one that did not |
+| ≥ 3 | either | `unchecked — above the detection ceiling` (D6) |
+
+Short towers are mostly level 0, so the feature still earns its place. **Gate 0b
+is the measurement that would lift the `unconfirmed` row**: park the rig, log
+the per-cell change fraction across a placement at level 1, and find the band
+between "nothing happened here" and "a block landed here". Same instrument
+shape as `measure_quiet_window.py`, restricted to one cell polygon.
+
+### F18 — §2b's "zero client work" was wrong, and the reason is timing
+
+The design's best piece of news was that the per-build verdict's client path is
+wired end to end, so *"publishing one string field from Python lights up the
+runner log AND the thesis run report with zero client work."*
+
+Half of it held. **The run-report column is genuinely free** — `run-report.ts`
+already emits `RunLogEntry.verification`. **The runner log row was not**, and
+the reason is not a gap in the wiring:
+
+`RunnerPanel.tsx` reads `vision_verification` **at the moment of the
+`build_result` event** and writes the log row there. But the verdict cannot
+exist at that moment. The rig has only just parked; D5 requires a still,
+settled scene, which is another ~0.6 s at the measured 8.6-8.7 Hz. At settle
+time the field necessarily reads `checking — waiting for a still frame`.
+
+Three ways out were considered. Delaying `build_result` until the check
+resolves is unthinkable — it is the terminal event and F15 shows how tight the
+ordering around it already is. Leaving the row unverified throws away the
+milestone's whole point. So: one `build-verified` RunEvent, ~10 lines in
+`runner.ts`, which patches the newest build row in place. The browser still
+never derives a verdict — it renders the server's sentence verbatim.
+
 ### F14 — DEFECT in the design: D5's "gantry parked" gate does not work
 
 D5 specifies the parked interlock as `not job.running` **and**

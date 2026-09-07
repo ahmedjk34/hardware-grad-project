@@ -25,7 +25,7 @@ from rig.grid import MachineGrid  # noqa: E402
 from rig.supervisor import (  # noqa: E402
     LEVEL_CEILING, MIN_LATTICE_BLOCKS, AMBER_VERDICTS, RED_VERDICTS,
     Interlocks, Observation, Supervisor, classify, locate, observe,
-    unjudged_cells,
+    unjudged_cells, verify_placement,
 )
 from rig.workspace import WorkspaceMap  # noqa: E402
 
@@ -238,6 +238,39 @@ verdict = classify("vertical", sparse, sparse | {(4, 4)},
 check("at exactly MIN_LATTICE_BLOCKS the filter is trusted again",
       verdict.verdict == "FOREIGN", verdict.verdict)
 check("MIN_LATTICE_BLOCKS is block_outline's own 6", MIN_LATTICE_BLOCKS == 6)
+
+
+# --- D8a: the per-build sentence, and what it refuses to claim ------------- #
+
+check("D8a level 0 empty -> occupied is decisive",
+      verify_placement((3, 1), 0, True) == "verified in frame at [3,1]",
+      verify_placement((3, 1), 0, True))
+check("D8a level 0 still empty NAMES the cell in the first four words",
+      verify_placement((2, 2), 0, False) == "not detected at [2,2]",
+      verify_placement((2, 2), 0, False))
+check("D8a an empty cell is decisive at EVERY judged level — a tower fell",
+      verify_placement((2, 2), 2, False) == "not detected at [2,2]")
+check("D8a level 1 occupied is UNCONFIRMED, never verified",
+      verify_placement((2, 2), 1, True).startswith("unconfirmed"),
+      verify_placement((2, 2), 1, True))
+check("D8a and it says why, rather than implying a failure",
+      "cannot be told from the one under it" in verify_placement((2, 2), 1, True))
+check("D8a level >= the ceiling is refused and SAID",
+      verify_placement((1, 1), LEVEL_CEILING, True)
+      == "unchecked — level 3 at [1,1] is above the detection ceiling",
+      verify_placement((1, 1), LEVEL_CEILING, True))
+check("D8a the ceiling wins even over an empty cell — the absence is an artifact",
+      verify_placement((1, 1), 4, False).startswith("unchecked — level 4"))
+check("D8a no map is unchecked, not unverified",
+      verify_placement((1, 1), 0, None, calibrated=False).startswith("unchecked — no map"))
+check("D8a a cell that never settled is unchecked, not not-detected",
+      verify_placement((1, 1), 0, None).startswith("unchecked"),
+      verify_placement((1, 1), 0, None))
+check("D8a never says the word 'error' — the machine may have got it right",
+      not any("error" in verify_placement(c, l, o, calibrated=cal)
+              for c, l, o, cal in (((1, 1), 0, True, True), ((1, 1), 0, False, True),
+                                   ((1, 1), 1, True, True), ((1, 1), 3, True, True),
+                                   ((1, 1), 0, None, False))))
 
 
 # --- D5: each interlock independently suppresses a verdict ----------------- #

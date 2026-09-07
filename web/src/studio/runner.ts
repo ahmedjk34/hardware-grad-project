@@ -109,6 +109,12 @@ export type RunEvent =
       phaseId: string; label: string; action: BuildPhaseAction;
       status: "begin" | "done"; eventId: number; now: number }
   | { type: "build-settled"; result: "placed" | "rejected" | "aborted"; reason: string | null; now: number; thumbnail?: string; verification?: string }
+  /** The camera's answer about the placement that just settled. It arrives
+   *  AFTER `build-settled`, because the server cannot form it until the rig
+   *  has parked and the scene has been still for a settle window — ~0.6 s at
+   *  the pipeline's measured 8.6-8.7 Hz. So the log row is written first with
+   *  whatever the server had, and this patches it in place. */
+  | { type: "build-verified"; verification: string; now: number }
   | { type: "mode-settled"; now: number }
   | { type: "shift-settled"; now: number }
   | { type: "stop-after"; now: number }
@@ -372,6 +378,16 @@ export function step(state: RunState, event: RunEvent): Turn {
     });
   }
 
+  if (event.type === "build-verified") {
+    // Patch the newest build row only. A verification belongs to one
+    // placement, and the server publishes exactly one per settled build.
+    const index = state.log.map(entry => entry.kind).lastIndexOf("build");
+    if (index < 0) return noEffects(state);
+    if (state.log[index].verification === event.verification) return noEffects(state);
+    const log = state.log.slice();
+    log[index] = { ...log[index], verification: event.verification };
+    return noEffects({ ...state, log });
+  }
   if (event.type === "build-settled") {
     const op = state.program[state.cursor];
     if (!state.inFlight || !op || op.op !== "build") return noEffects(state);

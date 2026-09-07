@@ -300,6 +300,13 @@ class PlacementLog:
                 f"{_stamp()}  PLACED    {placement.mode:<10} "
                 f"[{placement.col},{placement.row}] level={placement.level}")
 
+    def verified(self, sentence: str) -> None:
+        """D8a's per-build answer, once it has had a quiet window to form."""
+        if not self._sink.enabled:
+            return
+        with self._lock:
+            self._sink.write(f"{_stamp()}  CHECK     {sentence}")
+
     def verdict(self, state: str, reason, verdict) -> None:
         """One CHANGE in what the observer says about the board.
 
