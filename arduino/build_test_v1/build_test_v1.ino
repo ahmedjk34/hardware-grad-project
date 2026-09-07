@@ -4345,6 +4345,10 @@ bool zGoGround()
   return homeAxis(AXIS_Z);
 }
 
+// DISABLED - build phase 5 now goes back to a GROUND seek (zGoGround()).
+// The fixed "drop a certain distance below the top switch" pickup descent
+// below is commented out in full; nothing calls zGoPickup() any more.
+//
 // Lower Z to the feeder-belt pickup height for build phase 5: a fixed
 // drop below the pin 29 TOP switch, NOT a seek onto the pin 28 GROUND
 // switch. The belt sits above GROUND, so a ground seek would ram it.
@@ -4352,6 +4356,7 @@ bool zGoGround()
 // Requires a Z reference. Phase 1's zGoTop() always leaves one (the top
 // switch sets axisHomed[Z] via applyLimitReference), so inside a build
 // this guard never trips; it mirrors zGoLevel() for any other caller.
+/*
 bool zGoPickup()
 {
   // The pickup descent is measured DOWN FROM THE TOP SWITCH, so reference that
@@ -4397,6 +4402,7 @@ bool zGoPickup()
   }
   return ok;
 }
+*/
 
 // Drop Z to a computed block level.
 bool zGoLevel(long level)
@@ -4853,21 +4859,19 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
   openServoAndWait();
   buildPause();
 
-  // ---- 5. down to the feeder pickup height ----
+  // ---- 5. down to the ground switch ----
   //
-  // NOT a ground seek any more: the feeder belt sits above GROUND, so
-  // this drops a fixed distance below the top switch and grips there
-  // (Z_PICKUP_DROP_FROM_TOP_CM). Z keeps its reference from phase 1's
-  // top-switch seek; the build no longer re-zeroes it at GROUND. The
-  // wire identifiers (phase=lower_to_ground, text=Lower_Z_to_the_ground_switch)
-  // are kept as stable phase-5 IDs - see docs/ack-protocol.md.
+  // Back to a GROUND seek: Z drives down into the pin 28 bottom switch,
+  // which also re-zeroes the axis and clears any accumulated Z error
+  // every cycle. The fixed "drop below the top switch" pickup descent
+  // (zGoPickup / Z_PICKUP_DROP_FROM_TOP_CM) is commented out.
   buildStep(5, F("lower_to_ground"), F("move"),
             F("Lower_Z_to_the_ground_switch"),
-            "Lower Z to the feeder pickup height (fixed drop below the top switch)",
-            zEtaToPickupMs());
-  if (!zGoPickup())
+            "Lower Z to the ground switch",
+            zEtaToGroundMs());
+  if (!zGoGround())
   {
-    buildAbort("Z never reached the pickup height");
+    buildAbort("Z never reached the ground switch");
     return false;
   }
   buildPause();
