@@ -1,6 +1,14 @@
 # Placement supervision — the machine knows what it built, and checks
 
-**Status: designed, not started. This is the build plan.**
+**Status: Gate 0 passed, M1 complete, M2 logic complete and unwired. This is
+the build plan.**
+
+> **Read [placement-supervision-progress.md](placement-supervision-progress.md)
+> alongside this document.** It is the build record: the Gate 0 measurements
+> taken on the rig, ten findings, and the two places where the decisions below
+> were found to be wrong — D9's `DISAGREES` rows (over-conservative, see its
+> P1) and D10's stated rationale (the conclusion holds, the reason given does
+> not). The placeholder constants in D5 are superseded by measurements there.
 
 This document **merges and supersedes** two earlier descriptions of the same
 foundation: [feature-ideas.md §1.4 / Appendix A](../feature-ideas.md#appendix-a--placement-supervision-full-design)

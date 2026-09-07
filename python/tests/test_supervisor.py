@@ -9,8 +9,9 @@ rig precisely because it does not live in ``vision/``.
 **Exact cell sets, never counts.** A count-only assertion passes on a board
 renumbered by one cell, and that is the failure that matters.
 
-Gate 0's three interlock constants are UNMEASURED and every construction below
-passes explicit values. They are test fixtures, not recommendations.
+Gate 0's three interlock constants were measured on the rig on 2026-09-07, but
+every construction below still passes explicit values. Those are test fixtures,
+not recommendations; the measured defaults are asserted separately at the end.
 """
 
 from pathlib import Path
@@ -20,10 +21,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from rig.link import PLACED, BuildResult  # noqa: E402
 from rig.placement_ledger import PlacementLedger  # noqa: E402
+from rig.grid import MachineGrid  # noqa: E402
 from rig.supervisor import (  # noqa: E402
     LEVEL_CEILING, MIN_LATTICE_BLOCKS, AMBER_VERDICTS, RED_VERDICTS,
-    Interlocks, Observation, Supervisor, classify, observe, unjudged_cells,
+    Interlocks, Observation, Supervisor, classify, locate, observe,
+    unjudged_cells,
 )
+from rig.workspace import WorkspaceMap  # noqa: E402
 
 
 PASSED, FAILED = [], []
@@ -39,18 +43,6 @@ class FakeDetection:
 
     def __init__(self, center):
         self.center = center
-
-
-class FakeWorkspace:
-    """`cell_at` with a table, so a test can say 'this one lands in a gap'."""
-
-    def __init__(self, table):
-        self.table = table
-        self.calls = []
-
-    def cell_at(self, point, image_size):
-        self.calls.append((point, image_size))
-        return self.table.get(tuple(point))
 
 
 def ledger_with(mode, cells):
@@ -72,21 +64,53 @@ def busy_board(n=MIN_LATTICE_BLOCKS):
 
 # --- pixel -> cell is our own work (§2a.1) --------------------------------- #
 
-workspace = FakeWorkspace({(10.0, 10.0): (1, 1), (20.0, 20.0): (2, 1),
-                           (30.0, 30.0): None})
-result = observe([FakeDetection((10.0, 10.0)), FakeDetection((20.0, 20.0)),
-                  FakeDetection((30.0, 30.0))], workspace, (640, 480))
-check("cell_at is called once per detection", len(workspace.calls) == 3)
-check("cell_at is given the frame's image size",
-      all(call[1] == (640, 480) for call in workspace.calls))
-check("observed cells are the exact set", result.cells == ((1, 1), (2, 1)),
-      str(result.cells))
-check("a None cell becomes off_lattice, not a dropout", result.off_lattice == 1)
+#: A real WorkspaceMap, so `locate` is tested against the geometry it will
+#: actually see rather than against a stub that agrees with it by construction.
+GRID = MachineGrid.from_config(mode="vertical")
+SIZE = (1000, 800)
+MAP = WorkspaceMap.from_grid(GRID, ((0, 0), (1000, 0), (1000, 800), (0, 800)), SIZE)
+
+
+def at_cm(x_cm, y_cm):
+    return MAP.pixel_at(x_cm / GRID.workspace_width_cm,
+                        y_cm / GRID.workspace_height_cm, SIZE)
+
+
+centre = GRID.cell_center_cm(3, 2)
+gap_x = (GRID.cell_center_cm(3, 2)[0] + GRID.cell_center_cm(4, 2)[0]) / 2
+check("locate names a cell at a cell centre",
+      locate(MAP, at_cm(*centre), SIZE) == ((3, 2), "cell"))
+check("locate calls a between-cells point a GAP — on the board, off every site",
+      locate(MAP, at_cm(gap_x, centre[1]), SIZE) == (None, "gap"))
+check("locate calls a point beyond the envelope OUTSIDE",
+      locate(MAP, (-500.0, -500.0), SIZE) == (None, "outside"))
+check("locate calls a point past the far edge OUTSIDE",
+      locate(MAP, (1200.0, 400.0), SIZE) == (None, "outside"))
+
+result = observe([FakeDetection(at_cm(*centre)),
+                  FakeDetection(at_cm(gap_x, centre[1])),
+                  FakeDetection((-500.0, -500.0))], MAP, SIZE)
+check("observed cells are the exact set", result.cells == ((3, 2),), str(result.cells))
+check("a GAP detection is counted as evidence about the board",
+      result.in_gap == 1)
+check("an OFF-BOARD detection is counted separately, never as gap",
+      result.off_board == 1 and result.in_gap == 1)
 check("detections counts everything, for D10", result.detections == 3)
-duplicate = observe([FakeDetection((10.0, 10.0)), FakeDetection((10.0, 10.0))],
-                    workspace, (640, 480))
+
+duplicate = observe([FakeDetection(at_cm(*centre)), FakeDetection(at_cm(*centre))],
+                    MAP, SIZE)
 check("two detections in one cell are one occupied cell",
-      duplicate.cells == ((1, 1),))
+      duplicate.cells == ((3, 2),))
+
+# The measured regression: on 2026-09-07 one persistent object sat off the
+# board in 523 of 524 parked frames. Reading it as FOREIGN would have held the
+# machine stopped on a board that was entirely correct.
+rails = observe([FakeDetection(at_cm(*centre)), FakeDetection((-500.0, -500.0))],
+                MAP, SIZE)
+verdict = classify("vertical", {(3, 2)}, rails.cells, in_gap=rails.in_gap,
+                   detections=busy_board())
+check("REGRESSION: an off-board detection NEVER produces FOREIGN",
+      verdict.verdict == "VERIFIED", verdict.verdict)
 
 
 # --- D9, every row --------------------------------------------------------- #
@@ -111,26 +135,53 @@ verdict = classify("vertical", full, full | {(4, 2)}, detections=busy_board())
 check("D9 one unexpected -> FOREIGN", verdict.verdict == "FOREIGN")
 check("FOREIGN names the EXACT cell", verdict.cells == ((4, 2),))
 
-verdict = classify("vertical", full, full, off_lattice=1, detections=busy_board())
+verdict = classify("vertical", full, full, in_gap=1, detections=busy_board())
 check("D9 a detection in a GAP -> FOREIGN", verdict.verdict == "FOREIGN",
       "a block on the board and not on a site")
 
+# P1, decided with the user: a ONE-SIDED change of any size is named, not
+# dismissed. Identity is only needed when there is something to pair with, and
+# a clean disappearance with nothing gained offers nothing to pair with.
 verdict = classify("vertical", full, full - {(2, 2), (3, 2)},
                    detections=busy_board())
-check("D9 two missing -> DISAGREES", verdict.verdict == "DISAGREES")
-check("DISAGREES names every differing cell",
+check("P1 two missing, nothing gained -> REMOVED, not DISAGREES",
+      verdict.verdict == "REMOVED", verdict.verdict)
+check("REMOVED names ALL the missing cells",
       verdict.cells == ((2, 2), (3, 2)), str(verdict.cells))
+
+verdict = classify("vertical", full, full - {(1, 1), (2, 2), (3, 2)},
+                   detections=busy_board())
+check("P1 three missing is still REMOVED — there is no ambiguity to protect",
+      verdict.verdict == "REMOVED" and verdict.cells == ((1, 1), (2, 2), (3, 2)),
+      str(verdict.cells))
+check("P1 many missing is amber and PAUSES, it does not stop the program",
+      verdict.severity == "amber", verdict.severity)
 
 verdict = classify("vertical", full, full | {(4, 1), (4, 2)},
                    detections=busy_board())
-check("D9 two unexpected -> DISAGREES", verdict.verdict == "DISAGREES")
+check("P1 two unexpected, nothing missing -> FOREIGN, not DISAGREES",
+      verdict.verdict == "FOREIGN", verdict.verdict)
+check("FOREIGN names ALL the unexpected cells",
+      verdict.cells == ((4, 1), (4, 2)), str(verdict.cells))
+check("P1 many unexpected is still red — the plan cannot account for them",
+      verdict.severity == "red", verdict.severity)
 
 verdict = classify("vertical", full, (full - {(1, 1), (2, 1)}) | {(4, 1), (4, 2)},
                    detections=busy_board())
-check("D9 both sides differ by two -> DISAGREES", verdict.verdict == "DISAGREES")
+check("P1 DISAGREES is reserved for BOTH sides changing",
+      verdict.verdict == "DISAGREES", verdict.verdict)
+check("DISAGREES names every differing cell, from both sides",
+      verdict.cells == ((1, 1), (2, 1), (4, 1), (4, 2)), str(verdict.cells))
 check("DISAGREES carries BOTH sets for the banner",
       verdict.expected == tuple(sorted(full))
       and (4, 2) in verdict.observed)
+
+# The systemic case P1 was tested against: a camera bump shifts EVERYTHING, so
+# it presents as missing AND unexpected and still lands on DISAGREES.
+verdict = classify("vertical", full, {(2, 1), (3, 1), (4, 1), (2, 2), (3, 2), (4, 2)},
+                   detections=busy_board())
+check("P1 a shifted board still reaches DISAGREES, not REMOVED",
+      verdict.verdict == "DISAGREES", verdict.verdict)
 
 check("amber and red are disjoint and complete",
       set(AMBER_VERDICTS) & set(RED_VERDICTS) == set()
@@ -173,9 +224,9 @@ verdict = classify("vertical", sparse, sparse | {(4, 4)},
                    detections=MIN_LATTICE_BLOCKS - 1)
 check("D10 no FOREIGN below MIN_LATTICE_BLOCKS",
       verdict.verdict == "VERIFIED", verdict.verdict)
-verdict = classify("vertical", sparse, sparse, off_lattice=3,
+verdict = classify("vertical", sparse, sparse, in_gap=3,
                    detections=MIN_LATTICE_BLOCKS - 1)
-check("D10 an off-lattice detection is junk on a sparse board",
+check("D10 a gap detection is junk on a sparse board",
       verdict.verdict == "VERIFIED", verdict.verdict)
 verdict = classify("vertical", sparse, set(), detections=MIN_LATTICE_BLOCKS - 1)
 check("D10 REMOVED still fires on a sparse board",
@@ -192,7 +243,7 @@ check("MIN_LATTICE_BLOCKS is block_outline's own 6", MIN_LATTICE_BLOCKS == 6)
 # --- D5: each interlock independently suppresses a verdict ----------------- #
 
 ledger = ledger_with("vertical", [(1, 1, 0), (2, 1, 0)])
-observation = Observation(cells=((1, 1), (2, 1)), off_lattice=0, detections=8)
+observation = Observation(cells=((1, 1), (2, 1)), detections=8)
 
 for name, locks, want_state in (
         ("uncalibrated", Interlocks(parked=True, calibrated=False, quiet=True), "NO_MAP"),
@@ -254,7 +305,7 @@ check("D7 a tripped interlock RESETS the counters rather than decaying them",
       "two frames of evidence + a trip must not leave one frame short")
 
 sup = supervisor(settle_n=2, settle_m=3)
-dropout = Observation(cells=((1, 1),), off_lattice=0, detections=8)
+dropout = Observation(cells=((1, 1),), detections=8)
 sup.step(mode="vertical", ledger=ledger, observation=observation,
          interlocks=open_gates)
 sup.step(mode="vertical", ledger=ledger, observation=dropout,
@@ -288,12 +339,53 @@ check("D13 a mode change resets the hysteresis",
       state == "WARMING" and verdict is None, f"{state}")
 
 sup = supervisor(settle_n=1, settle_m=1)
-horizontal = Observation(cells=((1, 1), (2, 7)), off_lattice=0, detections=8)
+horizontal = Observation(cells=((1, 1), (2, 7)), detections=8)
 state, _, verdict = sup.step(mode="horizontal", ledger=both,
                              observation=horizontal, interlocks=open_gates)
 check("D13 horizontal is judged against horizontal's lattice alone",
       verdict.verdict == "VERIFIED" and verdict.expected == ((1, 1), (2, 7)),
       str(verdict.expected))
+
+
+# --- P2: the MIN_LATTICE_BLOCKS crossing resets too (F8) ------------------- #
+#
+# The threshold is a cliff, not a slope, and it counts DETECTIONS, not blocks.
+# Above it the lattice filter runs and rectifies; below it nothing is rejected.
+# Evidence gathered under one filtering regime must not judge under the other —
+# D13's argument, applied to the other boundary the observed set has.
+
+busy = Observation(cells=((1, 1), (2, 1)), detections=MIN_LATTICE_BLOCKS)
+thin = Observation(cells=((1, 1), (2, 1)), detections=MIN_LATTICE_BLOCKS - 1)
+
+sup = supervisor(settle_n=2, settle_m=3)
+sup.step(mode="vertical", ledger=ledger, observation=busy, interlocks=open_gates)
+state, _, verdict = sup.step(mode="vertical", ledger=ledger, observation=thin,
+                             interlocks=open_gates)
+check("P2 dropping below MIN_LATTICE_BLOCKS resets the hysteresis",
+      state == "WARMING" and verdict is None, f"{state}")
+
+sup = supervisor(settle_n=2, settle_m=3)
+sup.step(mode="vertical", ledger=ledger, observation=thin, interlocks=open_gates)
+state, _, verdict = sup.step(mode="vertical", ledger=ledger, observation=busy,
+                             interlocks=open_gates)
+check("P2 crossing back UP resets it as well — both directions",
+      state == "WARMING" and verdict is None, f"{state}")
+
+sup = supervisor(settle_n=2, settle_m=3)
+for _ in range(2):
+    state, _, verdict = sup.step(mode="vertical", ledger=ledger, observation=busy,
+                                 interlocks=open_gates)
+check("P2 a STEADY detection count still settles — it is a crossing, not a gate",
+      state == "VERDICT" and verdict.verdict == "VERIFIED", f"{state}")
+
+sup = supervisor(settle_n=2, settle_m=3)
+for detections in (MIN_LATTICE_BLOCKS + 4, MIN_LATTICE_BLOCKS + 1):
+    state, _, verdict = sup.step(
+        mode="vertical", ledger=ledger,
+        observation=Observation(cells=((1, 1), (2, 1)), detections=detections),
+        interlocks=open_gates)
+check("P2 a count that moves WITHOUT crossing does not reset",
+      state == "VERDICT" and verdict.verdict == "VERIFIED", f"{state}")
 
 
 # --- a verdict never locks ------------------------------------------------- #
@@ -306,24 +398,33 @@ check("no verdict name is LOCKED",
 
 for bad in ({"quiet_diff_fraction": None, "settle_n": 3, "settle_m": 5},
             {"quiet_diff_fraction": 0.02, "settle_n": None, "settle_m": 5},
-            {"quiet_diff_fraction": 0.02, "settle_n": 3, "settle_m": None}):
+            {"quiet_diff_fraction": 0.02, "settle_n": 3, "settle_m": None},
+            {"quiet_diff_fraction": 0.0, "settle_n": 3, "settle_m": 5}):
     try:
         Supervisor(**bad)
-        check(f"an unmeasured {[k for k, v in bad.items() if v is None][0]} is refused", False)
+        check(f"a bad {[k for k, v in bad.items() if not v][0]} is refused", False)
     except ValueError:
-        check(f"an unmeasured {[k for k, v in bad.items() if v is None][0]} is refused", True)
+        check(f"a bad {[k for k, v in bad.items() if not v][0]} is refused", True)
 try:
     Supervisor(quiet_diff_fraction=0.02, settle_n=5, settle_m=3)
     check("settle_n > settle_m is refused", False)
 except ValueError:
     check("settle_n > settle_m is refused", True)
 
+# Gate 0 ran on the rig on 2026-09-07. These are its numbers; the reasoning and
+# the measured percentages are in the module's own comment.
 import rig.supervisor as supervisor_module  # noqa: E402
-check("the module constants are still UNMEASURED",
-      supervisor_module.QUIET_DIFF_FRACTION is None
-      and supervisor_module.SETTLE_N is None
-      and supervisor_module.SETTLE_M is None,
-      "Gate 0 fills these in; nothing may ship a guess")
+check("Gate 0's measured constants are in place",
+      supervisor_module.QUIET_DIFF_FRACTION == 0.01
+      and supervisor_module.SETTLE_N == 3
+      and supervisor_module.SETTLE_M == 5,
+      "parked p99 0.000573 / hand p50 0.070745")
+check("the defaults are the measured constants",
+      Supervisor().quiet_diff_fraction == 0.01)
+check("the quiet threshold clears the worst parked maximum seen (0.003855)",
+      supervisor_module.QUIET_DIFF_FRACTION > 0.003855)
+check("and stays well under the median hand disturbance (0.070745)",
+      supervisor_module.QUIET_DIFF_FRACTION < 0.070745 / 5)
 
 
 print(f"\n{len(PASSED)} passed, {len(FAILED)} failed")

@@ -388,6 +388,7 @@ on" — the first ticked box in M3a makes that sentence wrong, and a living doc
 that still says it is worse than no doc.
 
 Plans: [placement-supervision.md](features/placement-supervision.md) ·
+**[the build record + Gate 0 measurements](features/placement-supervision-progress.md)** ·
 [stage-15-placement-correction.md](features/stage-15-placement-correction.md) ·
 [camera-parallax-and-levels.md](features/camera-parallax-and-levels.md)
 
@@ -396,16 +397,25 @@ Plans: [placement-supervision.md](features/placement-supervision.md) ·
 - [x] **Throwaway measurement script**, rig parked, ~60 s. Log per frame: the
       channel-max frame-difference energy fraction, the detection count, and
       what `WorkspaceMap.cell_at` assigns each detection to.
-      → `python/tools/measure_quiet_window.py`. Its analysis half is verified
-      on synthetic rows; **the camera half is unrun** — there is no camera on
-      the dev desktop, so this has to be run on the Pi.
-- [ ] **Answer three questions from it:** does the quiet window ever open, and
-      how often? Is detection stable frame to frame? Do cells assign
-      consistently? → sets `QUIET_DIFF_FRACTION`, `SETTLE_N`, `SETTLE_M` from
-      measurement instead of guesswork.
-- [ ] **If the quiet window never opens, stop and re-plan.** Supervision would
-      sit at `BUSY` forever and silently do nothing. This is the single biggest
-      risk and it costs half a day to retire.
+      → `python/tools/measure_quiet_window.py`. **Run on the rig 2026-09-07.**
+- [x] **Answer three questions from it.** All three answered on the rig:
+      - *Does the quiet window open?* **Yes, decisively.** Parked p99
+        `0.000573`, worst max `0.003855`; a hand over the board reads p50
+        `0.070745` — **105× the parked median**. The still floor and the
+        disturbed ceiling are more than an order of magnitude apart, so the
+        threshold sits in a wide empty band, not on a judgement call.
+      - *Is detection stable?* **Yes, once blocks are RIG-PLACED.** All five
+        cells at 99.4–99.8% recall. An earlier hand-scattered board read 65%,
+        which was an artifact of running below `MIN_LATTICE_BLOCKS` where the
+        lattice filter cannot engage — not a property of the detector.
+      - *Do cells assign consistently?* **Yes.** 171/171 quiet frames matched
+        the expected cell set exactly; 3-of-5 windows read every cell occupied
+        100.00% of the time.
+      → `QUIET_DIFF_FRACTION = 0.01`, `SETTLE_N = 3`, `SETTLE_M = 5`
+      (0.58 s at the measured 8.6 Hz — the pipeline delivers 8.6–8.7, not 10).
+- [x] **The quiet window opens during a program too**, not only between jobs:
+      42–47% of frames quiet, ~9 runs of ≥5 consecutive quiet frames per
+      minute. Supervision is not restricted to between-job checks.
 
 ### M1 — the memory *(no camera involvement at all)*
 
@@ -420,12 +430,15 @@ Plans: [placement-supervision.md](features/placement-supervision.md) ·
 
 ### M2 — the observer *(report only, no verdicts)*
 
-- [x] `python/rig/supervisor.py` — **the three Gate 0 constants are still
-      `None` and `Supervisor` refuses to construct without explicit values**,
-      so nothing can start on a guessed threshold
+- [x] `python/rig/supervisor.py` — carrying Gate 0's **measured** constants
 - [x] Interlocks: gantry parked · **`frame.calibrated`** · scene quiet · settled N-of-M
 - [x] **pixel → cell via `WorkspaceMap.cell_at`** — real work, not an inherited
       input (§5b); `None` in a gap is *signal*
+- [x] **`cell_at → None` is split three ways** — `gap` (on the board, off every
+      site: real FOREIGN) vs `margin` / `outside` (rails and offcuts: ignored).
+      Measured necessity: one persistent off-board object sat in **523 of 524**
+      parked frames, and the merged reading would have held the machine at
+      FOREIGN in **99.8%** of windows on a board that was entirely correct
 - [ ] Frame difference **on the executor**, not the event loop — blocked on
       Gate 0: the supervisor is deliberately NOT wired into `web/app.py` yet
 - [x] Per-cell hysteresis; counters **reset**, not decay, on a tripped interlock

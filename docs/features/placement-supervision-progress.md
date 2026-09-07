@@ -1,0 +1,632 @@
+# Placement supervision — the build record
+
+**Companion to [placement-supervision.md](placement-supervision.md), which is the
+design.** That document says what should be built and why. This one says what
+*was* built, what the rig actually measured, which of the design's assumptions
+survived contact with it, and what is still open.
+
+Read this before continuing the implementation. Several of the design's numbers
+were placeholders and are now measured; two of its decisions were found to be
+wrong or under-specified; and one defect in the first implementation would have
+stopped the machine permanently on a correct board.
+
+**Status at time of writing: Gate 0 PASSED. M1 complete. M2 logic complete and
+unwired. M3a / M3b not started.**
+
+---
+
+## 0. Timeline of what happened
+
+| Stage | Outcome |
+| --- | --- |
+| Gate 0 script written | `python/tools/measure_quiet_window.py`, analysis half verified on synthetic rows |
+| M1 built in parallel | ledger + hook + log + 42 tests, all passing |
+| M2 logic built (ungated) | classifier, pixel→cell, hysteresis, ceiling, D10 — 55 tests |
+| **Gate 0 run 1 on the rig** | Board hand-scattered. Q1 passed; Q2/Q3 apparently failed |
+| Cause diagnosed | The board state was invalid, not the detector — see F4 |
+| **Gate 0 run 2 on the rig** | Board rig-placed. Q1/Q2/Q3 all pass decisively |
+| Defect found in M2 | `cell_at → None` conflation. Would emit FOREIGN in 99.8% of windows |
+| Defect fixed + verified | Replayed the rig CSVs through the real `Supervisor` |
+| Constants set from measurement | `0.01 / 3 / 5` |
+| M2 tests extended | 63 checks, all passing |
+
+---
+
+## 1. GATE 0 — the measurement record
+
+**This section is the evidence base for every constant in `rig/supervisor.py`.
+Do not change those constants without re-running the script and updating this
+section in the same commit.**
+
+### 1.1 Method
+
+`python/tools/measure_quiet_window.py`, run on the Pi with the rig parked.
+It opens the camera through `ConsolePipeline` exactly as the console does —
+same `camera_settings.json`, same colour correction, same lens map, same 10 Hz
+`AnalysisWorker` — so the numbers describe the frames supervision will actually
+see. It adds no detector and takes no extra frames.
+
+Per frame it logs the channel-max frame-difference energy fraction (the
+`_difference_sightings` pattern, `DIFF_MIN_THRESHOLD = 18` as the per-pixel
+level), the detection count, and what `WorkspaceMap.cell_at` assigns each
+detection to.
+
+**The pipeline delivers 8.6–8.7 Hz, not the nominal 10.** Every duration below
+is computed at the measured rate.
+
+### 1.2 The runs
+
+Four runs across two sessions on 2026-09-07. Session 1 (`09:06`) used a
+**hand-scattered** board and is retained here only because its failure is
+instructive. Session 2 (`09:26`/`09:33`) used **five rig-placed blocks** at
+cells `(0,2) (2,0) (2,1) (3,2) (4,4)` — this is the valid measurement.
+
+| Run | Board | Frames | Duration | Rate |
+| --- | --- | --- | --- | --- |
+| parked (s1) | hand-scattered | 523 | 60.0 s | 8.7 Hz |
+| hand (s1) | hand-scattered | 175 | 20.0 s | 8.8 Hz |
+| program (s1) | near-empty, program running | 528 | 59.9 s | 8.8 Hz |
+| **parked (s2)** | **5 rig-placed** | **524** | **60.0 s** | **8.7 Hz** |
+| **hand (s2)** | **5 rig-placed** | **174** | **19.9 s** | **8.7 Hz** |
+| **split (s2)** | **5 rig-placed** | **172** | **20.0 s** | **8.6 Hz** |
+
+`calibrated = True` on every frame of every run. Zero stale frames throughout.
+
+### 1.3 Q1 — does the quiet window ever open?  **YES, decisively**
+
+Frame-difference energy fraction:
+
+| percentile | parked (s2) | hand (s2) | program |
+| --- | --- | --- | --- |
+| p50 | 0.000000 | **0.070745** | 0.013617 |
+| p90 | 0.000031 | 0.105991 | 0.051109 |
+| p95 | 0.000089 | 0.114368 | 0.057187 |
+| p99 | **0.000573** | 0.129459 | 0.063120 |
+| max | **0.003855** | 0.137254 | 0.089039 |
+
+> **A hand over the board reads 105× the parked median.** The still floor and
+> the disturbed ceiling are separated by more than an order of magnitude, so the
+> threshold sits in a wide empty band rather than on a judgement call.
+
+This is the single most important result in the project's camera work. It
+retires the risk that supervision would sit at `BUSY` forever and silently do
+nothing.
+
+### 1.4 Threshold selection
+
+| `QUIET_DIFF_FRACTION` | parked quiet | hand quiet | program quiet | program runs ≥5 |
+| --- | --- | --- | --- | --- |
+| 0.001 | 99.0% | 4.6% | 37.5% | 9 |
+| 0.002 | 99.2% | 5.2% | 39.8% | 8 |
+| 0.004 | 99.8% | 6.3% | 41.5% | 9 |
+| 0.005 | 99.8% | 6.3% | 42.6% | 9 |
+| 0.008 | 99.8% | 8.0% | 45.1% | 9 |
+| **0.010** | **99.8%** | **8.6%** | **47.3%** | **9** |
+| 0.020 | 99.8% | 16.1% | 58.9% | 11 |
+| 0.050 | 99.8% | 33.9% | 88.1% | 11 |
+
+**Chosen: `QUIET_DIFF_FRACTION = 0.01`.**
+
+Reasoning, in order:
+
+1. It is **4× above the worst parked maximum observed** (`0.003855`), so a
+   slightly different lighting day does not push the still board over it.
+   `0.005` was the first candidate and was rejected for exactly this: it sits
+   only 1.3× above that maximum, which is not headroom.
+2. It is **7× below the median hand disturbance**, so a person reaching into
+   the workspace is never mistaken for stillness.
+3. Above `0.02` the hand-quiet fraction climbs sharply (16.1%, then 33.9%),
+   which is the threshold starting to admit real motion.
+
+The design's placeholder was `0.02`. It works, but sits only 1.5× under the
+hand p25 and is the looser of the two.
+
+**The ~6–9% of "quiet" frames in the hand run are not leakage** — they are the
+genuinely still moments between waves. Correct behaviour.
+
+### 1.5 Q2 — is detection stable frame to frame?  **YES, when rig-placed**
+
+Parked (s2), five rig-placed blocks, 524 frames:
+
+| cell | frames seen | recall |
+| --- | --- | --- |
+| (0,2) | 523 | 99.8% |
+| (2,1) | 523 | 99.8% |
+| (3,2) | 523 | 99.8% |
+| (4,4) | 523 | 99.8% |
+| (2,0) | 510 | **97.3%** |
+
+Split run (s2), 172 frames: all five cells at **99.4%**, and **171 of 171 quiet
+frames matched the expected cell set exactly**. (The single miss in each run is
+frame 1, before the analysis worker has produced anything.)
+
+Detections were `6` in 522 of 524 parked frames — stable, no flapping.
+
+### 1.6 Hysteresis, simulated against the real trace
+
+N-of-M evaluated over the actual parked (s2) frame sequence, per cell:
+
+| | worst cell reads occupied | spurious `REMOVED` |
+| --- | --- | --- |
+| 2 of 3 | 97.70% | 2.30% |
+| **3 of 5** | **98.65%** | **1.35%** |
+| 4 of 6 | 98.07% | 1.93% |
+
+**Chosen: `SETTLE_N = 3`, `SETTLE_M = 5`** — 0.58 s at the measured 8.6 Hz.
+
+This is a measured optimum, not a default: **both neighbours are worse.** The
+design's placeholder happened to be right, which is worth stating explicitly so
+nobody later "improves" it to 4-of-6.
+
+On the cleaner split run, 3-of-5 read every cell occupied **100.00%** of the
+time.
+
+> **Residual, stated honestly:** 1.35% is not zero. At ~9 windows/minute that is
+> roughly one false pause every 8 minutes, so a 40-block build should expect
+> ~3 spurious `REMOVED` verdicts. D12's dismissal covers it. It is not free and
+> the operator should be told to expect it.
+
+### 1.7 Q3 — do cells assign consistently?  **YES**
+
+- 171/171 quiet frames matched the expected cell set exactly (split run)
+- Zero frames ever reported an **extra** cell; the detector under-reports and
+  never over-reports
+- In the invalid session-1 run, even there, when the block *was* detected it
+  mapped to `(3,2)` **99.0%** of the time — cell assignment was never the
+  problem, detection was
+
+### 1.8 Timing during a running program
+
+At `0.01`: **47.3% of frames quiet, 9 runs of ≥5 consecutive quiet frames per
+60 s.**
+
+> **The quiet window opens roughly every 6–7 seconds during a running program**,
+> not merely between whole jobs. Supervision is not restricted to a
+> between-jobs activity, and `SETTLE_N = 3` is comfortably achievable mid-run.
+
+This answers M2's own gate question, which the parked runs could not.
+
+### 1.9 End-to-end replay through the real classifier
+
+The rig CSVs were replayed frame by frame through the actual `Supervisor`,
+with a ledger primed with the five placed cells:
+
+| run | verdict distribution |
+| --- | --- |
+| split (clean, 5 detections) | **98.3% VERIFIED**, 1.2% WARMING, 0.6% BUSY, **zero false verdicts** |
+| parked (6 detections, one off-board object) | **98.1% VERIFIED**, 1.3% REMOVED, 0.4% WARMING, 0.2% BUSY |
+| parked, with the pre-fix merged behaviour | **99.8% FOREIGN** |
+
+The 1.3% `REMOVED` matches the 1.35% predicted from `(2,0)`'s recall — the
+model and the rig agree.
+
+---
+
+## 2. FINDINGS
+
+### F1 — The quiet-window interlock works, with an enormous margin
+
+§1.3. Not marginal, not tuned into working. 105× separation.
+
+### F2 — The pipeline runs at 8.6–8.7 Hz, not 10
+
+`analysis_hz` is configured at 10.0 but the delivered rate is consistently
+8.6–8.7. Every settle duration must be computed at the measured rate:
+`SETTLE_M = 5` is **0.58 s**, not 0.5 s. Not investigated further; it does not
+affect any decision here, but a UI that displays a settle countdown must not
+assume 10.
+
+### F3 — `_lattice_filter` is not a board-membership test
+
+This is the finding that drove the defect fix, and it contradicts an
+assumption implicit throughout the earlier design work.
+
+The filter recovers a lattice **from the detections themselves** and rejects
+anything more than `LATTICE_SNAP` (0.34 cells) from an integer site. That
+lattice is **infinite** — indices are real numbers extrapolated from
+`detections[0]`. An object well off the board can still land within 0.34 of an
+integer index and survive.
+
+Evidence: in the parked (s2) run, one off-lattice object persisted in **523 of
+524 frames** *with the filter engaged* (6 detections ≥ `MIN_LATTICE_BLOCKS`).
+It was not rejected.
+
+> **`_lattice_filter` asks "is this on the lattice", never "is this on the
+> board."** Only the calibrated `WorkspaceMap` can answer the second question,
+> and supervision must ask it itself.
+
+### F4 — A hand-scattered board measures the detector at its worst
+
+Session 1 appeared to show catastrophic detection: 16.1% of detections landing
+on a cell, only one cell ever occupied, and **64.8% recall** on the one block
+that mapped.
+
+None of that was a property of the detector. With blocks scattered by hand:
+
+- most blocks sit in the **gaps** between lattice sites, so `cell_at` correctly
+  returns `None` for them — they are not on build sites
+- detections hovered at 5–6, **flapping across `MIN_LATTICE_BLOCKS` 188 times
+  in 522 frames**, so the lattice filter switched on and off frame to frame
+- with the filter off there is no rectification, and no shared size or bearing
+
+The correlation is decisive:
+
+| detections | (3,2) present |
+| --- | --- |
+| 5 (filter OFF) | 43.4% |
+| 6 (filter ON) | **99.0%** |
+
+Rig-placed, the same measurement gave 97.3–99.8%.
+
+> **Any future camera measurement must use rig-placed blocks.** A hand-scattered
+> board is not a weaker version of the real thing; it is a different regime in
+> which the filter cannot function.
+
+### F5 — DEFECT (fixed): `cell_at → None` conflates three different facts
+
+The first `supervisor.py` counted every `cell_at → None` as one `off_lattice`
+number and `classify()` read any of it as `FOREIGN`. Its own docstring defended
+this, claiming the split "would need the envelope quad".
+
+**Measured consequence: `FOREIGN` in 99.8% of windows on a completely correct
+board.** The machine would have stopped permanently.
+
+The split is available from the existing API — `normalized_at()` returns
+`(u,v)`. `rig.supervisor.locate()` now mirrors `cell_at`'s own branches:
+
+| placement | meaning | supervision |
+| --- | --- | --- |
+| `cell` | on a real build site | occupancy |
+| `gap` | **inside the envelope AND the grid allocation, between block footprints** | real `FOREIGN` — a block on the board, on no site |
+| `margin` | inside the quad, outside the grid's cm allocation | **ignored** |
+| `outside` | outside the envelope quad — frame-edge rails, offcuts beside the holder | **ignored** |
+
+Only `gap` is evidence. `Observation` now carries `in_gap` and `off_board`
+separately; `classify()` takes `in_gap` and never sees `off_board`.
+
+A regression test asserts an off-board detection never produces `FOREIGN`.
+
+**Note on vertical:** the grid allocation spans −1.10…23.90 cm against a 22.8 cm
+envelope — it is *wider* than the frame because of the half-block overhang — so
+`margin` is unreachable in vertical mode. Everything is `gap` or `outside`.
+That is correct, not a hole in the instrumentation.
+
+### F6 — The off-board object proved removable, and vanished mid-investigation
+
+The persistent object present in 523/524 parked frames was **absent from all
+172 frames** of the split run taken seven minutes later, with the same five
+blocks in the same five cells.
+
+**It was therefore never classified as `gap` vs `outside`.** The instrument
+built to answer that question ran after the object had gone.
+
+This is recorded as an open loop rather than papered over. It does not block
+progress: because the object proved removable it is not permanent furniture, and
+the split behaves correctly either way — if it returns in a gap, `FOREIGN` is
+the right call and the operator clears it; if outside, it is ignored.
+
+### F7 — The filter's 30% self-disable is weakest exactly when the board is most wrong
+
+```python
+if len(kept) < 0.7 * len(detections):
+    return list(detections), [], None
+```
+
+If a recovered lattice would reject more than 30% of what it saw, the filter
+concludes it has not found the board's lattice and keeps everything.
+
+That is right for a *drawing* layer. But it means that when several blocks
+genuinely move — the `DISAGREES` case — junk rejection **degrades at the exact
+moment a clean observed set matters most.** Nothing in the design covers this.
+See P4.
+
+### F8 — The `MIN_LATTICE_BLOCKS` boundary is a cliff, and detection counts cross it
+
+The threshold is binary at 6, and it counts **detections, not blocks** — so junk
+counts toward reaching it. In the parked (s2) run, 5 blocks + 1 off-board object
+= 6 detections: *the offcut is what pushed the filter over its own threshold.*
+
+Rig-placed the count was stable (6 in 522/524). Hand-scattered it flapped 188
+times, meaning the *character* of the observed set changed between consecutive
+frames that hysteresis treats as comparable evidence. See P2.
+
+### F9 — D10's stated rationale is wrong; its conclusion is right
+
+The design justifies suppressing `FOREIGN` below 6 detections on the grounds
+that *"the observed set is unfiltered"*. Per F3 and F5, the lattice filter was
+never supervision's defence against junk — `locate()` is, and it works at any
+detection count.
+
+The **real** reason to keep D10: AGENTS.md names *"the holder's two small
+offcuts beside `[0,0]`"*. Beside `[0,0]` means **on the board** — inside the
+envelope — so `locate()` will class them as `gap`, and D9 makes a gap detection
+`FOREIGN`. Which is *strictly correct* and *operationally intolerable*: a red
+stop-the-program verdict because two offcuts are sitting where they always sit.
+
+D10 is not buying filtering. It is buying **restraint about the loudest verdict
+during the phase of every program when the board is emptiest and the
+junk-to-block ratio is worst.** Same fail-open instinct as `block_outline`,
+pointed the other way: one refuses to hide a block, the other refuses to raise
+an alarm.
+
+See P3 — the code comment currently states the wrong reason, and a rule
+documented with a reason that does not hold is a rule someone later deletes.
+
+### F10 — `test_grid.py` is failing on an unrelated firmware change
+
+```
+FAIL  rig sketch phase 5 uses zGoPickup(), not zGoGround()
+```
+
+`test_grid.py` passed 234/0 at the start of this work and now reports 233/1.
+The cause is user commits `7983d32` and `26f5ad3`, which changed the firmware:
+the sketch now reads *"DISABLED — build phase 5 now goes back to a GROUND seek…
+nothing calls `zGoPickup()` any more"*, and `GRID_BLOCKED_COUNT` was cleared
+for a variant with no feeder belt.
+
+This is exactly the paired-value drift `test_grid.py` exists to catch. It makes
+**AGENTS.md stale in two places**: the "one documented exception" section
+explaining `Z_PICKUP_DROP_FROM_TOP_CM`, and §3b-bis's shipped `blocked_cells`
+list.
+
+**Not touched by this work** — `arduino/` is out of scope — but recorded because
+it is failing now, and because it matters here: if the belt is gone, the cells
+around `[0,0]` are buildable again, which changes what supervision expects.
+
+### F11 — One pytest failure is flaky, not a regression
+
+`web_state_test.py::test_events_send_initial_update_and_heartbeat` fails
+intermittently. Verified by stashing all work and running it four times on a
+clean tree: it failed once there too. A heartbeat timing test.
+
+---
+
+## 3. THE USER'S QUESTIONS — asked, answered, resolved
+
+Recorded because several of them changed the design.
+
+### Q1 — "What's left? Is all the other stuff dependent on Gate 0?"
+
+**Answer.** No. Gate 0 gates two separable things: the **three constants**
+(which only `supervisor.py` reads) and the **go/no-go bit** (which gates the
+feature existing at all). Roughly three-quarters of the remaining code — the
+classifier, pixel→cell, hysteresis, the ceiling, D10, the state model, the
+route, all four UI surfaces — depends on neither and is testable from synthetic
+cell sets with no camera.
+
+**Resolution.** Built the ungated logic while the measurement was pending, with
+the constants left as `None` and `Supervisor` refusing to construct without
+explicit values, so nothing could ship a guessed threshold.
+
+### Q2 — "Do you need the CSV or final output only?"
+
+**Answer.** CSVs. The summary's buckets are six guessed candidate thresholds;
+the per-frame table allows picking the threshold off the real distribution.
+
+**Resolution.** Vindicated — `0.01` was chosen from the distribution and is not
+one of the values the summary would have recommended.
+
+### Q3 — "I placed the blocks by hand — is that the issue in detection failure?"
+
+**Answer.** Partly, and the two halves separate cleanly. Hand-placing explains
+the off-lattice flood (blocks in gaps are correctly `None`) and the "only one
+cell" result. It does **not** explain the 65% recall — whether a block sits on a
+site has no bearing on whether it is *visible*.
+
+The real cause of the recall figure was the detection count flapping across
+`MIN_LATTICE_BLOCKS`, so the filter and its rectification were intermittently
+absent. See F4.
+
+**Resolution.** Re-ran rig-placed → 97.3–99.8% recall. Q2 passes.
+
+**Correction issued:** an earlier report of "cell assignment failing" was wrong.
+When the block was detected it mapped correctly 99.0% of the time. Assignment
+was never the problem.
+
+### Q4 — "Why is the threshold 6 blocks? What happens before and after it?"
+
+**Answer.** `_lattice_vectors` recovers the lattice from the blocks' own
+pairwise neighbours — there is no external reference — and hard-raises below 4
+sightings. Three or four points always define *some* lattice that fits them
+perfectly, so "off the lattice" would mean nothing.
+
+- **Below 6:** `return list(detections), [], None` — everything kept, nothing
+  rejected, no shared bearing, no rectification.
+- **At 6+:** lattice recovered, every detection indexed relative to
+  `detections[0]`, anything >0.34 cells off an integer site rejected — then the
+  30% self-disable (F7).
+
+### Q5 — "Why did we enforce this boundary in the first place?"
+
+**Answer.** Two different boundaries had been conflated.
+
+`block_outline`'s 6 is a **fail-open safety rule for a drawing layer**: an extra
+rectangle on the video is cosmetic, a missing one is a lie, so when the evidence
+is thin it refuses to filter rather than filtering badly.
+
+Supervision's D10 inherited that number for a different purpose, and on a
+premise that does not hold. See F9.
+
+### Q6 — "The camera has a grid. If I place a block there, it's just there — whether it's 1 or 6 blocks?"
+
+**The most important question asked, and the answer reframed the feature.**
+
+**Yes — for the block you placed, the count is irrelevant.** Confirmed by the
+user's own data: the split run was *below* the threshold with the filter off for
+all 172 frames, and was flawless.
+
+The distinction the earlier explanations had buried:
+
+> **`cell_at` answers *where*. Nothing in the vision stack answers *what*.**
+> The detector segments warm, block-shaped things. An offcut is warm and
+> block-shaped. Hand `cell_at` the centre of a shadow and it returns a cell.
+
+Which splits supervision's questions in two:
+
+| question | needs | works with 1 block? |
+| --- | --- | --- |
+| Is something at a cell **the ledger named**? | the map alone | **yes** |
+| Is an object **nothing named** a block? | consistency with a population | **no** |
+
+`VERIFIED` and `REMOVED` are about ledger-named cells and work at any count.
+`FOREIGN` and `DISAGREES` are about unnamed objects, and identifying an unnamed
+object requires other objects to be consistent with — which is what needs 6.
+
+D10 does not mean "we cannot see your blocks below 6". It means **"below 6 we
+will not accuse an unidentified object of being a foreign block, because we
+would be guessing and the penalty is stopping your program."**
+
+### Q7 — "What is DISAGREES?"
+
+**Answer.** The classifier declining to guess. With one difference there is an
+obvious story (`REMOVED`, or `MOVED` when counts match). With two or more, the
+blocks are identical and carry no identity, so any pairing is a guess.
+
+It is also **rarer than it sounds**: at 8.6 Hz with a 0.58 s settle, changes
+arrive one at a time and decompose into clean single-cell events. `DISAGREES`
+only fires when two changes land inside the *same* window — a person cannot lift
+two blocks that fast; a toppling tower can.
+
+Red, not amber: continuing to place into a board you no longer understand is how
+the claw hits something.
+
+### Q8 — "But we can tell what happened based on our memory and state, can't we?"
+
+**Answer: yes, more than had been credited — and this question found a real
+design error.**
+
+What memory cannot supply is **identity**. The ledger records *"a block was
+placed at [3,2]"*, not *"block #17"*. So when two cells empty and two fill in the
+same window, memory cannot say whether the new occupant is either old block or
+something new. Pairing them by proximity is exactly the data-association guess
+D1 rejected.
+
+**But pairing only matters when there is something to pair with.** If two cells
+empty and *nothing unexpected appears*, there is no ambiguity at all: memory
+says both were ours, the camera says both are gone, and no identity is required.
+That claim is fully supported, and reporting `BOARD DISAGREES` there is *less*
+informative than the truth.
+
+**Resolution: D9 is over-conservative.** See P1.
+
+---
+
+## 4. OPEN — proposed work, decisions pending
+
+### P1 — Refine D9's `DISAGREES` rows *(recommended; deviates from the approved design)*
+
+Arising from Q8.
+
+| observed | design / current code | proposed |
+| --- | --- | --- |
+| N missing, 0 unexpected | `DISAGREES` | **`REMOVED`, naming all N** (amber) |
+| 0 missing, N unexpected | `DISAGREES` | **`FOREIGN`, naming all N** (red) |
+| missing **and** unexpected, >1 either side | `DISAGREES` | `DISAGREES` — genuinely ambiguous |
+
+`DISAGREES` then means precisely *"both sides changed and I cannot pair them"* —
+the only case that actually needs identity.
+
+The counter-argument considered and rejected: *"several changes at once may mean
+something systemic, like a camera bump."* A bump shifts everything — blocks
+reappear at shifted cells or land in gaps — so it presents as missing **and**
+unexpected, or as `in_gap`. It does not present as clean disappearance with
+nothing gained.
+
+**Side benefit:** the sparse-board special case currently in `classify()` (where
+multiple missing cells report `REMOVED` because D10 bans `DISAGREES`) becomes
+the general rule, and the special case disappears.
+
+### P2 — Reset hysteresis when the detection count crosses `MIN_LATTICE_BLOCKS`
+
+Arising from F8. Same argument as D13's mode reset: evidence gathered under one
+filtering regime must not judge under another. The hand-scattered run crossed
+that boundary 188 times in 522 frames.
+
+Small change to `Supervisor.step` alongside the existing `note_mode` reset.
+
+### P3 — Correct D10's rationale in the code
+
+Arising from F9. The comment in `supervisor.py` currently blames the lattice
+filter. It should name the holder's offcuts beside `[0,0]`. A rule documented
+with a reason that does not hold is a rule someone later deletes correctly.
+
+### P4 — Record the 30% self-disable in the design's known limits
+
+Arising from F7. `placement-supervision.md` §9 lists seven known limits; this is
+an eighth and is not there.
+
+### P5 — Resolve the `test_grid.py` firmware drift *(not this feature's scope)*
+
+Arising from F10. Either the firmware change is intended and `test_grid.py` +
+AGENTS.md must follow it in the same commit, or it is unintended. Needs a human
+decision; it is a paired value and AGENTS.md forbids changing one side alone.
+
+### P6 — `test_supervisor_frames.py` against the reference boards
+
+Listed in the design's §8 test table, not yet written. Uses
+`python/captures/IMAGE_TO_TEST_BLOCK_CALIBRATION.png` — a still image, no camera
+needed. The rig CSV replay (§1.9) is arguably stronger evidence and could be
+committed as a fixture-based test instead, or as well.
+
+### P7 — The Gate 0 CSVs are untracked in the repo root
+
+`gate0_parked.csv`, `gate0_hand.csv`, `gate0_program.csv`, `gate0_split.csv`.
+They are the evidence behind every constant here. Either commit them (perhaps
+under `python/captures/` or `docs/measurements/`) or delete them once this
+document is considered the record.
+
+---
+
+## 5. What is built, and what is not
+
+### Built and passing
+
+| | |
+| --- | --- |
+| `python/tools/measure_quiet_window.py` | Gate 0 instrument. Splits `gap`/`margin`/`outside`, logs `(u,v)` |
+| `python/rig/placement_ledger.py` | D2/D3/D4/D13 + Stage 15's two predicates. Pure data |
+| `python/rig/build_log.py` | third `PlacementLog` sink → `logs/placements.log` |
+| `python/rig/build_controller.py` | one call on the `PLACED` branch, behind `ledger=None` |
+| `python/rig/supervisor.py` | `locate`, `observe`, `classify`, `_CellHistory`, `Interlocks`, `Supervisor` |
+| `python/tests/test_placement_ledger.py` | **42 checks** |
+| `python/tests/test_supervisor.py` | **63 checks** |
+
+Test gate at time of writing:
+
+| suite | result |
+| --- | --- |
+| `test_placement_ledger.py` | 42 passed, 0 failed |
+| `test_supervisor.py` | 63 passed, 0 failed |
+| `test_grid.py` | 233 passed, **1 failed** — F10, firmware drift, not this work |
+| `npx vitest run` | 40 files, 530 tests, all passed |
+| `pytest tests/` | 65 passed, 3 failed — 2 documented pre-existing (`mock_camera_test.py`), 1 flaky (F11) |
+
+### Not built
+
+- **The supervisor is not wired into `web/app.py`.** No `ConsolePipeline`
+  integration, no frame difference on the executor. `Supervisor` is
+  constructible and fully tested but nothing constructs one at runtime.
+- M3a — the per-build verdict and `vision_verification`
+- M3b — `SupervisionModel`, `POST /api/supervision/ack`, all four UI surfaces
+- `docs/CAMERA.md` §0 and §6a still say the camera "never makes an assertion the
+  system acts on". **Still true** — nothing asserts yet. It becomes false the
+  moment M3a lands and must be corrected in that same commit.
+
+---
+
+## 6. Rules for whoever continues this
+
+1. **The constants in `supervisor.py` are measured.** Changing one means
+   re-running `measure_quiet_window.py` on the rig and updating §1 here in the
+   same commit.
+2. **Any camera measurement uses rig-placed blocks.** F4. A hand-scattered board
+   is a different regime, not a weaker one.
+3. **`locate()`'s split is load-bearing.** F5. Never collapse `gap` and
+   `off_board` back into one number; there is a regression test.
+4. **`vision/` is not touched.** No detector, no extra frames.
+5. **A verdict never sets `LOCKED`.** Amber pauses, red stops. `LOCKED` means
+   the claw's position is unknown and needs a human plus a service restart.
+6. **Assert exact cell sets, never counts.** A count assertion passes on a board
+   renumbered by one cell.
+7. **The frame difference goes on the single-threaded executor**, with the other
+   OpenCV work, per AGENTS.md §7. The set maths stays on the event loop.

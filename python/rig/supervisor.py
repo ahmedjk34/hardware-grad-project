@@ -35,20 +35,26 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass, field
 
-# ── Gate 0's outputs. NOT YET MEASURED. ───────────────────────────────────── #
+# ── Gate 0's outputs. MEASURED ON THE RIG, 2026-09-07. ────────────────────── #
 #
-# These three are the quiet-window interlock, and every one of them has to come
-# off the rig via `python/tools/measure_quiet_window.py`, not out of a design
-# document. The plan's D5 carries 0.02 / 3 / 5 and says outright they are "to
-# be measured on hardware, not trusted from here".
+# Three 60/20 s runs with 5 rig-placed blocks, camera calibrated, at the
+# pipeline's measured 8.6-8.7 Hz (not the nominal 10):
 #
-# They are None on purpose and `Supervisor` REQUIRES them as arguments, so a
-# caller cannot start a supervisor on a guessed threshold by forgetting to pass
-# one. Fill these in from the measurement, and only then wire the supervisor
-# into `web/app.py`.
-QUIET_DIFF_FRACTION: float | None = None   # UNMEASURED — Gate 0
-SETTLE_N: int | None = None                # UNMEASURED — Gate 0
-SETTLE_M: int | None = None                # UNMEASURED — Gate 0
+#   parked, hands off   diff p99 0.000573, worst max across runs 0.003855
+#   hand over the board diff p50 0.070745  — 105x the parked median
+#   during a program    42-47% of frames quiet, ~9 runs of >=5 quiet frames/min
+#
+# The still floor and the disturbed ceiling are separated by more than an order
+# of magnitude, so the threshold sits in a wide empty band rather than on a
+# judgement call. 0.01 is 4x above the worst parked maximum and 7x below the
+# median hand disturbance; at it, parked reads quiet 99.8% and a hand 8.6%.
+#
+# 3-of-5 was simulated against the real parked trace and read the cell occupied
+# in 100.00% of windows on all five cells. Both neighbours are worse (2-of-3:
+# 97.70%, 4-of-6: 98.07%), so this is a measured optimum, not a default.
+QUIET_DIFF_FRACTION = 0.01
+SETTLE_N = 3
+SETTLE_M = 5
 
 #: Per-pixel level at which a channel-max difference counts as a changed pixel.
 #: `vision/block_grid.py`'s DIFF_MIN_THRESHOLD, so the quiet gate is measured
@@ -63,11 +69,25 @@ PIXEL_THRESHOLD = 18
 #: NOT_DETECTED or REMOVED for one — that would be the feature lying.
 LEVEL_CEILING = 3
 
-#: D10. `block_outline._lattice_filter` skips entirely below this many
-#: detections, so on a sparse board the observed set is UNFILTERED and the
-#: holder's offcuts beside [0,0] read as blocks. Below it, no FOREIGN and no
-#: DISAGREES — ever. Early in every program the board IS sparse, so this is the
-#: common path, not an edge case.
+#: D10, and NOT for the reason the design gives. The plan justifies this by
+#: saying the observed set is unfiltered below `block_outline._lattice_filter`'s
+#: own threshold — but that filter was never supervision's defence against junk
+#: (F3: it fits an INFINITE lattice from the detections themselves and answers
+#: "is this on the lattice", never "is this on the board"). `locate()` is the
+#: defence, and it works at any detection count.
+#:
+#: The real reason, which is the one that must survive: AGENTS.md names "the
+#: holder's two small offcuts beside [0,0]". BESIDE [0,0] means ON the board —
+#: inside the envelope — so `locate()` correctly classes them as `gap`, and D9
+#: makes a gap detection FOREIGN. Strictly correct, and operationally
+#: intolerable: a red stop-the-program verdict because two offcuts are sitting
+#: where they have always sat.
+#:
+#: So D10 buys RESTRAINT ABOUT THE LOUDEST VERDICT during the phase of every
+#: program when the board is emptiest and the junk-to-block ratio is worst. It
+#: is the same fail-open instinct as `block_outline`'s, pointed the other way:
+#: that one refuses to hide a block, this one refuses to raise an alarm.
+#: Early in every program the board IS sparse, so this is the common path.
 MIN_LATTICE_BLOCKS = 6
 
 #: The observer's own states. BUSY and QUIET and NO_MEMORY are NOT faults and
@@ -88,15 +108,29 @@ def _sorted(cells) -> tuple[Cell, ...]:
     return tuple(sorted(cells))
 
 
+#: Where one detection sits. `cell_at` returns None for THREE different facts
+#: and only one of them is evidence about the board — measured on the rig on
+#: 2026-09-07, where one persistent off-lattice object appeared in 523 of 524
+#: parked frames. A classifier reading every None as FOREIGN would have stopped
+#: the machine in 99.8% of windows on a board that was completely correct.
+PLACEMENTS = ("cell", "gap", "margin", "outside")
+
+
 @dataclass(frozen=True)
 class Observation:
     """What one accepted frame saw. M2's whole output — no verdict in here."""
 
     cells: tuple[Cell, ...]
-    #: Detections whose centre `cell_at` could not place. See :func:`observe`.
-    off_lattice: int
+    #: Detections inside the envelope AND inside the grid allocation but in one
+    #: of the deliberate gaps between block footprints. THE signal D9 wants: a
+    #: block on the board and not on a site.
+    in_gap: int = 0
+    #: Detections outside the board altogether — the frame-edge rails, the
+    #: holder's offcuts, anything beside the envelope. NOT evidence. Counted so
+    #: it can be shown, never classified.
+    off_board: int = 0
     #: Total detections in the frame, before any of this. D10 reads it.
-    detections: int
+    detections: int = 0
 
 
 @dataclass(frozen=True)
@@ -119,6 +153,44 @@ class Verdict:
         return "none"
 
 
+def locate(workspace, point, image_size):
+    """Where one detection sits: ``(cell_or_None, placement)``.
+
+    ``WorkspaceMap.cell_at`` collapses three different facts into one None, and
+    supervision must not. Mirrors its own branches rather than guessing:
+
+    1. ``normalized_at`` outside [0,1] on either axis  -> ``"outside"``
+    2. inside the quad, off the grid's cm allocation   -> ``"margin"``
+    3. ``cell_at`` named a cell                        -> ``"cell"``
+    4. otherwise                                        -> ``"gap"``
+
+    Only ``"gap"`` is evidence about the board. ``"margin"`` and ``"outside"``
+    are the rails and the offcuts, and BLOCK-VISION is explicit that they are
+    normal on an untidy bench — below ``MIN_LATTICE_BLOCKS`` the lattice filter
+    does not even run, so they reach us unfiltered.
+    """
+    u, v = workspace.normalized_at(point, image_size)
+    epsilon = 1e-9
+    if u < -epsilon or v < -epsilon or u > 1 + epsilon or v > 1 + epsilon:
+        return None, "outside"
+
+    cell = workspace.cell_at(point, image_size)
+    if cell is not None:
+        return (int(cell[0]), int(cell[1])), "cell"
+
+    grid = getattr(workspace, "mapped_grid", None)
+    if grid is None:
+        # No physical grid in the map, so there are no gaps to be in: cell_at's
+        # own fallback divides the quad evenly and always answers.
+        return None, "margin"
+    x_cm = min(max(u, 0.0), 1.0) * grid.workspace_width_cm
+    y_cm = min(max(v, 0.0), 1.0) * grid.workspace_height_cm
+    if (x_cm < grid.x_start_cm - epsilon or x_cm > grid.x_end_cm + epsilon
+            or y_cm < grid.y_start_cm - epsilon or y_cm > grid.y_end_cm + epsilon):
+        return None, "margin"
+    return None, "gap"
+
+
 def observe(detections, workspace, image_size) -> Observation:
     """Pixel -> cell for every detection. This is the supervisor's own work.
 
@@ -136,19 +208,24 @@ def observe(detections, workspace, image_size) -> Observation:
       **a block is on the board and is not on a site**. That is a FOREIGN-shaped
       fact, and a block knocked half a cell sideways reads exactly this way.
 
-    Both arrive here as None, so both are counted in ``off_lattice`` and the
-    classifier treats the count as FOREIGN-shaped evidence. Distinguishing them
-    would need the envelope quad, and D9 already stops the machine on either.
-    Never treat this as a dropout.
+    An earlier revision counted both as one ``off_lattice`` number and let the
+    classifier read it as FOREIGN, on the grounds that separating them "would
+    need the envelope quad". It does not — ``normalized_at`` already gives it —
+    and the rig measurement showed the merge is not survivable: one persistent
+    off-board object sat in 99.8% of parked frames and would have held the
+    machine at FOREIGN indefinitely. :func:`locate` does the split.
+
+    Never treat any of this as a dropout.
     """
-    cells, off_lattice = [], 0
+    cells = []
+    counts = {name: 0 for name in PLACEMENTS}
     for detection in detections:
-        cell = workspace.cell_at(detection.center, image_size)
-        if cell is None:
-            off_lattice += 1
-        else:
-            cells.append((int(cell[0]), int(cell[1])))
-    return Observation(cells=_sorted(set(cells)), off_lattice=off_lattice,
+        cell, placement = locate(workspace, detection.center, image_size)
+        counts[placement] += 1
+        if cell is not None:
+            cells.append(cell)
+    return Observation(cells=_sorted(set(cells)), in_gap=counts["gap"],
+                       off_board=counts["margin"] + counts["outside"],
                        detections=len(detections))
 
 
@@ -159,11 +236,14 @@ def unjudged_cells(top_levels: dict[Cell, int]) -> tuple[Cell, ...]:
 
 
 def classify(mode: str, expected, observed, *, top_levels=None,
-             off_lattice: int = 0, detections: int = 0) -> Verdict:
+             in_gap: int = 0, detections: int = 0) -> Verdict:
     """D9's set difference. Pure — no frames, no time, no I/O.
 
     ``expected`` is ``ledger.expected_occupancy(mode)``; ``observed`` is
-    :attr:`Observation.cells`. Everything else is the two suppressions that
+    :attr:`Observation.cells`; ``in_gap`` is the count of detections that are ON
+    the board and not on a site — and only that count, never
+    :attr:`Observation.off_board`, which is rails and offcuts. Everything else
+    is the two suppressions that
     keep this honest on a real board: D6's level ceiling and D10's sparse-board
     rule.
 
@@ -180,43 +260,55 @@ def classify(mode: str, expected, observed, *, top_levels=None,
     missing = expected - observed
     unexpected = observed - expected
 
-    # D10. Below the lattice filter's own threshold the observed set is
-    # unfiltered, so an "unexpected" cell may be a holder offcut and an
-    # off-lattice detection may be a cable. Missing cells are still trustworthy
-    # — nothing about a sparse board invents an absence — so REMOVED survives
-    # and FOREIGN and DISAGREES do not.
+    # D10. On a sparse board the holder's offcuts beside [0,0] sit ON the board
+    # and `locate()` correctly calls them `gap`, which D9 would make FOREIGN —
+    # strictly correct and operationally intolerable. Suppressing the unexpected
+    # side is the whole of it. Missing cells stay trustworthy: nothing about a
+    # sparse board invents an absence, so REMOVED survives.
     sparse = detections < MIN_LATTICE_BLOCKS
     if sparse:
         unexpected = set()
-        off_lattice = 0
+        in_gap = 0
 
     def made(name, cells):
         return Verdict(verdict=name, cells=_sorted(cells), mode=str(mode),
                        expected=_sorted(expected), observed=_sorted(observed),
                        unjudged=_sorted(refused))
 
-    if not missing and not unexpected and not off_lattice:
+    if not missing and not unexpected and not in_gap:
         return made("VERIFIED", ())
     # A block on the board and not on any site. Red on its own, whatever else
     # the cell sets say — there is something the plan cannot account for.
-    if off_lattice and not sparse:
+    if in_gap and not sparse:
         return made("FOREIGN", unexpected)
     if len(missing) == 1 and len(unexpected) == 1:
         # Ordered [from, to]: the UI draws an arrow between them.
         return made("MOVED", (missing.pop(), unexpected.pop()))
+    # ── P1: the two ONE-SIDED rows. A refinement of D9, and a deviation from
+    # the approved design, decided with the user.
+    #
+    # The design sent every change of more than one cell to DISAGREES. What
+    # DISAGREES actually protects against is the absence of IDENTITY: the
+    # ledger records "a block was placed at [3,2]", never "block #17", so when
+    # two cells empty and two fill in the same window, no memory can say
+    # whether a new occupant is an old block or something new. Pairing them by
+    # proximity is exactly the data-association guess D1 rejected.
+    #
+    # But pairing only matters when there is something to pair WITH. Two cells
+    # emptied with nothing gained needs no identity at all: memory says both
+    # were ours, the camera says both are gone, and naming them is strictly
+    # more use to an operator than declining to. The systemic counter-argument
+    # does not reach these rows either — a camera bump shifts EVERYTHING, so
+    # blocks reappear at shifted cells or land in gaps, which presents as
+    # missing AND unexpected, or as `in_gap`. It does not present as clean
+    # disappearance with nothing gained.
     if missing and not unexpected:
-        # More than one missing cell on a SPARSE board is still REMOVED, not
-        # DISAGREES: D10 bans DISAGREES there, and naming the cells is more
-        # use to an operator than declining to.
-        if len(missing) > 1 and not sparse:
-            return made("DISAGREES", missing)
         return made("REMOVED", missing)
     if unexpected and not missing:
-        if len(unexpected) > 1:
-            return made("DISAGREES", unexpected)
         return made("FOREIGN", unexpected)
-    # Both sides differ by more than one cell. Not a failure of the classifier
-    # — the classifier declining to guess. Two simultaneous changes in one
+    # BOTH sides changed, by more than one cell. THIS is the case that needs
+    # identity and cannot have it — not a failure of the classifier, the
+    # classifier declining to guess. Two simultaneous changes inside one
     # half-second window means something happened this model does not describe,
     # so it stops the program rather than pausing it.
     return made("DISAGREES", missing | unexpected)
@@ -291,18 +383,21 @@ class Interlocks:
 class Supervisor:
     """The observer. Holds hysteresis across frames and nothing else.
 
-    ``quiet_diff_fraction``, ``settle_n`` and ``settle_m`` are REQUIRED and have
-    no defaults, because their values are Gate 0's output and a default here
-    would be a guess with the authority of code. See the module constants.
+    ``quiet_diff_fraction``, ``settle_n`` and ``settle_m`` default to the module
+    constants, which are Gate 0's MEASURED values — see there for the runs they
+    came from. They remain explicit keyword arguments so a test can vary them,
+    and None is still refused: an unmeasured threshold must never reach a rig.
     """
 
-    def __init__(self, *, quiet_diff_fraction: float, settle_n: int,
-                 settle_m: int) -> None:
+    def __init__(self, *, quiet_diff_fraction: float = QUIET_DIFF_FRACTION,
+                 settle_n: int = SETTLE_N, settle_m: int = SETTLE_M) -> None:
         if quiet_diff_fraction is None or settle_n is None or settle_m is None:
             raise ValueError(
                 "quiet_diff_fraction, settle_n and settle_m are Gate 0's "
                 "measurement — run python/tools/measure_quiet_window.py on the "
                 "rig rather than guessing them")
+        if quiet_diff_fraction <= 0:
+            raise ValueError("quiet_diff_fraction must be positive")
         if not 0 < settle_n <= settle_m:
             raise ValueError("need 0 < settle_n <= settle_m")
         self.quiet_diff_fraction = float(quiet_diff_fraction)
@@ -310,6 +405,7 @@ class Supervisor:
         self.settle_m = int(settle_m)
         self._history = _CellHistory(self.settle_n, self.settle_m)
         self._mode: str | None = None
+        self._sparse: bool | None = None
 
     def reset(self) -> None:
         self._history.reset()
@@ -324,6 +420,26 @@ class Supervisor:
         if self._mode is not None and mode != self._mode:
             self._history.reset()
         self._mode = mode
+
+    def note_regime(self, detections: int) -> None:
+        """D7's argument again, applied to D10's threshold — P2, from F8.
+
+        ``MIN_LATTICE_BLOCKS`` is a hard cliff, not a slope, and it counts
+        DETECTIONS, not blocks: junk counts toward reaching it. Above it
+        ``_lattice_filter`` runs and rectifies; below it nothing is rejected at
+        all. So the two sides are different filtering regimes, and the frames
+        either side of a crossing are not comparable evidence — the same
+        argument D13 makes about the two lattices.
+
+        Measured (F8): rig-placed the count was stable, 6 in 522 of 524 frames.
+        Hand-scattered it crossed the boundary 188 times in 522 frames, and
+        the *character* of the observed set changed between consecutive frames
+        that hysteresis was treating as evidence about the same thing.
+        """
+        sparse = detections < MIN_LATTICE_BLOCKS
+        if self._sparse is not None and sparse != self._sparse:
+            self._history.reset()
+        self._sparse = sparse
 
     def is_quiet(self, diff_fraction: float | None) -> bool:
         """The scene-quiet gate. None (no baseline yet) is NOT quiet."""
@@ -341,6 +457,7 @@ class Supervisor:
         the loop because it is "only a subtraction".
         """
         self.note_mode(mode)
+        self.note_regime(observation.detections)
 
         refusal = interlocks.refusal()
         if refusal is not None:
@@ -366,6 +483,6 @@ class Supervisor:
 
         verdict = classify(
             mode, expected, self._history.settled_occupancy(interest),
-            top_levels=top_levels, off_lattice=observation.off_lattice,
+            top_levels=top_levels, in_gap=observation.in_gap,
             detections=observation.detections)
         return "VERDICT", None, verdict
