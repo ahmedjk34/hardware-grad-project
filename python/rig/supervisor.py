@@ -33,7 +33,9 @@ about the *board*, not the *machine*. Amber verdicts pause, red ones stop.
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+
+import numpy as np
 
 # ── Gate 0's outputs. MEASURED ON THE RIG, 2026-09-07. ────────────────────── #
 #
@@ -89,6 +91,24 @@ LEVEL_CEILING = 3
 #: that one refuses to hide a block, this one refuses to raise an alarm.
 #: Early in every program the board IS sparse, so this is the common path.
 MIN_LATTICE_BLOCKS = 6
+
+#: D5's "gantry parked" gate, as a set of `CellOrchestrator` phases — and NOT
+#: the design's `cell_phase == "idle"`, which does not work.
+#:
+#: `idle` is only ever the value BEFORE the first cell operation of a process.
+#: `CellOrchestrator._phase("complete")` is terminal and sticky: nothing resets
+#: it, so after the first placed block `cell_phase` reads `complete` until the
+#: next build starts. Gating on `"idle"` would therefore wedge supervision at
+#: BUSY for the whole of every session after block one — silently, and in
+#: exactly the situation the feature exists for.
+#:
+#: The complement is the honest question: `feeding`, `staging`, `ready_for_pick`
+#: and `placing` are the phases in which a cell operation is IN FLIGHT and the
+#: arm may be over the board; `error` is not parked either, whatever else is
+#: true. `idle` and `complete` both mean nothing is in flight. Conservative on
+#: purpose — a false BUSY costs one missed window out of the ~9 per minute
+#: §1.8 measured, and a false QUIET costs a wrong verdict.
+PARKED_CELL_PHASES = ("idle", "complete")
 
 #: The observer's own states. BUSY and QUIET and NO_MEMORY are NOT faults and
 #: must not take a state colour in the UI: BUSY is the normal condition for the
@@ -151,6 +171,33 @@ class Verdict:
         if self.verdict in AMBER_VERDICTS:
             return "amber"
         return "none"
+
+
+def quiet_fraction(view, baseline) -> float | None:
+    """Fraction of pixels whose channel-max change clears PIXEL_THRESHOLD.
+
+    D5's scene-quiet gate, and the ONLY numpy in this module. It is a
+    full-frame op — ~5-15 ms at 1296 px on a Pi 5 — so it must run on the same
+    single-threaded executor as ``pipeline.process_once`` and ``encode_jpeg``,
+    per AGENTS.md §7's one-owner-thread rule. Do not call it on the event loop
+    because it is "only a subtraction". Everything else here is set maths and
+    belongs on the loop.
+
+    Channel-max rather than a grey difference, matching
+    ``block_grid._difference_sightings`` and Gate 0's own instrument: a pale
+    wooden block on pale paper separates far better in one channel than in
+    luminance, and which channel that is depends on the cast of the day.
+    Measuring the gate on a different footing from the script that chose its
+    threshold would make ``QUIET_DIFF_FRACTION`` describe nothing.
+
+    Returns None when there is no usable baseline — the first frame of a
+    session, and the frame after a mode latch. :meth:`Supervisor.is_quiet`
+    reads None as NOT quiet, which is the fail-closed direction.
+    """
+    if baseline is None or getattr(baseline, "shape", None) != view.shape:
+        return None
+    difference = np.abs(view.astype(np.int16) - baseline.astype(np.int16)).max(axis=2)
+    return float(np.count_nonzero(difference >= PIXEL_THRESHOLD)) / float(difference.size)
 
 
 def locate(workspace, point, image_size):

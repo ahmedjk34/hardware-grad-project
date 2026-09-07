@@ -439,12 +439,33 @@ Plans: [placement-supervision.md](features/placement-supervision.md) ·
       Measured necessity: one persistent off-board object sat in **523 of 524**
       parked frames, and the merged reading would have held the machine at
       FOREIGN in **99.8%** of windows on a board that was entirely correct
-- [ ] Frame difference **on the executor**, not the event loop — blocked on
-      Gate 0: the supervisor is deliberately NOT wired into `web/app.py` yet
+- [x] Frame difference **on the executor**, not the event loop —
+      `rig.supervisor.quiet_fraction`, dispatched from `_supervise` in
+      `web/app.py` to the same single-threaded executor that owns
+      `process_once` and `encode_jpeg` (AGENTS.md §7). The pixel → cell step
+      and the set maths stay on the loop
+- [x] Wired into `_drive_pipeline` — **last in the loop turn**, after the
+      build result is published. Any `await` between `job.poll()` and
+      `_publish_build_result` lets a state snapshot claim `last_result=placed`
+      before the terminal event (progress.md F15)
+- [x] D5's "gantry parked" is `PARKED_CELL_PHASES`, **not** the design's
+      `cell_phase == "idle"` — `complete` is terminal and sticky, so `"idle"`
+      would wedge supervision at BUSY for every session after the first placed
+      block (progress.md F14)
+- [x] One step per NEW capture. `process_once` hands back the same frame when
+      only staleness changed; stepping on it would difference an array against
+      itself and let one capture supply two of the N-of-M readings
+- [x] `PlacementLedger` owned by the lifespan and passed to `BuildController`
+      as `ledger=` — the controller still knows nothing about OpenCV
+- [x] `python/tests/web_supervision_test.py` — 16 tests over the seam
 - [x] Per-cell hysteresis; counters **reset**, not decay, on a tripped interlock
 - [x] Level-3 ceiling: refuse to judge cells whose expected top level is ≥ 3
 - [x] Hysteresis reset on `frame.grid_mode` change
-- [ ] Exposed as a state field, watched on the bench for a session
+- [ ] Exposed as a state field, watched on the bench for a session — the
+      reading is held on `app.state.supervision` and every CHANGE is written to
+      `logs/placements.log`, but **nothing is published to the client yet**;
+      that is M3b. **Unverified on hardware: there is no camera on the dev
+      desktop, so the quiet gate has only ever run on synthetic arrays here**
 - [x] `python/tests/test_supervisor.py` — **73 checks**, synthetic cell sets only
 - [x] **D9 refined (P1)** — a one-sided change of any size is NAMED, not
       dismissed: N missing with nothing gained is `REMOVED` naming all N, N

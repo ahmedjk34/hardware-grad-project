@@ -42,13 +42,17 @@ from rig.feeder import Feeder
 from rig.mock_board import MockBoard
 from rig.mock_feeder import MockFeeder
 from rig.orchestrator import CellOrchestrator
+from rig.placement_ledger import PlacementLedger
+from rig.supervisor import (
+    PARKED_CELL_PHASES, Interlocks, Supervisor, observe, quiet_fraction,
+)
 from rig.workspace import WORKSPACE_MAP_PATH
 from web.events import EventHub, now_ms
 from web.mjpeg import encode_jpeg, publish_encoded, router as mjpeg_router
 from web.progress import BuildProgressTracker
 from web.routes_command import router as command_router
 from web.routes_calibration import router as calibration_router
-from web.state import StateModel, build_state
+from web.state import StateModel, SupervisionState, build_state
 
 
 #: The state fields that make a snapshot MEAN something different. Camera
@@ -156,9 +160,110 @@ async def _drive_pipeline(app: FastAPI, pipeline: ConsolePipeline,
                 await _notify_state(app)
             elif frame is not None:
                 publish_state(app)
+            if frame is not None:
+                # LAST, and that ordering is load-bearing. `job.poll()` has
+                # already taken the outcome, so `controller.last_result` reads
+                # `placed` from here on — but the durable `build_result` event
+                # has not gone out yet. Any `await` in between hands the loop
+                # to a queued `_cell_phase` / `_serial_*` callback, which
+                # publishes a state snapshot saying `last_result=placed`
+                # BEFORE the terminal event: exactly what `_cell_phase`'s own
+                # comment guards against, and what `web_events_test.py`'s "no
+                # frame claims a placement early" asserts. Supervision is the
+                # lowest-priority work in the loop and goes after the result.
+                #
+                # The frame difference inside is the THIRD piece of blocking
+                # work and goes to the same one owner thread (AGENTS.md §7);
+                # the set maths it feeds stays on the loop.
+                await _supervise(app, frame, job, loop, executor)
             await asyncio.sleep(interval_s)
     except asyncio.CancelledError:
         raise
+
+
+async def _supervise(app: FastAPI, frame, job: BuildJob, loop,
+                     executor: ThreadPoolExecutor) -> None:
+    """One frame through the observer. Nothing here moves the rig.
+
+    The split of work is D5's and is not negotiable: the **frame difference**
+    is a full-frame numpy op and goes to `executor`, the same single-threaded
+    one that owns `process_once` and `encode_jpeg` (AGENTS.md §7). The pixel →
+    cell step and the set maths are a few dozen Python operations over ~6
+    detections and stay on the event loop with the rest of the driver's
+    bookkeeping.
+
+    Three refusals happen here rather than inside `Supervisor`, because each
+    one is a fact about the SERVER's plumbing rather than about the board:
+    """
+    supervisor = app.state.supervisor
+    controller = app.state.controller
+
+    # 1. A mode latch. The frame describes the other lattice — `build_state()`
+    #    nulls the frame for exactly this reason, and D13 says supervision
+    #    suspends until the first quiet window on the other side. The baseline
+    #    goes too: `set_mode` homes X/Y, so the scene moved.
+    if frame.grid_mode != app.state.rig.grid.mode:
+        supervisor.reset()
+        app.state.supervision_baseline = None
+        app.state.supervision_sequence = None
+        _note_supervision(app, "BUSY", "MODE LATCH — waiting for the new grid", None)
+        return
+
+    # 2. The SAME ProcessedFrame, handed back. `process_once` returns the last
+    #    frame again — `replace`d, same `view` object — when only its staleness
+    #    changed. Stepping on it would let one camera frame supply two of the
+    #    N-of-M readings, and would difference an array against itself and call
+    #    the result quiet. One step per new capture, which is exactly what Gate
+    #    0's instrument did.
+    if frame.sequence == app.state.supervision_sequence:
+        return
+
+    baseline = app.state.supervision_baseline
+    # `view` is a fresh, read-only array per capture, so holding the previous
+    # one as the baseline costs a reference and never a copy.
+    app.state.supervision_baseline = frame.view
+    app.state.supervision_sequence = frame.sequence
+
+    fraction = await loop.run_in_executor(executor, quiet_fraction,
+                                          frame.view, baseline)
+
+    # 3. D5's "gantry parked", which is NOT `cell_phase == "idle"` — see
+    #    `PARKED_CELL_PHASES` for why that would wedge supervision at BUSY for
+    #    every session after the first placed block.
+    interlocks = Interlocks(
+        parked=(not job.running and not controller.locked
+                and app.state.cell_phase in PARKED_CELL_PHASES),
+        calibrated=bool(frame.calibrated),
+        quiet=supervisor.is_quiet(fraction),
+    )
+    observation = observe(frame.detections, frame.workspace, frame.image_size)
+    state, reason, verdict = supervisor.step(
+        mode=frame.grid_mode, ledger=app.state.ledger,
+        observation=observation, interlocks=interlocks)
+    _note_supervision(app, state, reason, verdict)
+
+
+def _note_supervision(app: FastAPI, state: str, reason, verdict) -> None:
+    """Hold the latest reading, and log it once per CHANGE.
+
+    Not once per frame: at the measured 8.6-8.7 Hz a per-frame line would be
+    half a million entries an hour, all of them `VERDICT VERIFIED`, and the one
+    line that mattered would be unfindable. The signature is the state plus the
+    verdict plus the cells it names, so a REMOVED that moves to a different
+    cell is a new line and a REMOVED that persists is not.
+
+    M2 publishes nothing to the client. M3b turns `app.state.supervision` into
+    a `SupervisionModel` and the four surfaces; until then this log line and a
+    `GET /api/state` debugger are the whole of the bench session's evidence.
+    """
+    app.state.supervision = SupervisionState(
+        state=state, reason=reason, verdict=verdict, judged_at_ms=now_ms())
+    signature = (state, None if verdict is None else verdict.verdict,
+                 () if verdict is None else verdict.cells)
+    if signature == app.state.supervision_signature:
+        return
+    app.state.supervision_signature = signature
+    build_log.placements.verdict(state, reason, verdict)
 
 
 def _publish_build_result(app: FastAPI, outcome) -> None:
@@ -242,6 +347,18 @@ def create_app(options: ConsoleAppOptions | None = None) -> FastAPI:
         app.state.state_signature = None
         app.state.state_published_at = 0.0
         app.state.geometry_min_interval = 1.0 / options.geometry_hz
+        # The as-built memory (D2) and the observer (D5-D10). The ledger starts
+        # EMPTY on every process and is never reloaded from `placements.log`:
+        # a reloaded ledger would claim to describe a board nobody has looked
+        # at since the process died, and what consumes it drives a claw (D3).
+        app.state.ledger = PlacementLedger()
+        app.state.supervisor = Supervisor()
+        app.state.supervision = None
+        app.state.supervision_signature = None
+        #: The previous accepted capture, for D5's frame difference, and the
+        #: sequence it came from. Both are cleared by a mode latch.
+        app.state.supervision_baseline = None
+        app.state.supervision_sequence = None
 
         def _serial_line(line: str) -> None:
             """On the loop. One raw line: the log AND one durable event.
@@ -406,7 +523,12 @@ def create_app(options: ConsoleAppOptions | None = None) -> FastAPI:
                 "distinct stable /dev/serial/by-id paths"
             )
         orchestrator = CellOrchestrator(feeder, rig, on_phase=cell_phase)
-        controller = BuildController(rig, level=0, orchestrator=orchestrator)
+        # `ledger=` is how the memory reaches the controller without the
+        # controller learning anything about OpenCV: it is pure data, it is
+        # written on the PLACED branch only, and `BuildController` still has no
+        # idea a camera exists.
+        controller = BuildController(rig, level=0, orchestrator=orchestrator,
+                                     ledger=app.state.ledger)
         job = BuildJob(controller, timeout=300.0)
         executor = ThreadPoolExecutor(max_workers=1,
                                       thread_name_prefix="console-pipeline")

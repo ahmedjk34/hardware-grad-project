@@ -17,11 +17,14 @@ in append mode so every server run adds to them rather than replacing them:
     firmware phase shows up directly as a large delta in the second column.
 
 ``logs/placements.log``
-    One line per confirmed placement — the as-built record behind
-    :mod:`rig.placement_ledger`. Written for the thesis record and **never read
-    back**: a reloaded ledger would claim to describe a board nobody has looked
-    at since the process died, and what consumes the ledger drives a claw. See
-    ``docs/features/placement-supervision.md`` D3.
+    The board's record: one line per confirmed placement — the as-built memory
+    behind :mod:`rig.placement_ledger` — and one line each time the observer in
+    :mod:`rig.supervisor` CHANGES its mind about that board. Both concern the
+    same object, so they share a file and read as one timeline: what was placed,
+    and what the camera made of it. Written for the thesis record and **never
+    read back**: a reloaded ledger would claim to describe a board nobody has
+    looked at since the process died, and what consumes the ledger drives a
+    claw. See ``docs/features/placement-supervision.md`` D3.
 
 Disabled by default. Importing this module costs nothing and every logging
 call is a cheap no-op until :func:`configure` is called, which
@@ -268,7 +271,7 @@ class BuildLog:
 
 
 class PlacementLog:
-    """``logs/placements.log`` — one line per confirmed placement.
+    """``logs/placements.log`` — what was placed, and what the camera made of it.
 
     Called from the ``BuildJob`` worker thread rather than the event loop, so
     unlike :class:`BuildLog` this one keeps a lock.
@@ -294,8 +297,35 @@ class PlacementLog:
             return
         with self._lock:
             self._sink.write(
-                f"{_stamp()}  {placement.mode:<10} "
+                f"{_stamp()}  PLACED    {placement.mode:<10} "
                 f"[{placement.col},{placement.row}] level={placement.level}")
+
+    def verdict(self, state: str, reason, verdict) -> None:
+        """One CHANGE in what the observer says about the board.
+
+        Called from the event loop, per change and never per frame: at the
+        pipeline's measured 8.6-8.7 Hz a line a frame would be half a million
+        entries an hour, and the one that mattered would be unfindable.
+
+        `state` is one of ``rig.supervisor.STATES``; `verdict` is None for all
+        of them but ``VERDICT``. Refusals are logged too — ``NO MAP`` and
+        ``NO MEMORY`` are the feature saying honestly that it is not looking,
+        and a run report that cannot tell "checked and correct" from "never
+        checked" is worse than one that says nothing.
+        """
+        if not self._sink.enabled:
+            return
+        if verdict is None:
+            line = f"{state:<9} {reason or ''}".rstrip()
+        else:
+            cells = " ".join(f"[{col},{row}]" for col, row in verdict.cells)
+            line = (f"{verdict.verdict:<9} {verdict.mode:<10} {cells}"
+                    f"  ({verdict.severity})").rstrip()
+            if verdict.unjudged:
+                unjudged = " ".join(f"[{c},{r}]" for c, r in verdict.unjudged)
+                line += f"  unjudged {unjudged}"
+        with self._lock:
+            self._sink.write(f"{_stamp()}  {line}")
 
 
 #: Module singletons. One server process, one of each — see AGENTS.md on the

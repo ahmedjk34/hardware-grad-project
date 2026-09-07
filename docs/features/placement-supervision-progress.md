@@ -421,6 +421,60 @@ Two things the trace shows that were previously only argued:
   "the scene was not still" precedes "there is nothing to compare it to" — and
   worth knowing before a UI renders the first frame after a restart.
 
+### F14 — DEFECT in the design: D5's "gantry parked" gate does not work
+
+D5 specifies the parked interlock as `not job.running` **and**
+`not controller.locked` **and** `cell_phase == "idle"`. The third clause is
+wrong, and wrong in the silent direction.
+
+`CellOrchestrator._phase("complete")` is **terminal and sticky** — nothing
+resets it. `cell_phase` reads `idle` only before the first cell operation of a
+process; from the first placed block onward it reads `complete` until the next
+build starts. Gating on `"idle"` would therefore hold supervision at `BUSY` for
+the whole of every session after block one, producing no verdicts at all, with
+no error and nothing on screen to say so.
+
+Built as `rig.supervisor.PARKED_CELL_PHASES = ("idle", "complete")` — the
+phases in which no cell operation is in flight. The complement (`feeding`,
+`staging`, `ready_for_pick`, `placing`, `error`) refuses. Conservative on
+purpose: a false `BUSY` costs one window out of the ~9 a minute §1.8 measured,
+and a false quiet costs a wrong verdict. `web_supervision_test.py` asserts
+`complete` is parked, with the reasoning in the test's own docstring.
+
+**This is the third place the design was found wrong on contact with the
+code.** Like the other two it was found by reading, not by a rig.
+
+### F15 — Supervision must be the LAST work in the driver loop, not the first
+
+Found by a test regression, and it is an ordering hazard the loop already had
+latently.
+
+`_drive_pipeline` calls `job.poll()` and then `_publish_build_result`. Between
+those two, `controller.last_result` already reads `placed` while the durable
+`build_result` event has not gone out. **Any `await` in that gap** hands the
+loop to a queued `_cell_phase` / `_serial_*` callback, each of which calls
+`publish_state(app, force=True)` — and a state snapshot then claims
+`last_result=placed` before the terminal event. `_cell_phase` has a comment
+guarding exactly this, and `web_events_test.py::test_nothing_says_placed_
+before_the_terminal_acknowledgement` asserts it.
+
+The hazard pre-dates supervision — the JPEG encode awaits in the same gap — but
+only when `stream_subscribers > 0`, which no test exercises. Supervision made
+it unconditional: **4 of 6 runs failed** with the call placed after the encode,
+**0 of 6** on a clean tree, and **0 of 6** once the call moved after the result
+publish.
+
+`_supervise` is now the last thing in the loop turn, which is also the right
+priority: the serial stream is the important one, and supervision is the
+lowest-value work in the tick.
+
+### F16 — `web_state_test`'s heartbeat flake is ~50%, not "intermittent"
+
+F11 recorded that test as flaky. Measured properly while chasing F15: **5 of 10
+runs fail on a clean tree, and 5 of 10 with this work applied.** Identical, so
+it is untouched by supervision — but "intermittent" undersells it. It is a
+coin-flip, and any future bisect over this suite has to know that.
+
 ### F11 — One pytest failure is flaky, not a regression
 
 `web_state_test.py::test_events_send_initial_update_and_heartbeat` fails

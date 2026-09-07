@@ -2,12 +2,39 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import time
 from typing import Any, Literal
 
 from pydantic import BaseModel
 
+from rig.supervisor import Verdict
 from web.geometry import build_geometry
+
+
+@dataclass(frozen=True)
+class SupervisionState:
+    """The latest thing the observer said, held on ``app.state``.
+
+    Server-side only for now: M3b turns this into a published
+    ``SupervisionModel`` and the four surfaces that render it. It exists at M2
+    so a bench session has something to watch and so the wiring can be tested
+    without any of the UI.
+
+    ``state`` is one of ``rig.supervisor.STATES``. ``verdict`` is None for every
+    state but ``VERDICT`` — including the good ones: BUSY, QUIET and NO_MEMORY
+    are not faults and must never take a state colour.
+    """
+
+    state: str
+    reason: str | None
+    verdict: Verdict | None
+    judged_at_ms: int
+
+    @property
+    def severity(self) -> str:
+        """``amber`` / ``red`` / ``none``. A verdict NEVER produces LOCKED."""
+        return self.verdict.severity if self.verdict is not None else "none"
 
 
 class StateModel(BaseModel):
