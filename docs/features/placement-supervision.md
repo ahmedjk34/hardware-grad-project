@@ -350,6 +350,19 @@ it ended up.
 detections, or one out plus one onto a cell *and* a gap detection, will not pair
 cleanly → `DISAGREES`.
 
+> **Update — 2026-09-07: the pairing is now checked geometrically.** `classify`
+> matches the one emptied cell to the one gap detection by set difference alone
+> — it never checks they are near each other, so a block genuinely removed from
+> `[a,b]` plus an unrelated detection reading in a gap far away would still
+> publish a confident `DISPLACED [a,b]` and offer a nonsense correction. When
+> `Supervisor.step()` is given the mode's `MachineGrid`, `implausible_displacement()`
+> projects the gap detection against `[a,b]`'s lattice centre
+> (`rig.placement_geometry.axis_coverage`); if the block reaches more than
+> `PAIRING_BEYOND_CM` (provisional, 1.0 cm) past `[a,b]`'s neighbour — i.e. the
+> two are more than a pitch apart — the verdict is downgraded to `DISAGREES`
+> with a reason naming the distance. A misregistered workspace map trips this on
+> every displacement, which is the intended loud failure.
+
 `BOARD DISAGREES` is not a failure of the classifier; it is the classifier
 declining to guess. A toppled short tower lands here, and it **stops the
 program** rather than pausing it — two simultaneous changes in one half-second

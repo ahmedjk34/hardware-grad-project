@@ -33,11 +33,12 @@ about the *board*, not the *machine*. Amber verdicts pause, red ones stop.
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+import math
 
 import numpy as np
 
-from rig.placement_geometry import residual_cm as _residual_cm
+from rig.placement_geometry import axis_coverage, residual_cm as _residual_cm
 
 # ── Gate 0's outputs. MEASURED ON THE RIG, 2026-09-07. ────────────────────── #
 #
@@ -96,6 +97,16 @@ PARKED_CELL_PHASES = ("idle", "complete")
 #: whole of a build, and colouring it amber would leave the console amber most
 #: of the time, which kills DESIGN.md's reserved palette.
 STATES = ("NO_MEMORY", "NO_MAP", "WARMING", "BUSY", "QUIET", "VERDICT")
+
+#: A DISPLACED verdict pairs the ONE emptied cell with the ONE gap detection by
+#: pure set difference (`classify`); it never checks the two are near each other.
+#: If the gap block sits more than this far PAST the neighbour of the cell it was
+#: paired with (`axis_coverage.beyond` — ~0 for a real single-cell displacement,
+#: growing once the two are over a pitch apart), the pairing is not credible:
+#: the block that left and the block in the gap are probably different blocks, or
+#: the workspace map is misregistered to the lattice. `step()` downgrades such a
+#: verdict to DISAGREES so the runner stops for a human. PROVISIONAL.
+PAIRING_BEYOND_CM = 1.0
 
 #: Amber — degraded but recoverable. The runner pauses.
 #:
@@ -271,22 +282,39 @@ def point_cm(workspace, point, image_size):
     return (float(u) * grid.workspace_width_cm, float(v) * grid.workspace_height_cm)
 
 
-def _box_size_cm(workspace, box, image_size):
-    """`(long_cm, short_cm)` extent of a detection box via its projected corners.
+def _detection_size_cm(workspace, detection, image_size):
+    """`(long_cm, short_cm)` footprint of a detection, from its OWN measurement.
 
-    Axis-aligned in cm on purpose: the CORRECTION action only ever acts on a
-    block within `ANGLE_TOLERANCE_DEG` of the grid, so the cm bounding box of
-    the four projected corners is the footprint its consistency check wants.
-    None when the map has no physical grid or a corner will not project.
+    Built from ``own_size`` / ``own_angle`` — the block's pre-rectification
+    values — so a misplaced block reads as its real size, not the population
+    median ``block_outline._rectify`` substitutes for every on-lattice block.
+    Falls back to projecting ``detection.box`` when ``own_size`` is absent (a
+    bare test double). None when the map has no physical grid or a corner will
+    not project. The result is an axis-aligned cm bounding box, which is what
+    the CORRECTION action's consistency check wants (it only acts on blocks
+    within ``ANGLE_TOLERANCE_DEG`` of the grid anyway).
     """
+    own = getattr(detection, "own_size", None)
+    if own is not None and own[0] and own[1]:
+        long_px, short_px = float(own[0]), float(own[1])
+        angle = math.radians(float(getattr(detection, "own_angle", 0.0) or 0.0))
+        ux, uy = math.cos(angle), math.sin(angle)         # long axis
+        vx, vy = -uy, ux                                  # short axis
+        cx, cy = detection.center
+        pts = [(cx + sl * ux * long_px / 2 + ss * vx * short_px / 2,
+                cy + sl * uy * long_px / 2 + ss * vy * short_px / 2)
+               for sl, ss in ((1, 1), (1, -1), (-1, -1), (-1, 1))]
+    else:
+        box = getattr(detection, "box", None)
+        pts = [(float(p[0]), float(p[1])) for p in box] if box is not None else []
+    if len(pts) < 4:
+        return None
     corners = []
-    for point in box if box is not None else ():
-        cm = point_cm(workspace, (float(point[0]), float(point[1])), image_size)
+    for px, py in pts:
+        cm = point_cm(workspace, (px, py), image_size)
         if cm is None:
             return None
         corners.append(cm)
-    if len(corners) < 4:
-        return None
     xs = [c[0] for c in corners]
     ys = [c[1] for c in corners]
     width, height = max(xs) - min(xs), max(ys) - min(ys)
@@ -336,7 +364,7 @@ def observe(detections, workspace, image_size) -> Observation:
         angle = float(getattr(detection, "own_angle", None)
                       if getattr(detection, "own_angle", None) is not None
                       else getattr(detection, "angle", 0.0) or 0.0)
-        size = _box_size_cm(workspace, getattr(detection, "box", None), image_size)
+        size = _detection_size_cm(workspace, detection, image_size)
         if cell is not None:
             cells.append(cell)
             if cell not in cell_points:
@@ -529,6 +557,40 @@ def classify(mode: str, expected, observed, *, top_levels=None,
     return made("DISAGREES", missing | unexpected)
 
 
+def implausible_displacement(grid, plan_cell: Cell, observation: Observation) -> str | None:
+    """Why a DISPLACED pairing is not geometrically credible, or None if it is.
+
+    :func:`classify` names ``plan_cell`` (the one emptied cell) as the origin of
+    the one gap detection by SET DIFFERENCE alone — it never checks the two are
+    near each other. This does: :func:`~rig.placement_geometry.axis_coverage`'s
+    ``beyond`` is the cm the gap block reaches PAST the neighbour of
+    ``plan_cell`` on each axis, which is ~0 for a real single-cell displacement
+    and grows once they are more than a pitch apart. Over
+    :data:`PAIRING_BEYOND_CM` the pairing is rejected — different blocks, or a
+    misregistered map — and :meth:`Supervisor.step` turns the verdict into
+    DISAGREES.
+    """
+    if not observation.gap_points_cm:
+        return None
+    try:
+        planned = grid.cell_center_cm(int(plan_cell[0]), int(plan_cell[1]))
+    except (ValueError, TypeError):
+        return None
+    observed = observation.gap_points_cm[0]
+    cov_x = axis_coverage(observed_centre=observed[0], planned_centre=planned[0],
+                          block_len=grid.block_x_cm, gap_len=grid.gap_x_cm,
+                          pitch=grid.pitch_x_cm)
+    cov_y = axis_coverage(observed_centre=observed[1], planned_centre=planned[1],
+                          block_len=grid.block_y_cm, gap_len=grid.gap_y_cm,
+                          pitch=grid.pitch_y_cm)
+    beyond = max(cov_x.beyond, cov_y.beyond)
+    if beyond <= PAIRING_BEYOND_CM:
+        return None
+    return (f"a block in the gap sits {beyond:.1f} cm past the cell "
+            f"[{int(plan_cell[0])},{int(plan_cell[1])}] it was paired with — "
+            f"the classifier cannot confirm the same block moved")
+
+
 class _CellHistory:
     """The last M readings of every cell. D7's confidence, per cell.
 
@@ -650,7 +712,7 @@ class Supervisor:
         return diff_fraction is not None and diff_fraction <= self.quiet_diff_fraction
 
     def step(self, *, mode: str, ledger, observation: Observation,
-             interlocks: Interlocks):
+             interlocks: Interlocks, grid=None):
         """One frame. Returns ``(state, reason, verdict)``; verdict may be None.
 
         The set maths here is trivial and belongs on the event loop with the
@@ -659,6 +721,12 @@ class Supervisor:
         AGENTS.md §7's one-owner-thread rule puts it on the same
         single-threaded executor as the other OpenCV work. Do not let it run on
         the loop because it is "only a subtraction".
+
+        ``grid`` is the mode's :class:`rig.grid.MachineGrid`. With it, a
+        DISPLACED verdict whose gap detection is not geometrically near the cell
+        :func:`classify` paired it with is downgraded to DISAGREES — see
+        :func:`implausible_displacement`. Without it (the default) the verdict
+        is published exactly as ``classify`` returned it.
         """
         self.note_mode(mode)
 
@@ -693,4 +761,13 @@ class Supervisor:
             mode, expected, self._history.settled_occupancy(interest),
             top_levels=top_levels,
             in_gap=observation.in_gap if gap_settled else 0)
+
+        # A DISPLACED verdict pairs cells by set difference only. If a grid is
+        # available, reject the pairing when the gap block is nowhere near the
+        # cell it was matched with — different blocks, or a misregistered map.
+        if grid is not None and verdict.verdict == "DISPLACED" and len(verdict.cells) == 1:
+            reason = implausible_displacement(grid, verdict.cells[0], observation)
+            if reason is not None:
+                return "VERDICT", reason, replace(verdict, verdict="DISAGREES")
+
         return "VERDICT", None, verdict

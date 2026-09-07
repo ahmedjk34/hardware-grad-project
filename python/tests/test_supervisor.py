@@ -23,9 +23,9 @@ from rig.link import PLACED, BuildResult  # noqa: E402
 from rig.placement_ledger import PlacementLedger  # noqa: E402
 from rig.grid import MachineGrid  # noqa: E402
 from rig.supervisor import (  # noqa: E402
-    LEVEL_CEILING, AMBER_VERDICTS, RED_VERDICTS,
-    Interlocks, Observation, Supervisor, classify, locate, observe,
-    unjudged_cells, verify_placement,
+    LEVEL_CEILING, PAIRING_BEYOND_CM, AMBER_VERDICTS, RED_VERDICTS,
+    Interlocks, Observation, Supervisor, classify, implausible_displacement,
+    locate, observe, unjudged_cells, verify_placement,
 )
 from rig.workspace import WorkspaceMap  # noqa: E402
 
@@ -148,8 +148,10 @@ check("a detection with no .angle attribute defaults to 0.0, never raises",
 # angle, and the CORRECTION action's consistency check has to see that.
 
 class SizedDetection:
-    def __init__(self, center, own_angle, box):
+    def __init__(self, center, own_angle, box, own_size=None):
         self.center, self.own_angle, self.box = center, own_angle, box
+        if own_size is not None:
+            self.own_size = own_size
 
 
 def box_at_cm(cx, cy, long_cm, short_cm):
@@ -157,6 +159,12 @@ def box_at_cm(cx, cy, long_cm, short_cm):
     hw, hh = long_cm / 2.0, short_cm / 2.0
     return [at_cm(cx - hw, cy - hh), at_cm(cx + hw, cy - hh),
             at_cm(cx + hw, cy + hh), at_cm(cx - hw, cy + hh)]
+
+
+def own_px(long_cm, short_cm):
+    """`own_size` in px for a block that round-trips to `(long_cm, short_cm)`."""
+    return (long_cm * SIZE[0] / GRID.workspace_width_cm,
+            short_cm * SIZE[1] / GRID.workspace_height_cm)
 
 
 sized = observe([SizedDetection(at_cm(*centre), 1.0,
@@ -169,6 +177,14 @@ check("the ON-CELL block's footprint is projected to ~ (6.0, 2.2) cm",
       and abs(sized.cell_sizes_cm[0][0] - 6.0) < 0.3
       and abs(sized.cell_sizes_cm[0][1] - 2.2) < 0.3,
       str(sized.cell_sizes_cm))
+own_wins = observe([SizedDetection(at_cm(*centre), 0.0,
+                                   box_at_cm(centre[0], centre[1], 3.0, 3.0),
+                                   own_size=own_px(6.0, 2.2))], MAP, SIZE)
+check("_detection_size_cm uses own_size, not the (rectified) box beside it",
+      abs(own_wins.cell_sizes_cm[0][0] - 6.0) < 0.3
+      and abs(own_wins.cell_sizes_cm[0][1] - 2.2) < 0.3,
+      str(own_wins.cell_sizes_cm))
+
 check("the GAP block's footprint rides alongside gap_points_cm, one per in_gap",
       len(sized.gap_sizes_cm) == sized.in_gap == 1
       and abs(sized.gap_sizes_cm[0][0] - 6.0) < 0.3,
@@ -540,6 +556,49 @@ state, _, verdict = sup.step(mode="vertical", ledger=ledger,
 check("one gap frame after an interlock trip is not yet FOREIGN",
       verdict is None or verdict.verdict != "FOREIGN",
       f"{state} {verdict.verdict if verdict else None}")
+
+
+# --- step() rejects a DISPLACED pairing the geometry cannot support -------- #
+#
+# `classify` names the emptied cell as the origin of the gap detection by set
+# difference alone. When `step()` is given the grid, a gap block more than
+# PAIRING_BEYOND_CM past that cell's neighbour is downgraded to DISAGREES —
+# different blocks, or a misregistered map.
+
+pair_ledger = ledger_with("vertical", [(1, 1, 0), (2, 1, 0)])
+plan_centre = GRID.cell_center_cm(2, 1)  # (7.6, 7.6)
+
+near_gap = Observation(cells=((1, 1),), in_gap=1, detections=4,
+                       gap_points_cm=((plan_centre[0] + 1.9, plan_centre[1]),))
+sup = supervisor(settle_n=1, settle_m=1)
+state, reason, verdict = sup.step(mode="vertical", ledger=pair_ledger,
+                                  observation=near_gap, interlocks=open_gates,
+                                  grid=GRID)
+check("a gap block one cell away stays DISPLACED", verdict.verdict == "DISPLACED",
+      f"{verdict.verdict} / {reason}")
+
+far_gap = Observation(cells=((1, 1),), in_gap=1, detections=4,
+                      gap_points_cm=((plan_centre[0], plan_centre[1] + 11.0),))
+sup = supervisor(settle_n=1, settle_m=1)
+state, reason, verdict = sup.step(mode="vertical", ledger=pair_ledger,
+                                  observation=far_gap, interlocks=open_gates,
+                                  grid=GRID)
+check("a gap block 11 cm from the paired cell is downgraded to DISAGREES",
+      verdict.verdict == "DISAGREES", f"{verdict.verdict}")
+check("  ... and the reason names the distance and the cell",
+      reason is not None and "past the cell [2,1]" in reason, str(reason))
+check("  ... DISAGREES stops the runner (red)", verdict.severity == "red")
+
+check("without a grid, step() publishes the DISPLACED verdict unchanged",
+      supervisor(settle_n=1, settle_m=1).step(
+          mode="vertical", ledger=pair_ledger, observation=far_gap,
+          interlocks=open_gates)[2].verdict == "DISPLACED")
+
+check("implausible_displacement returns None for a credible pairing",
+      implausible_displacement(GRID, (2, 1), near_gap) is None)
+check("implausible_displacement explains an incredible one",
+      "past the cell" in (implausible_displacement(GRID, (2, 1), far_gap) or ""))
+check("PAIRING_BEYOND_CM is the provisional 1.0 cm slack", PAIRING_BEYOND_CM == 1.0)
 
 
 # --- a verdict never locks ------------------------------------------------- #

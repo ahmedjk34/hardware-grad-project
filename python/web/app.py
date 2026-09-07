@@ -255,7 +255,8 @@ async def _supervise(app: FastAPI, frame, job: BuildJob, loop,
     observation = observe(frame.detections, frame.workspace, frame.image_size)
     state, reason, verdict = supervisor.step(
         mode=frame.grid_mode, ledger=app.state.ledger,
-        observation=observation, interlocks=interlocks)
+        observation=observation, interlocks=interlocks,
+        grid=getattr(frame.workspace, "mapped_grid", None))
     correction, correction_reason = _assess_correction(
         app, frame, observation, state, verdict)
     residual_cm = frame_residual_cm(

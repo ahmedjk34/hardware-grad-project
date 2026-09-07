@@ -272,6 +272,23 @@ def test_a_DISPLACED_block_far_off_with_a_clear_neighbour_is_now_corrected():
     assert sv.residual_cm is not None and abs(sv.residual_cm - 1.9) < 0.05
 
 
+def test_a_gap_block_far_from_its_paired_cell_is_downgraded_to_DISAGREES():
+    """`classify` pairs the one emptied cell with the one gap detection by set
+
+    difference; `step()` with the grid rejects the pairing when they are more
+    than a pitch apart — the case that was surfacing as a nonsense correction.
+    """
+    app = fake_app()  # ledger [1,1] and [2,1]; [2,1] centre is (7.6, 7.6) cm
+    far = at_cm_point(7.6, 7.6 + 11.0)  # in a gap, but 11 cm from [2,1]
+    seen = drive(app, [frame_at(1, cells=((1, 1),), extra=(far,)),
+                       frame_at(2, cells=((1, 1),), extra=(far,))])
+    sv = seen[-1]
+    assert sv.verdict.verdict == "DISAGREES"
+    assert sv.severity == "red"
+    assert sv.reason is not None and "past the cell [2,1]" in sv.reason
+    assert sv.correction is None
+
+
 def test_a_DISPLACED_block_toward_an_occupied_neighbour_is_refused_by_hand():
     """Same 1.9 cm displacement, but [3,1] now holds a block: the descending
 
