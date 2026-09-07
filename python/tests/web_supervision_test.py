@@ -171,10 +171,14 @@ def test_a_still_correct_board_reaches_a_VERIFIED_verdict():
     assert seen[1].verdict.verdict == "VERIFIED"
     assert seen[1].verdict.expected == ((1, 1), (2, 1))
     assert seen[1].severity == "none"
-    # No offending block, so no advisory residual.
+    # No offending block, so no advisory offender residual — but the board's
+    # blocks are placed dead on their centres, so the worst on-cell drift is ~0.
     assert seen[1].residual_cm is None
     from web.state import supervision_model
-    assert supervision_model(seen[1]).residual_cm is None
+    model = supervision_model(seen[1])
+    assert model.residual_cm is None
+    assert seen[1].max_cell_residual_cm is not None and seen[1].max_cell_residual_cm < 0.1
+    assert model.max_cell_residual_cm is not None and model.max_cell_residual_cm < 0.1
 
 
 def test_a_missing_block_names_the_exact_cell():

@@ -43,6 +43,10 @@ class SupervisionState:
     #: centre, for a MOVED / DISPLACED verdict. Published for the operator to
     #: read "how far off"; it never gates anything and takes no state colour.
     residual_cm: float | None = None
+    #: ADVISORY — the largest on-cell drift anywhere on the board, cm. Non-None
+    #: for VERIFIED too: a board can be "correct" and still have a block 0.8 cm
+    #: off its centre. Gates nothing, no state colour.
+    max_cell_residual_cm: float | None = None
 
     @property
     def severity(self) -> str:
@@ -108,6 +112,9 @@ class SupervisionModel(BaseModel):
     #: MOVED / DISPLACED verdict. Display-only; it gates nothing and has no
     #: state colour. None for every other verdict and state.
     residual_cm: float | None = None
+    #: ADVISORY — the worst on-cell drift anywhere on the board, cm. Present for
+    #: VERIFIED too. Display-only; gates nothing, no state colour.
+    max_cell_residual_cm: float | None = None
 
 
 def supervision_model(reading, *, acknowledged: bool = False) -> SupervisionModel:
@@ -142,6 +149,7 @@ def supervision_model(reading, *, acknowledged: bool = False) -> SupervisionMode
         pick_offset_cm=None if correction is None
         else (round(correction.dx_cm, 3), round(correction.dy_cm, 3)),
         residual_cm=getattr(reading, "residual_cm", None),
+        max_cell_residual_cm=getattr(reading, "max_cell_residual_cm", None),
     )
 
 
@@ -283,6 +291,20 @@ def frame_residual_cm(*, observation, workspace, verdict, mode) -> float | None:
     except ValueError:
         return None
     return round(_residual_cm(observed_cm, planned_centre), 2)
+
+
+def worst_cell_residual_cm(observation) -> float | None:
+    """The largest on-cell drift on the board, in cm — ADVISORY.
+
+    Every occupied cell's block carries a `residual_cm` from `observe()`; this
+    is the worst of them. Published so a VERIFIED board can still say "the worst
+    block is 0.8 cm off". It gates nothing and takes no state colour. None when
+    the map is off or no cell is occupied.
+    """
+    residuals = getattr(observation, "cell_residuals_cm", ())
+    if not residuals:
+        return None
+    return round(max(value for _cell, value in residuals), 2)
 
 
 class StateModel(BaseModel):

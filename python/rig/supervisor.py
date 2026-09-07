@@ -37,6 +37,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from rig.placement_geometry import residual_cm as _residual_cm
+
 # ── Gate 0's outputs. MEASURED ON THE RIG, 2026-09-07. ────────────────────── #
 #
 # Three 60/20 s runs with 5 rig-placed blocks, camera calibrated, at the
@@ -160,6 +162,11 @@ class Observation:
     #: Same, for the first detection on each occupied cell. Parallel to
     #: `cell_points_cm`.
     cell_sizes_cm: tuple[tuple[float, float], ...] = ()
+    #: ADVISORY. `(cell, residual_cm)` for each occupied cell — how far that
+    #: block's centre is from the cell's own lattice centre. The classifier
+    #: does NOT branch on this; it exists so a VERIFIED board can still report
+    #: "the worst block is 0.8 cm off" ([[placement-drift]]). `()` with no map.
+    cell_residuals_cm: tuple[tuple[Cell, float], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -346,6 +353,16 @@ def observe(detections, workspace, image_size) -> Observation:
                 gap_points.append(cm)
                 gap_angles.append(angle)
                 gap_sizes.append(size if size is not None else (0.0, 0.0))
+    grid = getattr(workspace, "mapped_grid", None)
+    cell_residuals: dict[Cell, float] = {}
+    if grid is not None:
+        for cell, observed in cell_points.items():
+            try:
+                lattice = grid.cell_center_cm(int(cell[0]), int(cell[1]))
+            except ValueError:
+                continue
+            cell_residuals[cell] = _residual_cm(observed, lattice)
+
     return Observation(cells=_sorted(set(cells)), in_gap=counts["gap"],
                        off_board=counts["margin"] + counts["outside"],
                        detections=len(detections),
@@ -354,7 +371,10 @@ def observe(detections, workspace, image_size) -> Observation:
                        gap_sizes_cm=tuple(gap_sizes),
                        cell_points_cm=tuple(cell_points.items()),
                        cell_angles_deg=tuple(cell_angles[c] for c in cell_points),
-                       cell_sizes_cm=tuple(cell_sizes[c] for c in cell_points))
+                       cell_sizes_cm=tuple(cell_sizes[c] for c in cell_points),
+                       cell_residuals_cm=tuple(
+                           (c, cell_residuals[c]) for c in cell_points
+                           if c in cell_residuals))
 
 
 def verify_placement(cell: Cell, level: int, occupied, *,

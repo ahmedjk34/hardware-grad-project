@@ -76,6 +76,10 @@ export interface Supervision {
   /** ADVISORY — cm the offending block is from its planned cell centre, for a
    *  MOVED / DISPLACED verdict. Display-only; gates nothing, no state colour. */
   residual_cm?: number | null;
+  /** ADVISORY — the worst on-cell drift anywhere on the board, cm. Present for
+   *  VERIFIED too (a board can be correct with a block 0.8 cm off its centre).
+   *  Display-only; gates nothing, no state colour. */
+  max_cell_residual_cm?: number | null;
 }
 
 export interface StateModel {

@@ -198,6 +198,23 @@ check("a detection whose box will not project keeps a (0, 0) size, never raises"
       ra.cell_sizes_cm == ((0.0, 0.0),), str(ra.cell_sizes_cm))
 
 
+# --- observe() reports per-cell drift (advisory; the classifier ignores it) - #
+
+drifted = observe([FakeDetection(at_cm(centre[0] + 0.8, centre[1]))], MAP, SIZE)
+check("observe() reports how far an on-cell block is from its lattice centre",
+      len(drifted.cell_residuals_cm) == 1
+      and drifted.cell_residuals_cm[0][0] == (3, 2)
+      and abs(drifted.cell_residuals_cm[0][1] - 0.8) < 0.05,
+      str(drifted.cell_residuals_cm))
+check("a drift inside the footprint does NOT change the verdict (still occupied)",
+      drifted.cells == ((3, 2),))
+
+square_cell = observe([FakeDetection(at_cm(*centre))], MAP, SIZE)
+check("a squarely placed block reports a near-zero residual",
+      square_cell.cell_residuals_cm[0][1] < 0.05,
+      str(square_cell.cell_residuals_cm))
+
+
 # --- D9, every row --------------------------------------------------------- #
 
 full = {(1, 1), (2, 1), (3, 1), (1, 2), (2, 2), (3, 2)}
