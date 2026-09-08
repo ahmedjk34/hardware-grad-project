@@ -12,15 +12,22 @@ worse than none.
 
 | For | Read |
 | --- | --- |
-| what the feature does, and every decision behind it | [placement-supervision.md](placement-supervision.md) |
-| what was measured, what changed, and why — **20 findings and 7 decisions** | [placement-supervision-progress.md](placement-supervision-progress.md) |
+| what the feature does, and every decision behind it | [placement-supervision.md](placement-supervision.md) — §2c is the 2026-09-07 geometry layer |
+| what was measured, what changed, and why — **25 findings and 7 decisions** | [placement-supervision-progress.md](placement-supervision-progress.md) — §2b is the 2026-09-07 pass |
+| the detector, its `include_rejected` intake and `own_size` | [../BLOCK-VISION.md](../BLOCK-VISION.md) §2 |
+| the CORRECTION gate (no more `1.2 cm` ceiling) | [correction-action.md](correction-action.md) |
 | the camera's role, and the status board | [../CAMERA.md](../CAMERA.md) |
 | the raw Gate 0 traces | [../measurements/](../measurements/) |
 
 ## What is actually left
 
 - **A bench session.** Nothing here has been watched on hardware — there is no
-  camera on the development desktop. That is M2's last open item.
+  camera on the development desktop. That is M2's last open item, and the
+  2026-09-07 camera-path changes add to it.
+- **The off-lattice shape gate** (F24) and **`PLACEMENT_DRIFT`** (F25) —
+  proposed, not built.
+- **Stage 15 Stage B** — `SIZE_TOLERANCE_CM`, `JAW_CLEARANCE_CM`,
+  `PAIRING_BEYOND_CM` are provisional constants awaiting bench measurement.
 - **Gate 0b** — the per-cell change threshold that would let the per-build check
   confirm a placement at level 1 or 2 instead of reporting `unconfirmed`
   (finding F17).

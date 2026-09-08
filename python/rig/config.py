@@ -26,7 +26,7 @@ shiftY, default 0.0) are Python-side intent too: `rig.link` pushes them after
 the mode latch and before 'S' on every connection, since a port-open reset
 clears them. They translate the whole placement lattice, [0,0] reference
 included, but never the pick-up.
-The `workspace` X/Y holder displacement, block footprint, 0.5 cm gaps and
+The `workspace` X/Y holder displacement, block footprint, 1.6 cm gaps and
 signed trims are also consumed by the Pi's camera mapping. Python serial
 clients prefer `/dev/ttyACM0` and fall back to `/dev/ttyACM1` if needed.
 `tool_offsets` are the calibrated vector from the
@@ -42,8 +42,8 @@ build displacement. It is deliberately not a control input while the extra
 Two grids, not one
 ------------------
 `grid` holds `active_mode` plus a `modes` table with one self-contained entry
-per block orientation: `vertical` (blocks standing, 9 x 5) and `horizontal`
-(blocks lying, 3 x 15). Each entry declares BOTH `block_x_cm` and `block_y_cm`
+per block orientation: `vertical` (blocks standing, 7 x 6) and `horizontal`
+(blocks lying, 3 x 10). Each entry declares BOTH `block_x_cm` and `block_y_cm`
 outright. Nothing anywhere swaps a width for a length — a swap would have to be
 performed identically in the firmware, in `MachineGrid` and in the camera
 overlay, which is three chances to get an axis backwards. See
@@ -62,11 +62,11 @@ old checkout's config still loads.
 permits a placed block's own EDGE to sit. It is not a trim and it moves
 nothing: it is the budget the geometry validator checks the far and near block
 edges against, on both machines. Vertical allows half a block on each axis
-(1.1 / 3.75 cm) because its last centre sits exactly on the travel limit and
+(1.1 / 3.0 cm) because its last centre sits exactly on the travel limit and
 the held block unavoidably overhangs — that is the shipped, physically
-verified 9 x 5 grid. Horizontal allows zero, because its 15 rows are flush
-with both walls and any overhang there means the trims are wrong. See
-docs/dual-orientation-grid.md D20 and R2. A mode that omits the pair gets
+verified 7 x 6 grid. Horizontal allows its own half-block budget (3.0 / 1.1
+cm) for its registered 3 x 10 grid. See docs/dual-orientation-grid.md D20 and
+R2. A mode that omits the pair gets
 half a block, which makes the edge check exactly as permissive as the
 centre-only check that predates it — so a legacy config does not start failing.
 """

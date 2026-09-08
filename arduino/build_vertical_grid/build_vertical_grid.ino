@@ -4280,19 +4280,16 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
   openServoAndWait();
   buildPause();
 
-  // ---- 5. down to the feeder pickup height ----
+  // ---- 5. down to the ground switch ----
   //
-  // NOT a ground seek any more: the feeder belt sits above GROUND, so
-  // this drops a fixed distance below the top switch and grips there
-  // (Z_PICKUP_DROP_FROM_TOP_CM). Z keeps its reference from phase 1's
-  // top-switch seek. Wire identifiers kept stable - see docs/ack-protocol.md.
+  // Reference build_test_v1 owns this standalone build's phase-5 motion.
   buildStep(5, F("lower_to_ground"), F("move"),
             F("Lower_Z_to_the_ground_switch"),
-            "Lower Z to the feeder pickup height (fixed drop below the top switch)",
-            zEtaToPickupMs());
-  if (!zGoPickup())
+            "Lower Z to the ground switch",
+            zEtaToGroundMs());
+  if (!zGoGround())
   {
-    buildAbort("Z never reached the pickup height");
+    buildAbort("Z never reached the ground switch");
     return false;
   }
   buildPause();

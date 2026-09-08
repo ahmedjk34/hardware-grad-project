@@ -185,24 +185,25 @@ vertical allows half a block (`1.1` / `3.0`), horizontal allows `3.0` / `1.1`
 Vertical sits exactly on its cap. Horizontal keeps far-end slack after the
 registration — but measure a real stack before trusting its last row.
 
-Commands address col `0..cols` and row `0..rows`: `[0,0]` home, `[col,0]`
-X-only, and `[0,row]` Y-only. `GRID_TRIM_X_CM[]` and `GRID_TRIM_Y_CM[]` shift
-the complete allocation of one mode; after changing one, flash and verify first
-and last cells with `G` before using `B`.
+Commands address col `0..cols` and row `0..rows`. `[0,0]` is the feeder and
+therefore a no-op build sentinel; every other coordinate, including `[col,0]`
+and `[0,row]`, is an ordinary build target. `GRID_TRIM_X_CM[]` and
+`GRID_TRIM_Y_CM[]` shift the complete allocation of one mode; after changing
+one, flash and verify first and last cells with `G` before using `B`.
 
 **The claw's physical angle is not sensed.** You are trusted to start each
 session with it neutral. Nothing in software can detect otherwise.
 
-Command `9` draws the complete convention (`H` home, `+` axis-only, `.` a
-positive cell, and `#` the current machine position):
+Command `9` draws the complete convention (`F` feeder, `.` a buildable cell,
+and `#` the current machine position):
 
 ```text
-  5 | + . . . . . .
-  4 | + . . . . . .
-  3 | + . . . . . .
-  2 | + . . . . . .
-  1 | + . . . . . .
-  0 | H + + + + + +
+  5 | . . . . . . .
+  4 | . . . . . . .
+  3 | . . . . . . .
+  2 | . . . . . . .
+  1 | . . . . . . .
+  0 | F . . . . . .
       0 1 2 3 4 5 6
 ```
 

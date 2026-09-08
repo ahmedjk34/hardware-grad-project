@@ -4,6 +4,14 @@
 and wired. M4 and M5 remain future work.** This document is now both the plan
 and the record of what was built from it — every deviation is marked in place.
 
+> **2026-09-07 — a geometry layer was added on top of M2.** `rig/placement_geometry.py`
+> (coverage / consistency / corridor / residual), `Observation` now carries the
+> block's own size and per-cell drift, the CORRECTION gate swapped its `1.2 cm`
+> ceiling for a consistency + descent-corridor check, and `step()` downgrades a
+> geometrically-impossible `DISPLACED` to `DISAGREES`. **No verdict boundary
+> moved.** Consolidated in [§2c](#2c-2026-09-07--the-geometry-layer); the
+> DISPLACED-pairing check is the note under [D9](#d9--the-classifier-is-a-set-difference-keyed-to-the-build-area).
+
 > **Not yet watched on hardware.** Every path here is tested, and Gate 0's
 > constants were measured on the rig — but the wired code has never seen a real
 > frame, because there is no camera on the development desktop. M2's last open
@@ -170,6 +178,77 @@ newest build row in place. **The browser still never derives a verdict** — it
 renders the server's sentence verbatim.
 
 M3a was still far cheaper than it looks, and was still built first.
+
+---
+
+## 2c. 2026-09-07 — the geometry layer
+
+M2 shipped occupancy only: a cell was a boolean, `in_gap` was a count, and a
+`DISPLACED` verdict named a cell without ever measuring where the block
+actually was. A pass on 2026-09-07 added a **pure geometry module** and wired it
+into supervision and the CORRECTION action. **No verdict boundary moved** — the
+VERIFIED / DISPLACED / MOVED split is still `WorkspaceMap.cell_at` on the
+centroid (§2a.2). Everything below is measurement layered *on top* of that.
+
+### `rig/placement_geometry.py` — separable 1-D block geometry
+
+Pure interval arithmetic, no camera, no numpy. The grid is separable (footprints
+and gaps are axis-aligned strips), so each question is one axis at a time.
+
+| Function | Answers |
+| --- | --- |
+| `axis_coverage()` | splits a block's extent on one axis into the part over its planned footprint / the gap / the neighbour it drifted toward / **`beyond`** (past that neighbour). `beyond ≈ 0` for a real single-cell displacement; it grows once the block and the cell are more than a pitch apart. |
+| `consistency()` | is this one axis-aligned block, one displacement off — not two touching blocks (`measured_size` off nominal), not reaching past a neighbour (`beyond`), not rotated. |
+| `corridor_clear()` | on the drift axis only: is there room to lower a jaw between the block and the cell it slid toward — nothing if that neighbour is empty; `gap − cov.gap ≥ JAW_CLEARANCE_CM` if it is occupied. |
+| `residual_cm()` | `hypot` of the observed-minus-planned centre offset — the one "how far off" number. |
+
+### `Observation` now carries the block's own geometry
+
+`observe()` reads **`BlockDetection.own_angle`** (not the rectified lattice
+bearing) and projects **`own_size`** to cm (`_detection_size_cm`, built from the
+detection's own box corners), adding three parallel fields:
+
+- `gap_sizes_cm` — footprint of each `in_gap` detection, for `consistency()`;
+- `cell_sizes_cm` — same, per occupied cell;
+- `cell_residuals_cm` — `(cell, residual_cm)` for every occupied cell. **Advisory
+  only** — the classifier never branches on it; it exists so a VERIFIED board
+  can still report "the worst block is 0.8 cm off its centre".
+
+### The CORRECTION gate stopped being a distance band
+
+`rig/placement_check.assess()` for a `DISPLACED` verdict: the `0.5 cm` **floor**
+stays (below it a pick-lift-place adds more error than it removes); the `1.2 cm`
+**ceiling is gone**. `CORRECT_BAND_MAX_CM` and `judge_band`'s `REFUSE` branch
+were deleted. In their place: `consistency()` + `corridor_clear()`, fed the
+block's `own_size` and the drifted-toward neighbour's ledger occupancy. A block
+displaced far along an axis whose neighbour is **empty** — the whole of vertical
+Y in a normal build — is now correctable. `MOVED` is unchanged
+(`MOVED_PICK_SANITY_CM`). Provisional constants: `SIZE_TOLERANCE_CM = 0.8`,
+`JAW_CLEARANCE_CM = 0.4` — Stage 15 Stage B. Full detail in
+[correction-action.md](correction-action.md), 2026-09-07 note.
+
+### `step()` rejects a `DISPLACED` pairing the geometry cannot support
+
+See the note under **D9** below — `Supervisor.step(grid=…)` runs
+`implausible_displacement()` and downgrades to `DISAGREES` when the gap block is
+more than `PAIRING_BEYOND_CM` (1.0, provisional) past the cell `classify` paired
+it with. This is what surfaces a **misregistered workspace map**: it trips on
+every displacement instead of publishing a confident wrong verdict.
+
+### The published model
+
+`SupervisionState` / `SupervisionModel` (§5) gained two **advisory** fields,
+`residual_cm` (the MOVED / DISPLACED offender's distance) and
+`max_cell_residual_cm` (worst on-cell drift, present for VERIFIED too). Both are
+display-only — no state colour, they gate nothing. `web/src/types.ts` matches.
+
+### The `include_rejected` intake, and its open edge
+
+`console_pipeline.py` now calls the detector with `include_rejected=True`
+(BLOCK-VISION §2), so an off-lattice block reaches `observe()` at all. The open
+edge: shape junk the lattice filter rejected reaches it too, and can become
+spurious `in_gap` evidence on a messy bench. A block-shape gate for off-lattice
+detections was proposed and **not built** — progress.md F24.
 
 ---
 

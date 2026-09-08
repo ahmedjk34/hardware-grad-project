@@ -7,7 +7,7 @@
     rig.connect()               # opens the port, waits out the reboot banner
     rig.send("5")               # fire and forget, like the console does
     rig.build(3, 5, 0)          # blocks, returns 'placed'/'rejected'/'aborted'
-    rig.build(0, 5, 0)          # calibration: target Y only
+    rig.build(0, 5, 0)          # ordinary placement on the Y-home edge
 
 `rig_console.py` is a thin wrapper around the first three lines. Anything that
 needs to KNOW whether a command worked — the camera viewer, next — uses the

@@ -2609,6 +2609,19 @@ int8_t gridDirOf(uint8_t axis)
   return travelEndOf(axis);
 }
 
+// Convert only at the boundary between the distance-from-home calibration
+// space and the motor's signed position space. X is negative away from home;
+// Y is positive, so build corrections must never be added to a signed target.
+long axisPosFromHomeSteps(uint8_t axis, long stepsFromHome)
+{
+  return stepsFromHome * (long)gridDirOf(axis);
+}
+
+long axisStepsFromHome(uint8_t axis, long signedPos)
+{
+  return signedPos * (long)gridDirOf(axis);
+}
+
 long gridCountOf(uint8_t axis)
 {
   return (axis == AXIS_X) ? gridColsNow() : gridRowsNow();
@@ -2908,7 +2921,7 @@ bool cellTargetPosition(uint8_t axis, long index, int8_t rotation,
     return false;
   }
 
-  *targetPosition = mag * (long)gridDirOf(axis);
+  *targetPosition = axisPosFromHomeSteps(axis, mag);
   return true;
 }
 
@@ -2934,7 +2947,7 @@ float gridPitchStepsOf(uint8_t axis)
 long positionToIndex(uint8_t axis, long pos, int8_t rotation)
 {
   long count = gridCountOf(axis);
-  long mag = pos * (long)gridDirOf(axis); // distance from origin
+  long mag = axisStepsFromHome(axis, pos); // distance from home
   float scale = xyStepsPerCmOf(axis);
 
   if (mag < 0 || mag > gridTravelOf(axis) || scale <= 0.0)
@@ -3523,21 +3536,28 @@ bool gotoBuildTarget(long col, long row, int8_t rotation)
     long correction = buildPlacementOffsetSteps(axis) + buildSkewSteps(axis, col, row);
     if (correction == 0)
       continue;
+    // `original` is signed (negative away from home on X); `correction` is a
+    // magnitude away from home. Combine and clamp them only in magnitude
+    // space, then convert back once. This matches build_test_v1 and prevents
+    // horizontal X targets from being clamped to the origin.
     long original = *targets[axis];
-    long capped = original + correction;
-    long maximum = lround(xyTravelCmOf(axis) * xyStepsPerCmOf(axis));
-    if (capped < 0)
-      capped = 0;
-    else if (capped > maximum)
-      capped = maximum;
+    long wantedFromHome = axisStepsFromHome(axis, original) + correction;
+    long maximum = gridTravelOf(axis);
+    long magnitude = wantedFromHome;
+    if (magnitude < 0)
+      magnitude = 0;
+    else if (magnitude > maximum)
+      magnitude = maximum;
+    long capped = axisPosFromHomeSteps(axis, magnitude);
     Serial.print(F("  Build correction: "));
     Serial.print((axis == AXIS_X) ? F("X ") : F("Y "));
     Serial.print(original);
     Serial.print(F(" -> "));
     Serial.print(capped);
     Serial.print(F(" steps ("));
-    Serial.print((float)(capped - original) / xyStepsPerCmOf(axis), 3);
-    Serial.println(F(" cm)"));
+    Serial.print((float)(magnitude - axisStepsFromHome(axis, original)) /
+                 xyStepsPerCmOf(axis), 3);
+    Serial.println(F(" cm from home)"));
     *targets[axis] = capped;
   }
 
@@ -4280,19 +4300,16 @@ bool buildBlock(long col, long row, long level, int8_t wantRot)
   openServoAndWait();
   buildPause();
 
-  // ---- 5. down to the feeder pickup height ----
+  // ---- 5. down to the ground switch ----
   //
-  // NOT a ground seek any more: the feeder belt sits above GROUND, so
-  // this drops a fixed distance below the top switch and grips there
-  // (Z_PICKUP_DROP_FROM_TOP_CM). Z keeps its reference from phase 1's
-  // top-switch seek. Wire identifiers kept stable - see docs/ack-protocol.md.
+  // Reference build_test_v1 owns this standalone build's phase-5 motion.
   buildStep(5, F("lower_to_ground"), F("move"),
             F("Lower_Z_to_the_ground_switch"),
-            "Lower Z to the feeder pickup height (fixed drop below the top switch)",
-            zEtaToPickupMs());
-  if (!zGoPickup())
+            "Lower Z to the ground switch",
+            zEtaToGroundMs());
+  if (!zGoGround())
   {
-    buildAbort("Z never reached the pickup height");
+    buildAbort("Z never reached the ground switch");
     return false;
   }
   buildPause();

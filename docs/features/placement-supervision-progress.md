@@ -604,6 +604,67 @@ clean tree: it failed once there too. A heartbeat timing test.
 
 ---
 
+## 2b. FINDINGS — 2026-09-07, the geometry-layer pass
+
+### F21 — The old CORRECTION `1.2 cm` ceiling was a blunt proxy, and dead
+
+`CORRECT_BAND_MAX_CM = 1.2` refused any `DISPLACED` correction past 1.2 cm on
+the grounds the block's edge would foul a neighbour. It never checked whether
+the neighbour was *there*, and a `DISPLACED` centroid is already ≥ half a block
+off its cell, so the correctable window was ~1 mm in vertical X and **empty in
+vertical Y**. Replaced with `placement_geometry.consistency()` (one straight
+block, right footprint, not past a neighbour) + `corridor_clear()` (the
+drifted-toward neighbour's ledger occupancy, jaw clearance on the drift axis).
+`judge_band` keeps only the `0.5 cm` floor. New provisional constants
+`SIZE_TOLERANCE_CM = 0.8`, `JAW_CLEARANCE_CM = 0.4` — Stage 15 Stage B.
+
+### F22 — `classify` pairs `DISPLACED` cells by set difference and never checks proximity
+
+One emptied cell + one gap detection → `DISPLACED [a,b]`, even when the gap
+detection is a full grid away from `[a,b]`. On the rig this surfaced as a
+verdict of "the block reaches 3.67 cm past its neighbour" for a block that
+looked fine — the classifier had paired an unrelated gap reading with a cell
+emptied elsewhere. `Supervisor.step(grid=…)` now runs
+`implausible_displacement()`: `axis_coverage.beyond > PAIRING_BEYOND_CM` (1.0,
+provisional) ⇒ the verdict is downgraded to `DISAGREES` with a reason naming
+the distance. **A misregistered workspace map trips this on every displacement**
+— the intended loud failure, instead of a confident wrong verdict.
+
+### F23 — `_rectify` was erasing the one thing supervision needed
+
+`block_outline._rectify` overwrites `width` / `height` / `angle` with the
+population median and lattice bearing — correct for the overlay, wrong for
+supervision, because a misplaced block *is* the wrong size or angle. `_rectify`
+now copies the pre-rectification values to `BlockDetection.measured_*` first;
+`own_size` / `own_angle` read them back. `observe()` uses `own_angle` and
+projects `own_size`, not the rectified box. Off-lattice detections reach the
+supervisor at all via `detect_aligned_blocks(include_rejected=True)`, which
+`console_pipeline` now passes (BLOCK-VISION §2).
+
+### F24 — `include_rejected=True` has an ungated edge: shape junk
+
+Keeping off-lattice detections also keeps whatever the lattice filter rejected
+that was *not* a block — a shadow, a rail, half an occluded block — and
+`observe()` can count it as `in_gap` evidence, producing spurious FOREIGN /
+DISPLACED / DISAGREES on an untidy bench. A block-shape gate for off-lattice
+detections in `observe()` (rectangularity + solidity + `own_size` ≈ nominal ±
+tolerance) was **proposed and not built** — the reverted change is the design
+of record if it is picked up. The **detector itself is not regressed**:
+`detect_blocks` / `detect_aligned_blocks` (default) give byte-identical counts
+to the pre-pass code on every `python/captures/` image; the "detector broken"
+report was a false alarm traced to this intake widening.
+
+### F25 — Advisory residuals, published, rendered nowhere yet
+
+`SupervisionModel` gained `residual_cm` (MOVED / DISPLACED offender distance)
+and `max_cell_residual_cm` (worst on-cell drift, present for VERIFIED). Both
+gate nothing and take no state colour. `types.ts` matches. **No UI renders them
+yet** — they reach the client via `GET /api/state` only. Turning
+`max_cell_residual_cm` into a `PLACEMENT_DRIFT` verdict needs the Stage 15 Stage
+B placement-repeatability number to set the trigger, so it stays a field.
+
+---
+
 ## 3. THE USER'S QUESTIONS — asked, answered, resolved
 
 Recorded because several of them changed the design.
@@ -914,9 +975,12 @@ still stops-or-pauses on ~99% of a correct board. `test_supervisor.py` 89 pass,
 | `python/rig/placement_ledger.py` | D2/D3/D4/D13 + Stage 15's two predicates. Pure data |
 | `python/rig/build_log.py` | third `PlacementLog` sink → `logs/placements.log` |
 | `python/rig/build_controller.py` | one call on the `PLACED` branch, behind `ledger=None` |
-| `python/rig/supervisor.py` | `locate`, `observe`, `classify`, `verify_placement`, `quiet_fraction`, `_CellHistory`, `Interlocks`, `Supervisor` |
-| `python/web/app.py` | `_supervise`, `_resolve_pending_check`, `_note_supervision`; ledger + supervisor owned by the lifespan |
-| `python/web/state.py` | `SupervisionState`, `SupervisionModel`, `vision_verification` |
+| `python/rig/supervisor.py` | `locate`, `observe`, `classify`, `verify_placement`, `quiet_fraction`, `_CellHistory`, `Interlocks`, `Supervisor`; **+2026-09-07:** `_detection_size_cm`, `implausible_displacement`, `step(grid=…)` DISPLACED→DISAGREES gate, `Observation.{gap,cell}_sizes_cm` / `cell_residuals_cm` |
+| `python/rig/placement_geometry.py` | **+2026-09-07:** `axis_coverage`, `consistency`, `corridor_clear`, `residual_cm`, `drift_axis`, `displacement_cm`. Pure interval maths |
+| `python/rig/placement_check.py` | CORRECTION geometry + policy; **+2026-09-07:** `1.2 cm` ceiling replaced by `consistency` + `corridor_clear`, `SIZE_TOLERANCE_CM` / `JAW_CLEARANCE_CM` |
+| `python/vision/block_detector.py` `block_outline.py` | **+2026-09-07:** `BlockDetection.measured_*` / `own_size` / `own_angle` / `on_lattice`; `detect_aligned_blocks(include_rejected=True)`, passed by `console_pipeline` |
+| `python/web/app.py` | `_supervise`, `_resolve_pending_check`, `_note_supervision`; ledger + supervisor owned by the lifespan; **+2026-09-07:** passes `grid` to `step()`, publishes `residual_cm` / `max_cell_residual_cm` |
+| `python/web/state.py` | `SupervisionState`, `SupervisionModel`, `vision_verification`; **+2026-09-07:** `frame_residual_cm`, `worst_cell_residual_cm`, `residual_cm` / `max_cell_residual_cm`, `assess_frame_correction` drift-neighbour occupancy |
 | `python/web/routes_command.py` | `POST /api/supervision/ack` (D12) |
 | `web/src/components/SupervisionBanner.tsx` | the only surface allowed to alarm |
 | `web/src/components/GridOverlay.tsx` | the per-cell verdict mark and the unjudged hatch |
@@ -929,23 +993,38 @@ still stops-or-pauses on ~99% of a correct board. `test_supervisor.py` 89 pass,
 | `python/tests/test_supervisor_frames.py` | **23 checks** — the four rig traces, replayed |
 | `docs/measurements/gate0_*.csv` | the four Gate 0 traces, now committed (P7) |
 
-Test gate at time of writing:
+Test gate — M2 build (unchanged):
 
 | suite | result |
 | --- | --- |
 | `test_placement_ledger.py` | 42 passed, 0 failed |
-| `test_supervisor.py` | 83 passed, 0 failed |
 | `test_supervisor_frames.py` | 23 passed, 0 failed |
-| `web_supervision_test.py` | 26 passed, 0 failed |
-| `test_grid.py` | 233 passed, **1 failed** — F10, firmware drift, not this work and left alone by decision (P5) |
-| `npx vitest run` | **42 files, 552 tests, all passed** |
-| `pytest tests/` | **94 passed, 0 failed** — the three that used to fail were test bugs (F20) |
 
-### Not built — and these are the only things left
+Test gate — after the 2026-09-07 geometry-layer pass:
 
-- **A bench session.** The one item that cannot be done from this desk.
-- **Gate 0b** — the per-cell change threshold that would let the per-build check
-  confirm a placement at level 1 or 2 rather than reporting `unconfirmed` (F17).
+| suite | result |
+| --- | --- |
+| `test_supervisor.py` | **111 passed, 0 failed** (was 83) |
+| `test_placement_geometry.py` | **32 passed, 0 failed** (new) |
+| `test_placement_check.py` | **41 passed, 0 failed** |
+| `web_supervision_test.py` | **43 passed, 0 failed** (was 26) |
+| `test_block_outline.py` / `test_block_detector.py` | all passed |
+| `test_grid.py` | 241 passed, **1 failed** — F10, firmware drift, not this work (P5) |
+| `npx vitest run` | **42 files, 563 tests, all passed** |
+| `pytest tests/` (python) | all passed |
+
+### Not built — the things left
+
+- **A bench session.** The one item that cannot be done from this desk. The
+  2026-09-07 camera-path changes (`include_rejected`, `measured_*` through
+  `_rectify`, `own_size` box projection, `step(grid=…)`) are **unverified on the
+  Pi**.
+- **The off-lattice shape gate** (F24) — proposed, reverted, not built.
+- **`PLACEMENT_DRIFT`** — a verdict off `max_cell_residual_cm`; needs Stage 15
+  Stage B (F25).
+- **Stage 15 Stage B bench numbers** — `SIZE_TOLERANCE_CM`, `JAW_CLEARANCE_CM`,
+  `PAIRING_BEYOND_CM`, `CORRECT_BAND_MIN_CM` are all provisional (F21, F22).
+- **Gate 0b** — the per-cell change threshold for a level-1/2 confirm (F17).
 - **M4** — bounded automatic repair, deliberately off.
 - **M5** — lifting the level-3 ceiling.
 - **F10 / P5** — `test_grid.py`'s firmware drift. Not this feature's, by

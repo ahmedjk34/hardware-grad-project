@@ -124,9 +124,11 @@ _drop_duplicates      IoU > DUPLICATE_IOU (0.30)
       ↓
 _inside_frame         box must not run off the frame (EDGE_TOLERANCE_PX = 1.0)
       ↓
-_lattice_filter       needs a MachineGrid; drops anything off the lattice
+_lattice_filter       needs a MachineGrid; off-lattice → dropped, OR (include_rejected)
+                      kept and tagged on_lattice=False
       ↓
-_rectify              median size + shared bearing, measured centre kept
+_rectify              on-lattice: median size + shared bearing, measured centre kept;
+                      off-lattice: own geometry kept. Both: measured_* preserved.
 ```
 
 ### Constants
@@ -170,6 +172,39 @@ bearing. **The centre stays exactly where it was measured.** Snapping positions
 onto the lattice would draw a prettier grid and hide a misplaced block, which
 is the one thing this overlay exists to show. `tests/test_block_outline.py`
 asserts the centres match a same-settings `detect_blocks` run exactly.
+
+### `include_rejected`, `on_lattice`, and the preserved `measured_*` (2026-09-07)
+
+`_lattice_filter` used to *drop* every off-lattice detection. That was safe only
+while the holder's offcuts were the one thing off the lattice; with the holder
+off the rig, an off-lattice detection is usually a real block that drifted more
+than `LATTICE_SNAP` (0.34 cells) from its site — i.e. exactly what a supervision
+`DISPLACED` verdict is about, and it was being hidden from the supervisor.
+
+- **`detect_aligned_blocks(include_rejected=True)`** keeps the rejected
+  detections in the returned list, each tagged **`on_lattice=False`**, and
+  `_rectify` leaves those their own size and bearing (never the population
+  median). `console_pipeline.py` — the web console's pipeline — passes this
+  flag; `camera_feed.py`, `rig_build_v1.py` and `gridded_camera_feed.py` do
+  **not**, so their overlays are unchanged. Default is `False`: the count and
+  behaviour `test_block_outline.py` pins are untouched.
+- **`BlockDetection.measured_width` / `measured_height` / `measured_angle`** are
+  set by `_rectify` (both branches) to the pre-rectification values before it
+  overwrites `width` / `height` / `angle` with the shared ones. The properties
+  **`own_size`** and **`own_angle`** read them back (falling through to
+  `size` / `angle` when unset — a bare `detect_blocks` output, or `rectify=False`).
+  Supervision reads `own_*`; the drawing code still reads the shared `size` /
+  `angle`, so the board still renders as one grid.
+- **Known consequence, not yet gated:** `include_rejected=True` also lets shape
+  junk the lattice filter rejected — a shadow, a rail, half an occluded block —
+  reach `observe()`, where it can become spurious `in_gap` / FOREIGN evidence on
+  a messy bench. A block-shape gate for off-lattice detections in `observe()`
+  was proposed and **not** built; see
+  [placement-supervision-progress.md](features/placement-supervision-progress.md) F24.
+
+The offline detector itself is **unchanged** — `detect_blocks` and
+`detect_aligned_blocks` (default args) produce byte-identical counts to the
+pre-2026-09-07 code on every image in `python/captures/`.
 
 ### Do not borrow layer 3's detection settings
 

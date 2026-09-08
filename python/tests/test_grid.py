@@ -597,16 +597,24 @@ for constant, expected_by_mode in placement_offset_defaults.items():
 check("live gripper open angle is 100 degrees", firmware_number("SERVO_OPEN_ANGLE") == 100)
 check("live gripper close angle is 180 degrees", firmware_number("SERVO_CLOSE_ANGLE") == 180)
 
-# The feeder belt sits above ground, so build phase 5 drops a fixed distance
-# below the TOP switch instead of ground-seeking. Firmware-only, no rig.json
-# partner - but it lives in all three build sketches and they must agree, or a
-# manual standalone run rams the belt while the rig sketch clears it.
+# build_test_v1 is the firmware reference. Its phase-5 ground seek is
+# firmware-only, but the supervised standalone sketches must use the same
+# operation so a manual fill does not disagree with the flashed controller.
 Z_PICKUP_DROP_FROM_TOP_CM = 13.3
 check("rig sketch feeder pickup drop is 13.3 cm below the top switch",
       firmware_number("Z_PICKUP_DROP_FROM_TOP_CM") == Z_PICKUP_DROP_FROM_TOP_CM,
       str(firmware_number("Z_PICKUP_DROP_FROM_TOP_CM")))
-check("rig sketch phase 5 uses zGoPickup(), not zGoGround()",
-      "if (!zGoPickup())" in sketch and "if (!zGoGround())" not in sketch)
+
+
+def phase5_body(src):
+    """The active build phase-5 block, excluding disabled helper code."""
+    match = re.search(r"buildStep\(5,.*?\n\s*buildPause\(\);", src, re.DOTALL)
+    return match.group(0) if match else ""
+
+
+check("rig sketch phase 5 uses zGoGround(), not zGoPickup()",
+      "if (!zGoGround())" in phase5_body(sketch)
+      and "if (!zGoPickup())" not in phase5_body(sketch))
 
 
 def zgopickup_body(src):
@@ -622,15 +630,6 @@ def zgopickup_body(src):
     return re.sub(r"//[^\n]*", "", body)  # code only - a word in a comment is not a use
 
 
-# zGoPickup() must reference the TOP switch physically (seek it) and step the
-# drop from there - NOT compute an absolute target from Z_TRAVEL_STEPS, which
-# would make the pickup height wrong (and first-block-different) whenever the
-# step constant does not match the rig.
-_body = zgopickup_body(sketch)
-check("rig sketch zGoPickup() seeks the top switch as its reference",
-      "zGoTop()" in _body and "zStepsFromGround()" in _body
-      and "Z_TRAVEL_STEPS" not in _body)
-
 # The supervised vertical/horizontal fill sketches must use the same dynamic
 # correction tables as the configured rig sketch. They are not flashed by
 # scripts/flash.sh, but leaving their old Y-only implementation behind makes a
@@ -645,12 +644,9 @@ for standalone_name in ("build_vertical_grid", "build_horizontal_grid"):
           standalone_drop is not None
           and float(standalone_drop.group(1)) == Z_PICKUP_DROP_FROM_TOP_CM,
           standalone_drop.group(1) if standalone_drop else "not found")
-    check(f"{standalone_name} phase 5 uses zGoPickup(), not zGoGround()",
-          "if (!zGoPickup())" in standalone and "if (!zGoGround())" not in standalone)
-    _sbody = zgopickup_body(standalone)
-    check(f"{standalone_name} zGoPickup() seeks the top switch as its reference",
-          "zGoTop()" in _sbody and "zStepsFromGround()" in _sbody
-          and "Z_TRAVEL_STEPS" not in _sbody)
+    check(f"{standalone_name} phase 5 uses the rig sketch's zGoGround()",
+          "if (!zGoGround())" in phase5_body(standalone)
+          and "if (!zGoPickup())" not in phase5_body(standalone))
     for constant, expected_by_mode in {**dynamic_skew_defaults,
                                        **placement_offset_defaults}.items():
         actual = firmware_mode_numbers(constant, standalone)
