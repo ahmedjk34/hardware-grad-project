@@ -52,7 +52,7 @@ float SKEW_Y_PER_COL_CM[GRID_MODE_COUNT]    = {0.115f, 0.130f};
 float SKEW_Y_PER_ROW_CM[GRID_MODE_COUNT]    = {0.0f, 0.0f};
 float SKEW_Y_PER_COLROW_CM[GRID_MODE_COUNT] = {0.0f, 0.0f};
 
-float BUILD_PLACEMENT_OFFSET_X_CM[GRID_MODE_COUNT] = {0.0f, -0.4f};
+float BUILD_PLACEMENT_OFFSET_X_CM[GRID_MODE_COUNT] = {0.0f, 1.35f};
 float BUILD_PLACEMENT_OFFSET_Y_CM[GRID_MODE_COUNT] = {0.0f, 0.0f};
 
 long buildSkewSteps(uint8_t axis, long col, long row)
@@ -97,10 +97,12 @@ The shipped skew values are `vertical Y += 0.115 * col` and `horizontal Y +=
 `BUILD_PLACEMENT_OFFSET_*` is the separate fixed-error correction. It is per
 axis and per mode, defaults to zero, and is added once to a `B` target before
 the dynamic skew. Use it only for a measured constant release-position error;
-The current measured fixed residual is horizontal X: placements land 0.4 cm
-too far from the X home switch, so `BUILD_PLACEMENT_OFFSET_X_CM[horizontal]`
-is `-0.4`. The negative command moves the holder toward home and cancels that
-away-from-home error. The other three slots remain zero until measured.
+`BUILD_PLACEMENT_OFFSET_X_CM[horizontal]` is `+1.35`. It was `-0.4` until the
+2026 arm re-seat; with the knob at `0` the re-seated arm placed every block
+1.35 cm toward the X+ home switch (rig-measured), so `+1.35` pushes them back.
+An unverified `+1.8` intermediate was never confirmed on hardware. If the arm
+is ever re-seated square, set this back to `-0.4`. The other three slots remain
+zero until measured.
 
 ## Scope — where this lives, and where it must never leak
 
@@ -137,7 +139,7 @@ Dynamic skew [vertical]: Y += 0.115*col + 0.000*row + 0.000*col*row cm   (BUILD 
 Build placement offset [vertical]: Y += 0.000 cm   (BUILD only, + = away from home)
 Dynamic skew [horizontal]: Y += 0.130*col + 0.000*row + 0.000*col*row cm   (BUILD only, + = away from home)
              e.g. col 2 row 0 -> Y += 0.260 cm (<steps> steps)
-Build placement offset [horizontal]: X += -0.400 cm   (BUILD only, + = away from home)
+Build placement offset [horizontal]: X += 1.350 cm   (BUILD only, + = away from home)
 ```
 
 If those lines are **absent**, the board is still running old firmware — re-flash.

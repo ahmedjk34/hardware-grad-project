@@ -69,9 +69,10 @@ SKEW_Y_PER_COL_CM = {"vertical": 0.115, "horizontal": 0.13}
 SKEW_Y_PER_ROW_CM = {"vertical": 0.0, "horizontal": 0.0}
 SKEW_Y_PER_COLROW_CM = {"vertical": 0.0, "horizontal": 0.0}
 
-# horizontal X was -0.4 until the 2026 arm re-seat; +2.2 added to cancel the
-# re-seated claw gripping every block ~2.2 cm toward the X+ home switch.
-BUILD_PLACEMENT_OFFSET_X_CM = {"vertical": 0.0, "horizontal": 1.8}
+# horizontal X was -0.4 until the 2026 arm re-seat; with the knob at 0 the
+# re-seated arm placed blocks 1.35 cm toward the X+ home switch (rig-measured),
+# so +1.35 corrects it.
+BUILD_PLACEMENT_OFFSET_X_CM = {"vertical": 0.0, "horizontal": 1.35}
 BUILD_PLACEMENT_OFFSET_Y_CM = {"vertical": 0.0, "horizontal": 0.0}
 # --------------------------------------------------------------------------- #
 

@@ -167,7 +167,7 @@ describes the bug, not the rig.
 | `GRID_ERROR_OFFSET_*` | `0.0` | `0.0` | no model-level correction in either mode |
 | `SKEW_Y_PER_COL_CM` | `0.115` | `0.13` | X-rail twist pulls Y as X travels out |
 | `SKEW_X_*`, `SKEW_Y_PER_ROW/COLROW` | `0.0` | `0.0` | unmeasured, stay zero |
-| `BUILD_PLACEMENT_OFFSET_X_CM` | **`0.0`** | **`+1.8`** | horizontal placements are pushed 1.8 cm **away** from the X home switch. Was `−0.4` until the 2026 arm re-seat left the claw gripping every block ~2.2 cm toward the X+ home switch; `+1.8` = the old `−0.4` intent plus `+2.2` to cancel it, net placement unchanged. Goes back to `−0.4` if the arm is re-seated square. |
+| `BUILD_PLACEMENT_OFFSET_X_CM` | **`0.0`** | **`+1.35`** | horizontal placements are pushed 1.35 cm **away** from the X home switch. Was `−0.4` until the 2026 arm re-seat; with the knob at `0` the re-seated arm placed every block 1.35 cm **toward** the X+ home switch (rig-measured), so `+1.35` corrects it. An unverified `+1.8` intermediate was never confirmed on hardware. Goes back to `−0.4` if the arm is re-seated square. |
 | `BUILD_PLACEMENT_OFFSET_Y_CM` | **`0.0`** | `0.0` | no fixed Y correction in either mode |
 | `Z_PICKUP_DROP_FROM_TOP_CM` | `13.3` | `13.3` | not per mode — phase-5 pickup descends 13.3 cm below the top switch (≈ 13.2 cm above ground at the shipped Z calibration) onto the feeder belt, instead of ground-seeking |
 

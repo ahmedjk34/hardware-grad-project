@@ -3493,9 +3493,9 @@ float SKEW_Y_PER_COLROW_CM[GRID_MODE_COUNT] = {0.0, 0.0};
 // Fixed, build-only placement correction. It never moves the grid model,
 // camera overlay, Studio, Twin, or direct G target. Positive is away from
 // that axis's home switch; leave every mode/axis slot zero until measured.
-// horizontal X is +1.8 (was -0.4; +2.2 added to cancel the 2026 arm re-seat
-// that grips every block ~2.2 cm toward the X+ home switch).
-float BUILD_PLACEMENT_OFFSET_X_CM[GRID_MODE_COUNT] = {0.0, 1.8};
+// horizontal X is +1.35 (was -0.4; after the 2026 arm re-seat, with this knob
+// at 0, blocks landed 1.35 cm toward the X+ home switch - measured on the rig).
+float BUILD_PLACEMENT_OFFSET_X_CM[GRID_MODE_COUNT] = {0.0, 1.35};
 float BUILD_PLACEMENT_OFFSET_Y_CM[GRID_MODE_COUNT] = {0.0, 0.0};
 
 long buildPlacementOffsetSteps(uint8_t axis)

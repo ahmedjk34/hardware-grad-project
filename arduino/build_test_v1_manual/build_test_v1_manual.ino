@@ -626,11 +626,9 @@ const bool SOFT_LIMIT_VERBOSE = true;
 //   GRID_SHIFT_X_CM / _Y_CM            0.0    0.0   (runtime only)
 //   SKEW_Y_PER_COL_CM                  0.115  0.13  (X-rail twist pulls Y)
 //   SKEW_X_* and all ROW/COLROW terms  0.0    0.0   (unmeasured)
-//   BUILD_PLACEMENT_OFFSET_X_CM        0.0   +1.35  (horiz, UNDER TEST here only;
-//                                                    other sketches +1.8. history:
-//                                                    -0.4 -> +1.8 -> 0.0 (raw
-//                                                    error measured: 1.35 toward
-//                                                    home) -> +1.35)
+//   BUILD_PLACEMENT_OFFSET_X_CM        0.0   +1.35  (horiz; was -0.4, then the
+//                                                    2026 arm re-seat - measured
+//                                                    1.35 cm toward home at 0)
 //   BUILD_PLACEMENT_OFFSET_Y_CM        0.0    0.0
 //   TOOL_OFFSET_NEUTRAL_X/Y_CM         0.0 / 0.0    (not per mode)
 //   TOOL_OFFSET_CW_X/Y_CM             +0.9 / -0.3   (the pickup-rotate swing)
@@ -3960,17 +3958,15 @@ float SKEW_Y_PER_COLROW_CM[GRID_MODE_COUNT] = {0.0, 0.0};
 // THE SHIPPED VALUES, AND WHAT EACH ONE MEANS - the tables read
 // { vertical, horizontal }:
 //
-//   X horizontal +1.35  UNDER TEST in this sketch only. With this knob at 0.0
-//                       the re-seated arm placed blocks 1.35 cm TOWARD the X+
-//                       home switch; +1.35 pushes them back out. History: -0.4
-//                       (pre re-seat) -> +1.8 -> 0.0 (raw measurement) -> +1.35.
-//                       The other three sketches (build_test_v1,
-//                       build_vertical_grid, build_horizontal_grid) and
-//                       AGENTS.md still say +1.8; reconcile once +1.35 is
-//                       confirmed on hardware.
 //   X vertical    0.0   no fixed X correction in vertical mode
-//   Y vertical    0.0   no fixed Y correction in vertical mode
-//   Y horizontal  0.0   no fixed Y correction in horizontal mode
+//   X horizontal +1.35  horizontal placements are commanded 1.35 cm AWAY from
+//                       the X home switch of the raw lattice. History: -0.4
+//                       (0.4 cm toward home) until the 2026 arm re-seat. With
+//                       this knob at 0 the re-seated arm placed every block
+//                       1.35 cm TOWARD the X+ home switch (measured on the
+//                       rig), so +1.35 pushes them back onto the cell. An
+//                       unverified +1.8 intermediate was never confirmed on
+//                       hardware. Back to -0.4 if the arm is re-seated square.
 //   Y vertical    0.0   no fixed Y correction in vertical mode
 //   Y horizontal  0.0   no fixed Y correction in horizontal mode
 //

@@ -332,15 +332,15 @@ hlx = pick_x_leg(pf_h)
 # holder X = centre(1)=9.5 minus tool_offset_x 0.9 -> 8.6 cm.
 check("horizontal pick X folds in the CW tool offset",
       hlx.target_mag == _lround((9.5 - 0.9) * HSPC_X))
-# correction X = lround(BUILD_PLACEMENT_OFFSET_X(+1.8)*spc) + skew_x(0) + lround(dx*spc)
-check("horizontal pick X correction sums the +1.8 cm placement offset and the nudge",
-      hlx.correction_steps == _lround(1.8 * HSPC_X) + _lround(0.5 * HSPC_X))
+# correction X = lround(BUILD_PLACEMENT_OFFSET_X(+1.35)*spc) + skew_x(0) + lround(dx*spc)
+check("horizontal pick X correction sums the +1.35 cm placement offset and the nudge",
+      hlx.correction_steps == _lround(1.35 * HSPC_X) + _lround(0.5 * HSPC_X))
 check("horizontal place X carries the placement offset even with no nudge",
       next(l for l in pf_h.legs if l.leg == "place" and l.axis == "x"
-           ).correction_steps == _lround(1.8 * HSPC_X))
+           ).correction_steps == _lround(1.35 * HSPC_X))
 
-# Far horizontal column [2] holder X = 17.1 - 0.9 = 16.2 cm, then +1.8 cm
-# placement offset pushes it away from home to ~18.0 cm — still well inside
+# Far horizontal column [2] holder X = 17.1 - 0.9 = 16.2 cm, then +1.35 cm
+# placement offset pushes it away from home to ~17.55 cm — still well inside
 # the 22.8 cm X travel cap.
 pf_hc = preflight_correction(grid=HGRID, mode="horizontal",
                              pick_cell=(2, 9), place_cell=(2, 9),
@@ -349,9 +349,9 @@ check("horizontal far corner with placement offset + tool offset is reachable",
       pf_hc.ok, pf_hc.reason)
 # Horizontal's grid only reaches X = 17.1 cm, so the far X cap is out of a
 # legal nudge's reach — the reachable clamp is at the HOME end. Column 0
-# holder X = 1.9 - 0.9 = 1.0 cm (~200 steps); the +1.8 cm placement offset
+# holder X = 1.9 - 0.9 = 1.0 cm (~200 steps); the +1.35 cm placement offset
 # pushes it out, so a large -2.9 cm inward nudge is needed to drive it below
-# the home switch (200 + ~359 - ~579 steps < 0).
+# the home switch (200 + ~269 - ~579 steps < 0).
 pf_ho = preflight_correction(grid=HGRID, mode="horizontal",
                              pick_cell=(0, 4), place_cell=(0, 4),
                              dx_cm=-2.9, dy_cm=0.0, tool_offset_cm=HTOOL)

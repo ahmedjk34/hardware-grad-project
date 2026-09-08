@@ -433,7 +433,7 @@ def appendices(rep):
             ["`BUILD_PHASE_PAUSE_MS`", "250 ms", "Settle between build phases"],
             ["`BUILD_STEP_COUNT`", "14", "Phases per build"],
             ["`SKEW_Y_PER_COL_CM`", "0.115 / 0.13 cm", "Vertical / horizontal Y skew per column, build motion only"],
-            ["`BUILD_PLACEMENT_OFFSET_X_CM`", "0.0 / -0.4 cm", "Vertical / horizontal fixed X correction, build motion only"],
+            ["`BUILD_PLACEMENT_OFFSET_X_CM`", "0.0 / +1.35 cm", "Vertical / horizontal fixed X correction, build motion only"],
             ["`TOOL_OFFSET_CW_*`", "(+0.9, -0.3) cm", "The pickup-rotate swing"],
             ["`EN_ACTIVE_LEVEL`", "LOW", "TB6600 enable polarity in this wiring"],
         ],

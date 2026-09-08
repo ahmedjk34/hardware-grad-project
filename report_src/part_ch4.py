@@ -355,8 +355,8 @@ def chapter_4(rep):
         "correction logged as it is applied "
         "(`X-rail skew: Y 0 -> 20 steps (0.100 cm, col skew)`). The source was subsequently "
         "generalised and calibrated to 0.115/0.13 cm per column, with a separate horizontal "
-        "X placement offset of -0.4 cm. [[VALUE NEEDED: re-measure the residual per mode with "
-        "the current coefficients flashed.]]")
+        "X placement offset of +1.35 cm (a rig measurement after the 2026 arm re-seat; it was "
+        "-0.4 cm before).")
 
     rep.h3("4.2.6 Z heights and block levels")
     rep.p(
