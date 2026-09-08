@@ -83,6 +83,14 @@ export interface Supervision {
    *  VERIFIED too (a board can be correct with a block 0.8 cm off its centre).
    *  Display-only; gates nothing, no state colour. */
   max_cell_residual_cm?: number | null;
+  /** ADVISORY (audit items 6 + 9) — the fused CORRECTION track's uncertainty
+   *  over the coherent quiet window: radial centroid dispersion, worst
+   *  single-frame residual from the fused centre, and [frames_seen, window].
+   *  Display-only; gates nothing, no state colour. Null for every non
+   *  MOVED/DISPLACED case. */
+  localization_sigma_cm?: number | null;
+  localization_residual_cm?: number | null;
+  track_samples?: [number, number] | null;
 }
 
 export interface StateModel {

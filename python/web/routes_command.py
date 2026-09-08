@@ -12,7 +12,9 @@ from rig.build_controller import BuildStateError
 from rig.build_job import BUSY_MESSAGE
 from rig.link import ABORTED, RigError
 from rig.supervisor import observe
-from web.state import StateModel, assess_frame_correction, build_state
+from web.state import (
+    StateModel, assess_frame_correction, build_state, correction_query_point,
+)
 
 
 router = APIRouter(prefix="/api", tags=["commands"])
@@ -364,10 +366,18 @@ def correct_supervision(request: CorrectRequest, http: Request) -> StateModel:
                    "dismiss it and let the board re-check")
 
     observation = observe(frame.detections, frame.workspace, frame.image_size)
+    # ITEM 6 + 9: re-check on the SAME coherent quiet-window track the driver
+    # has been accumulating — the block must still be one stable, unambiguous,
+    # block-consistent track before a byte is sent, and the pick centroid is
+    # the fused one, not this frame's first candidate.
+    supervisor = getattr(app.state, "supervisor", None)
+    query_point = correction_query_point(observation, sv.verdict)
+    track = (supervisor.track_evidence_at(query_point)
+             if supervisor is not None and query_point is not None else None)
     correction, reason = assess_frame_correction(
         ledger=app.state.ledger, workspace=frame.workspace,
         observation=observation, state=sv.state, verdict=sv.verdict,
-        mode=frame.grid_mode)
+        mode=frame.grid_mode, track=track, require_track=True)
     if correction is None:
         raise HTTPException(status_code=409,
                             detail=reason or "this block cannot be corrected")
@@ -402,7 +412,6 @@ def correct_supervision(request: CorrectRequest, http: Request) -> StateModel:
     else:
         # D12: re-verify. Drop the hysteresis so the next quiet window judges
         # the board fresh, not on frames taken while the arm was over it.
-        supervisor = getattr(app.state, "supervisor", None)
         if supervisor is not None:
             supervisor.reset()
         app.state.supervision_acknowledged = False

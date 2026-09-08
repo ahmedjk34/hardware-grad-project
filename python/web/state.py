@@ -47,6 +47,13 @@ class SupervisionState:
     #: for VERIFIED too: a board can be "correct" and still have a block 0.8 cm
     #: off its centre. Gates nothing, no state colour.
     max_cell_residual_cm: float | None = None
+    #: ITEM 9 — the fused CORRECTION track's uncertainty across the coherent
+    #: quiet window, for a MOVED / DISPLACED verdict: radial centroid
+    #: dispersion, worst single-frame residual from the fused centre, and
+    #: ``(frames_seen, window)``. Advisory; None when there is no track.
+    localization_sigma_cm: float | None = None
+    localization_residual_cm: float | None = None
+    track_samples: tuple[int, int] | None = None
 
     @property
     def severity(self) -> str:
@@ -122,6 +129,15 @@ class SupervisionModel(BaseModel):
     #: ADVISORY — the worst on-cell drift anywhere on the board, cm. Present for
     #: VERIFIED too. Display-only; gates nothing, no state colour.
     max_cell_residual_cm: float | None = None
+    #: ITEM 9 — the fused CORRECTION track's uncertainty over the coherent quiet
+    #: window (audit §2.4 / §6.2): ``localization_sigma_cm`` is the radial
+    #: centroid dispersion, ``localization_residual_cm`` the worst single-frame
+    #: deviation from the fused centre, ``track_samples`` is ``[frames_seen,
+    #: window]``. Advisory — the operator sees why a track is or is not trusted;
+    #: gates nothing, no state colour. None for every non MOVED/DISPLACED case.
+    localization_sigma_cm: float | None = None
+    localization_residual_cm: float | None = None
+    track_samples: tuple[int, int] | None = None
 
 
 def supervision_model(reading, *, acknowledged: bool = False) -> SupervisionModel:
@@ -157,6 +173,10 @@ def supervision_model(reading, *, acknowledged: bool = False) -> SupervisionMode
         else (round(correction.dx_cm, 3), round(correction.dy_cm, 3)),
         residual_cm=getattr(reading, "residual_cm", None),
         max_cell_residual_cm=getattr(reading, "max_cell_residual_cm", None),
+        localization_sigma_cm=getattr(reading, "localization_sigma_cm", None),
+        localization_residual_cm=getattr(reading, "localization_residual_cm", None),
+        track_samples=(tuple(reading.track_samples)
+                       if getattr(reading, "track_samples", None) else None),
     )
 
 
@@ -186,8 +206,31 @@ def _drift_neighbour(cell, centre_cm, observed_cm):
     return (col, row + (1 if dy >= 0 else -1))
 
 
+def correction_query_point(observation, verdict):
+    """The single-frame cm point a MOVED / DISPLACED block sits at — the gap
+    detection for DISPLACED, the wrong-cell detection for MOVED — or None when
+    the verdict is not a correctable shape or the frame did not pin it down.
+
+    `web/app.py` and `/api/supervision/correct` both use it to look the fused
+    track up in the supervisor (`Supervisor.track_evidence_at`) at the same
+    point `assess_frame_correction` derives internally, so the two never drift.
+    """
+    name = getattr(verdict, "verdict", None)
+    if verdict is None or name not in ("MOVED", "DISPLACED"):
+        return None
+    if name == "DISPLACED":
+        if len(verdict.cells) != 1 or len(observation.gap_points_cm) != 1:
+            return None
+        return observation.gap_points_cm[0]
+    if len(verdict.cells) != 2:
+        return None
+    where = (int(verdict.cells[1][0]), int(verdict.cells[1][1]))
+    return dict(observation.cell_points_cm).get(where)
+
+
 def assess_frame_correction(*, ledger, workspace, observation, state: str,
-                            verdict, mode: str):
+                            verdict, mode: str, track=None,
+                            require_track: bool = False):
     """Can the claw safely return this MOVED / DISPLACED block? Read-only.
 
     The single source of truth for the operator CORRECTION action: `web/app.py`
@@ -195,6 +238,14 @@ def assess_frame_correction(*, ledger, workspace, observation, state: str,
     `/api/supervision/correct` calls it AGAIN on the current frame before it
     moves anything — the published flag is never trusted, because a correction
     is motion (DESIGN.md §8). Nothing here touches the rig.
+
+    `track` is the fused `rig.supervisor.TrackEvidence` for this block over the
+    coherent quiet window (audit items 6 + 9), from `Supervisor.track_evidence_at`.
+    With `require_track` the correction is REFUSED unless that track is settled,
+    unambiguous and low-dispersion — no merged blob, no candidate switch, no
+    arbitrary first-of-many pick — and its robust centre / angle / size then
+    replace the single-frame values the pick offset is computed from. Without
+    `track` (a bare unit test) the single-frame path is kept.
 
     Returns `(Correction | None, reason | None)`. `reason` is None only when the
     verdict is not one that could ever be corrected; otherwise it is a sentence
@@ -238,6 +289,25 @@ def assess_frame_correction(*, ledger, workspace, observation, state: str,
     if measured_size_cm in (None, (0.0, 0.0)):
         measured_size_cm = None
 
+    # ITEM 6 + 9: gate on ONE stable, block-consistent track over the coherent
+    # quiet window, and fuse the pick centroid / angle / size from it. `track`
+    # is anchored at exactly the point derived above (see `correction_query_point`).
+    loc_sigma_cm = loc_residual_cm = track_samples = angle_sigma_deg = None
+    if require_track and (track is None or not track.ok):
+        return None, (track.reason if track is not None else
+                      "the block is not being tracked as one stable object "
+                      "across the quiet window")
+    if track is not None and track.ok:
+        if track.centre_cm is not None:
+            observed_cm = track.centre_cm
+        angle_deg = track.angle_deg
+        if track.size_cm and track.size_cm != (0.0, 0.0):
+            measured_size_cm = track.size_cm
+        loc_sigma_cm = round(track.centre_sigma_cm, 3)
+        loc_residual_cm = round(track.max_residual_cm, 3)
+        track_samples = (int(track.samples), int(track.window))
+        angle_sigma_deg = round(track.angle_sigma_deg, 2)
+
     plan_level = top_levels.get(plan_cell)
     map_pick_centre_cm = None if grid is None else grid.cell_center_cm(*where_cell)
 
@@ -263,6 +333,9 @@ def assess_frame_correction(*, ledger, workspace, observation, state: str,
         pick_is_top_of_column=pick_is_top, grid=grid,
         measured_size_cm=measured_size_cm,
         drift_neighbour_occupied=drift_neighbour_occupied,
+        localization_sigma_cm=loc_sigma_cm,
+        localization_residual_cm=loc_residual_cm,
+        track_samples=track_samples, angle_sigma_deg=angle_sigma_deg,
     )
 
 

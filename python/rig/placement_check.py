@@ -52,6 +52,14 @@ Narrow on purpose (the audit)
    correctable. :data:`SIZE_TOLERANCE_CM` and :data:`JAW_CLEARANCE_CM` are
    **provisional** — Stage 15 Stage B (jaw capture tolerance, placement
    repeatability). Named here so a measurement changes one line.
+4. **One stable, block-consistent track.** ``assess_frame_correction`` passes a
+   :class:`rig.supervisor.TrackEvidence` fused over the coherent quiet window
+   (audit items 6 + 9). With ``require_track`` the correction is refused unless
+   exactly one settled, unambiguous, low-dispersion track sits at the block's
+   position — no merged blob, no candidate switch, no first-of-many pick — and
+   the fused centre / angle / size then replace the single-frame values above.
+   ``localization_*`` / ``track_samples`` on :class:`Correction` carry that
+   uncertainty for the operator and the log.
 
 The offset is a MAP-FRAME DIFFERENTIAL
 -------------------------------------
@@ -132,6 +140,16 @@ class Correction:
     dx_cm: float
     dy_cm: float
     magnitude_cm: float
+    #: ITEM 9 — the fused-track uncertainty this pick offset was computed from,
+    #: or None when it came from a single frame. ``localization_sigma_cm`` is
+    #: the radial dispersion of the fused centre across the quiet window;
+    #: ``localization_residual_cm`` the worst single-frame deviation from it;
+    #: ``track_samples`` is ``(frames_seen, window)``. Advisory: the operator
+    #: and the log read them, the ``P`` verb does not.
+    localization_sigma_cm: float | None = None
+    localization_residual_cm: float | None = None
+    track_samples: tuple[int, int] | None = None
+    angle_sigma_deg: float | None = None
 
     @property
     def command_args(self) -> tuple:
@@ -208,6 +226,10 @@ def assess(*, verdict: str, mode: str,
            measured_size_cm: tuple[float, float] | None = None,
            drift_neighbour_occupied: bool = False,
            tool_offset_cm: tuple[float, float] = (0.0, 0.0),
+           localization_sigma_cm: float | None = None,
+           localization_residual_cm: float | None = None,
+           track_samples: tuple[int, int] | None = None,
+           angle_sigma_deg: float | None = None,
            ) -> tuple[Correction | None, str]:
     """May the claw correct this verdict? Returns ``(Correction | None, reason)``.
 
@@ -277,10 +299,32 @@ def assess(*, verdict: str, mode: str,
         if magnitude > MOVED_PICK_SANITY_CM:
             return _reject(f"the block is {magnitude:.2f} cm off {list(where_cell)}; "
                            f"too far to be sure which cell it is on")
+        # Audit item 6: the measured size / shape consistency DISPLACED already
+        # applied belongs on MOVED too — a merged blob or a decomposed compound
+        # squarely on the wrong cell must not be gripped as one block.
+        if grid is not None:
+            cov_x = axis_coverage(
+                observed_centre=observed_cm[0], planned_centre=map_pick_centre_cm[0],
+                block_len=grid.block_x_cm, gap_len=grid.gap_x_cm, pitch=grid.pitch_x_cm)
+            cov_y = axis_coverage(
+                observed_centre=observed_cm[1], planned_centre=map_pick_centre_cm[1],
+                block_len=grid.block_y_cm, gap_len=grid.gap_y_cm, pitch=grid.pitch_y_cm)
+            nominal = (max(grid.block_x_cm, grid.block_y_cm),
+                       min(grid.block_x_cm, grid.block_y_cm))
+            geom = consistency(
+                cov_x=cov_x, cov_y=cov_y,
+                measured_size_cm=measured_size_cm or nominal, nominal_size_cm=nominal,
+                angle_deg=angle_deg, size_tolerance_cm=SIZE_TOLERANCE_CM,
+                angle_tolerance_deg=ANGLE_TOLERANCE_DEG)
+            if not geom.ok:
+                return _reject(geom.reason)
         correction = Correction(
             verdict="MOVED", pick_cell=(int(where_cell[0]), int(where_cell[1])),
             pick_level=0, place_cell=(int(plan_cell[0]), int(plan_cell[1])),
-            place_level=int(plan_level), dx_cm=dx, dy_cm=dy, magnitude_cm=magnitude)
+            place_level=int(plan_level), dx_cm=dx, dy_cm=dy, magnitude_cm=magnitude,
+            localization_sigma_cm=localization_sigma_cm,
+            localization_residual_cm=localization_residual_cm,
+            track_samples=track_samples, angle_sigma_deg=angle_sigma_deg)
         clamp = _preflight_reject(correction, mode=mode, grid=grid,
                                   tool_offset_cm=tool_offset_cm)
         if clamp is not None:
@@ -322,7 +366,10 @@ def assess(*, verdict: str, mode: str,
     correction = Correction(
         verdict="DISPLACED", pick_cell=(int(plan_cell[0]), int(plan_cell[1])),
         pick_level=int(plan_level), place_cell=(int(plan_cell[0]), int(plan_cell[1])),
-        place_level=int(plan_level), dx_cm=dx, dy_cm=dy, magnitude_cm=magnitude)
+        place_level=int(plan_level), dx_cm=dx, dy_cm=dy, magnitude_cm=magnitude,
+        localization_sigma_cm=localization_sigma_cm,
+        localization_residual_cm=localization_residual_cm,
+        track_samples=track_samples, angle_sigma_deg=angle_sigma_deg)
     clamp = _preflight_reject(correction, mode=mode, grid=grid,
                               tool_offset_cm=tool_offset_cm)
     if clamp is not None:

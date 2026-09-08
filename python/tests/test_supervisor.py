@@ -23,9 +23,12 @@ from rig.link import PLACED, BuildResult  # noqa: E402
 from rig.placement_ledger import PlacementLedger  # noqa: E402
 from rig.grid import MachineGrid  # noqa: E402
 from rig.supervisor import (  # noqa: E402
-    LEVEL_CEILING, PAIRING_BEYOND_CM, AMBER_VERDICTS, RED_VERDICTS,
-    Interlocks, Observation, Supervisor, classify, implausible_displacement,
-    locate, observe, unjudged_cells, verify_placement,
+    LEVEL_CEILING, PAIRING_BEYOND_CM, TRACK_CENTRE_SIGMA_MAX_CM,
+    TRACK_ANGLE_SIGMA_MAX_DEG, TRACK_SIZE_SIGMA_MAX_CM, TRACK_IDENTITY_MATCH_CM,
+    AMBER_VERDICTS, RED_VERDICTS, DetectionRecord, Interlocks, Observation,
+    Supervisor, TrackEvidence, _TrackHistory, _circular_mean_deg,
+    _circular_std_deg, classify, implausible_displacement, locate, observe,
+    unjudged_cells, verify_placement,
 )
 from rig.workspace import WorkspaceMap  # noqa: E402
 
@@ -837,6 +840,190 @@ check("implausible_displacement returns None for a credible pairing",
 check("implausible_displacement explains an incredible one",
       "past the cell" in (implausible_displacement(GRID, (2, 1), far_gap) or ""))
 check("PAIRING_BEYOND_CM is the provisional 1.0 cm slack", PAIRING_BEYOND_CM == 1.0)
+
+
+# --- item 6 + 9: one coherent, stable, block-consistent track ------------- #
+#
+# `observe()` keeps every detection whole in `detections_detail`; `_TrackHistory`
+# associates them frame to frame across the SAME N-of-M quiet window and fuses
+# the matched run. A MOVED / DISPLACED correction is refused unless exactly one
+# such track is settled, unambiguous and low-dispersion.
+
+def _rec(x, y, *, angle=0.0, size=(6.0, 2.2), placement="gap", cell=None):
+    return DetectionRecord(placement=placement, cell=cell, centre_cm=(x, y),
+                           angle_deg=angle, size_cm=size)
+
+
+def _obs(*recs):
+    return Observation(cells=(), detections=len(recs),
+                       detections_detail=tuple(recs))
+
+
+def _feed(history, frames):
+    for recs in frames:
+        history.update(_obs(*recs))
+    return history
+
+
+# multiple detections — observe keeps them all, cells still collapses
+_multi = observe([FakeDetection(at_cm(*centre)),
+                  FakeDetection(at_cm(centre[0] + 0.3, centre[1])),
+                  FakeDetection(at_cm(gap_x, centre[1]))], MAP, SIZE)
+check("observe keeps EVERY detection in detections_detail (multiplicity)",
+      len(_multi.detections_detail) == 3 and _multi.cells == ((3, 2),))
+check("  ... two on one cell are both recorded against that cell",
+      len([r for r in _multi.detections_detail if r.cell == (3, 2)]) == 2)
+
+# a stable clean track over the window
+_h = _feed(_TrackHistory(3, 5), [[_rec(10.0, 8.0)]] * 5)
+_ev = _h.evidence_at((10.0, 8.0))
+check("a stable single-block track over the window is ok",
+      _ev.ok and _ev.settled and _ev.consistent and _ev.samples == 5
+      and _ev.window == 5 and _ev.multiplicity == 1)
+check("  ... fused centre is the tracked centre, sigma ~0, residual ~0",
+      abs(_ev.centre_cm[0] - 10.0) < 1e-6 and _ev.centre_sigma_cm < 1e-6
+      and _ev.max_residual_cm < 1e-6)
+
+# noisy centroid within tolerance still fuses; residual is the worst frame
+_noisy = [(10.0, 8.0), (10.2, 7.9), (9.8, 8.1), (10.15, 8.05), (9.9, 7.95)]
+_ev = _feed(_TrackHistory(3, 5), [[_rec(*p)] for p in _noisy]).evidence_at((10.0, 8.0))
+check("a lightly-noisy centroid still fuses to one stable track",
+      _ev.ok and _ev.centre_sigma_cm <= TRACK_CENTRE_SIGMA_MAX_CM)
+check("  ... and reports a non-zero residual (worst per-frame deviation)",
+      _ev.max_residual_cm > 0.0)
+
+# noisy centroid past the sigma ceiling — an uncertainty threshold refusal
+_ev = _feed(_TrackHistory(3, 5),
+            [[_rec(x, 8.0)] for x in (10.0, 10.8, 9.2, 10.7, 9.3)]
+            ).evidence_at((10.0, 8.0))
+check("a centroid scattering past the sigma ceiling is refused",
+      (not _ev.ok) and _ev.centre_sigma_cm > TRACK_CENTRE_SIGMA_MAX_CM
+      and "scattered" in _ev.reason)
+
+# merged blob / duplicate hypothesis — two detections on one spot every frame
+_ev = _feed(_TrackHistory(3, 5),
+            [[_rec(10.0, 8.0), _rec(10.4, 8.0)]] * 4).evidence_at((10.2, 8.0))
+check("two detections on one spot every frame -> merged blob, refused",
+      (not _ev.ok) and _ev.multiplicity >= 2 and "merged blob" in _ev.reason)
+
+# candidate switching — one detection per frame, alternating between two spots
+_ev = _feed(_TrackHistory(3, 5),
+            [[_rec(x, 8.0)] for x in (10.0, 11.8, 10.0, 11.8, 10.0)]
+            ).evidence_at((10.0, 8.0))
+check("a detection alternating between two spots -> candidate switch, refused",
+      (not _ev.ok) and "candidate switch" in _ev.reason)
+
+# an occupied NEIGHBOUR present at the same time is NOT a candidate switch
+_ev = _feed(_TrackHistory(3, 5),
+            [[_rec(10.0, 8.0), _rec(11.9, 8.0)]] * 5).evidence_at((10.0, 8.0))
+check("a second block present at the SAME time (a neighbour) is not a switch",
+      _ev.ok and _ev.consistent)
+
+# angle wraparound in the circular statistics
+check("circular mean folds 179 / 1 / -179 to ~0, not ~60",
+      abs(_circular_mean_deg([179.0, 1.0, -179.0])) < 5.0)
+check("circular mean of 88 and -88 is ~+-90, not ~0",
+      abs(abs(_circular_mean_deg([88.0, -88.0])) - 90.0) < 3.0)
+check("circular std is small for tight angles, large for a 40 deg spread",
+      _circular_std_deg([2.0, -2.0, 1.0]) < 3.0
+      and _circular_std_deg([0.0, 40.0, -40.0]) > TRACK_ANGLE_SIGMA_MAX_DEG)
+
+_ev = _feed(_TrackHistory(3, 5),
+            [[_rec(10.0, 8.0, angle=a)] for a in (179.0, -179.0, 178.0, -178.0, 179.5)]
+            ).evidence_at((10.0, 8.0))
+check("angle wraparound near +-180 is NOT read as a huge scatter",
+      _ev.ok and _ev.angle_sigma_deg < TRACK_ANGLE_SIGMA_MAX_DEG)
+
+_ev = _feed(_TrackHistory(3, 5),
+            [[_rec(10.0, 8.0, angle=a)] for a in (0.0, 12.0, -12.0, 9.0, -9.0)]
+            ).evidence_at((10.0, 8.0))
+check("a track whose angle scatters past the ceiling is refused",
+      (not _ev.ok) and _ev.angle_sigma_deg > TRACK_ANGLE_SIGMA_MAX_DEG)
+
+# size variation
+_ev = _feed(_TrackHistory(3, 5),
+            [[_rec(10.0, 8.0, size=s)] for s in
+             ((6.0, 2.2), (6.1, 2.2), (5.9, 2.3), (6.0, 2.1), (6.05, 2.25))]
+            ).evidence_at((10.0, 8.0))
+check("a footprint that varies only slightly still fuses to one track", _ev.ok)
+
+_ev = _feed(_TrackHistory(3, 5),
+            [[_rec(10.0, 8.0, size=s)] for s in
+             ((6.0, 2.2), (8.0, 2.2), (6.0, 2.2), (8.0, 2.2), (6.0, 2.2))]
+            ).evidence_at((10.0, 8.0))
+check("a footprint jumping by >0.8 cm across the window is refused",
+      (not _ev.ok) and _ev.size_sigma_cm[0] > TRACK_SIZE_SIGMA_MAX_CM)
+
+# missing frames — 3 of 5 present (2 dropped) still settles
+_ev = _feed(_TrackHistory(3, 5),
+            [[_rec(10.0, 8.0)], [], [_rec(10.0, 8.0)], [_rec(10.0, 8.0)], []]
+            ).evidence_at((10.0, 8.0))
+check("a track present in 3 of 5 frames (2 missing) still settles ok",
+      _ev.ok and _ev.samples == 3 and _ev.window == 5)
+
+# insufficient samples — seen in only 2 frames so far
+_ev = _feed(_TrackHistory(3, 5),
+            [[_rec(10.0, 8.0)], [_rec(10.0, 8.0)], []]).evidence_at((10.0, 8.0))
+check("a track seen in only 2 frames is not settled -> refused",
+      (not _ev.ok) and (not _ev.settled) and "are needed" in _ev.reason
+      and _ev.samples == 2)
+
+# no track at the query point
+_ev = _feed(_TrackHistory(3, 5), [[_rec(10.0, 8.0)]] * 4).evidence_at((20.0, 20.0))
+check("evidence_at a point with no track nearby is refused",
+      (not _ev.ok) and "not consistent frame to frame" in _ev.reason)
+
+# decay + a reappearance warms from nothing
+_h = _feed(_TrackHistory(3, 5), [[_rec(10.0, 8.0)]] * 5)
+check("the track is settled before it vanishes", _h.evidence_at((10.0, 8.0)).ok)
+_feed(_h, [[]] * 3)
+check("after 3 empty frames the track is forgotten",
+      not _h.evidence_at((10.0, 8.0)).ok)
+_h.update(_obs(_rec(10.0, 8.0)))
+_ev = _h.evidence_at((10.0, 8.0))
+check("  ... a reappearance warms from nothing (1 sample, not settled)",
+      (not _ev.ok) and _ev.samples == 1)
+
+# track consistency: the match radius is tighter than the gap constant so a
+# displaced block and its adjacent neighbour are never one track
+check("TRACK_IDENTITY_MATCH_CM is the tighter provisional 1.2 cm",
+      TRACK_IDENTITY_MATCH_CM == 1.2)
+
+# step() feeds the track history from the SAME observation, and every reset
+# primitive clears it
+_sup = Supervisor(quiet_diff_fraction=0.02, settle_n=1, settle_m=3)
+_led = ledger_with("vertical", [(1, 1, 0), (2, 1, 0)])
+_gy = GRID.cell_center_cm(2, 1)[1]
+_gx = (GRID.cell_center_cm(2, 1)[0] + GRID.cell_center_cm(3, 1)[0]) / 2
+_disp = Observation(
+    cells=((1, 1),), in_gap=1, detections=3,
+    gap_points_cm=((_gx, _gy),), gap_angles_deg=(0.0,),
+    detections_detail=(_rec(*GRID.cell_center_cm(1, 1), placement="cell", cell=(1, 1)),
+                       _rec(_gx, _gy)))
+for _ in range(3):
+    _sup.step(mode="vertical", ledger=_led, observation=_disp,
+              interlocks=Interlocks(parked=True, calibrated=True, quiet=True),
+              grid=GRID)
+check("step() feeds the track history — the DISPLACED gap block is tracked",
+      _sup.track_evidence_at((_gx, _gy)).ok)
+_sup.reset()
+check("Supervisor.reset() clears the track history too",
+      not _sup.track_evidence_at((_gx, _gy)).ok)
+for _ in range(3):
+    _sup.step(mode="vertical", ledger=_led, observation=_disp,
+              interlocks=Interlocks(parked=True, calibrated=True, quiet=True),
+              grid=GRID)
+_sup.note_mode("horizontal", 0)
+check("a mode latch clears the track history (item 7 reset primitive)",
+      not _sup.track_evidence_at((_gx, _gy)).ok)
+for _ in range(3):
+    _sup.step(mode="vertical", ledger=_led, observation=_disp,
+              interlocks=Interlocks(parked=True, calibrated=True, quiet=True),
+              grid=GRID)
+_sup.step(mode="vertical", ledger=_led, observation=_disp,
+          interlocks=Interlocks(parked=True, calibrated=False, quiet=True), grid=GRID)
+check("a tripped interlock clears the track history",
+      not _sup.track_evidence_at((_gx, _gy)).ok)
 
 
 # --- a verdict never locks ------------------------------------------------- #

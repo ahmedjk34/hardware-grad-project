@@ -403,10 +403,10 @@ Any proposed detection resolution, flattening, area, colour, or morphology chang
 3. **Make correction a one-shot coherent ticket with atomic quiet/mode/map/track revalidation.** Medium effort, closes the decision-to-motion race.
 4. [x] **Add exact Python full-motion reachability/clamp preflight for all compensated targets.** Medium effort and a commissioning blocker at edges.
 5. **Refuse diagonal correction and enforce both-neighbour/corner clearance until measured.** Small initial effort with large collision-risk reduction.
-6. **Preserve multiplicity and require one stable block-consistent track for MOVED/DISPLACED.** Medium effort; prevents first-candidate/merged-blob pickup.
+6. [x] **Preserve multiplicity and require one stable block-consistent track for MOVED/DISPLACED.** Medium effort; prevents first-candidate/merged-blob pickup.
 7. [x] **Fix reset/decay semantics: clear gap history everywhere and hysterese clearing with persistent gap identity.** Small–medium effort; removes repeatable false/stale verdicts.
 8. [x] **Make ledger memory mode- and board-epoch-specific.** Small–medium effort; fixes misleading cross-mode VERIFIED/FOREIGN outcomes.
-9. **Fuse centroid/angle/size over the existing coherent quiet window and expose uncertainty/residuals.** Medium effort; directly improves the requested pickup centre without extra frames.
+9. [x] **Fuse centroid/angle/size over the existing coherent quiet window and expose uncertainty/residuals.** Medium effort; directly improves the requested pickup centre without extra frames.
 10. **Run the complete-build Gate 0/Gate 0b and provisional-geometry measurement campaign.** Hardware effort is substantial, but it is the only valid route to safely tune thresholds, raise the level ceiling, or automate correction.
 
 Performance cleanup—especially the exact OpenCV quiet-fraction equivalent and removal of double flattening—should follow the correctness items. It is attractive and likely inexpensive, but throughput cannot compensate for incoherent evidence.

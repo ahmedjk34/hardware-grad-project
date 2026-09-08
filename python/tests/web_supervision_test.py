@@ -349,6 +349,61 @@ def test_a_rotated_DISPLACED_block_is_refused_with_a_straighten_it_reason():
     assert supervision_model(sv).correctable is False
 
 
+# --- items 6 + 9: the correction rests on one coherent, stable track ------ #
+#
+# `_supervise` looks the offending block's fused quiet-window track up in the
+# supervisor and refuses a correction unless it is one stable, unambiguous,
+# block-consistent track. `fake_app` runs settle_n = settle_m = 1, so a single
+# steady frame is enough — the point here is the multiplicity / switch / fusion
+# behaviour, not the N-of-M window (that is `test_supervisor.py`).
+
+def test_a_clean_DISPLACED_track_publishes_its_fused_uncertainty():
+    from web.state import supervision_model
+    app = fake_app()
+    y = GRID.cell_center_cm(2, 1)[1]
+    off = at_cm_point(8.75, y)
+    seen = drive(app, [frame_at(1, cells=((1, 1),), extra=(off,)),
+                       frame_at(2, cells=((1, 1),), extra=(off,))])
+    sv = seen[-1]
+    assert sv.verdict.verdict == "DISPLACED" and sv.correction is not None
+    # Item 9 uncertainty surfaced: one steady detection -> sigma 0, 1 of 1 frame.
+    assert sv.track_samples == (1, 1)
+    assert sv.localization_sigma_cm == 0.0 and sv.localization_residual_cm == 0.0
+    model = supervision_model(sv)
+    assert model.track_samples == (1, 1)
+    assert model.localization_sigma_cm == 0.0
+
+
+def test_a_merged_blob_on_the_MOVED_cell_is_not_correctable():
+    from web.state import supervision_model
+    app = fake_app()  # ledger [1,1] and [2,1]; [2,1] emptied, block on [3,1]
+    x, y = GRID.cell_center_cm(3, 1)
+    dupe = FakeDetection(MAP.pixel_at((x + 0.3) / GRID.workspace_width_cm,
+                                      y / GRID.workspace_height_cm, SIZE))
+    seen = drive(app, [frame_at(1, cells=((1, 1), (3, 1)), extra=(dupe,)),
+                       frame_at(2, cells=((1, 1), (3, 1)), extra=(dupe,))])
+    sv = seen[-1]
+    assert sv.verdict.verdict == "MOVED"     # the SET still reads one moved block
+    assert sv.correction is None             # ... but the track is ambiguous
+    assert sv.correction_reason and "merged blob" in sv.correction_reason
+    assert supervision_model(sv).correctable is False
+
+
+def test_the_correct_route_refuses_when_the_track_is_not_established():
+    """The `/correct` route re-queries the SAME supervisor track. If nothing has
+    been tracked (the driver never ran, or the block stopped being seen), the
+    correction is refused rather than driven off a single stale frame."""
+    from fastapi import HTTPException
+    http, state, sent = _correct_app(off_cm=8.75)
+    state.supervisor._track_history.reset()   # as if the block dropped out
+    try:
+        _call_correct(http)
+        assert False, "should have refused"
+    except HTTPException as exc:
+        assert exc.status_code == 409
+    assert sent == []
+
+
 # --- refusal 1: the mode latch (D13) --------------------------------------- #
 
 def test_a_frame_from_the_other_lattice_suspends_and_clears_the_baseline():
@@ -759,6 +814,14 @@ def _correct_app(*, verdict_name="DISPLACED", off_cm=8.75, angle=0.0,
 
     supervisor = Supervisor(quiet_diff_fraction=QUIET_DIFF_FRACTION,
                             settle_n=1, settle_m=1)
+    # Items 6 + 9: the route re-queries the supervisor's coherent quiet-window
+    # track. The driver (`_supervise`) fills it in production; here, seed it by
+    # feeding the current frame's observation N times so a stable single-block
+    # track exists for `track_evidence_at` to return.
+    from rig.supervisor import observe as _observe
+    _seed = _observe(frame.detections, frame.workspace, frame.image_size)
+    for _ in range(max(supervisor.settle_n, 1)):
+        supervisor._track_history.update(_seed)
     supervisor.reset_calls = 0
     _orig_reset = supervisor.reset
     supervisor.reset = lambda: (setattr(supervisor, "reset_calls",

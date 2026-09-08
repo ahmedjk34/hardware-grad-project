@@ -242,6 +242,47 @@ every displacement instead of publishing a confident wrong verdict.
 `max_cell_residual_cm` (worst on-cell drift, present for VERIFIED too). Both are
 display-only — no state colour, they gate nothing. `web/src/types.ts` matches.
 
+### 2c-bis. 2026-09-08 — one coherent, stable, block-consistent track (audit items 6 + 9)
+
+`observe()` collapsed detections to a set and stored only the **first** per cell,
+and the CORRECTION action then took that first candidate from **one frame** for
+the pick coordinate. A merged blob, a duplicate hypothesis, a candidate switch
+or an unstable track all read as a clean single-block pick.
+
+- **Multiplicity survives.** `Observation.detections_detail` — one
+  `DetectionRecord` per detection, in detector order, kept whole — is populated
+  by `observe()` before any per-cell collapse. The set verdict is unchanged; the
+  multiplicity is now visible to the layer that needs it.
+- **`_TrackHistory`** is a sibling of item 7's `_gap_history`: fed from the
+  **same** `observation` in the **same** `step()` on the **same** N-of-M quiet
+  window, cleared by the **same** `_reset_hysteresis()` primitive — *not* a
+  second analysis path or extra frames (audit §2.4). It associates every
+  block-shaped detection (cell or gap) frame to frame by cm anchor and fuses the
+  matched run: **median** centre, **circular-mean** angle (period 180, so ±180
+  wraparound never inflates the scatter), **median** size, with a per-axis and
+  radial **dispersion** and a **worst per-frame residual**.
+- **The gate.** `Supervisor.track_evidence_at(point_cm)` returns a
+  `TrackEvidence`. `assess_frame_correction(..., track=…, require_track=True)` —
+  the live `_supervise` path **and** the `/api/supervision/correct` re-check —
+  refuses a `MOVED` / `DISPLACED` correction unless that track is `settled`
+  (≥ N frames), `consistent` (multiplicity ≤ 1 **and** not an anti-phase
+  candidate switch — `_looks_like_switch` tells a switch from a genuine occupied
+  neighbour by anti-correlated presence, not distance) and `stable` (centre /
+  angle / size dispersion each under its ceiling). When it passes, the fused
+  centre / angle / size **replace** the single-frame values the pick offset is
+  computed from. `MOVED` now also runs the `consistency()` size/shape gate
+  `DISPLACED` already had.
+- **Published.** `SupervisionState` / `SupervisionModel` gained advisory
+  `localization_sigma_cm`, `localization_residual_cm`, `track_samples`
+  (`[frames_seen, window]`) — display-only, no state colour, gate nothing.
+- **Provisional constants** (Python-only, no firmware partner), all wanting the
+  rig localisation-repeatability run of audit §7.5:
+  `TRACK_IDENTITY_MATCH_CM = 1.2` (deliberately tighter than
+  `GAP_IDENTITY_MATCH_CM = 2.0` — a track must separate a displaced block from
+  its adjacent neighbour cell), `SWITCH_NEIGHBOUR_CM = 3.0`,
+  `TRACK_CENTRE_SIGMA_MAX_CM = 0.6`, `TRACK_ANGLE_SIGMA_MAX_DEG = 4.0`,
+  `TRACK_SIZE_SIGMA_MAX_CM = 0.8`.
+
 ### The `include_rejected` intake, and its open edge
 
 `console_pipeline.py` now calls the detector with `include_rejected=True`

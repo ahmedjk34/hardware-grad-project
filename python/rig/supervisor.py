@@ -144,6 +144,26 @@ PLACEMENTS = ("cell", "gap", "margin", "outside")
 
 
 @dataclass(frozen=True)
+class DetectionRecord:
+    """One detection kept WHOLE — item 6's "preserve per-cell multiplicity".
+
+    :func:`observe` collapses the occupied cells to a set and keeps only the
+    FIRST detection per cell for the legacy ``cell_points_cm`` / ``cell_*``
+    arrays. This is the parallel, un-deduplicated list — one entry per detection
+    in detector order — so the track layer (:class:`_TrackHistory`) can see two
+    detections sitting on one cell (a merged blob, a duplicate hypothesis, a
+    decomposed compound) instead of silently taking the first and calling it a
+    clean block.
+    """
+
+    placement: str                        #: one of :data:`PLACEMENTS`
+    cell: Cell | None
+    centre_cm: tuple[float, float] | None  #: None for "margin" / "outside"
+    angle_deg: float
+    size_cm: tuple[float, float]           #: ``(long, short)``; ``(0.0, 0.0)`` if unknown
+
+
+@dataclass(frozen=True)
 class Observation:
     """What one accepted frame saw. M2's whole output — no verdict in here."""
 
@@ -186,6 +206,11 @@ class Observation:
     #: does NOT branch on this; it exists so a VERIFIED board can still report
     #: "the worst block is 0.8 cm off" ([[placement-drift]]). `()` with no map.
     cell_residuals_cm: tuple[tuple[Cell, float], ...] = ()
+    #: ITEM 6. Every detection kept whole and un-deduplicated, in detector
+    #: order — the multiplicity the CORRECTION track layer needs and the
+    #: collapsed arrays above discard. Empty on hand-built test observations,
+    #: which :class:`_TrackHistory` tolerates by falling back to those arrays.
+    detections_detail: tuple[DetectionRecord, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -362,6 +387,7 @@ def observe(detections, workspace, image_size) -> Observation:
     cell_points: dict[Cell, tuple[float, float]] = {}
     cell_angles: dict[Cell, float] = {}
     cell_sizes: dict[Cell, tuple[float, float]] = {}
+    details: list[DetectionRecord] = []
     counts = {name: 0 for name in PLACEMENTS}
     for detection in detections:
         cell, placement = locate(workspace, detection.center, image_size)
@@ -373,18 +399,20 @@ def observe(detections, workspace, image_size) -> Observation:
                       if getattr(detection, "own_angle", None) is not None
                       else getattr(detection, "angle", 0.0) or 0.0)
         size = _detection_size_cm(workspace, detection, image_size)
+        cm = point_cm(workspace, detection.center, image_size)
+        # ITEM 6: record EVERY detection whole, before any per-cell collapse.
+        details.append(DetectionRecord(
+            placement=placement, cell=cell, centre_cm=cm, angle_deg=angle,
+            size_cm=size if size is not None else (0.0, 0.0)))
         if cell is not None:
             cells.append(cell)
-            if cell not in cell_points:
-                cm = point_cm(workspace, detection.center, image_size)
-                if cm is not None:
-                    cell_points[cell] = cm
-                    cell_angles[cell] = angle
-                    cell_sizes[cell] = size if size is not None else (0.0, 0.0)
+            if cell not in cell_points and cm is not None:
+                cell_points[cell] = cm
+                cell_angles[cell] = angle
+                cell_sizes[cell] = size if size is not None else (0.0, 0.0)
         elif placement == "gap":
             # `locate` only returns "gap" when `mapped_grid` is set, so this
             # projection cannot come back None here.
-            cm = point_cm(workspace, detection.center, image_size)
             if cm is not None:
                 gap_points.append(cm)
                 gap_angles.append(angle)
@@ -410,7 +438,8 @@ def observe(detections, workspace, image_size) -> Observation:
                        cell_sizes_cm=tuple(cell_sizes[c] for c in cell_points),
                        cell_residuals_cm=tuple(
                            (c, cell_residuals[c]) for c in cell_points
-                           if c in cell_residuals))
+                           if c in cell_residuals),
+                       detections_detail=tuple(details))
 
 
 def verify_placement(cell: Cell, level: int, occupied, *,
@@ -789,6 +818,403 @@ class _GapHistory:
                    if self._state(track.readings) is True)
 
 
+# ── ITEM 6 + 9: one coherent, stable, block-consistent track ────────────── #
+#
+# audit §1 (MOVED/DISPLACED "collapses detections to a set and stores only the
+# first detection per cell"), §2.4 ("fuse centres/angles/sizes over the quiet
+# evidence window ... report covariance/dispersion"), §3.2 ("per-cell/per-gap
+# candidate lists and persistent tracks"), §6.2 ("a provenance-coherent robust
+# track centre ... carry a covariance through the full motion preflight").
+#
+# `_GapHistory` (item 7) hystereses the CLASSIFIER's `in_gap` count. This is
+# its sibling for the operator CORRECTION action: it associates every
+# block-shaped detection — on a cell or in a gap — frame to frame across the
+# SAME N-of-M quiet window `_CellHistory` already uses (no extra frames, no
+# second analysis path, audit §2.4 constraint) and fuses the matched run into
+# one robust centre / angle / size with an explicit dispersion and a worst
+# per-frame residual. `assess_frame_correction` refuses a MOVED / DISPLACED
+# correction unless exactly ONE such track is settled, unambiguous and stable
+# at the block's position, and then uses the fused centre in place of the
+# single-frame centroid the pick offset was computed from.
+
+#: Two block detections within this cm distance across consecutive judged
+#: frames are ONE track identity; a centroid that jumps farther is a candidate
+#: switch and starts a NEW track that has to warm from nothing. Deliberately
+#: TIGHTER than :data:`GAP_IDENTITY_MATCH_CM` (2.0): that one only has to
+#: separate a gap from another gap a full pitch away, whereas a track has to
+#: separate a displaced block from its adjacent neighbour cell — only half a
+#: pitch (~1.9 cm vertical) away — while still absorbing the sub-cm frame-to-
+#: frame centroid jitter the map's 0.27 cm residual produces. PROVISIONAL, same
+#: rig-measurement need as :data:`GAP_IDENTITY_MATCH_CM` (audit §5.2 / §7.5).
+TRACK_IDENTITY_MATCH_CM = 1.2
+
+#: A track's neighbour within this cm is close enough to be a candidate-switch
+#: ALTERNATIVE for the same block rather than a different block. Under one
+#: vertical pitch (3.8 cm) so a real neighbour a full cell away never counts;
+#: the anti-phase presence test (`_looks_like_switch`) is what actually tells a
+#: switch from an occupied neighbour, this only bounds the search. PROVISIONAL.
+SWITCH_NEIGHBOUR_CM = 3.0
+
+#: Item 9 uncertainty ceilings for a track to back a correction. Each is a
+#: dispersion across the ALREADY-collected quiet window, not a new measurement.
+#: PROVISIONAL — they want the localisation-repeatability run audit §7.5 lists
+#: under "Local map residual/parallax" and "SIZE_TOLERANCE_CM". A guessed
+#: ceiling must fail CLOSED: it can only make a scattered track un-correctable,
+#: never turn a scattered one green.
+TRACK_CENTRE_SIGMA_MAX_CM = 0.6
+TRACK_ANGLE_SIGMA_MAX_DEG = 4.0
+TRACK_SIZE_SIGMA_MAX_CM = 0.8
+
+
+def _median(values) -> float:
+    ordered = sorted(values)
+    n = len(ordered)
+    if n == 0:
+        return 0.0
+    mid = n // 2
+    return ordered[mid] if n % 2 else 0.5 * (ordered[mid - 1] + ordered[mid])
+
+
+def _dispersion(values) -> float:
+    """Population standard deviation; 0.0 for fewer than two samples."""
+    n = len(values)
+    if n < 2:
+        return 0.0
+    mean = sum(values) / n
+    return math.sqrt(sum((v - mean) ** 2 for v in values) / n)
+
+
+def _circular_mean_deg(angles, period: float = 180.0) -> float:
+    """Mean orientation of block angles, wraparound-safe.
+
+    A rectangle at ``a`` and one at ``a + 180`` are the SAME orientation, so
+    the mean is taken on a circle of period 180°: ``+89`` and ``-89`` average
+    to ``±90``, not ``0``, and ``179`` / ``1`` / ``-179`` average near ``0``.
+    """
+    if not angles:
+        return 0.0
+    scale = 2.0 * math.pi / period
+    s = sum(math.sin(a * scale) for a in angles)
+    c = sum(math.cos(a * scale) for a in angles)
+    if s == 0.0 and c == 0.0:
+        return float(angles[0])
+    return math.atan2(s, c) / scale
+
+
+def _circular_std_deg(angles, period: float = 180.0) -> float:
+    """Circular standard deviation in degrees; 0.0 for fewer than two samples."""
+    n = len(angles)
+    if n < 2:
+        return 0.0
+    scale = 2.0 * math.pi / period
+    s = sum(math.sin(a * scale) for a in angles) / n
+    c = sum(math.cos(a * scale) for a in angles) / n
+    r = math.hypot(s, c)
+    if r >= 1.0:
+        return 0.0
+    if r <= 1e-12:
+        return period / 2.0
+    return math.sqrt(-2.0 * math.log(r)) / scale
+
+
+@dataclass
+class _TrackFrame:
+    """One frame's contribution to a track: the matched detection, or absence."""
+
+    centre_cm: tuple[float, float] | None
+    angle_deg: float
+    size_cm: tuple[float, float]
+    present: bool
+    #: Block-consistent detections that fell on this identity this frame. ``1``
+    #: is a clean read; ``>1`` is a merged blob, a duplicate hypothesis or a
+    #: candidate switch and makes the whole track ambiguous.
+    multiplicity: int
+
+
+@dataclass
+class _Track:
+    anchor: tuple[float, float]
+    frames: deque  #: of :class:`_TrackFrame`, ``maxlen`` = settle_m
+
+
+@dataclass(frozen=True)
+class TrackEvidence:
+    """The fused, stability-gated evidence for ONE block across the quiet window.
+
+    ``ok`` is the gate a MOVED / DISPLACED correction must pass (item 6). The
+    rest is the uncertainty / residual the pick offset, the operator and the
+    log see (item 9). Nothing here ever loosens a refusal — a missing or
+    unstable track only ever blocks a correction.
+    """
+
+    ok: bool
+    reason: str
+    centre_cm: tuple[float, float] | None = None
+    angle_deg: float = 0.0
+    size_cm: tuple[float, float] = (0.0, 0.0)
+    samples: int = 0
+    window: int = 0
+    #: Radial dispersion of the fused centre, cm (``hypot`` of the per-axis).
+    centre_sigma_cm: float = 0.0
+    centre_sigma_xy_cm: tuple[float, float] = (0.0, 0.0)
+    angle_sigma_deg: float = 0.0
+    size_sigma_cm: tuple[float, float] = (0.0, 0.0)
+    #: Worst single-frame centroid deviation from the fused centre, cm.
+    max_residual_cm: float = 0.0
+    #: ``>1`` ⇒ merged blob / duplicate hypothesis / candidate switch.
+    multiplicity: int = 1
+    settled: bool = False
+    consistent: bool = True
+    stable: bool = True
+
+
+class _TrackHistory:
+    """:class:`_CellHistory` / :class:`_GapHistory` for the CORRECTION pick target.
+
+    Same N-of-M window, cleared through the same
+    :meth:`Supervisor._reset_hysteresis` primitive (item 7). It associates
+    every block-shaped detection (cell or gap) frame to frame by cm anchor and
+    fuses the matched run; :meth:`evidence_at` answers "is the block near here
+    one stable, unambiguous, settled track, and where exactly is it".
+    """
+
+    def __init__(self, settle_n: int, settle_m: int,
+                 match_cm: float = TRACK_IDENTITY_MATCH_CM) -> None:
+        self._n = int(settle_n)
+        self._m = int(settle_m)
+        self._match_cm = float(match_cm)
+        self._tracks: list[_Track] = []
+
+    def reset(self) -> None:
+        self._tracks.clear()
+
+    def _records(self, observation) -> list[DetectionRecord]:
+        """The frame's block detections, multiplicity preserved."""
+        detail = getattr(observation, "detections_detail", ())
+        if detail:
+            return [r for r in detail if r.centre_cm is not None
+                    and r.placement in ("cell", "gap")]
+        # Hand-built observations (unit tests, older rig traces) carry only the
+        # collapsed parallel arrays. Fall back to them so the track layer still
+        # has something to fuse, accepting their pre-existing one-per-cell limit.
+        out: list[DetectionRecord] = []
+        cps = list(getattr(observation, "cell_points_cm", ()))
+        cas = list(getattr(observation, "cell_angles_deg", ()))
+        css = list(getattr(observation, "cell_sizes_cm", ()))
+        for i, (cell, cm) in enumerate(cps):
+            out.append(DetectionRecord(
+                "cell", cell, cm, cas[i] if i < len(cas) else 0.0,
+                css[i] if i < len(css) else (0.0, 0.0)))
+        gps = list(getattr(observation, "gap_points_cm", ()))
+        gas = list(getattr(observation, "gap_angles_deg", ()))
+        gss = list(getattr(observation, "gap_sizes_cm", ()))
+        for i, cm in enumerate(gps):
+            out.append(DetectionRecord(
+                "gap", None, cm, gas[i] if i < len(gas) else 0.0,
+                gss[i] if i < len(gss) else (0.0, 0.0)))
+        return out
+
+    def _looks_like_switch(self, best: _Track) -> bool:
+        """Is another nearby track ANTI-PHASE with ``best`` — the block's
+        detection alternating between two positions across the quiet window
+        (a candidate switch), as opposed to a genuine second block that is
+        present at the SAME time (an occupied neighbour)."""
+        bf = [f.present for f in best.frames]
+        for other in self._tracks:
+            if other is best:
+                continue
+            d = math.hypot(best.anchor[0] - other.anchor[0],
+                           best.anchor[1] - other.anchor[1])
+            if d > SWITCH_NEIGHBOUR_CM:
+                continue
+            of = [f.present for f in other.frames]
+            k = min(len(bf), len(of))
+            if k < self._n:
+                continue
+            b, o = bf[-k:], of[-k:]
+            both = sum(1 for i in range(k) if b[i] and o[i])
+            either = sum(1 for i in range(k) if b[i] or o[i])
+            only_other = sum(1 for i in range(k) if o[i] and not b[i])
+            if only_other >= 1 and both == 0 and either >= k - 1:
+                return True
+        return False
+
+    def _presence_state(self, track: _Track) -> bool | None:
+        pres = [f.present for f in track.frames]
+        if len(pres) < self._n:
+            return None
+        seen = sum(pres)
+        if seen >= self._n:
+            return True
+        if len(pres) - seen >= self._n:
+            return False
+        return None
+
+    def update(self, observation) -> None:
+        recs = [r for r in self._records(observation) if r.centre_cm is not None]
+
+        # Greedy nearest 1:1 association to the live anchors.
+        pairs = []
+        for ri, r in enumerate(recs):
+            for ti, t in enumerate(self._tracks):
+                d = math.hypot(r.centre_cm[0] - t.anchor[0],
+                               r.centre_cm[1] - t.anchor[1])
+                if d <= self._match_cm:
+                    pairs.append((d, ri, ti))
+        rec_to_track: dict[int, int] = {}
+        track_to_rec: dict[int, int] = {}
+        for _d, ri, ti in sorted(pairs):
+            if ri in rec_to_track or ti in track_to_rec:
+                continue
+            rec_to_track[ri] = ti
+            track_to_rec[ti] = ri
+
+        # How many records sit within the match radius of each track this frame
+        # — the multiplicity the collapsed observation used to hide.
+        near = [0] * len(self._tracks)
+        for r in recs:
+            for ti, t in enumerate(self._tracks):
+                if math.hypot(r.centre_cm[0] - t.anchor[0],
+                              r.centre_cm[1] - t.anchor[1]) <= self._match_cm:
+                    near[ti] += 1
+
+        for ti, t in enumerate(self._tracks):
+            if ti in track_to_rec:
+                r = recs[track_to_rec[ti]]
+                t.frames.append(_TrackFrame(
+                    centre_cm=r.centre_cm, angle_deg=r.angle_deg,
+                    size_cm=r.size_cm, present=True,
+                    multiplicity=max(1, near[ti])))
+                t.anchor = (0.6 * t.anchor[0] + 0.4 * r.centre_cm[0],
+                            0.6 * t.anchor[1] + 0.4 * r.centre_cm[1])
+            else:
+                t.frames.append(_TrackFrame(None, 0.0, (0.0, 0.0), False, 0))
+
+        # Records matching no existing track open new ones. Two unmatched
+        # records within the match radius of each other are a merged / duplicate
+        # pair and open ONE track already flagged multiplicity 2, so the very
+        # first frame of an ambiguous read is never mistaken for a clean one.
+        unmatched = [ri for ri in range(len(recs)) if ri not in rec_to_track]
+        consumed: set[int] = set()
+        for a in unmatched:
+            if a in consumed:
+                continue
+            group = [a]
+            for b in unmatched:
+                if b <= a or b in consumed:
+                    continue
+                if math.hypot(recs[a].centre_cm[0] - recs[b].centre_cm[0],
+                              recs[a].centre_cm[1] - recs[b].centre_cm[1]) <= self._match_cm:
+                    group.append(b)
+                    consumed.add(b)
+            consumed.add(a)
+            r = recs[a]
+            self._tracks.append(_Track(
+                anchor=(float(r.centre_cm[0]), float(r.centre_cm[1])),
+                frames=deque([_TrackFrame(
+                    centre_cm=r.centre_cm, angle_deg=r.angle_deg,
+                    size_cm=r.size_cm, present=True,
+                    multiplicity=len(group))], maxlen=self._m)))
+
+        # Decay: forget a track once N of its last M frames say it is gone, so a
+        # later reappearance is a NEW identity warming from nothing.
+        self._tracks = [t for t in self._tracks
+                        if self._presence_state(t) is not False]
+
+    def evidence_at(self, point_cm) -> TrackEvidence:
+        if point_cm is None:
+            return TrackEvidence(False, "no block position to anchor a track to",
+                                 window=self._m)
+        best: _Track | None = None
+        best_d: float | None = None
+        for t in self._tracks:
+            d = math.hypot(point_cm[0] - t.anchor[0], point_cm[1] - t.anchor[1])
+            if d <= self._match_cm and (best_d is None or d < best_d):
+                best, best_d = t, d
+        if best is None:
+            return TrackEvidence(
+                False,
+                f"no block is being tracked within {self._match_cm:g} cm of "
+                f"({point_cm[0]:.1f}, {point_cm[1]:.1f}) cm — the detection is "
+                f"not consistent frame to frame",
+                window=self._m)
+
+        present = [f for f in best.frames if f.present]
+        n_present = len(present)
+        n_window = len(best.frames)
+        centres = [f.centre_cm for f in present if f.centre_cm is not None]
+        angles = [f.angle_deg for f in present]
+        sizes = [f.size_cm for f in present
+                 if f.size_cm and f.size_cm != (0.0, 0.0)]
+
+        cx = _median([c[0] for c in centres]) if centres else float(point_cm[0])
+        cy = _median([c[1] for c in centres]) if centres else float(point_cm[1])
+        sx = _dispersion([c[0] for c in centres])
+        sy = _dispersion([c[1] for c in centres])
+        radial = math.hypot(sx, sy)
+        f_ang = _circular_mean_deg(angles)
+        s_ang = _circular_std_deg(angles)
+        if sizes:
+            f_size = (_median([s[0] for s in sizes]), _median([s[1] for s in sizes]))
+            s_size = (_dispersion([s[0] for s in sizes]),
+                      _dispersion([s[1] for s in sizes]))
+        else:
+            f_size, s_size = (0.0, 0.0), (0.0, 0.0)
+        max_resid = max((math.hypot(c[0] - cx, c[1] - cy) for c in centres),
+                        default=0.0)
+        multiplicity = max((f.multiplicity for f in present), default=1)
+
+        settled = n_present >= self._n
+        switched = self._looks_like_switch(best)
+        consistent = multiplicity <= 1 and not switched
+        size_scatter = max(s_size) if sizes else 0.0
+        stable = (radial <= TRACK_CENTRE_SIGMA_MAX_CM
+                  and s_ang <= TRACK_ANGLE_SIGMA_MAX_DEG
+                  and size_scatter <= TRACK_SIZE_SIGMA_MAX_CM)
+
+        problems: list[str] = []
+        if not settled:
+            problems.append(
+                f"only {n_present} of the last {n_window} quiet frames tracked "
+                f"one block here — {self._n} are needed")
+        if multiplicity > 1:
+            problems.append(
+                "more than one block-shaped detection sat on this spot in the "
+                "quiet window — a merged blob or a duplicate hypothesis")
+        if switched:
+            problems.append(
+                "the detection alternated between two positions across the "
+                "quiet window — a candidate switch, not one settled block")
+        if radial > TRACK_CENTRE_SIGMA_MAX_CM:
+            problems.append(
+                f"the tracked centre scattered {radial:.2f} cm across the window "
+                f"(limit {TRACK_CENTRE_SIGMA_MAX_CM:g})")
+        if s_ang > TRACK_ANGLE_SIGMA_MAX_DEG:
+            problems.append(
+                f"the tracked angle scattered {s_ang:.1f} deg across the window "
+                f"(limit {TRACK_ANGLE_SIGMA_MAX_DEG:g})")
+        if size_scatter > TRACK_SIZE_SIGMA_MAX_CM:
+            problems.append(
+                f"the tracked footprint scattered {size_scatter:.2f} cm across "
+                f"the window (limit {TRACK_SIZE_SIGMA_MAX_CM:g})")
+
+        ok = settled and consistent and stable
+        if ok:
+            reason = (f"one stable block-consistent track over {n_present}/"
+                      f"{n_window} quiet frames: centre ({cx:.2f}, {cy:.2f}) cm "
+                      f"±{radial:.2f}, angle {f_ang:+.1f}° ±{s_ang:.1f}")
+        else:
+            reason = "; ".join(problems)
+
+        return TrackEvidence(
+            ok=ok, reason=reason, centre_cm=(cx, cy), angle_deg=f_ang,
+            size_cm=f_size, samples=n_present, window=n_window,
+            centre_sigma_cm=radial, centre_sigma_xy_cm=(sx, sy),
+            angle_sigma_deg=s_ang, size_sigma_cm=s_size,
+            max_residual_cm=max_resid, multiplicity=multiplicity,
+            settled=settled, consistent=consistent, stable=stable)
+
+
 @dataclass
 class Interlocks:
     """D5's four gates. All required; any one of them refuses every verdict."""
@@ -847,18 +1273,25 @@ class Supervisor:
         #: inherit the previous one's evidence. See that class for the global
         #: `deque[bool]` it replaced and why.
         self._gap_history = _GapHistory(self.settle_n, self.settle_m)
+        #: ITEM 6 + 9. The CORRECTION pick target's fused track, over the same
+        #: N-of-M window. Fed from the same `observation` in `step()` as the two
+        #: histories above, cleared by the same primitive — never a second
+        #: analysis path (audit §2.4). Queried by `track_evidence_at`.
+        self._track_history = _TrackHistory(self.settle_n, self.settle_m)
 
     def reset(self) -> None:
         self._reset_hysteresis()
 
     def _reset_hysteresis(self) -> None:
-        """Clear BOTH histories together. Every reset cause — a tripped
+        """Clear ALL histories together. Every reset cause — a tripped
         interlock, a mode latch, memory loss, a map-generation change on the
-        server — goes through here, so a stale gap verdict can never outlive the
-        cell evidence gathered beside it (D7: reset, never decay; audit item 7:
-        no asymmetric or leaky clearing)."""
+        server — goes through here, so a stale gap verdict or a stale
+        correction track can never outlive the cell evidence gathered beside it
+        (D7: reset, never decay; audit item 7: no asymmetric or leaky
+        clearing)."""
         self._history.reset()
         self._gap_history.reset()
+        self._track_history.reset()
 
     def note_mode(self, mode: str, board_epoch: int = 0) -> None:
         """D13 + audit item 8: evidence gathered under one lattice OR one board
@@ -883,6 +1316,19 @@ class Supervisor:
     def is_quiet(self, diff_fraction: float | None) -> bool:
         """The scene-quiet gate. None (no baseline yet) is NOT quiet."""
         return diff_fraction is not None and diff_fraction <= self.quiet_diff_fraction
+
+    def track_evidence_at(self, point_cm) -> TrackEvidence:
+        """ITEM 6 + 9: the fused, stability-gated track for the block at
+        ``point_cm`` (map cm frame), from the coherent quiet window
+        :meth:`step` accumulates.
+
+        :func:`web.state.assess_frame_correction` calls this to require ONE
+        stable, block-consistent track before a MOVED / DISPLACED correction
+        and to fuse the pick centroid / angle / size instead of trusting a
+        single frame's first candidate. Read-only — it never advances the
+        window (that is :meth:`step`'s job, once per coherent analysis result).
+        """
+        return self._track_history.evidence_at(point_cm)
 
     def step(self, *, mode: str, ledger, observation: Observation,
              interlocks: Interlocks, grid=None):
@@ -929,6 +1375,9 @@ class Supervisor:
         interest = set(expected) | set(observation.cells)
         self._history.update(interest, observation.cells)
         self._gap_history.update(observation)
+        # ITEM 6 + 9: the CORRECTION pick target's track, from the SAME
+        # observation, on the SAME window — no extra frames, no second path.
+        self._track_history.update(observation)
 
         warming = self._history.warming(interest)
         if warming:

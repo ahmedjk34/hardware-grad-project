@@ -56,7 +56,7 @@ from web.routes_command import router as command_router
 from web.routes_calibration import router as calibration_router
 from web.state import (
     StateModel, SupervisionState, assess_frame_correction, build_state,
-    frame_residual_cm, worst_cell_residual_cm,
+    correction_query_point, frame_residual_cm, worst_cell_residual_cm,
 )
 
 
@@ -296,23 +296,35 @@ async def _supervise(app: FastAPI, frame, job: BuildJob, loop,
         mode=frame.grid_mode, ledger=app.state.ledger,
         observation=observation, interlocks=interlocks,
         grid=getattr(frame.workspace, "mapped_grid", None))
+    # ITEM 6 + 9: the fused, stability-gated track for the offending block, from
+    # the SAME quiet window `step()` just advanced — the correction rests on one
+    # coherent block-consistent track, not this one frame's first candidate.
+    query_point = correction_query_point(observation, verdict)
+    track = (supervisor.track_evidence_at(query_point)
+             if query_point is not None else None)
     correction, correction_reason = _assess_correction(
-        app, frame, observation, state, verdict)
+        app, frame, observation, state, verdict, track)
     residual_cm = frame_residual_cm(
         observation=observation, workspace=frame.workspace, verdict=verdict,
         mode=frame.grid_mode)
     _note_supervision(app, state, reason, verdict, correction, correction_reason,
-                      residual_cm, worst_cell_residual_cm(observation))
+                      residual_cm, worst_cell_residual_cm(observation), track)
     _resolve_pending_check(app, state, verdict)
 
 
-def _assess_correction(app: FastAPI, frame, observation, state: str, verdict):
+def _assess_correction(app: FastAPI, frame, observation, state: str, verdict,
+                       track=None):
     """Thin wrapper: `web.state.assess_frame_correction` is the real logic, so
-    the same code answers `/api/supervision/correct` before it moves the rig."""
+    the same code answers `/api/supervision/correct` before it moves the rig.
+
+    `track` is the fused quiet-window `TrackEvidence` (items 6 + 9); with it the
+    correction is gated on ONE stable block-consistent track and the pick
+    centroid is fused, not read off a single frame.
+    """
     return assess_frame_correction(
         ledger=app.state.ledger, workspace=frame.workspace,
         observation=observation, state=state, verdict=verdict,
-        mode=frame.grid_mode)
+        mode=frame.grid_mode, track=track, require_track=True)
 
 
 def _resolve_pending_check(app: FastAPI, state: str, verdict) -> None:
@@ -345,7 +357,8 @@ def _resolve_pending_check(app: FastAPI, state: str, verdict) -> None:
 
 def _note_supervision(app: FastAPI, state: str, reason, verdict,
                       correction=None, correction_reason=None,
-                      residual_cm=None, max_cell_residual_cm=None) -> None:
+                      residual_cm=None, max_cell_residual_cm=None,
+                      track=None) -> None:
     """Hold the latest reading, and log it once per CHANGE.
 
     Not once per frame: at the measured 8.6-8.7 Hz a per-frame line would be
@@ -358,10 +371,17 @@ def _note_supervision(app: FastAPI, state: str, reason, verdict,
     a `SupervisionModel` and the four surfaces; until then this log line and a
     `GET /api/state` debugger are the whole of the bench session's evidence.
     """
+    loc_sigma_cm = loc_residual_cm = track_samples = None
+    if track is not None and getattr(track, "samples", 0):
+        loc_sigma_cm = round(track.centre_sigma_cm, 3)
+        loc_residual_cm = round(track.max_residual_cm, 3)
+        track_samples = (int(track.samples), int(track.window))
     app.state.supervision = SupervisionState(
         state=state, reason=reason, verdict=verdict, judged_at_ms=now_ms(),
         correction=correction, correction_reason=correction_reason,
-        residual_cm=residual_cm, max_cell_residual_cm=max_cell_residual_cm)
+        residual_cm=residual_cm, max_cell_residual_cm=max_cell_residual_cm,
+        localization_sigma_cm=loc_sigma_cm,
+        localization_residual_cm=loc_residual_cm, track_samples=track_samples)
     signature = (state, None if verdict is None else verdict.verdict,
                  () if verdict is None else verdict.cells)
     if signature == app.state.supervision_signature:
