@@ -629,11 +629,13 @@ const bool SOFT_LIMIT_VERBOSE = true;
 //   GRID_SHIFT_X_CM / _Y_CM            0.0    0.0   (runtime only)
 //   SKEW_Y_PER_COL_CM                  0.115  0.13  (X-rail twist pulls Y)
 //   SKEW_X_* and all ROW/COLROW terms  0.0    0.0   (unmeasured)
-//   BUILD_PLACEMENT_OFFSET_X_CM        0.0   +1.35  (horiz; was -0.4, then the
+//   BUILD_PLACEMENT_OFFSET_X_CM       -0.45  +1.35  (vert -0.45 UNDER TEST here;
+//                                                    horiz was -0.4, then the
 //                                                    2026 arm re-seat - measured
 //                                                    1.35 cm toward home at 0)
-//   BUILD_PLACEMENT_OFFSET_Y_CM        0.0   -0.3  (horiz; UNDER TEST here only,
-//                                                   was 0.0 - lands 0.3 too far)
+//   BUILD_PLACEMENT_OFFSET_Y_CM      -0.45   -0.3  (both UNDER TEST here only;
+//                                                   vert lands 0.45 too far,
+//                                                   horiz lands 0.3 too far)
 //   TOOL_OFFSET_NEUTRAL_X/Y_CM         0.0 / 0.0    (not per mode)
 //   TOOL_OFFSET_CW_X/Y_CM             +0.9 / -0.3   (the pickup-rotate swing)
 //   TOOL_OFFSET_CCW_X/Y_CM             0.0 / 0.0    (never measured)
@@ -3965,7 +3967,9 @@ float SKEW_Y_PER_COLROW_CM[GRID_MODE_COUNT] = {0.0, 0.0};
 // THE SHIPPED VALUES, AND WHAT EACH ONE MEANS - the tables read
 // { vertical, horizontal }:
 //
-//   X vertical    0.0   no fixed X correction in vertical mode
+//   X vertical   -0.45  vertical placements landed 0.45 cm too FAR from the X
+//                       home switch (rig-measured, UNDER TEST here only; other
+//                       sketches still 0.0). -0.45 pulls them back toward home.
 //   X horizontal +1.35  horizontal placements are commanded 1.35 cm AWAY from
 //                       the X home switch of the raw lattice. History: -0.4
 //                       (0.4 cm toward home) until the 2026 arm re-seat. With
@@ -3974,7 +3978,9 @@ float SKEW_Y_PER_COLROW_CM[GRID_MODE_COUNT] = {0.0, 0.0};
 //                       rig), so +1.35 pushes them back onto the cell. An
 //                       unverified +1.8 intermediate was never confirmed on
 //                       hardware. Back to -0.4 if the arm is re-seated square.
-//   Y vertical    0.0   no fixed Y correction in vertical mode
+//   Y vertical   -0.45  vertical placements landed 0.45 cm too FAR from the Y
+//                       home switch (rig-measured, UNDER TEST here only; other
+//                       sketches still 0.0). -0.45 pulls them back toward home.
 //   Y horizontal -0.3   horizontal placements landed 0.3 cm too FAR from the Y
 //                       home switch (rig-measured, UNDER TEST here only; other
 //                       sketches still 0.0). -0.3 pulls them back toward home.
@@ -4000,8 +4006,8 @@ float SKEW_Y_PER_COLROW_CM[GRID_MODE_COUNT] = {0.0, 0.0};
 //
 // Keep these paired with the values documented in AGENTS.md; test_grid.py pins
 // every slot against this sketch and fails on any drift.
-float BUILD_PLACEMENT_OFFSET_X_CM[GRID_MODE_COUNT] = {0.0, 1.35};
-float BUILD_PLACEMENT_OFFSET_Y_CM[GRID_MODE_COUNT] = {0.0, -0.3};
+float BUILD_PLACEMENT_OFFSET_X_CM[GRID_MODE_COUNT] = {-0.45, 1.35};
+float BUILD_PLACEMENT_OFFSET_Y_CM[GRID_MODE_COUNT] = {-0.45, -0.3};
 
 // Returns a MAGNITUDE in steps - "this far away from the home switch" - with no
 // travel-direction factor applied. Only gotoBuildTarget() consumes it, and it
