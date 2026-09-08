@@ -252,13 +252,17 @@ const int SERVO_PIN = 6;
 // The feeder is calibrated for a tighter opening when both X/Y home switches
 // are physically active. The home-switch check is made at the instant
 // O/openServo() runs.
-// Build gripper calibration. This manual sketch ONLY: open is split -
-// SERVO_HOME_OPEN_ANGLE (120) is used while both X/Y home switches are active
-// (feeder pickup, build phase 4); SERVO_OPEN_ANGLE (100) is used everywhere
-// else, i.e. the release at the target cell (phase 11). Close is standard 180.
+// Build gripper calibration. This manual sketch ONLY: BOTH open and close are
+// split by "are both X/Y home switches active?" (checked the instant
+// openServo()/closeServo() runs):
+//   at feeder home  -> SERVO_HOME_OPEN_ANGLE (120) / SERVO_HOME_CLOSE_ANGLE (107)
+//   anywhere else    -> SERVO_OPEN_ANGLE (100) / SERVO_CLOSE_ANGLE (95)
+// So the pickup grip (phase 6, at home) closes to 107 and the release at the
+// target cell (phase 11) opens to 100; a close away from home goes to 95.
 const int SERVO_HOME_OPEN_ANGLE = 120;
 const int SERVO_OPEN_ANGLE = 100;
-const int SERVO_CLOSE_ANGLE = 180;
+const int SERVO_HOME_CLOSE_ANGLE = 107;
+const int SERVO_CLOSE_ANGLE = 95;
 
 // The servo is commanded and then forgotten - nothing reports back
 // when it has actually arrived. The build sequence must not start
@@ -2491,13 +2495,17 @@ void openServo()
 
 void closeServo()
 {
-  gripperServo.write(SERVO_CLOSE_ANGLE);
+  const bool atFeederHome = isLimitHitAt(homeLimitIndexOf(AXIS_X)) &&
+                            isLimitHitAt(homeLimitIndexOf(AXIS_Y));
+  const int closeAngle = atFeederHome ? SERVO_HOME_CLOSE_ANGLE : SERVO_CLOSE_ANGLE;
+
+  gripperServo.write(closeAngle);
   servoIsOpen = false;
   statServoCloses++;
 
   Serial.println();
   Serial.print(F("SERVO: CLOSE ("));
-  Serial.print(SERVO_CLOSE_ANGLE);
+  Serial.print(closeAngle);
   Serial.println(F(" deg)"));
 }
 
@@ -5598,6 +5606,8 @@ void printServoStatus()
   Serial.print(SERVO_HOME_OPEN_ANGLE);
   Serial.print(F(" deg / close "));
   Serial.print(SERVO_CLOSE_ANGLE);
+  Serial.print(F(" deg / feeder-home close "));
+  Serial.print(SERVO_HOME_CLOSE_ANGLE);
   Serial.println(F(" deg)"));
 
   Serial.print(F("Actuations: "));
