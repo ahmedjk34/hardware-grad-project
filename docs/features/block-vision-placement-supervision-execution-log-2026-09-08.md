@@ -4,11 +4,173 @@ Date: 2026-09-08
 
 ## CURRENT RESUME STATE
 
-- Completed and verified: Section 8 item 1 (pre-existing); Section 8 item 2 (`NO_VISION` propagation for detector failure and stale frames — implemented, tested, committed on `main`); Section 8 item 7 (per-identity gap history, symmetric reset/decay — implemented, tested, committed `074aaf9` on `main`); Section 8 item 8 (mode- and board-epoch-specific ledger memory — implemented, tested, committed `70f2e17` on `main`); Section 8 item 4 (Pi-side exact compensated-motion reachability/clamp preflight — implemented, tested, committed `a22e92d` on `main`); Section 8 items 6 + 9 (preserve detection multiplicity + require one stable block-consistent track for MOVED/DISPLACED; fuse centroid/angle/size over the existing coherent quiet window with exposed uncertainty/residuals — implemented, tested, committed `f0c8c37` on `main`); Section 8 item 3 (one-shot coherent correction ticket with atomic quiet/mode/map/track/epoch revalidation — implemented, tested, committed on `main`).
+- Completed and verified: Section 8 item 1 (pre-existing); Section 8 item 2 (`NO_VISION` propagation for detector failure and stale frames — implemented, tested, committed on `main`); Section 8 item 7 (per-identity gap history, symmetric reset/decay — implemented, tested, committed `074aaf9` on `main`); Section 8 item 8 (mode- and board-epoch-specific ledger memory — implemented, tested, committed `70f2e17` on `main`); Section 8 item 4 (Pi-side exact compensated-motion reachability/clamp preflight — implemented, tested, committed `a22e92d` on `main`); Section 8 items 6 + 9 (preserve detection multiplicity + require one stable block-consistent track for MOVED/DISPLACED; fuse centroid/angle/size over the existing coherent quiet window with exposed uncertainty/residuals — implemented, tested, committed `f0c8c37` on `main`); Section 8 item 3 (one-shot coherent correction ticket with atomic quiet/mode/map/track/epoch revalidation — implemented, tested, committed `c609e54` on `main`); Section 8 item 5 (refuse diagonal correction; both-neighbour + corner clearance sweep; boundary-safe; fail-closed when the 3×3 occupancy is unavailable — implemented, tested, committed `eaec686` on `main`).
 - Implemented but unmerged: none.
-- Active or blocked work: Phase 1's serialized 2 → 7 → 8 → 4 → (6 + 9) → 3 chain is complete. Next in the audited safe sequence is item 5, then item 10 (out of scope for this pass).
+- **Software implementation items 2–9 are complete and ready for final verification.** All of the audited safe sequence 2 → 7 → 8 → 4 → (6 + 9) → 3 → 5 is on `main` with its own feature + docs commit pair, each green against the full `python/tests/` suite and the hand-rolled suites. What remains is (a) a consolidated final-verification pass over items 2–9 together, and (b) **item 10** — the on-rig Gate 0 / Gate 0b / provisional-geometry measurement campaign — which is hardware work and out of scope for this software pass. Every constant introduced by items 2–9 that wants a rig number is flagged PROVISIONAL against audit §7.5.
+- Active or blocked work: none. Phase 1's serialized implementation chain is finished.
 - Unmerged branches/worktrees: none.
-- Next required action: start **item 5** — refuse diagonal correction and enforce both-neighbour / corner clearance until the jaw geometry is measured (audit §1 P0 `placement_geometry.py:164-171` / `placement_check.py:279-286`, shortlist item 5). `_drift_neighbour` in `web/state.py` currently collapses two-axis drift to one dominant axis and only checks that one neighbour corridor; item 5 adds an "essentially one-dimensional" gate and a both-signed-axis + corner sweep, refusing ambiguous diagonal drift outright. Item 10 (the rig measurement campaign) remains after it / out of scope.
+- Next required action: run the consolidated **final verification** of items 2–9 (full `python/tests/` + every hand-rolled suite + `web/ npx vitest`), then hand item 10's measurement campaign to the rig team. Do not reopen items 2–9 without a specific regression.
+
+## Phase 1 — item 5: refuse diagonal correction; both-neighbour + corner clearance
+
+### Agent `item5_diagonal_gate`
+
+- Assigned item(s): Section 8 item 5 ONLY — refuse diagonal correction unless a
+  diagonal jaw approach has been explicitly measured and supported; require
+  both-neighbour and corner-clearance checks before a correction; handle
+  boundary/edge cells safely; fail closed with a clear reason when the required
+  safety evidence (the neighbourhood occupancy) is unavailable; preserve valid
+  axis-aligned corrections; do not infer safe geometry from incomplete
+  information. No other Section 8 item touched — item 3's ticket, item 4's
+  preflight and items 6 + 9's track were verified integrated and left alone;
+  item 10 (the rig campaign) not started.
+- Verified before starting: items 3 and 4 integrated and green —
+  `test_motion_preflight.py` 62/0 with `_preflight_reject` wired into both
+  `assess()` branches (item 4); `web_supervision_test.py` 68/0 with
+  `CorrectionTicket` / `validate_correction_ticket` / `correction_lock` threaded
+  through `state.py` / `app.py` / `routes_command.py` (item 3).
+- Branch/worktree: `main`; working tree clean at start (items 2, 7, 8, 4, 6+9, 3
+  all already on `main`).
+- Files changed:
+  - `python/rig/placement_geometry.py`:
+    - `drift_axis()` docstring corrected — it names only the *larger* axis and
+      no longer claims a displacement is "essentially 1-D".
+    - New `drift_axes()` (plural) — the tuple of axes carrying more than
+      `axis_tolerance_cm` of displacement, larger first: `()` / `("x",)` /
+      `("y",)` / `("x", "y")`. One entry = a correctable slide; two = a
+      diagonal; zero = within noise of the cell centre.
+    - New frozen `NeighbourhoodClearance` (`ok`, `reason`, `diagonal`,
+      `checked`) and `neighbourhood_clear(*, cov_x, cov_y, gap_x_cm, gap_y_cm,
+      jaw_clearance_cm, axis_tolerance_cm, occupied, diagonal_supported=False)`.
+      `occupied(dcol, drow)` is an authoritative 3×3 predicate. A two-axis drift
+      with `diagonal_supported=False` is refused with `diagonal=True` and no
+      occupancy consulted (`checked == ()`). A one-axis drift runs
+      `corridor_clear` on the primary neighbour, then — for the cross side the
+      block leans, or BOTH cross sides when it is centred — checks the
+      cross-axis neighbour (overlap / jaw width) and the corner cell past the
+      primary neighbour (refused only when BOTH adjacent gaps are closed to
+      within a jaw width, the one geometry in which a primary-axis jaw also
+      reaches the corner). Off-grid offsets read empty via the predicate, so an
+      edge/corner pick cell is handled without an index error.
+  - `python/rig/placement_check.py`:
+    - New `DIAGONAL_AXIS_TOLERANCE_CM = 0.5` (PROVISIONAL — deliberately the
+      correction floor `CORRECT_BAND_MIN_CM`; the map's flattening residual is
+      ~0.27 cm, so a sub-floor cross component is noise) and
+      `DIAGONAL_CORRECTION_SUPPORTED = False` (PROVISIONAL — flip only once the
+      swept jaw envelope for a two-axis descent is bench-measured, audit §7.5
+      `JAW_CLEARANCE_CM`, and `neighbourhood_clear`'s two-axis branch is
+      validated). Both are Pi-side supervision policy — no `config/rig.json`
+      partner, no firmware partner, `test_grid.py` unaffected.
+    - Import swapped `corridor_clear` → `neighbourhood_clear` (`drift_axis` kept
+      for the no-neighbourhood fallback).
+    - `assess()` gains `neighbourhood: dict | None = None` and
+      `diagonal_supported: bool = DIAGONAL_CORRECTION_SUPPORTED`.
+    - DISPLACED branch: after the floor check and BEFORE any grid geometry, a
+      drift over `DIAGONAL_AXIS_TOLERANCE_CM` on BOTH axes is refused (the
+      reason quotes `{dx:+.2f} cm X / {dy:+.2f} cm Y` and says "Clear it by
+      hand") — this needs only the displacement, so a degenerate no-map path
+      cannot slip a diagonal through. `effective_diag = diagonal_supported and
+      neighbourhood is not None`, so enabling the flag without supplying the
+      3×3 does NOT enable diagonals. The `drift_axis` + single `corridor_clear`
+      call is replaced by `neighbourhood_clear(...)`: with a `neighbourhood` the
+      full 3×3 feeds it; without one (a bare unit test) only the
+      `drift_neighbour_occupied` toward-cell is known and `effective_diag` is
+      already False. MOVED branch untouched — its pick is a real lattice cell
+      whose gaps are clear by definition, not a gap between two blocks.
+  - `python/web/state.py`:
+    - New `_cell_occupied(cell, occupied, top_levels)` — a detection this frame
+      OR a ledger placement; off-grid `cell` is absent from both, so safe for
+      any 3×3 offset.
+    - `assess_frame_correction()` builds the full `{(dc, dr): occupied}` 3×3
+      around `where_cell` from `_cell_occupied` and passes it as
+      `neighbourhood=` (still also passes `drift_neighbour_occupied` for the
+      fallback path). `_drift_neighbour` kept; `drift_neighbour_occupied` now
+      derived via `_cell_occupied`.
+  - `docs/features/placement-supervision.md` — geometry-function table gains
+    `drift_axes()` / `neighbourhood_clear()` rows; the CORRECTION-gate paragraph
+    rewritten (`consistency()` + `neighbourhood_clear()`, the four new
+    provisional constants); new §2c-ter dated section.
+  - `docs/features/correction-action.md` — new "Update — 2026-09-08" note under
+    the 2026-09-07 corridor note.
+  - `docs/features/block-vision-placement-supervision-audit-2026-09-08.md` —
+    shortlist item 5 marked `[x]`.
+- Implementation summary: the `DISPLACED` descent decision reduced the
+  displacement to its dominant axis (`drift_axis`) and checked only that one
+  neighbour's corridor. A block shoved into a corner gap drifts on both axes and
+  closes two corridors plus the corner between them; when the dominant axis'
+  neighbour was empty the correction was approved anyway (audit §1 P0). Fix:
+  `drift_axes` reports every axis over a noise tolerance; `neighbourhood_clear`
+  refuses a two-axis drift outright while `DIAGONAL_CORRECTION_SUPPORTED` is
+  False, and otherwise sweeps the primary neighbour, the cross-axis neighbour
+  and the corner against an authoritative 3×3 supplied by `web/state.py`.
+  `assess()` refuses the diagonal before touching grid geometry and forces the
+  diagonal path off whenever the 3×3 is missing, so safe geometry is never
+  inferred from incomplete information. Axis-aligned corrections (the whole of
+  vertical Y in a normal build) are unchanged; `MOVED` is unchanged. No
+  firmware / `config/rig.json` change; no new paired constant.
+- Tests added:
+  - `python/tests/test_placement_geometry.py` (+23 checks, new `item 5` block):
+    `drift_axes` on pure-X / pure-Y / sub-tolerance cross / exactly-at-tolerance
+    (strict `>`) / real two-axis (larger first) / y-leads / tie / no-drift;
+    `neighbourhood_clear` — unsupported diagonal refused with `diagonal=True`,
+    cites "diagonal" + "by hand", `checked == ()`; a diagonal with a full corner
+    is STILL refused as a diagonal (occupancy cannot rescue it); a one-axis
+    drift into empty space clears and the `checked` set is exactly {primary,
+    both cross, both corners}; an occupied primary neighbour in a closed gap →
+    "no room for the jaw"; overlapping the neighbour footprint → "overlaps";
+    0.7 cm of open gap is enough; a drift toward an off-grid edge is handled not
+    errored; `(diagonal_supported=True)` both gaps closed + corner occupied →
+    "diagonally past", same geometry with an empty corner → clear, closed gap to
+    an occupied cross neighbour → "other axis"; `NeighbourhoodClearance` frozen.
+  - `python/tests/test_placement_check.py` (+17 checks, new `item 5` block, new
+    `displaced_xy` / `full_3x3` helpers): a diagonal DISPLACED request refused,
+    reason names both axes + quotes the per-axis drift + "clear it by hand"; the
+    `abs(dx)==abs(dy)` tie refused; a sub-tolerance cross component still
+    corrected and the real vector carried; exactly at the tolerance still
+    axis-aligned, one hair over → refused; a diagonal with an occupied corner
+    still refused AS a diagonal (not "diagonally past"); `diagonal_supported`
+    without a neighbourhood → still refused (fail-safe); `(supported)` diagonal
+    into a clear 3×3 → a Correction, both gaps closed onto an occupied corner →
+    refused, into an occupied primary neighbour's closed gap → refused; the
+    one-axis path through the full 3×3 still corrects and still refuses toward an
+    occupied neighbour; the two new constants asserted (`0.5`, `False`).
+  - `python/tests/web_supervision_test.py` (+1 test):
+    `test_a_DISPLACED_block_that_drifted_on_both_axes_is_refused_as_a_diagonal`
+    — a gap detection at the shared corner of `[2,1] [3,1] [2,2] [3,2]` still
+    settles `DISPLACED` but yields `correction is None`, `correctable False`,
+    reason "both axes" / "by hand".
+- Exact test commands and results:
+  - `.venv/bin/python python/tests/test_placement_geometry.py` — 55 passed, 0
+    failed (was 32; +23).
+  - `.venv/bin/python python/tests/test_placement_check.py` — 58 passed, 0
+    failed (was 41; +17).
+  - `.venv/bin/python -m pytest -q python/tests/` — 148 passed (was 147; +1).
+  - `.venv/bin/python -m pytest -q python/tests/web_supervision_test.py
+    python/tests/web_state_test.py python/tests/web_command_test.py
+    python/tests/console_pipeline_test.py python/tests/orchestrator_test.py` —
+    90 passed.
+  - `.venv/bin/python python/tests/test_supervisor.py` — 167;
+    `test_supervisor_frames.py` — 21; `test_motion_preflight.py` — 62;
+    `test_placement_ledger.py` — 57; `test_grid.py` — 239; `test_link.py` — 113;
+    `test_build_controller.py` — 30; `test_latest_workers.py` — 25. All 0 failed.
+  - No `web/src` change (no `SupervisionModel` field added), so `npx vitest` not
+    re-run — consistent with the item 3 / item 4 entries.
+- Commit hash: `eaec686` (`feat(supervision): refuse diagonal correction, sweep
+  both neighbours + corner`) — code + tests + `placement-supervision.md` +
+  `correction-action.md` + audit checkbox. This log entry is the immediately
+  following docs commit.
+- Unresolved issues: none for item 5. `DIAGONAL_AXIS_TOLERANCE_CM = 0.5` and
+  `DIAGONAL_CORRECTION_SUPPORTED = False` are PROVISIONAL and want audit §7.5's
+  `JAW_CLEARANCE_CM` measurement before a diagonal correction can ever be
+  enabled; `neighbourhood_clear`'s two-axis branch and its corner criterion are
+  implemented and unit-tested against `diagonal_supported=True` but are dead
+  code in production until that flag flips. The corner rule ("both adjacent gaps
+  closed to within a jaw width") is a conservative analytic model, not a
+  measured swept-volume — flagged for the same bench session. Hardware/camera
+  unverified locally as always.
+- Whether merged: committed directly to `main`.
+- Next action: consolidated final verification of items 2–9; then item 10 (the
+  on-rig measurement campaign) to the rig team.
 
 ## Phase 1 — item 3: one-shot coherent correction ticket
 
