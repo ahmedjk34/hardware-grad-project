@@ -298,8 +298,14 @@ const int AUX_STEPPER_IN4 = 37;
 // Approximate number of steps for one output-shaft revolution.
 const int AUX_STEPPER_STEPS_PER_REV = 2048;
 
-// A quarter turn, used by the build's neutral/CW/CCW placement states.
-const int AUX_STEPPER_QUARTER_TURN = AUX_STEPPER_STEPS_PER_REV / 4;
+// The build's CW/CCW placement rotation magnitude (neutral/CW/CCW states).
+// This manual sketch ONLY: 91 deg, not a true 90 deg quarter turn (other
+// sketches use AUX_STEPPER_STEPS_PER_REV / 4 = 512 = 90 deg).
+//   2048 steps/rev * 91 deg / 360 deg = 517.7 -> 518 steps (~91.0 deg).
+// KEEP THIS A PLAIN LITERAL. `AUX_STEPPER_STEPS_PER_REV * 91` = 186368 overflows
+// the MEGA's 16-bit int, producing a NEGATIVE constant that makes the
+// while-loops in rotateClawTo() never terminate (claw spins forever).
+const int AUX_STEPPER_QUARTER_TURN = 518;
 
 // One manual command is deliberately capped at one turn. The aux mechanism
 // has no limit switch, so a larger move must be consciously split into
