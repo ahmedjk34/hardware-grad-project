@@ -5588,6 +5588,8 @@ void printServoStatus()
   Serial.print(servoIsOpen ? "OPEN" : "CLOSED");
   Serial.print(F("   (open "));
   Serial.print(SERVO_OPEN_ANGLE);
+  Serial.print(F(" deg / feeder-home open "));
+  Serial.print(SERVO_HOME_OPEN_ANGLE);
   Serial.print(F(" deg / close "));
   Serial.print(SERVO_CLOSE_ANGLE);
   Serial.println(F(" deg)"));
