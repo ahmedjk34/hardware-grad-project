@@ -674,6 +674,128 @@ check("a mode latch clears the gap history — horizontal is not FOREIGN off "
       "vertical's gap", hv is not None and hv.verdict == "VERIFIED", str(hv))
 
 
+# --- item 8: memory is mode- AND board-epoch-specific -------------------- #
+#
+# `has_memory` used to be one global boolean: any PLACED in any mode, any board
+# epoch, and `step()` would then judge the CURRENT grid against a possibly-empty
+# expected set. So horizontal-only placements made vertical mode read VERIFIED
+# on an empty view or FOREIGN on a real board, and a settled verdict from before
+# a gantry reboot leaked onto the board that replaced it. Each case below is
+# asserted against the mode+epoch model that replaced it. The reset path is item
+# 7's `_reset_hysteresis()` — no second mechanism.
+
+i8_open = Interlocks(parked=True, calibrated=True, quiet=True)
+i8_shut = Interlocks(parked=False, calibrated=True, quiet=True)
+
+
+def warm(sup, obs, led, mode="vertical", gates=i8_open, n=4):
+    last = None
+    for _ in range(n):
+        last = sup.step(mode=mode, ledger=led, observation=obs,
+                        interlocks=gates)
+    return last
+
+
+# mode change: placements exist ONLY in horizontal; vertical must say NO_MEMORY,
+# never VERIFIED on an empty view and never FOREIGN on a real vertical board.
+h_only = PlacementLedger()
+for c, r, l in [(1, 1, 0), (2, 7, 0)]:
+    h_only.append("horizontal", c, r, l, BuildResult(PLACED))
+sup = supervisor(settle_n=2, settle_m=3)
+s, _, v = warm(sup, Observation(cells=(), detections=0), h_only, mode="vertical")
+check("mode change: horizontal-only memory, empty vertical view -> NO_MEMORY",
+      s == "NO_MEMORY" and v is None, f"{s} {v}")
+sup = supervisor(settle_n=2, settle_m=3)
+s, _, v = warm(sup, Observation(cells=((1, 1), (2, 1)), detections=6), h_only,
+               mode="vertical")
+check("mode change: horizontal-only memory, real vertical board -> NO_MEMORY "
+      "(not FOREIGN)", s == "NO_MEMORY" and v is None, f"{s} {v}")
+# and horizontal itself, its own mode, still judges normally.
+sup = supervisor(settle_n=2, settle_m=3)
+s, _, v = warm(sup, Observation(cells=((1, 1), (2, 7)), detections=6), h_only,
+               mode="horizontal")
+check("preservation: the mode that WAS placed still reaches VERIFIED",
+      s == "VERDICT" and v.verdict == "VERIFIED", f"{s} {v}")
+
+
+# historical VERIFIED must not leak across a board epoch. A full matching board
+# in epoch 0, then new_board_epoch(), then an EMPTY view -> NO_MEMORY.
+epoch_led = ledger_with("vertical", [(1, 1, 0), (2, 1, 0)])
+sup = supervisor(settle_n=2, settle_m=3)
+s, _, v = warm(sup, Observation(cells=((1, 1), (2, 1)), detections=6), epoch_led)
+check("baseline: epoch 0 full board settles VERIFIED",
+      s == "VERDICT" and v.verdict == "VERIFIED", f"{s} {v}")
+epoch_led.new_board_epoch()
+s, _, v = sup.step(mode="vertical", ledger=epoch_led,
+                   observation=Observation(cells=(), detections=0),
+                   interlocks=i8_open)
+check("new board epoch drops the settled VERIFIED — empty view is NO_MEMORY",
+      s == "NO_MEMORY" and v is None, f"{s} {v}")
+s, _, v = warm(sup, Observation(cells=(), detections=0), epoch_led)
+check("and it stays NO_MEMORY on the new epoch, never VERIFIED",
+      s == "NO_MEMORY" and v is None, f"{s} {v}")
+
+
+# historical FOREIGN must not leak across a board epoch either. Board present in
+# epoch 0; new epoch; a real board -> NO_MEMORY, not FOREIGN.
+f_led = ledger_with("vertical", [(1, 1, 0)])
+sup = supervisor(settle_n=2, settle_m=3)
+warm(sup, Observation(cells=((1, 1),), detections=4), f_led)
+f_led.new_board_epoch()
+s, _, v = warm(sup, Observation(cells=((1, 1), (2, 1), (3, 1)), detections=8),
+               f_led)
+check("new board epoch: a real board with no epoch memory is NO_MEMORY "
+      "(not FOREIGN)", s == "NO_MEMORY" and v is None, f"{s} {v}")
+
+
+# reconnect: after the epoch bump the FIRST build in the new epoch re-enables
+# verdicts, and the epoch change reset the hysteresis (it warms from nothing).
+rc_led = ledger_with("vertical", [(1, 1, 0), (2, 1, 0)])
+sup = supervisor(settle_n=2, settle_m=3)
+warm(sup, Observation(cells=((1, 1), (2, 1)), detections=6), rc_led)
+rc_led.new_board_epoch()
+rc_led.append("vertical", 5, 3, 0, BuildResult(PLACED))
+s1, _, v1 = sup.step(mode="vertical", ledger=rc_led,
+                     observation=Observation(cells=((5, 3),), detections=4),
+                     interlocks=i8_open)
+check("reconnect: the first frame of the new epoch WARMS, no leaked verdict",
+      s1 == "WARMING" and v1 is None, f"{s1} {v1}")
+s2, _, v2 = warm(sup, Observation(cells=((5, 3),), detections=4), rc_led)
+check("reconnect: the new epoch's own placement settles VERIFIED on its cell",
+      s2 == "VERDICT" and v2.verdict == "VERIFIED"
+      and v2.expected == ((5, 3),), f"{s2} {v2}")
+
+
+# reset: supervisor.reset() drops the live verdict but the ledger memory for the
+# SAME epoch is untouched, so it re-warms and reaches the same verdict again.
+rs_led = ledger_with("vertical", [(1, 1, 0), (2, 1, 0)])
+sup = supervisor(settle_n=2, settle_m=3)
+obs_ok = Observation(cells=((1, 1), (2, 1)), detections=6)
+warm(sup, obs_ok, rs_led)
+sup.reset()
+sr1, _, vr1 = sup.step(mode="vertical", ledger=rs_led, observation=obs_ok,
+                       interlocks=i8_open)
+check("reset: the next frame re-warms — the settled verdict did not survive",
+      sr1 == "WARMING" and vr1 is None, f"{sr1} {vr1}")
+sr2, _, vr2 = warm(sup, obs_ok, rs_led)
+check("reset: same-epoch memory is preserved, so VERIFIED returns",
+      sr2 == "VERDICT" and vr2.verdict == "VERIFIED", f"{sr2} {vr2}")
+
+
+# preservation within the same mode+epoch: a settled verdict is stable frame to
+# frame — stepping again with an unchanged identity must not reset anything.
+pv_led = ledger_with("vertical", [(1, 1, 0), (2, 1, 0)])
+sup = supervisor(settle_n=2, settle_m=3)
+warm(sup, obs_ok, pv_led)
+stable = [sup.step(mode="vertical", ledger=pv_led, observation=obs_ok,
+                   interlocks=i8_open)[2].verdict for _ in range(4)]
+check("preservation: an unchanged mode+epoch keeps the verdict, no flicker",
+      stable == ["VERIFIED"] * 4, str(stable))
+# an epoch that never advances behaves exactly as before this change.
+check("preservation: board_epoch stays 0 when nothing bumps it",
+      pv_led.board_epoch == 0)
+
+
 # --- step() rejects a DISPLACED pairing the geometry cannot support -------- #
 #
 # `classify` names the emptied cell as the origin of the gap detection by set

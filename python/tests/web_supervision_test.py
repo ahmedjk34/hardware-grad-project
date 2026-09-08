@@ -911,7 +911,51 @@ def test_the_lifespan_owns_a_ledger_the_controller_writes_to(tmp_path):
     assert state.controller.ledger is state.ledger
     assert isinstance(state.supervisor, Supervisor)
     # D3: empty on every process, never reloaded from `placements.log`.
-    assert state.ledger.has_memory is False
+    assert state.ledger.has_memory() is False
     # Gate 0's measured constants reached the running server unaltered.
     assert state.supervisor.quiet_diff_fraction == QUIET_DIFF_FRACTION
     assert (state.supervisor.settle_n, state.supervisor.settle_m) == (3, 5)
+
+
+def test_a_gantry_reboot_starts_a_new_board_epoch(tmp_path):
+    """Audit item 8: a genuine `@0 BOOT` under a running session means the board
+    on the table can no longer be spoken for by the ledger's entries. The rows
+    stay, but a new epoch is started so no pre-reboot placement is authority,
+    and the observer's hysteresis is dropped through item 7's reset primitive.
+    """
+    from rig.link import Ack
+
+    app = create_app(ConsoleAppOptions(
+        mock=True,
+        settings_path=mock_settings(tmp_path),
+        workspace_map_path=tmp_path / "workspace_map.json",
+    ))
+
+    async def scenario():
+        async with LifespanManager(app):
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport,
+                                         base_url="http://test"):
+                st = app.state
+                # An empty ledger has nothing to protect: a boot does not bump.
+                st.rig._on_ack(Ack(seq=0, kind="BOOT"))
+                await asyncio.sleep(0)
+                await asyncio.sleep(0)
+                assert st.ledger.board_epoch == 0
+
+                # With memory on the board, a reboot supersedes it.
+                st.ledger.append("vertical", 2, 1, 0, BuildResult(PLACED))
+                assert st.ledger.has_memory("vertical", 0) is True
+                st.rig._on_ack(Ack(seq=0, kind="BOOT"))
+                await asyncio.sleep(0)
+                await asyncio.sleep(0)
+                return st
+
+    st = asyncio.run(scenario())
+    assert st.ledger.board_epoch == 1
+    # The pre-reboot row is retained for the record...
+    assert len(st.ledger.placements("vertical", board_epoch=None)) == 1
+    # ...but the current epoch has no memory, so supervision reports NO_MEMORY
+    # rather than judging the new board against the old one.
+    assert st.ledger.has_memory("vertical") is False
+    assert st.ledger.has_memory("vertical", 0) is True

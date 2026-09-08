@@ -56,13 +56,13 @@ def fill(ledger, mode, cells):
 # --- D3: no memory after a restart ---------------------------------------- #
 
 ledger = PlacementLedger()
-check("a fresh ledger has NO MEMORY", ledger.has_memory is False)
+check("a fresh ledger has NO MEMORY", ledger.has_memory() is False)
 check("no memory means an empty occupancy set, not an error",
       ledger.expected_occupancy("vertical") == frozenset())
 ledger.append("vertical", 3, 2, 0, BuildResult(PLACED))
-check("one placement gives it a memory", ledger.has_memory is True)
+check("one placement gives it a memory", ledger.has_memory() is True)
 check("a fresh ledger of its own is still empty (nothing is reloaded)",
-      PlacementLedger().has_memory is False)
+      PlacementLedger().has_memory() is False)
 
 
 # --- D2: PLACED only ------------------------------------------------------- #
@@ -72,7 +72,7 @@ check("rejected is refused",
       ledger.append("vertical", 1, 1, 0, BuildResult(REJECTED, "empty feeder")) is None)
 check("aborted is refused",
       ledger.append("vertical", 2, 2, 0, BuildResult(ABORTED, "claw unknown")) is None)
-check("a refused build leaves NO memory at all", ledger.has_memory is False)
+check("a refused build leaves NO memory at all", ledger.has_memory() is False)
 check("refusals leave the occupancy set exactly empty",
       ledger.expected_occupancy("vertical") == frozenset())
 entry = ledger.append("vertical", 2, 2, 0, BuildResult(PLACED))
@@ -181,10 +181,10 @@ rig = FakeRig([BuildResult(REJECTED, "empty feeder"), BuildResult(ABORTED, "held
 controller = BuildController(rig, ledger=ledger)
 controller.select((3, 4))
 controller.build()
-check("a rejected build reaches nothing", ledger.has_memory is False)
+check("a rejected build reaches nothing", ledger.has_memory() is False)
 check("a rejected build keeps its selection", controller.selected == (3, 4))
 controller.build()
-check("an aborted build reaches nothing", ledger.has_memory is False)
+check("an aborted build reaches nothing", ledger.has_memory() is False)
 check("an aborted build locks the controller", controller.locked)
 check("nothing was recorded across either failure",
       ledger.expected_occupancy("vertical") == frozenset())
@@ -203,6 +203,56 @@ plain = BuildController(rig)
 plain.select((3, 4))
 plain.build()
 check("a controller with no ledger still builds", plain.selected is None)
+
+
+# --- audit item 8: memory is scoped by board epoch ----------------------- #
+#
+# A gantry reboot / reconnect / operator board swap calls `new_board_epoch()`.
+# The rows are KEPT for the record, but `has_memory` / `expected_occupancy` and
+# every derived predicate answer for the CURRENT epoch only — so a superseded
+# board can never lend authority to a verdict about the one on the table now.
+
+ledger = PlacementLedger()
+check("a fresh ledger is board epoch 0", ledger.board_epoch == 0)
+fill(ledger, "vertical", [(1, 1, 0), (2, 1, 0)])
+check("epoch 0 has memory for vertical",
+      ledger.has_memory("vertical", 0) is True)
+check("placements are stamped with the epoch they were made in",
+      all(p.board_epoch == 0 for p in ledger.placements("vertical")))
+
+epoch = ledger.new_board_epoch()
+check("new_board_epoch() returns and advances to epoch 1", epoch == 1
+      and ledger.board_epoch == 1)
+check("the current epoch has NO memory — nothing placed in it yet",
+      ledger.has_memory("vertical") is False)
+check("current-epoch occupancy is empty after the bump",
+      ledger.expected_occupancy("vertical") == frozenset())
+check("the old epoch's rows are retained and still addressable explicitly",
+      ledger.expected_occupancy("vertical", 0) == frozenset({(1, 1), (2, 1)}))
+check("the every-epoch (history) view still sees them",
+      ledger.has_memory("vertical", None) is True
+      and len(ledger.placements("vertical", None)) == 2)
+
+fill(ledger, "vertical", [(4, 4, 0)])
+check("a placement after the bump is stamped epoch 1",
+      ledger.placements("vertical")[-1].board_epoch == 1)
+check("current-epoch memory is exactly the post-bump placement",
+      ledger.expected_occupancy("vertical") == frozenset({(4, 4)}))
+check("the old epoch is unchanged by the new placement",
+      ledger.expected_occupancy("vertical", 0) == frozenset({(1, 1), (2, 1)}))
+
+# mode AND epoch together: horizontal placed in epoch 1 is not vertical's, and
+# not epoch 0's either.
+fill(ledger, "horizontal", [(1, 1, 0)])
+check("has_memory is false for a mode with nothing in this epoch",
+      ledger.has_memory("horizontal", 0) is False)
+check("has_memory is true for the mode+epoch that was actually placed",
+      ledger.has_memory("horizontal", 1) is True)
+check("is_top_of_column is scoped to the current epoch",
+      ledger.is_top_of_column("vertical", 4, 4, 0) is True
+      and ledger.is_top_of_column("vertical", 1, 1, 0) is False)
+check("has_taller_neighbour is scoped to the current epoch",
+      ledger.has_taller_neighbour("vertical", 1, 1) is False)
 
 
 print(f"\n{len(PASSED)} passed, {len(FAILED)} failed")

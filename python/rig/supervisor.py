@@ -832,7 +832,14 @@ class Supervisor:
         self.settle_n = int(settle_n)
         self.settle_m = int(settle_m)
         self._history = _CellHistory(self.settle_n, self.settle_m)
+        #: The (mode, board_epoch) the hysteresis belongs to. A change in
+        #: EITHER — an R/RR latch, or a gantry reboot / reconnect / board swap
+        #: that bumps `PlacementLedger.board_epoch` (audit item 8) — means the
+        #: board the counters describe no longer exists, so both histories are
+        #: dropped through `_reset_hysteresis()`, item 7's one reset primitive.
+        self._identity: tuple[str | None, int] | None = None
         self._mode: str | None = None
+        self._board_epoch: int = 0
         #: D7's hysteresis for the one signal that used to bypass it. `in_gap`
         #: is a per-frame count, so it cannot go through `_CellHistory` by cell;
         #: `_GapHistory` keys it by PERSISTENT GAP IDENTITY instead, so a gap is
@@ -853,17 +860,25 @@ class Supervisor:
         self._history.reset()
         self._gap_history.reset()
 
-    def note_mode(self, mode: str) -> None:
-        """D13: evidence gathered under one lattice never judges the other.
+    def note_mode(self, mode: str, board_epoch: int = 0) -> None:
+        """D13 + audit item 8: evidence gathered under one lattice OR one board
+        epoch never judges another.
 
         The two grids are different lattices with different registration —
         7x6 vertical against 3x10 horizontal — so a counter carried across an
-        R/RR latch would be describing a board that no longer exists. Both
-        histories go, not just the cell one.
+        R/RR latch would be describing a board that no longer exists. The same
+        is true across a board-epoch change: a gantry reboot, a reconnect or an
+        operator swap means the blocks on the table are no longer the ones the
+        earlier ledger entries describe. Either boundary drops BOTH histories,
+        through the one reset primitive item 7 established — never a second
+        mechanism.
         """
-        if self._mode is not None and mode != self._mode:
+        identity = (mode, int(board_epoch))
+        if self._identity is not None and identity != self._identity:
             self._reset_hysteresis()
+        self._identity = identity
         self._mode = mode
+        self._board_epoch = int(board_epoch)
 
     def is_quiet(self, diff_fraction: float | None) -> bool:
         """The scene-quiet gate. None (no baseline yet) is NOT quiet."""
@@ -886,7 +901,11 @@ class Supervisor:
         :func:`implausible_displacement`. Without it (the default) the verdict
         is published exactly as ``classify`` returned it.
         """
-        self.note_mode(mode)
+        # The board epoch travels on the ledger (audit item 8). A change in it
+        # — a gantry reboot / reconnect / board swap — invalidates the live
+        # hysteresis exactly like a mode latch does, via `note_mode`.
+        epoch = int(getattr(ledger, "board_epoch", 0))
+        self.note_mode(mode, epoch)
 
         refusal = interlocks.refusal()
         if refusal is not None:
@@ -895,14 +914,18 @@ class Supervisor:
             self._reset_hysteresis()
             return refusal[0], refusal[1], None
 
-        if not ledger.has_memory:
+        # Memory is scoped to THIS grid and THIS board epoch. A global
+        # `has_memory` let horizontal-only placements make vertical mode report
+        # "memory" against an empty expected set — VERIFIED on an empty view,
+        # FOREIGN on a real vertical board. Same failure across a board epoch.
+        if not ledger.has_memory(mode, epoch):
             self._reset_hysteresis()
             return ("NO_MEMORY",
                     "NO MEMORY — the board is only tracked from the first "
                     "build after a restart", None)
 
-        expected = ledger.expected_occupancy(mode)
-        top_levels = ledger.expected_top_level(mode)
+        expected = ledger.expected_occupancy(mode, epoch)
+        top_levels = ledger.expected_top_level(mode, epoch)
         interest = set(expected) | set(observation.cells)
         self._history.update(interest, observation.cells)
         self._gap_history.update(observation)

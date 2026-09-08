@@ -299,6 +299,19 @@ one has looked at since the process died. Appendix A originally proposed
 reloading it; Stage 15 §3 proposed refusing. **Refusing wins**, because the
 consumers of this substrate drive a claw.
 
+**Scoped by mode AND board epoch (audit item 8).** `has_memory` is not one
+global boolean. Every entry is stamped with the `board_epoch` it was placed in;
+`PlacementLedger.new_board_epoch()` — called on a gantry reboot (`@0 BOOT`),
+reconnect or operator board swap — starts a fresh epoch. The rows are kept for
+the record, but `has_memory(mode, board_epoch)`, `expected_occupancy` and every
+derived predicate answer for the *current* epoch and the *active* mode only.
+Without this, horizontal-only placements made vertical mode report "memory"
+against an empty expected set — `VERIFIED` on an empty view, `FOREIGN` on a real
+vertical board — and a settled verdict leaked across a reboot onto the board
+that replaced it. The supervisor treats an epoch change exactly like an R/RR
+latch: it drops both hysteresis histories through `_reset_hysteresis()`, item
+7's one reset primitive, never a second mechanism.
+
 ### D4 — Occupancy is a column, not a level
 
 The camera is above the board; a block at level 1 hides the one beneath it. So
@@ -922,18 +935,25 @@ Inheriting DESIGN.md §8, plus this feature's own:
 
 ```
 append(mode, col, row, level, result, t)
-expected_occupancy(mode)  -> set[(col, row)]      # cells with any block
-expected_top_level(mode)  -> dict[(col,row), int] # highest level placed
-is_top_of_column(mode, col, row, level) -> bool   # Stage 15 D5 predicate
-has_taller_neighbour(mode, col, row)    -> bool   # Stage 15 D6 predicate
+has_memory(mode=None, board_epoch=<current>) -> bool   # audit item 8
+board_epoch                              -> int   # current physical-board epoch
+new_board_epoch()                       -> int   # reboot / reconnect / swap
+expected_occupancy(mode, board_epoch=<current>)  -> set[(col, row)]
+expected_top_level(mode, board_epoch=<current>)  -> dict[(col,row), int]
+is_top_of_column(mode, col, row, level, board_epoch=<current>) -> bool  # D5
+has_taller_neighbour(mode, col, row, board_epoch=<current>)    -> bool  # D6
 ```
 
-The last two are Stage 15's safety predicates, built here so that feature
-inherits them rather than writing a second occupancy model.
+`is_top_of_column` / `has_taller_neighbour` are Stage 15's safety predicates,
+built here so that feature inherits them rather than writing a second occupancy
+model. Every reader takes an optional `board_epoch` — the sentinel default is
+the live epoch, `None` is the every-epoch history view.
 
 **Gate:** a sequence of builds produces the right occupancy set, keeps the two
 modes' lattices separate, collapses levels to a column correctly, admits only
-`PLACED`, and reports `NO MEMORY` after a restart.
+`PLACED`, reports `NO MEMORY` after a restart, and — audit item 8 — reports
+`NO MEMORY` for a mode or board epoch nothing has been placed in while keeping
+the superseded epoch's rows for the record.
 
 ### M2 — the observer *(report only, no verdicts)* — **BUILT AND WIRED**
 

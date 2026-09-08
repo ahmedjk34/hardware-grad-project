@@ -536,6 +536,21 @@ def create_app(options: ConsoleAppOptions | None = None) -> FastAPI:
 
         def _serial_ack(ack) -> None:
             """On the loop. RECV moves the tracker; everything else is logged."""
+            if getattr(ack, "kind", None) == "BOOT":
+                # A genuine `@0 BOOT` — the gantry rebooted under us, not the
+                # expected port-open reset `connect()` consumes. It has lost
+                # its homing and its grid, and whatever is on the table is no
+                # longer something the ledger's existing entries can speak for.
+                # Start a new board epoch (audit item 8) so no pre-reboot
+                # placement is read as authority, and drop the observer's live
+                # hysteresis through item 7's one reset primitive. The rows
+                # stay — they are the append-only history.
+                supervisor = getattr(app.state, "supervisor", None)
+                if supervisor is not None:
+                    supervisor.reset()
+                ledger = getattr(app.state, "ledger", None)
+                if ledger is not None and ledger.has_memory():
+                    ledger.new_board_epoch()
             if getattr(ack, "kind", None) == "RECV":
                 build_log.build.accepted(ack)
             if app.state.progress.on_ack(ack, app.state.hub.last_event_id) is not None:
