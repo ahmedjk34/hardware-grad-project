@@ -713,9 +713,9 @@ and on the sketch-canonical question (blocker 9).
 | `web/src/components/buildmode/BuildMode.tsx` | renders `<SupervisionBanner … quiet />` as a grid row; the old per-verdict toast logic dropped (banner replaces it), `BOARD VERIFIED` toast kept for the good case. |
 | `web/src/components/SupervisionActivity.tsx` | reverted to a read-only history — the control lives only on the banner, so the two surfaces cannot disagree. |
 | `web/src/App.tsx`, `web/src/style.css` | wire `requestCorrection` on the banner; the banner's wrapping layout + the `.buildmode` grid row. |
-| `python/web/routes_command.py` | `POST /api/supervision/correct` — guards, one-shot latch (`correction_attempted_signature`), worker-thread dispatch, re-runs `assess_frame_correction`, locks on `HELD`, resets hysteresis on success (D12). |
-| `python/web/state.py` | `assess_frame_correction()` (the shared assessor), `SupervisionModel` correction fields, `StateModel.last_correction`. |
-| `python/web/app.py` | `_assess_correction` wrapper; `_note_supervision` clears the latch on a new verdict. |
+| `python/web/routes_command.py` | `POST /api/supervision/correct` — guards, one-shot latch (`correction_attempted_signature`), worker-thread dispatch, re-runs `assess_frame_correction`, locks on `HELD`, resets hysteresis on success (D12). **Audit item 3:** the verdict/ticket decision + the `consumed` write run inside `app.state.correction_lock`; `validate_correction_ticket` must pass (coherent map generation / grid mode / board epoch / verdict signature / source sequence), the re-derived `command_args` must equal the ticket's, the fused track must still be within `TRACK_IDENTITY_MATCH_CM`, and the scene must be quiet on the exact newest frame, all before a `P` byte. |
+| `python/web/state.py` | `assess_frame_correction()` (the shared assessor), `SupervisionModel` correction fields, `StateModel.last_correction`. **Audit item 3:** `CorrectionTicket` (the coherent evidence bundle), `refresh_correction_ticket()`, `validate_correction_ticket()`, `correction_track_moved_cm()`, `CORRECTION_TICKET_FRESH_S` / `_MAX_AGE_S`. |
+| `python/web/app.py` | `_assess_correction` wrapper; `_note_supervision` clears the latch on a new verdict. **Audit item 3:** lifespan owns `correction_ticket` / `correction_ticket_seq` / `correction_lock`; `_supervise` re-affirms the ticket every coherent frame via `refresh_correction_ticket` and drops it on any map/mode/vision refusal; `_note_supervision` drops it on a verdict change. |
 | `docs/DESIGN.md §8`, `placement-supervision.md §6.10 / D11`, `CONSOLE.md`, `feature-ideas.md D8` | the operator-initiated carve-out. |
 
 **Not built:** a `CORRECTING` / `RE-CHECKING` observer sub-state and a
@@ -739,6 +739,13 @@ events if a session shows the implicit flow is unclear.
 - `web_supervision_test.py` — the route's guards: refused during a build,
   refused on a stale camera, refused on a second press of an unchanged verdict,
   D12 re-verify runs before the runner resumes.
+- `web_supervision_test.py` (`ITEM 3` block) — the one-shot coherent ticket:
+  `_supervise` mints/re-affirms it, and the route sends no `P` when the ticket
+  is missing / consumed / stale (past `FRESH_S`) / expired (past `MAX_AGE_S`),
+  when the grid mode latched, the map generation changed, the board epoch
+  changed, the verdict signature changed, the tracked block dropped out, the
+  camera evidence went backwards, the analysis failed, the scene is no longer
+  quiet, or a concurrent dispatch holds `correction_lock`.
 - `SupervisionBanner.test.tsx` — the control renders only on `correctable`; it
   confirms before it fires `onCorrect`; CANCEL backs out; nothing for `REMOVED` /
   `FOREIGN` / an acknowledged verdict; the sentence softens when the claw pick is

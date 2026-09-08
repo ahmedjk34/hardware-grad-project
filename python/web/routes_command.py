@@ -11,9 +11,10 @@ from rig import build_log
 from rig.build_controller import BuildStateError
 from rig.build_job import BUSY_MESSAGE
 from rig.link import ABORTED, RigError
-from rig.supervisor import observe
+from rig.supervisor import TRACK_IDENTITY_MATCH_CM, observe, quiet_fraction
 from web.state import (
     StateModel, assess_frame_correction, build_state, correction_query_point,
+    correction_track_moved_cm, validate_correction_ticket,
 )
 
 
@@ -355,37 +356,101 @@ def correct_supervision(request: CorrectRequest, http: Request) -> StateModel:
         raise HTTPException(status_code=409,
                             detail="no calibrated workspace map; a correction needs one")
 
-    sv = getattr(app.state, "supervision", None)
-    signature = _verdict_signature(sv)
-    if signature is None:
-        raise HTTPException(status_code=409, detail="no verdict to correct")
-    if getattr(app.state, "correction_attempted_signature", None) == signature:
+    if not bool(getattr(frame, "analysis_ok", True)):
         raise HTTPException(
             status_code=409,
-            detail="a correction has already been attempted for this verdict; "
-                   "dismiss it and let the board re-check")
+            detail="vision is not returning a usable reading right now; "
+                   "wait for it to recover")
 
-    observation = observe(frame.detections, frame.workspace, frame.image_size)
-    # ITEM 6 + 9: re-check on the SAME coherent quiet-window track the driver
-    # has been accumulating — the block must still be one stable, unambiguous,
-    # block-consistent track before a byte is sent, and the pick centroid is
-    # the fused one, not this frame's first candidate.
     supervisor = getattr(app.state, "supervisor", None)
-    query_point = correction_query_point(observation, sv.verdict)
-    track = (supervisor.track_evidence_at(query_point)
-             if supervisor is not None and query_point is not None else None)
-    correction, reason = assess_frame_correction(
-        ledger=app.state.ledger, workspace=frame.workspace,
-        observation=observation, state=sv.state, verdict=sv.verdict,
-        mode=frame.grid_mode, track=track, require_track=True)
-    if correction is None:
-        raise HTTPException(status_code=409,
-                            detail=reason or "this block cannot be corrected")
+    if supervisor is None:
+        raise HTTPException(status_code=409, detail="the observer is not ready")
 
-    # One attempt per verdict event (§E.2). Set BEFORE the move so a retry
-    # during it is refused; `_note_supervision` clears it when the reading
-    # changes, exactly like `supervision_acknowledged`.
-    app.state.correction_attempted_signature = signature
+    # ITEM 3: the decision and the `consumed` write are one critical section, so
+    # a second press or a concurrent dispatch cannot both validate the same
+    # ticket. A mode/map/epoch change that lands mid-validation is caught by
+    # `validate_correction_ticket` re-reading live state inside the lock.
+    lock = getattr(app.state, "correction_lock", None)
+    if lock is None or not lock.acquire(blocking=False):
+        raise HTTPException(status_code=409,
+                            detail="a correction is already being dispatched")
+    try:
+        # A grid-mode / shift latch that started between `require_mutable` and
+        # here would be homing X/Y on the same cable. Re-check inside the lock.
+        if _latching(app):
+            raise HTTPException(status_code=409, detail=MODE_BUSY_MESSAGE)
+        sv = getattr(app.state, "supervision", None)
+        signature = _verdict_signature(sv)
+        if signature is None:
+            raise HTTPException(status_code=409, detail="no verdict to correct")
+        if getattr(app.state, "correction_attempted_signature", None) == signature:
+            raise HTTPException(
+                status_code=409,
+                detail="a correction has already been attempted for this verdict; "
+                       "dismiss it and let the board re-check")
+
+        # ITEM 3: the one-shot coherent ticket, checked BEFORE the re-assessment
+        # so a consumed / stale / raced ticket refuses regardless of what the
+        # current frame shows. `_supervise` mints it while the correctable
+        # verdict is published; its whole bundle — verdict signature, map
+        # generation, grid mode, board epoch, source sequence — must still equal
+        # live state, or a race (mode/map/epoch change, stale analysis, verdict
+        # change, replay) is refused with no `P` sent.
+        ticket = getattr(app.state, "correction_ticket", None)
+        ok, why = validate_correction_ticket(app, ticket, frame, sv, signature)
+        if not ok:
+            raise HTTPException(status_code=409, detail=why)
+
+        observation = observe(frame.detections, frame.workspace, frame.image_size)
+        # ITEM 6 + 9: re-check on the SAME coherent quiet-window track the driver
+        # has been accumulating — the block must still be one stable, unambiguous,
+        # block-consistent track before a byte is sent, and the pick centroid is
+        # the fused one, not this frame's first candidate.
+        query_point = correction_query_point(observation, sv.verdict)
+        track = (supervisor.track_evidence_at(query_point)
+                 if query_point is not None else None)
+        correction, reason = assess_frame_correction(
+            ledger=app.state.ledger, workspace=frame.workspace,
+            observation=observation, state=sv.state, verdict=sv.verdict,
+            mode=frame.grid_mode, track=track, require_track=True)
+        if correction is None:
+            raise HTTPException(status_code=409,
+                                detail=reason or "this block cannot be corrected")
+
+        # The authorisation must correspond to the evidence that still exists:
+        # the freshly re-derived motion and the fused track centre both have to
+        # match what the ticket was affirmed against, or the block has moved
+        # between the reading and this confirmation.
+        if tuple(correction.command_args) != tuple(ticket.command_args):
+            raise HTTPException(
+                status_code=409,
+                detail="the block moved since the correction was offered; "
+                       "dismiss the verdict and let the board re-check")
+        moved = correction_track_moved_cm(ticket, track)
+        if moved is not None and moved > TRACK_IDENTITY_MATCH_CM:
+            raise HTTPException(
+                status_code=409,
+                detail=f"the tracked block shifted {moved:.2f} cm since the "
+                       f"correction was offered; let the board re-check")
+
+        # Quiet, right now, on this exact frame — not a settled verdict from an
+        # older one. `supervision_baseline` is the frame `_supervise` last
+        # accepted; a hand entering between them makes this fraction non-quiet.
+        baseline = getattr(app.state, "supervision_baseline", None)
+        if not supervisor.is_quiet(quiet_fraction(frame.view, baseline)):
+            raise HTTPException(
+                status_code=409,
+                detail="the scene is not still enough to correct; "
+                       "wait for it to settle")
+
+        # Consume BEFORE the move: a retry during it, a replay, or a
+        # decision-to-motion race now all send nothing. `_note_supervision`
+        # drops the ticket and this signature when the reading changes.
+        ticket.consumed = True
+        app.state.correction_attempted_signature = signature
+    finally:
+        lock.release()
+
     pc, pr, pl, dx, dy, qc, qr, ql = correction.command_args
     build_log.placements.note(
         f"operator CORRECTION: pick [{pc},{pr}] L{pl} nudge ({dx:.2f},{dy:.2f}) "

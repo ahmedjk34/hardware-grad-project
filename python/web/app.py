@@ -56,7 +56,8 @@ from web.routes_command import router as command_router
 from web.routes_calibration import router as calibration_router
 from web.state import (
     StateModel, SupervisionState, assess_frame_correction, build_state,
-    correction_query_point, frame_residual_cm, worst_cell_residual_cm,
+    correction_query_point, frame_residual_cm, refresh_correction_ticket,
+    worst_cell_residual_cm,
 )
 
 
@@ -219,6 +220,7 @@ async def _supervise(app: FastAPI, frame, job: BuildJob, loop,
         app.state.supervision_baseline = None
         app.state.supervision_sequence = None
         app.state.supervision_result_id = None
+        app.state.correction_ticket = None
         _note_supervision(app, "BUSY", "MAP CHANGED — waiting for coherent evidence",
                           None, None, None)
         return
@@ -237,6 +239,7 @@ async def _supervise(app: FastAPI, frame, job: BuildJob, loop,
         app.state.pending_check = None
         app.state.vision_verification = None
         app.state.supervision_acknowledged = False
+        app.state.correction_ticket = None
         _note_supervision(app, "BUSY", "MODE LATCH — waiting for the new grid",
                           None, None, None)
         return
@@ -266,6 +269,7 @@ async def _supervise(app: FastAPI, frame, job: BuildJob, loop,
     if not analysis_ok or frame.stale:
         supervisor.reset()
         app.state.supervision_baseline = None
+        app.state.correction_ticket = None
         if not analysis_ok:
             reason = (getattr(frame, "analysis_error", None)
                       or "VISION UNAVAILABLE — the detector failed on this frame")
@@ -309,6 +313,11 @@ async def _supervise(app: FastAPI, frame, job: BuildJob, loop,
         mode=frame.grid_mode)
     _note_supervision(app, state, reason, verdict, correction, correction_reason,
                       residual_cm, worst_cell_residual_cm(observation), track)
+    # ITEM 3: mint / re-affirm the one-shot correction ticket bound to this
+    # exact coherent frame — verdict signature, map generation, grid mode, board
+    # epoch, source sequence and the fused track. `/api/supervision/correct`
+    # validates the whole bundle against live state before it sends a `P` byte.
+    refresh_correction_ticket(app, frame, state, verdict, correction, track)
     _resolve_pending_check(app, state, verdict)
 
 
@@ -393,8 +402,12 @@ def _note_supervision(app: FastAPI, state: str, reason, verdict,
     # this deliberately, stop asking" mark in v1.
     app.state.supervision_acknowledged = False
     # The operator CORRECTION action is one attempt per verdict event, and this
-    # is a new event, so a fresh press is allowed again (routes_command.py).
+    # is a new event, so a fresh press is allowed again (routes_command.py). The
+    # ITEM 3 ticket is dropped for the same reason — any ticket still around was
+    # minted for the PREVIOUS verdict; `_supervise` re-mints one for this event
+    # in `refresh_correction_ticket` if it too is correctable.
     app.state.correction_attempted_signature = None
+    app.state.correction_ticket = None
     build_log.placements.verdict(state, reason, verdict)
 
 
@@ -512,6 +525,13 @@ def create_app(options: ConsoleAppOptions | None = None) -> FastAPI:
         app.state.pending_check = None
         app.state.vision_verification = None
         app.state.supervision_acknowledged = False
+        #: ITEM 3. The one-shot coherent correction authorisation. `_supervise`
+        #: mints / re-affirms it while a correctable verdict is published;
+        #: `/api/supervision/correct` validates its whole bundle against live
+        #: state and marks it `consumed` under `correction_lock` before motion.
+        app.state.correction_ticket = None
+        app.state.correction_ticket_seq = 0
+        app.state.correction_lock = threading.Lock()
 
         def _serial_line(line: str) -> None:
             """On the loop. One raw line: the log AND one durable event.

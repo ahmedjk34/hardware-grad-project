@@ -827,20 +827,52 @@ def _correct_app(*, verdict_name="DISPLACED", off_cm=8.75, angle=0.0,
     supervisor.reset = lambda: (setattr(supervisor, "reset_calls",
                                         supervisor.reset_calls + 1), _orig_reset())[1]
 
+    # ITEM 3: the route validates a one-shot coherent ticket. `_supervise` mints
+    # it in production; here, build the matching one straight from the same
+    # observation / track / assessment the route will re-derive.
+    import time as _time
+    from web.state import (
+        CorrectionTicket, assess_frame_correction as _afc,
+        correction_query_point as _cqp,
+    )
+    _qp = _cqp(_seed, verdict)
+    _trk = supervisor.track_evidence_at(_qp) if _qp is not None else None
+    _corr, _ = _afc(ledger=ledger, workspace=frame.workspace, observation=_seed,
+                    state="VERDICT", verdict=verdict, mode="vertical",
+                    track=_trk, require_track=True)
+    _now = _time.monotonic()
+    ticket = CorrectionTicket(
+        ticket_id=1,
+        verdict_signature=("VERDICT", verdict.verdict, tuple(verdict.cells)),
+        map_generation=None, grid_mode="vertical", board_epoch=0,
+        frame_sequence=int(frame.sequence),
+        analysis_result_id=int(getattr(frame, "analysis_result_id", frame.sequence)),
+        track_centre_cm=(_trk.centre_cm if _trk is not None else None),
+        track_samples=((int(_trk.samples), int(_trk.window))
+                       if _trk is not None else None),
+        command_args=(tuple(_corr.command_args) if _corr is not None else ()),
+        first_seen_at=_now, refreshed_at=_now)
+
     lock = threading.Lock()
     state = SimpleNamespace(
         job=SimpleNamespace(running=job_running),
         mode_latch_lock=lock,
+        correction_lock=threading.Lock(),
+        correction_ticket=ticket,
+        correction_ticket_seq=1,
+        correction_attempted_signature=None,
         controller=SimpleNamespace(locked=locked, locked_reason=None),
         latest_frame=frame,
-        rig=SimpleNamespace(connected=True, replace_block=fake_replace),
+        rig=SimpleNamespace(connected=True, replace_block=fake_replace,
+                            grid=SimpleNamespace(mode="vertical")),
         ledger=ledger,
         supervisor=supervisor,
         supervision=SupervisionState(state="VERDICT", reason=None, verdict=verdict,
                                      judged_at_ms=1),
+        supervision_baseline=view(40),
         supervision_acknowledged=True,
         signal_change=lambda: None,
-        pipeline=SimpleNamespace(saved_workspace=object()),
+        pipeline=SimpleNamespace(saved_workspace=object(), map_generation=None),
     )
     return SimpleNamespace(app=SimpleNamespace(state=state)), state, sent
 
@@ -950,6 +982,305 @@ def test_correct_moves_a_MOVED_block_back_to_its_planned_cell():
     pc, pr, pl, dx, dy, qc, qr, ql = sent[0]
     assert (pc, pr) == (3, 1)   # picked where it IS
     assert (qc, qr) == (2, 1)   # placed where it BELONGS
+
+
+# --- ITEM 3: the one-shot coherent correction ticket --------------------- #
+#
+# `_supervise` mints / re-affirms a `CorrectionTicket` bound to the exact
+# coherent frame — verdict signature, map generation, grid mode, board epoch,
+# source sequence, fused track. `/api/supervision/correct` sends no `P` byte
+# unless the whole bundle still equals live state, then marks the ticket
+# `consumed` under `correction_lock` before motion. These drive the REAL
+# `_supervise` path to mint the ticket, then race one thing against it.
+
+def _ticketed_app(*, mode="vertical", map_generation=3):
+    """A fake app the real `_supervise` mints a live ticket on, and the real
+    `/api/supervision/correct` route can then be called against."""
+    import threading
+    from rig.link import BuildResult, PLACED
+
+    ledger = PlacementLedger()
+    ledger.append("vertical", 1, 1, 0, BuildResult(PLACED))
+    ledger.append("vertical", 2, 1, 0, BuildResult(PLACED))
+
+    y = GRID.cell_center_cm(2, 1)[1]
+    off = at_cm_point(8.75, y)   # 1.15 cm off [2,1] -> DISPLACED, in band
+
+    sent = []
+
+    def fake_replace(*args):
+        sent.append(args)
+        return BuildResult(PLACED, "")
+
+    supervisor = Supervisor(quiet_diff_fraction=QUIET_DIFF_FRACTION,
+                            settle_n=1, settle_m=1)
+    state = SimpleNamespace(
+        ledger=ledger, supervisor=supervisor,
+        supervision=None, supervision_signature=None,
+        supervision_baseline=None, supervision_sequence=None,
+        supervision_result_id=None,
+        pending_check=None, vision_verification=None,
+        supervision_acknowledged=False,
+        correction_attempted_signature=None,
+        correction_ticket=None, correction_ticket_seq=0,
+        correction_lock=threading.Lock(),
+        cell_phase="idle",
+        job=SimpleNamespace(running=False),
+        mode_latch_lock=threading.Lock(),
+        controller=SimpleNamespace(locked=False, locked_reason=None),
+        rig=SimpleNamespace(connected=True, replace_block=fake_replace,
+                            grid=SimpleNamespace(mode=mode)),
+        pipeline=SimpleNamespace(saved_workspace=object(),
+                                 map_generation=map_generation),
+        signal_change=lambda: None,
+        latest_frame=None,
+    )
+    app = SimpleNamespace(state=state)
+
+    frames = []
+    for seq in (1, 2, 3):
+        f = frame_at(seq, cells=((1, 1),), extra=(off,), mode=mode)
+        f.map_generation = map_generation
+        f.analysis_result_id = seq
+        frames.append(f)
+    driven = drive(app, frames)
+    assert driven[-1].verdict.verdict == "DISPLACED"
+    assert state.correction_ticket is not None
+    assert state.correction_ticket.verdict_signature == (
+        "VERDICT", "DISPLACED", ((2, 1),))
+    state.latest_frame = frames[-1]
+    return SimpleNamespace(app=app), state, sent
+
+
+def _fresh_frame(seq, *, map_generation=3, fill=40):
+    f = frame_at(seq, cells=((1, 1),),
+                 extra=(at_cm_point(GRID.cell_center_cm(2, 1)[0] + 1.15,
+                                    GRID.cell_center_cm(2, 1)[1]),), fill=fill)
+    f.map_generation = map_generation
+    f.analysis_result_id = seq
+    return f
+
+
+def test_a_ticketed_correction_goes_through_when_nothing_changed():
+    """The fixture's happy path: the real `_supervise` minted the ticket, the
+    route validated the whole bundle and sent exactly one `P`."""
+    http, state, sent = _ticketed_app()
+    _call_correct(http)
+    assert len(sent) == 1
+    assert state.correction_ticket.consumed is True
+    assert state.correction_attempted_signature == ("VERDICT", "DISPLACED",
+                                                    ((2, 1),))
+
+
+def test_a_mode_latch_between_the_reading_and_the_confirm_sends_no_P():
+    from fastapi import HTTPException
+    http, state, sent = _ticketed_app()
+    state.rig.grid.mode = "horizontal"   # the rig latched; the frame has not
+    try:
+        _call_correct(http)
+        assert False, "should have refused"
+    except HTTPException as exc:
+        assert exc.status_code == 409 and "grid mode" in exc.detail
+    assert sent == []
+    assert state.correction_ticket.consumed is False
+
+
+def test_a_map_generation_change_between_the_reading_and_the_confirm_sends_no_P():
+    from fastapi import HTTPException
+    http, state, sent = _ticketed_app()
+    # A calibration reload: the pipeline AND the newest frame advance, but the
+    # ticket was affirmed against generation 3.
+    state.pipeline.map_generation = 4
+    state.latest_frame = _fresh_frame(4, map_generation=4)
+    try:
+        _call_correct(http)
+        assert False
+    except HTTPException as exc:
+        assert exc.status_code == 409 and "workspace map changed" in exc.detail
+    assert sent == []
+
+
+def test_a_new_board_epoch_between_the_reading_and_the_confirm_sends_no_P():
+    from fastapi import HTTPException
+    http, state, sent = _ticketed_app()
+    state.ledger.new_board_epoch()   # a gantry reboot / board swap
+    try:
+        _call_correct(http)
+        assert False
+    except HTTPException as exc:
+        assert exc.status_code == 409
+    assert sent == []
+    assert state.correction_ticket.consumed is False
+
+
+def test_the_scene_going_unquiet_between_the_reading_and_the_confirm_sends_no_P():
+    from fastapi import HTTPException
+    http, state, sent = _ticketed_app()
+    # A hand enters after the ticket was affirmed: the newest frame differs from
+    # the one `_supervise` last accepted, so the route's own quiet check fails.
+    state.latest_frame = _fresh_frame(4, fill=200)
+    try:
+        _call_correct(http)
+        assert False
+    except HTTPException as exc:
+        assert exc.status_code == 409 and "still enough" in exc.detail
+    assert sent == []
+
+
+def test_the_tracked_block_dropping_out_between_the_reading_and_the_confirm_sends_no_P():
+    from fastapi import HTTPException
+    http, state, sent = _ticketed_app()
+    state.supervisor._track_history.reset()   # the block stopped being tracked
+    try:
+        _call_correct(http)
+        assert False
+    except HTTPException as exc:
+        assert exc.status_code == 409
+    assert sent == []
+
+
+def test_a_verdict_change_between_the_reading_and_the_confirm_drops_the_ticket():
+    """A decision-to-motion race: the board reads clean on the next frame, so
+    `_note_supervision` drops the ticket. The route then has nothing to act on."""
+    from fastapi import HTTPException
+    http, state, sent = _ticketed_app()
+    good = frame_at(4, cells=((1, 1), (2, 1)), mode="vertical")
+    good.map_generation = 3
+    good.analysis_result_id = 4
+    drive(app=http.app, frames=[good])
+    assert state.correction_ticket is None
+    state.latest_frame = good
+    try:
+        _call_correct(http)
+        assert False
+    except HTTPException as exc:
+        assert exc.status_code == 409
+    assert sent == []
+
+
+def test_a_ticket_minted_for_a_different_verdict_event_is_refused():
+    """Belt and braces on the signature bind: a ticket whose signature no longer
+    matches the published verdict authorises nothing."""
+    from fastapi import HTTPException
+    http, state, sent = _ticketed_app()
+    state.correction_ticket.verdict_signature = ("VERDICT", "DISPLACED",
+                                                 ((9, 9),))
+    try:
+        _call_correct(http)
+        assert False
+    except HTTPException as exc:
+        assert exc.status_code == 409 and "verdict changed" in exc.detail
+    assert sent == []
+
+
+def test_a_stale_ticket_that_stopped_being_re_affirmed_is_refused():
+    from fastapi import HTTPException
+    from web.state import CORRECTION_TICKET_FRESH_S
+    http, state, sent = _ticketed_app()
+    state.correction_ticket.refreshed_at -= CORRECTION_TICKET_FRESH_S + 1.0
+    try:
+        _call_correct(http)
+        assert False
+    except HTTPException as exc:
+        assert exc.status_code == 409 and "no longer current" in exc.detail
+    assert sent == []
+
+
+def test_an_expired_correction_offer_is_refused_even_if_still_re_affirmed():
+    from fastapi import HTTPException
+    from web.state import CORRECTION_TICKET_MAX_AGE_S
+    http, state, sent = _ticketed_app()
+    state.correction_ticket.first_seen_at -= CORRECTION_TICKET_MAX_AGE_S + 1.0
+    try:
+        _call_correct(http)
+        assert False
+    except HTTPException as exc:
+        assert exc.status_code == 409 and "expired" in exc.detail
+    assert sent == []
+
+
+def test_camera_evidence_older_than_the_ticket_is_refused():
+    from fastapi import HTTPException
+    http, state, sent = _ticketed_app()
+    state.latest_frame = _fresh_frame(1)   # sequence 1, ticket affirmed at 3
+    try:
+        _call_correct(http)
+        assert False
+    except HTTPException as exc:
+        assert exc.status_code == 409 and "went backwards" in exc.detail
+    assert sent == []
+
+
+def test_a_detector_failure_frame_refuses_the_correction():
+    from fastapi import HTTPException
+    http, state, sent = _ticketed_app()
+    state.latest_frame.analysis_ok = False
+    try:
+        _call_correct(http)
+        assert False
+    except HTTPException as exc:
+        assert exc.status_code == 409 and "usable reading" in exc.detail
+    assert sent == []
+
+
+def test_the_ticket_is_consumed_once_and_a_replay_sends_nothing():
+    """Ticket reuse: even with the per-event signature latch cleared, the
+    consumed ticket alone refuses a second dispatch."""
+    from fastapi import HTTPException
+    http, state, sent = _ticketed_app()
+    _call_correct(http)
+    assert len(sent) == 1 and state.correction_ticket.consumed is True
+    state.correction_attempted_signature = None   # isolate the ticket guard
+    try:
+        _call_correct(http)
+        assert False
+    except HTTPException as exc:
+        assert exc.status_code == 409 and "already been dispatched" in exc.detail
+    assert len(sent) == 1
+
+
+def test_a_concurrent_dispatch_holding_the_lock_refuses_a_duplicate_ticket():
+    from fastapi import HTTPException
+    http, state, sent = _ticketed_app()
+    assert state.correction_lock.acquire(blocking=False)   # another dispatch
+    try:
+        try:
+            _call_correct(http)
+            assert False
+        except HTTPException as exc:
+            assert exc.status_code == 409 and "already being dispatched" in exc.detail
+    finally:
+        state.correction_lock.release()
+    assert sent == []
+
+
+def test_a_grid_mode_latch_in_progress_refuses_the_correction():
+    from fastapi import HTTPException
+    http, state, sent = _ticketed_app()
+    assert state.mode_latch_lock.acquire(blocking=False)   # a latch is homing X/Y
+    try:
+        try:
+            _call_correct(http)
+            assert False
+        except HTTPException as exc:
+            assert exc.status_code == 409
+    finally:
+        state.mode_latch_lock.release()
+    assert sent == []
+    assert state.correction_ticket.consumed is False
+
+
+def test_supervision_dropping_to_NO_VISION_drops_the_ticket():
+    http, state, sent = _ticketed_app()
+    failed = frame_at(4, cells=(), mode="vertical")
+    failed.map_generation = 3
+    failed.analysis_result_id = 4
+    failed.analysis_ok = False
+    failed.analysis_error = "detector crashed"
+    failed.detections = ()
+    drive(app=http.app, frames=[failed])
+    assert state.supervision.state == "NO_VISION"
+    assert state.correction_ticket is None
 
 
 # --- the real wiring exists ------------------------------------------------ #

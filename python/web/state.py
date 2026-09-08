@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 import time
 from typing import Any, Literal
 
@@ -336,6 +337,177 @@ def assess_frame_correction(*, ledger, workspace, observation, state: str,
         localization_sigma_cm=loc_sigma_cm,
         localization_residual_cm=loc_residual_cm,
         track_samples=track_samples, angle_sigma_deg=angle_sigma_deg,
+    )
+
+
+# ── ITEM 3: the one-shot coherent correction ticket ────────────────────── #
+#
+# audit §1 P0 (`routes_command.py` `/correct` "does not atomically require a
+# current quiet, settled, mode/map-coherent observation ... can act on an older
+# verdict") and §6.4 ("one-shot ticket, one-attempt limit").
+#
+# A correctable MOVED / DISPLACED verdict authorises exactly ONE claw pick. The
+# authorisation is a `CorrectionTicket`: `_supervise` mints it the first frame
+# the verdict is published correctable and RE-AFFIRMS it (`refreshed_at` + the
+# whole coherence bundle) on every later coherent quiet frame that still yields
+# the SAME verdict signature and a stable track. `/api/supervision/correct`
+# sends no `P` byte unless a live ticket exists whose entire bundle still equals
+# the server's state right now, then marks it `consumed` under
+# `app.state.correction_lock` BEFORE any motion. A second press, a replay, a
+# stale ticket, or a decision-to-motion race on mode / map / board epoch /
+# track / quietness therefore all send nothing.
+
+#: A correctable verdict is re-affirmed on every coherent quiet frame (~8.6 Hz
+#: measured, Gate 0). A ticket not refreshed for this long means supervision has
+#: stopped seeing that exact correctable verdict — a hand entered, the block
+#: moved, the mode latched, vision dropped — so the authorisation is stale.
+CORRECTION_TICKET_FRESH_S = 1.5
+
+#: The whole correctable episode's ceiling. Even continuously re-affirmed, a
+#: ticket older than this is stale operator intent: press it again.
+CORRECTION_TICKET_MAX_AGE_S = 30.0
+
+
+@dataclass
+class CorrectionTicket:
+    """A one-shot authorisation to run ONE operator CORRECTION (audit item 3).
+
+    Every field is a piece of the coherent evidence bundle the correction was
+    authorised against. ``/api/supervision/correct`` refuses unless each one
+    still equals the live server value immediately before motion, and sets
+    ``consumed`` under ``app.state.correction_lock`` before the first ``P`` byte.
+    """
+
+    ticket_id: int
+    #: ``_verdict_signature(app.state.supervision)`` — ``(state, verdict, cells)``.
+    verdict_signature: tuple
+    map_generation: int | None
+    grid_mode: str
+    board_epoch: int
+    #: The analysed source frame the ticket was last refreshed from. The route
+    #: refuses a ``latest_frame`` OLDER than this — camera evidence never rewinds.
+    frame_sequence: int
+    analysis_result_id: int
+    #: The fused quiet-window track centre (map cm) the pick offset came from,
+    #: and ``(frames_seen, window)``. Advisory record; the operative track
+    #: re-validation is ``assess_frame_correction(require_track=True)`` re-run on
+    #: the current frame by the route.
+    track_centre_cm: tuple[float, float] | None
+    track_samples: tuple[int, int] | None
+    #: The eight ``P`` arguments this ticket authorises. The route re-derives
+    #: them on the current frame and refuses on any mismatch — the block moved.
+    command_args: tuple
+    first_seen_at: float
+    refreshed_at: float
+    consumed: bool = False
+
+
+def validate_correction_ticket(app, ticket, frame, sv, signature):
+    """``(ok, reason)`` — may this ticket still authorise motion right now?
+
+    Read-only. Every branch is a race the audit names: a stale / consumed /
+    expired ticket, a verdict that changed, a map-generation / grid-mode /
+    board-epoch change between the reading and this confirmation, or camera
+    evidence that went backwards. The route holds ``app.state.correction_lock``
+    across this call, the re-assessment and the ``consumed`` write.
+    """
+    if ticket is None:
+        return False, ("the correctable reading is no longer current; dismiss "
+                       "the verdict and let the board re-check")
+    if ticket.consumed:
+        return False, "that correction has already been dispatched once"
+    now = time.monotonic()
+    if now - ticket.refreshed_at > CORRECTION_TICKET_FRESH_S:
+        return False, ("the correctable reading is no longer current; wait for "
+                       "the board to settle again")
+    if now - ticket.first_seen_at > CORRECTION_TICKET_MAX_AGE_S:
+        return False, "the correction offer has expired; press it again"
+    if ticket.verdict_signature != signature:
+        return False, ("the verdict changed since the correction was offered; "
+                       "dismiss it and let the board re-check")
+    pipeline = getattr(app.state, "pipeline", None)
+    live_gen = getattr(pipeline, "map_generation", None)
+    frame_gen = getattr(frame, "map_generation", live_gen)
+    if not (ticket.map_generation == live_gen == frame_gen):
+        return False, "the workspace map changed; the board re-checks on the new map"
+    live_mode = app.state.rig.grid.mode
+    if not (ticket.grid_mode == live_mode == frame.grid_mode):
+        return False, "the grid mode latched; supervision restarts on the new grid"
+    live_epoch = int(getattr(app.state.ledger, "board_epoch", 0))
+    if ticket.board_epoch != live_epoch:
+        return False, "the board was reset; its memory no longer applies"
+    if int(getattr(frame, "sequence", ticket.frame_sequence)) < int(ticket.frame_sequence):
+        return False, "the camera evidence went backwards; refusing to act on it"
+    return True, None
+
+
+def correction_track_moved_cm(ticket, track) -> float | None:
+    """Straight-line cm the fused quiet-window track centre has moved since the
+    ticket was last affirmed, or None when either centre is unknown.
+
+    ``/api/supervision/correct`` refuses a move past
+    :data:`rig.supervisor.TRACK_IDENTITY_MATCH_CM` — the block the operator
+    consented to correct is not the object the claw would now grip. This backs
+    up the ``command_args`` equality check and the
+    ``assess_frame_correction(require_track=True)`` re-query.
+    """
+    a = None if ticket is None else ticket.track_centre_cm
+    b = None if track is None else getattr(track, "centre_cm", None)
+    if a is None or b is None:
+        return None
+    return math.hypot(a[0] - b[0], a[1] - b[1])
+
+
+def refresh_correction_ticket(app, frame, state: str, verdict, correction,
+                              track) -> None:
+    """Mint or re-affirm the live :class:`CorrectionTicket` for this frame.
+
+    Called by ``_supervise`` once per coherent analysis result, right after the
+    reading is published. A non-correctable reading (no ``Correction``, or not a
+    ``VERDICT``) drops the ticket; a correctable one with the SAME verdict
+    signature re-affirms the existing ticket's bundle and ``refreshed_at``; a
+    new signature mints a fresh, unconsumed ticket. A ticket already
+    ``consumed`` for its signature is left alone — one attempt per verdict event.
+    """
+    if state != "VERDICT" or verdict is None or correction is None:
+        app.state.correction_ticket = None
+        return
+    signature = (state, verdict.verdict, tuple(verdict.cells))
+    now = time.monotonic()
+    epoch = int(getattr(app.state.ledger, "board_epoch", 0))
+    centre = None if track is None else getattr(track, "centre_cm", None)
+    samples = (None if track is None
+               else (int(track.samples), int(track.window)))
+    result_id = int(getattr(frame, "analysis_result_id", frame.sequence))
+    existing = getattr(app.state, "correction_ticket", None)
+    if existing is not None and existing.verdict_signature == signature:
+        if existing.consumed:
+            return
+        existing.map_generation = getattr(frame, "map_generation", None)
+        existing.grid_mode = frame.grid_mode
+        existing.board_epoch = epoch
+        existing.frame_sequence = int(frame.sequence)
+        existing.analysis_result_id = result_id
+        existing.track_centre_cm = centre
+        existing.track_samples = samples
+        existing.command_args = tuple(correction.command_args)
+        existing.refreshed_at = now
+        return
+    seq = int(getattr(app.state, "correction_ticket_seq", 0)) + 1
+    app.state.correction_ticket_seq = seq
+    app.state.correction_ticket = CorrectionTicket(
+        ticket_id=seq,
+        verdict_signature=signature,
+        map_generation=getattr(frame, "map_generation", None),
+        grid_mode=frame.grid_mode,
+        board_epoch=epoch,
+        frame_sequence=int(frame.sequence),
+        analysis_result_id=result_id,
+        track_centre_cm=centre,
+        track_samples=samples,
+        command_args=tuple(correction.command_args),
+        first_seen_at=now,
+        refreshed_at=now,
     )
 
 
