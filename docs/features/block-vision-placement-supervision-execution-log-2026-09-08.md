@@ -58,7 +58,7 @@ Date: 2026-09-08
   - `.venv/bin/python -m pytest -q python/tests/` — 127 passed.
   - `cd web && npx vitest run` — 42 files, 563 passed.
   - `cd web && npx tsc --noEmit` — no new errors (pre-existing `node:fs` / `node:path` / `process` type errors in `src/tokens.test.ts` only).
-- Commit hash: `81282ee` (this doc line was set by a follow-up `--amend`; the tree hash it names is stable).
+- Commit hash: `908a5dc` (code + tests + docs for item 2). This one-line hash correction is the immediately following commit.
 - Unresolved issues: none for item 2. Hardware motion remains unverified locally (no Arduino toolchain, no camera). `NO_VISION` is deliberately not a state-coloured fault — an operator sees it as a dim strip like BUSY, distinguished only by wording; if the team wants the camera-pipeline failure to be louder, that is a follow-up UI decision, not a safety gap. Items 7, 8, 4 remain open in that order.
 - Whether merged: committed directly to `main` (no divergent Phase 1 branch to merge against).
 - Next action: begin item 7 — unify `_gap_history` clearing with `_CellHistory` reset and add persistent per-gap identity / symmetric N-of-M clearing, with the leaked-gap-vote regression test.
