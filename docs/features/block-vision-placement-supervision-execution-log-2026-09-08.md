@@ -4,11 +4,149 @@ Date: 2026-09-08
 
 ## CURRENT RESUME STATE
 
-- Completed and verified: Section 8 item 1 (pre-existing); Section 8 item 2 (`NO_VISION` propagation for detector failure and stale frames — implemented, tested, committed on `main`); Section 8 item 7 (per-identity gap history, symmetric reset/decay — implemented, tested, committed `074aaf9` on `main`); Section 8 item 8 (mode- and board-epoch-specific ledger memory — implemented, tested, committed `70f2e17` on `main`); Section 8 item 4 (Pi-side exact compensated-motion reachability/clamp preflight — implemented, tested, committed `a22e92d` on `main`); Section 8 items 6 + 9 (preserve detection multiplicity + require one stable block-consistent track for MOVED/DISPLACED; fuse centroid/angle/size over the existing coherent quiet window with exposed uncertainty/residuals — implemented, tested, committed on `main`).
+- Completed and verified: Section 8 item 1 (pre-existing); Section 8 item 2 (`NO_VISION` propagation for detector failure and stale frames — implemented, tested, committed on `main`); Section 8 item 7 (per-identity gap history, symmetric reset/decay — implemented, tested, committed `074aaf9` on `main`); Section 8 item 8 (mode- and board-epoch-specific ledger memory — implemented, tested, committed `70f2e17` on `main`); Section 8 item 4 (Pi-side exact compensated-motion reachability/clamp preflight — implemented, tested, committed `a22e92d` on `main`); Section 8 items 6 + 9 (preserve detection multiplicity + require one stable block-consistent track for MOVED/DISPLACED; fuse centroid/angle/size over the existing coherent quiet window with exposed uncertainty/residuals — implemented, tested, committed `f0c8c37` on `main`); Section 8 item 3 (one-shot coherent correction ticket with atomic quiet/mode/map/track/epoch revalidation — implemented, tested, committed on `main`).
 - Implemented but unmerged: none.
-- Active or blocked work: Phase 1's serialized 2 → 7 → 8 → 4 → (6 + 9) chain is complete. Next in the audited safe sequence is item 3, then item 5.
+- Active or blocked work: Phase 1's serialized 2 → 7 → 8 → 4 → (6 + 9) → 3 chain is complete. Next in the audited safe sequence is item 5, then item 10 (out of scope for this pass).
 - Unmerged branches/worktrees: none.
-- Next required action: start **item 3** — make correction a one-shot coherent ticket with atomic quiet/mode/map/track revalidation (audit §1 P0 `routes_command.py` `/correct`, §6.4). It builds directly on items 6 + 9: `Supervisor.track_evidence_at` now yields a track signature/uncertainty the ticket can bind and re-check, and `assess_frame_correction` already re-derives everything server-side with `require_track=True`. Items 5 (diagonal/both-neighbour clearance) and 10 (the rig measurement campaign) remain after it / out of scope.
+- Next required action: start **item 5** — refuse diagonal correction and enforce both-neighbour / corner clearance until the jaw geometry is measured (audit §1 P0 `placement_geometry.py:164-171` / `placement_check.py:279-286`, shortlist item 5). `_drift_neighbour` in `web/state.py` currently collapses two-axis drift to one dominant axis and only checks that one neighbour corridor; item 5 adds an "essentially one-dimensional" gate and a both-signed-axis + corner sweep, refusing ambiguous diagonal drift outright. Item 10 (the rig measurement campaign) remains after it / out of scope.
+
+## Phase 1 — item 3: one-shot coherent correction ticket
+
+### Agent `item3_correction_ticket`
+
+- Assigned item(s): Section 8 item 3 ONLY — make the operator CORRECTION action
+  a one-shot coherent ticket. Immediately before motion, atomically revalidate
+  quiet state, active mode, map generation, selected stable track, board epoch
+  and every piece of evidence that authorised the correction; prevent stale
+  analysis, duplicate tickets, ticket reuse/replay, and decision-to-motion /
+  mode-change / map-change / track-change / board-reset(epoch) races. No other
+  Section 8 item touched (item 5's diagonal gate, item 10's rig campaign left
+  alone).
+- Branch/worktree: `main`; working tree clean at start (items 2, 7, 8, 4, 6+9
+  already on `main`).
+- Files changed:
+  - `python/web/state.py`:
+    - New `CorrectionTicket` dataclass — the coherent evidence bundle a
+      correction is authorised against: `ticket_id`, `verdict_signature`
+      (`(state, verdict, cells)`), `map_generation`, `grid_mode`, `board_epoch`,
+      `frame_sequence`, `analysis_result_id`, `track_centre_cm`,
+      `track_samples`, `command_args` (the eight `P` args), `first_seen_at`,
+      `refreshed_at`, `consumed`.
+    - New `CORRECTION_TICKET_FRESH_S = 1.5` (a correctable verdict is re-affirmed
+      on every coherent quiet frame at the measured ~8.6 Hz; a ticket not
+      refreshed for longer means supervision stopped seeing that exact verdict —
+      hand in, block moved, mode latched, vision dropped) and
+      `CORRECTION_TICKET_MAX_AGE_S = 30.0` (the whole correctable episode's
+      ceiling — stale operator intent even if continuously re-affirmed).
+    - New `refresh_correction_ticket(app, frame, state, verdict, correction,
+      track)` — called by `_supervise` once per coherent analysis result. A
+      non-correctable reading drops the ticket; a correctable one with the SAME
+      verdict signature re-affirms the bundle + `refreshed_at`; a new signature
+      mints a fresh unconsumed ticket; a ticket already `consumed` for its
+      signature is left alone (one attempt per verdict event).
+    - New `validate_correction_ticket(app, ticket, frame, sv, signature) ->
+      (ok, reason)` — read-only. Refuses a missing / consumed / stale (past
+      `FRESH_S`) / expired (past `MAX_AGE_S`) ticket, a `verdict_signature`
+      that no longer matches the published verdict, a `map_generation` /
+      `grid_mode` / `board_epoch` that differs from live state (each also
+      cross-checked against the current frame), and a `latest_frame.sequence`
+      older than the ticket's (camera evidence never rewinds).
+    - New `correction_track_moved_cm(ticket, track)` — straight-line cm the
+      fused quiet-window track centre moved since the ticket was affirmed;
+      `None` when either centre is unknown.
+  - `python/web/app.py`:
+    - Lifespan init: `app.state.correction_ticket = None`,
+      `correction_ticket_seq = 0`, `correction_lock = threading.Lock()`.
+    - `_supervise`: the three early-return branches (map-generation change, mode
+      latch, `NO_VISION` / stale) each now also clear `app.state.correction_ticket`;
+      the normal path calls `refresh_correction_ticket(...)` right after
+      `_note_supervision`.
+    - `_note_supervision`: on a verdict-signature change it now clears
+      `app.state.correction_ticket` alongside `correction_attempted_signature`
+      (any ticket around was minted for the PREVIOUS verdict).
+  - `python/web/routes_command.py` — `POST /api/supervision/correct`:
+    - New early refusal when the current frame's `analysis_ok` is False
+      (detector failed / result aged out) and when `app.state.supervisor` is
+      missing.
+    - The whole verdict/ticket decision + the `consumed` write now run inside a
+      non-blocking `app.state.correction_lock` critical section, so two presses
+      or a concurrent dispatch cannot both validate the same ticket; a
+      `_latching(app)` re-check inside the lock catches a grid-mode / shift
+      latch that started after `require_mutable`.
+    - Order inside the lock: verdict signature present → not already attempted →
+      `validate_correction_ticket` (coherence bundle) → re-`observe` +
+      `assess_frame_correction(require_track=True)` on the CURRENT frame (the
+      published flag is still never trusted) → freshly derived `command_args`
+      must equal the ticket's (the block has not moved) →
+      `correction_track_moved_cm` ≤ `TRACK_IDENTITY_MATCH_CM` → the scene is
+      quiet RIGHT NOW on this exact frame (`quiet_fraction(frame.view,
+      supervision_baseline)` through `supervisor.is_quiet`) → set
+      `ticket.consumed = True` and `correction_attempted_signature` BEFORE any
+      `P` byte. Any failure raises 409 with a specific reason and sends nothing.
+- Implementation summary: the route re-ran `assess_frame_correction` on the
+  current frame but took the verdict, and the authority to move, from
+  `app.state.supervision` — a reading that could be several frames old — with no
+  atomic check that a quiet, mode/map/epoch-coherent observation still existed.
+  `_supervise` now mints a `CorrectionTicket` the first frame a correctable
+  MOVED/DISPLACED verdict is published and re-affirms its whole coherence bundle
+  (verdict signature, map generation, grid mode, board epoch, source sequence,
+  fused track centre, the eight `P` args) on every later coherent quiet frame
+  that still yields the same verdict. `/api/supervision/correct` sends no byte
+  unless a live ticket exists whose entire bundle still equals live state, the
+  re-derived motion still matches it, the fused track is still one stable object
+  within `TRACK_IDENTITY_MATCH_CM` of where it was, and the scene is quiet on
+  the exact newest frame — then marks the ticket `consumed` under
+  `correction_lock` before motion. A verdict change, a mode/map/epoch change, a
+  stale or dropped-out analysis, a second press and a replay all now send
+  nothing. No firmware change; no `config/rig.json` change; no new paired
+  constant.
+- Tests added:
+  - `python/tests/web_supervision_test.py` (+16 tests, new `ITEM 3` block, new
+    `_ticketed_app` fixture that drives the real `_supervise` to mint a live
+    ticket then races one thing against it, and `_fresh_frame` helper;
+    `_correct_app` updated to build a matching ticket, a `supervision_baseline`,
+    `correction_lock`, `rig.grid.mode` and `pipeline.map_generation` so the
+    existing route tests exercise the new critical section):
+    a ticketed correction goes through when nothing changed (one `P` sent,
+    ticket `consumed`, per-event signature latched); a grid-mode latch between
+    the reading and the confirm sends no `P`; a map-generation change sends no
+    `P` ("workspace map changed"); a new board epoch sends no `P`; the scene
+    going unquiet between the reading and the confirm sends no `P` ("not still
+    enough"); the tracked block dropping out sends no `P`; a verdict change
+    drops the ticket and the route then has nothing to act on; a ticket whose
+    signature no longer matches the published verdict is refused ("verdict
+    changed"); a ticket that stopped being re-affirmed is refused ("no longer
+    current"); an expired offer is refused ("expired") even while still
+    re-affirmed; camera evidence older than the ticket is refused ("went
+    backwards"); a detector-failure frame refuses the correction ("usable
+    reading"); the ticket is consumed once and a replay sends nothing even with
+    the per-event latch cleared; a concurrent dispatch holding `correction_lock`
+    refuses a duplicate ("already being dispatched"); a grid-mode latch in
+    progress refuses; supervision dropping to `NO_VISION` drops the ticket.
+- Exact test commands and results:
+  - `.venv/bin/python -m pytest -q python/tests/web_supervision_test.py` — 68
+    passed (was 52; +16).
+  - `.venv/bin/python -m pytest -q python/tests/` — 147 passed (was 131; +16).
+  - `.venv/bin/python python/tests/test_supervisor.py` — 167; `test_supervisor_frames.py`
+    — 21; `test_placement_check.py` — 41; `test_placement_geometry.py` — 32;
+    `test_placement_ledger.py` — 57; `test_motion_preflight.py` — 62;
+    `test_grid.py` — 239; `test_link.py` — 113; `test_build_controller.py` — 30;
+    `test_latest_workers.py` — 25. All 0 failed.
+  - No `web/src` change (the ticket is entirely server-side; the client still
+    posts `{confirm: true}`), so `npx vitest` not re-run.
+- Commit hash: `c609e54` (`feat(supervision): one-shot coherent correction ticket`) — code + tests + audit checkbox + `correction-action.md`. This log entry is the immediately following docs commit.
+- Unresolved issues: none for item 3. The ticket is server-side only — the
+  operator's consent is still identified by the published verdict the client is
+  looking at, matched via `verdict_signature`; if a future requirement needs the
+  client to echo a specific ticket id (to reject "consented to verdict A while
+  the server moved to a different correctable verdict B"), that is a small
+  protocol addition on top of this. `CORRECTION_TICKET_FRESH_S` / `_MAX_AGE_S`
+  are chosen against the measured 8.6 Hz coherent-frame cadence, not rig-tuned;
+  both fail CLOSED (a too-short value only ever refuses a live correction).
+  Hardware/camera unverified locally as always.
+- Whether merged: committed directly to `main`.
+- Next action: begin item 5 — refuse diagonal correction; enforce both-neighbour
+  and corner clearance until the jaw geometry is measured.
 
 ## Phase 1 — items 6 + 9: multiplicity-preserving coherent track; quiet-window centroid/angle/size fusion
 
