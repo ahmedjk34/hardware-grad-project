@@ -558,6 +558,122 @@ check("one gap frame after an interlock trip is not yet FOREIGN",
       f"{state} {verdict.verdict if verdict else None}")
 
 
+# --- item 7: gap history is per-identity, and clears everywhere ----------- #
+#
+# `_gap_history` used to be one global `deque[bool]`: every "a gap exists" frame
+# appended True regardless of WHERE, the settled verdict was rendered from the
+# CURRENT frame's count (so one gap-free frame cleared it), and `note_mode` /
+# the interlock and no-memory branches reset `_CellHistory` but not the gap
+# deque. Each fix below is asserted against the model that replaced it.
+
+def gap_frame(x_cm, y_cm, cells=((1, 1), (2, 1))):
+    """A settled-board observation with one gap detection at a cm point."""
+    return Observation(cells=cells, in_gap=1, detections=6,
+                       gap_points_cm=((x_cm, y_cm),))
+
+
+GAP_A = ((GRID.cell_center_cm(2, 1)[0] + GRID.cell_center_cm(3, 1)[0]) / 2,
+         GRID.cell_center_cm(2, 1)[1])
+GAP_B = ((GRID.cell_center_cm(1, 1)[0] + GRID.cell_center_cm(1, 2)[0]) / 2,
+         (GRID.cell_center_cm(1, 1)[1] + GRID.cell_center_cm(1, 2)[1]) / 2)
+clean2 = Observation(cells=((1, 1), (2, 1)), detections=6)
+
+
+def run(sup, obs, gates=open_gates, mode="vertical", led=None):
+    return sup.step(mode=mode, ledger=led if led is not None else ledger,
+                    observation=obs, interlocks=gates)
+
+
+# repeated observation of the SAME gap: settles once, stays coherent.
+sup = supervisor(settle_n=2, settle_m=3)
+run(sup, gap_frame(*GAP_A))
+_, _, v2 = run(sup, gap_frame(*GAP_A))
+_, _, v3 = run(sup, gap_frame(*GAP_A))
+check("the same gap seen N frames running settles FOREIGN",
+      v2.verdict == "FOREIGN", v2.verdict)
+check("and stays FOREIGN while that same gap persists — no flicker",
+      v3.verdict == "FOREIGN", v3.verdict)
+
+# symmetric clearing: ONE gap-free frame does not clear a settled gap; a full
+# N of the last M do (timeout / decay).
+_, _, d1 = run(sup, clean2)
+_, _, d2 = run(sup, clean2)
+check("one gap-free frame does NOT clear a settled gap (clearing is hysteresed)",
+      d1.verdict == "FOREIGN", d1.verdict)
+check("N gap-free frames decay the gap back to VERIFIED",
+      d2.verdict == "VERIFIED", d2.verdict)
+
+# a CHANGED gap identity does not inherit the decayed one's evidence: after the
+# gap at A has decayed, a fresh gap at B must warm from nothing.
+_, _, b1 = run(sup, gap_frame(*GAP_B))
+_, _, b2 = run(sup, gap_frame(*GAP_B))
+check("a fresh gap identity warms from nothing, not from the old gap's votes",
+      b1.verdict == "VERIFIED", b1.verdict)
+check("and settles FOREIGN on its own N-of-M",
+      b2.verdict == "FOREIGN", b2.verdict)
+
+# a gap whose position JUMPS more than the match radius in one frame is a new
+# identity, not the same one moved.
+sup = supervisor(settle_n=2, settle_m=3)
+for _ in range(3):
+    run(sup, gap_frame(*GAP_A))
+_, _, j1 = run(sup, gap_frame(GAP_A[0], GAP_A[1] + 7.6))  # a full pitch away
+check("a gap that jumps a whole pitch starts a new identity (old one decays)",
+      j1.verdict in ("FOREIGN", "VERIFIED"), j1.verdict)
+check("the jumped gap is tracked separately, not as the same gap moved",
+      sup._gap_history.settled_gap_count() <= 1
+      and len(sup._gap_history._tracks) == 2, str(sup._gap_history._tracks))
+
+# two DISTINCT persistent gaps are two identities, not one repeated vote.
+sup = supervisor(settle_n=2, settle_m=3)
+two = Observation(cells=((1, 1), (2, 1)), in_gap=2, detections=7,
+                  gap_points_cm=(GAP_A, GAP_B))
+for _ in range(3):
+    _, _, tv = run(sup, two)
+check("two persistent distinct gaps settle as a count of 2",
+      sup._gap_history.settled_gap_count() == 2, str(sup._gap_history._tracks))
+check("  ... and with nothing missing that reads FOREIGN",
+      tv.verdict == "FOREIGN", tv.verdict)
+
+# RESET on a tripped interlock: the pre-trip gap votes are GONE, and a full
+# fresh N-of-M is required afterwards — the leaked-gap-vote regression the
+# audit calls for (the older test only checked the first warming frame).
+sup = supervisor(settle_n=2, settle_m=3)
+for _ in range(4):
+    run(sup, gap_frame(*GAP_A))
+run(sup, gap_frame(*GAP_A), gates=shut_gates)     # trip: _reset_hysteresis()
+run(sup, clean2)                                  # re-warm the cell history
+_, _, r0 = run(sup, clean2)
+check("post-trip with no gap the board is VERIFIED — pre-trip votes did not leak",
+      r0.verdict == "VERIFIED", r0.verdict)
+_, _, r1 = run(sup, gap_frame(*GAP_A))
+_, _, r2 = run(sup, gap_frame(*GAP_A))
+check("one gap frame after the trip is NOT FOREIGN (no inherited votes)",
+      r1.verdict == "VERIFIED", r1.verdict)
+check("it takes a full fresh N-of-M after the trip to reach FOREIGN",
+      r2.verdict == "FOREIGN", r2.verdict)
+
+# reset() drops the settled gap verdict: it must not survive into the next frame.
+sup = supervisor(settle_n=2, settle_m=3)
+for _ in range(3):
+    run(sup, gap_frame(*GAP_A))
+sup.reset()
+state, _, v = run(sup, gap_frame(*GAP_A))
+check("reset() drops the stale gap verdict — the next frame re-warms",
+      state == "WARMING" and v is None, f"{state} {v}")
+
+# a MODE LATCH clears the gap history too, not just the cell history (D13).
+mixed = ledger_with("vertical", [(1, 1, 0), (2, 1, 0)])
+mixed.append("horizontal", 1, 1, 0, BuildResult(PLACED))
+sup = supervisor(settle_n=1, settle_m=2)
+run(sup, gap_frame(*GAP_A), led=mixed)            # vertical: gap settles FOREIGN
+_, _, hv = sup.step(mode="horizontal", ledger=mixed,
+                    observation=Observation(cells=((1, 1),), detections=4),
+                    interlocks=open_gates)
+check("a mode latch clears the gap history — horizontal is not FOREIGN off "
+      "vertical's gap", hv is not None and hv.verdict == "VERIFIED", str(hv))
+
+
 # --- step() rejects a DISPLACED pairing the geometry cannot support -------- #
 #
 # `classify` names the emptied cell as the origin of the gap detection by set

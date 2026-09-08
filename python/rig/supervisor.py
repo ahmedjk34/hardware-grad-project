@@ -646,6 +646,149 @@ class _CellHistory:
                        if self.settled(cell) is True)
 
 
+#: Two gap detections within this cm distance across consecutive judged frames
+#: are ONE persistent gap identity; farther apart they are different gaps and
+#: each carries its own N-of-M evidence. This is the per-key hysteresis that
+#: `_CellHistory` gives a cell and that `in_gap` — a bare per-frame count — used
+#: to have no equivalent of: three "a gap exists" votes could come from three
+#: different objects or locations, and one gap-free frame cleared a settled gap
+#: with no counter-evidence. PROVISIONAL: wants the same rig measurement as
+#: :data:`PAIRING_BEYOND_CM` (audit §5.2). Half a vertical pitch is ~1.9 cm, so
+#: 2.0 cm keeps one jittering block as one identity while a neighbouring gap a
+#: full pitch away reads as a new one.
+GAP_IDENTITY_MATCH_CM = 2.0
+
+
+@dataclass
+class _GapTrack:
+    """One persistent gap identity: a map-frame cm anchor (None when the frame
+    gave only a count) and its last-M occupied/absent readings."""
+
+    anchor: tuple[float, float] | None
+    readings: deque
+
+
+class _GapHistory:
+    """The last M readings of every distinct gap identity — `_CellHistory` for gaps.
+
+    ``in_gap`` reaches :func:`classify` as a count, and it used to be hysteresed
+    by one global ``deque[bool]``: any frame with a gap appended True, any
+    gap-free frame appended False, and the settled verdict was then rendered
+    from the CURRENT frame's count regardless of the history. So one detector
+    dropout cleared a stable DISPLACED/FOREIGN with no N-of-M, and three votes
+    from three different objects settled as though they were one gap.
+
+    Each gap detection now carries a spatial identity (its map-frame cm centre),
+    associated frame to frame within :data:`GAP_IDENTITY_MATCH_CM`. A gap is
+    reported only once N of its OWN last M frames saw it, and it keeps being
+    reported until N of the last M frames agree it is gone — clearing is
+    hysteresed exactly like asserting, not read off the current frame. A gap
+    whose position jumps past the match radius is a NEW identity that starts its
+    N-of-M from nothing; the old one decays and is forgotten, so no evidence is
+    inherited across the change.
+
+    Frames that carry a bare ``in_gap`` count with no coordinates (older rig
+    instrumentation, synthetic traces) fall back to anonymous slots keyed by
+    position in the list: the count still hystereses symmetrically, but with no
+    coordinates there is no spatial identity to give it.
+    """
+
+    def __init__(self, settle_n: int, settle_m: int,
+                 match_cm: float = GAP_IDENTITY_MATCH_CM) -> None:
+        self._n = int(settle_n)
+        self._m = int(settle_m)
+        self._match_cm = float(match_cm)
+        self._tracks: list[_GapTrack] = []
+
+    def reset(self) -> None:
+        """Counters RESET, never decay — reached through
+        :meth:`Supervisor._reset_hysteresis` on every tripped interlock, mode
+        latch and memory loss, the SAME primitive `_CellHistory` resets on, so
+        gap evidence can never outlive the cell evidence gathered beside it."""
+        self._tracks.clear()
+
+    def _state(self, readings) -> bool | None:
+        """True/False once N of the last M readings agree; None while warming."""
+        if len(readings) < self._n:
+            return None
+        present = sum(readings)
+        if present >= self._n:
+            return True
+        if len(readings) - present >= self._n:
+            return False
+        return None
+
+    def update(self, observation) -> None:
+        """One judged frame's gap detections, associated to the live identities."""
+        points: list = list(observation.gap_points_cm)
+        if not points and observation.in_gap > 0:
+            points = [None] * int(observation.in_gap)
+
+        matched_tracks: set[int] = set()
+        matched_points: set[int] = set()
+
+        # Coordinates -> nearest free anchored track within the match radius,
+        # greedy on distance so the closest pairing wins.
+        candidates = []
+        for pi, p in enumerate(points):
+            if p is None:
+                continue
+            for ti, track in enumerate(self._tracks):
+                if track.anchor is None:
+                    continue
+                distance = math.hypot(p[0] - track.anchor[0],
+                                      p[1] - track.anchor[1])
+                if distance <= self._match_cm:
+                    candidates.append((distance, pi, ti))
+        for _distance, pi, ti in sorted(candidates):
+            if pi in matched_points or ti in matched_tracks:
+                continue
+            matched_points.add(pi)
+            matched_tracks.add(ti)
+            point = points[pi]
+            track = self._tracks[ti]
+            track.readings.append(True)
+            track.anchor = (0.6 * track.anchor[0] + 0.4 * float(point[0]),
+                            0.6 * track.anchor[1] + 0.4 * float(point[1]))
+
+        # Bare-count detections -> free anonymous tracks, in list order.
+        free_anon = [ti for ti, track in enumerate(self._tracks)
+                     if track.anchor is None and ti not in matched_tracks]
+        anon_points = [pi for pi, p in enumerate(points) if p is None]
+        for slot, pi in enumerate(anon_points):
+            if slot >= len(free_anon):
+                break
+            ti = free_anon[slot]
+            matched_points.add(pi)
+            matched_tracks.add(ti)
+            self._tracks[ti].readings.append(True)
+
+        # Every identity that matched nothing this frame gets a negative reading
+        # — this is what makes clearing symmetric with asserting.
+        for ti, track in enumerate(self._tracks):
+            if ti not in matched_tracks:
+                track.readings.append(False)
+
+        # Detections that matched no existing identity open a fresh one.
+        for pi, p in enumerate(points):
+            if pi in matched_points:
+                continue
+            self._tracks.append(_GapTrack(
+                anchor=(float(p[0]), float(p[1])) if p is not None else None,
+                readings=deque([True], maxlen=self._m)))
+
+        # Decay: forget an identity once N of its last M frames say it is gone,
+        # so a later reappearance is a new identity warming from nothing.
+        self._tracks = [track for track in self._tracks
+                        if self._state(track.readings) is not False]
+
+    def settled_gap_count(self) -> int:
+        """Distinct gap identities settled OCCUPIED — the ``in_gap`` the
+        classifier sees, never the raw per-frame count."""
+        return sum(1 for track in self._tracks
+                   if self._state(track.readings) is True)
+
+
 @dataclass
 class Interlocks:
     """D5's four gates. All required; any one of them refuses every verdict."""
@@ -690,29 +833,36 @@ class Supervisor:
         self.settle_m = int(settle_m)
         self._history = _CellHistory(self.settle_n, self.settle_m)
         self._mode: str | None = None
-        #: D7's hysteresis, applied to the one signal that used to bypass it.
-        #: `in_gap` is a per-frame count with no cell identity, so it cannot go
-        #: through `_CellHistory`; instead the last M judged frames each record
-        #: whether ANY detection was in a gap, and `classify` sees a non-zero
-        #: `in_gap` only once N of them agree. A single frame where a correctly
-        #: placed block's centroid crosses a footprint boundary must not stop
-        #: the program. NOT the full fix for a MOVED block that lands off-site
-        #: (that needs per-gap-cell identity); this is denoising only.
-        self._gap_history: deque[bool] = deque(maxlen=self.settle_m)
+        #: D7's hysteresis for the one signal that used to bypass it. `in_gap`
+        #: is a per-frame count, so it cannot go through `_CellHistory` by cell;
+        #: `_GapHistory` keys it by PERSISTENT GAP IDENTITY instead, so a gap is
+        #: asserted and cleared under the same N-of-M and a changed gap does not
+        #: inherit the previous one's evidence. See that class for the global
+        #: `deque[bool]` it replaced and why.
+        self._gap_history = _GapHistory(self.settle_n, self.settle_m)
 
     def reset(self) -> None:
+        self._reset_hysteresis()
+
+    def _reset_hysteresis(self) -> None:
+        """Clear BOTH histories together. Every reset cause — a tripped
+        interlock, a mode latch, memory loss, a map-generation change on the
+        server — goes through here, so a stale gap verdict can never outlive the
+        cell evidence gathered beside it (D7: reset, never decay; audit item 7:
+        no asymmetric or leaky clearing)."""
         self._history.reset()
-        self._gap_history.clear()
+        self._gap_history.reset()
 
     def note_mode(self, mode: str) -> None:
         """D13: evidence gathered under one lattice never judges the other.
 
         The two grids are different lattices with different registration —
         7x6 vertical against 3x10 horizontal — so a counter carried across an
-        R/RR latch would be describing a board that no longer exists.
+        R/RR latch would be describing a board that no longer exists. Both
+        histories go, not just the cell one.
         """
         if self._mode is not None and mode != self._mode:
-            self._history.reset()
+            self._reset_hysteresis()
         self._mode = mode
 
     def is_quiet(self, diff_fraction: float | None) -> bool:
@@ -741,12 +891,12 @@ class Supervisor:
         refusal = interlocks.refusal()
         if refusal is not None:
             # D7: a frame that was not allowed to be judged must not leave
-            # partial evidence behind. Reset, do not decay.
-            self._history.reset()
+            # partial evidence behind — cell OR gap. Reset, do not decay.
+            self._reset_hysteresis()
             return refusal[0], refusal[1], None
 
         if not ledger.has_memory:
-            self._history.reset()
+            self._reset_hysteresis()
             return ("NO_MEMORY",
                     "NO MEMORY — the board is only tracked from the first "
                     "build after a restart", None)
@@ -755,20 +905,21 @@ class Supervisor:
         top_levels = ledger.expected_top_level(mode)
         interest = set(expected) | set(observation.cells)
         self._history.update(interest, observation.cells)
-        self._gap_history.append(observation.in_gap > 0)
+        self._gap_history.update(observation)
 
         warming = self._history.warming(interest)
         if warming:
             return "WARMING", f"SETTLING — {len(warming)} cells", None
 
-        # D7 for `in_gap`: a non-zero count reaches `classify` only once N of
-        # the last M judged frames saw a gap detection — see `_gap_history`.
-        gap_settled = (len(self._gap_history) >= self.settle_n
-                       and sum(self._gap_history) >= self.settle_n)
+        # D7 for `in_gap`: the classifier sees a gap only once THAT gap's own
+        # last-M frames settle it occupied, and keeps seeing it until N of the
+        # last M say it is gone. `_GapHistory` keys this per persistent gap
+        # identity, not one global boolean (audit item 7 / §5.2), so the count
+        # here is distinct settled gaps — never the raw per-frame `in_gap`.
         verdict = classify(
             mode, expected, self._history.settled_occupancy(interest),
             top_levels=top_levels,
-            in_gap=observation.in_gap if gap_settled else 0)
+            in_gap=self._gap_history.settled_gap_count())
 
         # A DISPLACED verdict pairs cells by set difference only. If a grid is
         # available, reject the pairing when the gap block is nowhere near the
