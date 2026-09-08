@@ -4,11 +4,49 @@ Date: 2026-09-08
 
 ## CURRENT RESUME STATE
 
-- Completed and verified: Section 8 item 1 (pre-existing); Section 8 item 2 (`NO_VISION` propagation for detector failure and stale frames — implemented, tested, committed on `main`).
+- Completed and verified: Section 8 item 1 (pre-existing); Section 8 item 2 (`NO_VISION` propagation for detector failure and stale frames — implemented, tested, committed on `main`); Section 8 item 7 (per-identity gap history, symmetric reset/decay — implemented, tested, committed `074aaf9` on `main`).
 - Implemented but unmerged: none.
-- Active or blocked work: Phase 1 continues with item 7 (`python/rig/supervisor.py` gap-history reset/decay semantics). Items 7, 8, 4 remain serialized in that order per the Phase 0 overlap finding.
+- Active or blocked work: Phase 1 continues with item 8 (`python/rig/placement_ledger.py` / `supervisor.py` — make `has_memory` mode- and board-epoch-specific). Items 8, 4 remain serialized in that order per the Phase 0 overlap finding.
 - Unmerged branches/worktrees: none.
-- Next required action: start item 7 — clear `_gap_history` through the same reset primitive as `_CellHistory` on every mode/interlock/no-memory transition, and hysterese gap-verdict clearing with a persistent per-gap identity. Add the leaked-gap-vote regression the audit calls for (existing interlock-reset test only checks the first warming frame).
+- Next required action: start item 8 — add `has_memory(mode, board_epoch)` and explicit board/session identity so vertical mode does not report "memory" (and yield VERIFIED on an empty view / FOREIGN on a real board) when only horizontal placements exist. Item 8's epoch-transition path builds on item 7's `_reset_hysteresis()` primitive; invalidate live verdicts/tickets/tracks on a mode or board-epoch change through it. Item 10 is out of scope.
+
+## Phase 1 — item 7: gap-history reset and decay semantics
+
+### Agent `item7_gap_history`
+
+- Assigned item(s): Section 8 item 7 only — clear gap history through the same reset primitive as `_CellHistory`; hysterese gap-verdict clearing with a persistent per-gap identity; add the regression tests the audit calls for. No other Section 8 item touched; item 10 not touched.
+- Branch/worktree: `main`; `/home/ahmedjk34/Desktop/Work_Dev/Miscellaneous/hardware-grad-project` (working tree clean at start; item 2 already on `main`, no other Phase 1 work in flight).
+- Files changed:
+  - `python/rig/supervisor.py`:
+    - New `GAP_IDENTITY_MATCH_CM = 2.0` module constant (PROVISIONAL — flagged as wanting the same rig measurement as `PAIRING_BEYOND_CM`, per audit §5.2).
+    - New `_GapTrack` dataclass (`anchor: tuple[float,float] | None`, `readings: deque`) and `_GapHistory` class: per-identity last-M readings, greedy nearest-anchor association within the match radius, EMA anchor drift (`0.6·old + 0.4·new`), anonymous positional slots for frames that carry a bare `in_gap` count with no `gap_points_cm`, `_state()` N-of-M (mirrors `_CellHistory.settled`), decay that forgets a track once N of its last M readings are absent, and `settled_gap_count()`.
+    - `Supervisor.__init__`: `self._gap_history` is now a `_GapHistory(settle_n, settle_m)` instead of `deque[bool]`; comment rewritten.
+    - New `Supervisor._reset_hysteresis()` clears `_history` **and** `_gap_history`. Public `reset()` now delegates to it. `note_mode()` (mode latch), the interlock-refusal branch and the no-memory branch of `step()` all call `_reset_hysteresis()` where they previously called `self._history.reset()` alone.
+    - `step()`: `self._gap_history.update(observation)` replaces `.append(observation.in_gap > 0)`; `classify(..., in_gap=self._gap_history.settled_gap_count())` replaces the `gap_settled`/`observation.in_gap` expression, so the classifier now sees the count of distinct settled gap identities, never the raw per-frame count.
+  - `python/tests/test_supervisor.py`: +15 checks in a new `item 7` block (helpers `gap_frame`, `run`; constants `GAP_A`, `GAP_B`, `clean2`) — see "Tests added".
+  - `docs/features/block-vision-placement-supervision-audit-2026-09-08.md`: Section 8 item 7 marked `[x]`.
+- Implementation summary: `_gap_history` was one global `deque[bool]` with two defects. (1) Asymmetric/leaky clearing: the settled verdict was rendered from the current frame's `in_gap` count gated by a global N-of-M, so one gap-free frame cleared a settled DISPLACED/FOREIGN, and three "a gap exists" votes from three different objects settled as one gap. `_GapHistory` gives every distinct gap a spatial identity and requires N-of-M for both assertion and clearing; a gap whose position jumps past `GAP_IDENTITY_MATCH_CM` is a new identity that warms from nothing while the old one decays over N frames and is forgotten. (2) Asymmetric reset: `note_mode` and the interlock/no-memory branches reset `_CellHistory` only. `_reset_hysteresis()` is now the single primitive every reset cause goes through, so a stale gap verdict cannot outlive the cell evidence beside it. Item 2's `NO_VISION` path in `web/app.py` calls `supervisor.reset()`, which now also clears the gap history — no change there, re-verified.
+- Tests added (all in `python/tests/test_supervisor.py`):
+  - repeated same gap settles FOREIGN once and stays FOREIGN with no flicker;
+  - one gap-free frame does NOT clear a settled gap; N gap-free frames decay it back to VERIFIED (timeout/decay);
+  - a fresh gap identity warms from nothing, not from the decayed gap's votes, then settles on its own N-of-M;
+  - a gap that jumps a whole pitch starts a new identity (`len(_tracks) == 2`, old one decaying);
+  - two distinct persistent gaps settle as a count of 2 (`settled_gap_count() == 2`);
+  - interlock trip: post-trip the board reads VERIFIED with no gap, one gap frame after the trip is not FOREIGN, and a full fresh N-of-M is required to re-reach FOREIGN — the leaked-gap-vote regression (the older interlock-reset check only looked at the first warming frame, kept unchanged);
+  - `reset()` drops the settled gap verdict — the next frame re-warms;
+  - a mode latch clears the gap history — horizontal is not FOREIGN off vertical's gap.
+- Exact test commands and results:
+  - `.venv/bin/python python/tests/test_supervisor.py` — 126 passed, 0 failed (was 111; +15).
+  - `.venv/bin/python python/tests/test_supervisor_frames.py` — 21 passed, 0 failed.
+  - `.venv/bin/python python/tests/test_grid.py` — 239 passed, 0 failed.
+  - `.venv/bin/python -m pytest -q python/tests/` — 127 passed.
+  - `.venv/bin/python -m pytest -q python/tests/web_supervision_test.py python/tests/console_pipeline_test.py python/tests/orchestrator_test.py` — 63 passed (item 2's `web_supervision_test.py` + `console_pipeline_test.py` intact).
+  - `.venv/bin/python python/tests/test_placement_check.py` — 41 passed; `test_placement_geometry.py` — 32; `test_placement_ledger.py` — 42; `test_latest_workers.py` — 25; `test_build_controller.py` — 30.
+  - `cd web && npx vitest run src/` — 42 files, 563 passed.
+- Commit hash: `074aaf9` (`feat(supervision): per-identity gap history, symmetric reset and decay`) — code + tests + audit checkbox.
+- Unresolved issues: none for item 7. `GAP_IDENTITY_MATCH_CM = 2.0` is PROVISIONAL and wants a rig measurement (audit §5.2) — same status as `PAIRING_BEYOND_CM`. The `_CellHistory` interest-set asymmetry noted in audit line 74 first clause (an unexpected cell leaving the interest set on a single-frame dropout) is a separate `_CellHistory` concern and was left untouched — the resume note and shortlist item 7 both scope this task to the gap history; flag for the team if they want it folded in. Hardware/camera unverified locally as always.
+- Whether merged: committed directly to `main`.
+- Next action: begin item 8 — mode- and board-epoch-specific `has_memory`.
 
 ## Phase 0 — status audit
 
