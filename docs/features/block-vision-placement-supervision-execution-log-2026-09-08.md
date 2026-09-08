@@ -4,11 +4,59 @@ Date: 2026-09-08
 
 ## CURRENT RESUME STATE
 
-- Completed and verified: Section 8 item 1 (pre-existing); Section 8 item 2 (`NO_VISION` propagation for detector failure and stale frames — implemented, tested, committed on `main`); Section 8 item 7 (per-identity gap history, symmetric reset/decay — implemented, tested, committed `074aaf9` on `main`); Section 8 item 8 (mode- and board-epoch-specific ledger memory — implemented, tested, committed `70f2e17` on `main`).
+- Completed and verified: Section 8 item 1 (pre-existing); Section 8 item 2 (`NO_VISION` propagation for detector failure and stale frames — implemented, tested, committed on `main`); Section 8 item 7 (per-identity gap history, symmetric reset/decay — implemented, tested, committed `074aaf9` on `main`); Section 8 item 8 (mode- and board-epoch-specific ledger memory — implemented, tested, committed `70f2e17` on `main`); Section 8 item 4 (Pi-side exact compensated-motion reachability/clamp preflight — implemented, tested, committed on `main`).
 - Implemented but unmerged: none.
-- Active or blocked work: Phase 1 continues with item 4 (Pi-side exact compensated-motion reachability/clamp preflight). Item 4 was the last of the serialized 2 → 7 → 8 → 4 chain; after it, items 6+9 → 3 → 5.
+- Active or blocked work: Phase 1's serialized 2 → 7 → 8 → 4 chain is complete. Next in the audited safe sequence is items 6+9, then item 3, then item 5.
 - Unmerged branches/worktrees: none.
-- Next required action: start item 4 — add an exact Python full-motion reachability/clamp preflight for every compensated correction target (skew + fixed build offset + tool offset + requested nudge), per active mode and the paired calibration values, with any predicted firmware clamp a hard refusal. Item 4 likely shares the link/epoch capability boundary with item 8's `board_epoch` work — build on it rather than duplicating. Item 10 is out of scope.
+- Next required action: start **items 6+9** — most-accurate achievable pick point (coherent quiet-window centroid/angle/size fusion with exposed uncertainty/residuals, §6.2) together with throughput/backpressure telemetry that drives supervision only from unique coherent analysis results (§7.3). Both build on item 1's coherent analysis handoff and item 2's `analysis_ok`/`analysis_error` provenance on `ProcessedFrame`. `rig.motion_preflight.preflight_correction` now exists to consume a correction target's uncertainty band once one is produced (§6.2 "carry a covariance through the full motion preflight"). Item 10 (the rig measurement campaign) remains out of scope.
+
+## Phase 1 — item 4: Pi-side exact compensated-motion reachability/clamp preflight
+
+### Agent `item4_motion_preflight`
+
+- Assigned item(s): Section 8 item 4 only — an exact Python full-motion reachability and clamp preflight for every compensated CORRECTION (`P`) target: cell centre − tool offset, then `BUILD_PLACEMENT_OFFSET_*` + `SKEW_*` + the requested `(dx,dy)` nudge, on both the pick and the place leg, per active mode and the paired calibration values, with any predicted firmware clamp a hard refusal. Match the real motion semantics, not an approximate model. No other Section 8 item touched; item 10 not touched.
+- Branch/worktree: `main`; working tree clean at start (items 2, 7, 8 already on `main`).
+- Files changed:
+  - `python/rig/motion_preflight.py` (**new**): a line-for-line mirror of `gotoBuildTargetOffset()` in `build_test_v1.ino`.
+    - Firmware-only constants copied in as read-only module state, because the arithmetic needs them and they must not enter `rig.json` (AGENTS.md "What must NOT be copied"): `X_TRAVEL_STEPS = 4550`, `Y_TRAVEL_STEPS = 7600` (`SOFT_LIMIT_*_TRAVEL`); the per-mode `SKEW_{X,Y}_PER_{COL,ROW,COLROW}_CM` and `BUILD_PLACEMENT_OFFSET_{X,Y}_CM` tables, keyed by mode name so a `{vertical, horizontal}` swap cannot pass.
+    - `_lround()` — C `lround` (round half AWAY from zero), not Python's round-half-to-even, so the preflight agrees with the firmware at exact half-steps.
+    - `steps_per_cm(axis, grid)` — DERIVED as `cap / grid.workspace_{width,height}_cm` (the paired `X_TRAVEL_CM` partner), never hard-coded, exactly like `xyStepsPerCmOf()`.
+    - `_axis_leg()` runs both firmware stages per axis per leg: (1) `cellTargetPosition()` — the UNCOMPENSATED holder target, float bounds with `slack = 1e-4` then the `[0, cap]` step check; (2) the magnitude-space correction (three separately-`lround`'d terms — placement offset, skew polynomial in `col` AND `row`, `lround(extra*spc)`) added to the magnitude, then `clamp(0, cap)`. `clamped` is `True` exactly when the firmware's clamp would bite. All in magnitude space — no signed `axisPos[]`, no travel-direction multiply — so `+dx` is away from home on both axes.
+    - `preflight_correction(*, grid, mode, pick_cell, place_cell, dx_cm, dy_cm, tool_offset_cm=(0.0, 0.0)) -> MotionPreflight` — pick leg carries the nudge, place leg carries `0, 0`, mirroring `replaceBlock()`'s `gotoBuildTargetOffset(pcol,prow,rot,dx,dy)` then `gotoBuildTarget(qcol,qrow,rot)`. `MotionPreflight.ok` / `.reason` / `.legs` / `.clamped_legs`.
+    - `tool_offset_for_mode(cfg, mode)` — resolves `tool_offsets.{neutral,cw}` for the mode's build rotation from a loaded config dict (reads, does not load).
+  - `python/rig/placement_check.py`: `assess()` gains `tool_offset_cm=(0.0, 0.0)`; new private `_preflight_reject()` runs `preflight_correction` over the just-built `Correction` and returns `(None, reason)` on a predicted clamp, called in BOTH the MOVED and the DISPLACED branch immediately before the affirmative return. Skipped when `grid is None` (the map-less path is already rejected upstream for lacking a cm position). Vertical's `neutral` tool offset is a genuine `(0.0, 0.0)`, so the default is exact for the only `SUPPORTED_MODES` entry; docstring notes a future horizontal path must pass `tool_offsets.cw`.
+  - `python/rig/link.py`: `Rig.replace_block()` gains a defence-in-depth guard after the 3 cm nudge check — runs `preflight_correction` with `self.grid`, `self.grid.mode`, and the real `tool_offset_for_mode(self._cfg, mode)` (mode-agnostic, so it is exact for horizontal too), and raises `ValueError("correction refused before motion: …")` sending nothing, the same fail-closed contract as the feeder/belt/level guards beside it.
+  - `AGENTS.md`: new paragraph in "What must NOT be copied into `config/rig.json`" documenting `motion_preflight.py` as the one deliberate firmware-constant mirror, pinned against the sketch by `test_motion_preflight.py`, to be changed in the same commit as the sketch.
+  - `docs/features/block-vision-placement-supervision-audit-2026-09-08.md`: shortlist item 4 marked `[x]`.
+- Implementation summary: the firmware's `cellTargetPosition()` validates only the uncompensated holder target; `BUILD_PLACEMENT_OFFSET_*`, `SKEW_*` and the `P` nudge are added afterwards inside `gotoBuildTargetOffset()`, where an off-travel target is clamped onto the cap, a console warning is printed, and the claw is driven anyway — so a far-edge correction descends somewhere other than the block's centre and nothing on the Pi predicts it. `motion_preflight.py` reproduces that exact magnitude-space arithmetic (same `lround`, same three-term correction, same clamp condition) for both legs; a predicted clamp — or an uncompensated target already off travel via the tool offset — is a hard refusal. Wired at the policy layer (`assess()`, the single source of truth `/api/supervision/correct` re-runs before dispatch) and independently at the motion layer (`replace_block()`, the "before a byte is sent" point that calibration/commissioning paths also call). Firmware untouched — the mirror carries the constants and `test_motion_preflight.py` fails on any drift from `build_test_v1.ino`.
+- Tests added:
+  - `python/tests/test_motion_preflight.py` (**new**, 62 checks, hand-rolled like `test_placement_check.py`; not pytest-collected — `pytest.ini` restricts collection to `*_test.py`):
+    - `_lround` matches C round-half-away-from-zero (incl. the `82.5 -> 83` case where Python's `round` gives 82).
+    - Firmware-mirror drift guard: parses `build_test_v1.ino` and asserts `X_TRAVEL_STEPS` / `Y_TRAVEL_STEPS` == `SOFT_LIMIT_*_TRAVEL`, every `SKEW_*` and `BUILD_PLACEMENT_OFFSET_*` table == the sketch (both modes), the mode keys are exactly `{vertical, horizontal}`, and `steps_per_cm` is derived not hard-coded.
+    - A mid-grid correction is reachable, reports no clamped legs, preflights all four axis-legs; the per-leg magnitude / correction / `wanted_from_home` arithmetic is re-derived by hand (pick X one nudge term, pick Y skew(col)+nudge, place legs skew-only, place X correction exactly zero → firmware `continue`).
+    - Just-inside vs just-outside the far X cap at ±1 step of compensation; a compensated target landing EXACTLY on the cap is not clamped (`> maximum`, not `>=`).
+    - Compensation-induced failure with `dx=dy=0`: vertical `[6,5]` skew alone (`0.115*6 = 0.69 cm`) clamps the pick Y leg; reason carries the ~0.69 cm miss distance.
+    - Both legs checked: a clamp on the PLACE leg (`place_cell=[6,5]`) fails the preflight with the pick legs clean.
+    - `cellTargetPosition` stage: a negative X tool offset puts the holder past 22.8 cm → refused before any nudge (`target_mag is None`); a positive X tool offset at col 0 puts it before the home switch → refused.
+    - X-axis sign convention: around a mid cell `+dx` / `−dx` move `wanted_from_home` symmetrically (no travel-direction factor); `+dx` past the far cap clamps to the cap, `−dx` below home clamps to 0 (a sign-inverted model would clamp the wrong end), and the raw wanted magnitude is genuinely negative at the home end.
+    - Both modes through the full stack: horizontal folds in the `cw` tool offset and the `−0.4 cm` `BUILD_PLACEMENT_OFFSET_X`; horizontal's reachable clamp is at the home end (its grid only reaches X = 17.1 cm), exercised at col 0.
+    - Integration through `assess()`: an in-band reachable DISPLACED still returns a `Correction`; a DISPLACED whose compensated pick would clamp (`[6,2]` on the X cap, +0.7 cm) is refused with "clamp" / "pick X" in the reason; the MOVED path is guarded the same way; `grid=None` still returns a `Correction` (preflight skipped).
+- Exact test commands and results:
+  - `.venv/bin/python python/tests/test_motion_preflight.py` — 62 passed, 0 failed (new).
+  - `.venv/bin/python python/tests/test_placement_check.py` — 41 passed, 0 failed.
+  - `.venv/bin/python python/tests/test_placement_geometry.py` — 32 passed, 0 failed.
+  - `.venv/bin/python python/tests/test_link.py` — 113 passed, 0 failed (the `replace_block` guard added; nominal `P 3 1 0 -0.420 0.110 2 1 0` still preflights clean).
+  - `.venv/bin/python python/tests/test_supervisor.py` — 139 passed, 0 failed (item 7/8 intact).
+  - `.venv/bin/python python/tests/test_supervisor_frames.py` — 21 passed, 0 failed.
+  - `.venv/bin/python python/tests/test_placement_ledger.py` — 57 passed, 0 failed (item 8 intact).
+  - `.venv/bin/python python/tests/test_grid.py` — 239 passed, 0 failed (firmware pairing unchanged).
+  - `.venv/bin/python python/tests/test_build_controller.py` — 30; `test_latest_workers.py` — 25.
+  - `.venv/bin/python -m pytest -q python/tests/` — 128 passed (item 2's `web_supervision_test.py`, `console_pipeline_test.py`, `orchestrator_test.py` all green).
+  - No `web/src` change, so `npx vitest` not re-run.
+- Commit hash: `a22e92d` (`feat(supervision): Pi-side exact compensated-motion clamp preflight`) — code + tests + `AGENTS.md` + audit checkbox. This log entry is the immediately following docs commit.
+- Unresolved issues: none for item 4. The firmware `P` verb itself remains **unflashed and unverified on hardware** (no local Arduino toolchain) — the preflight mirrors the sketch's arithmetic, which `arduino/tools/pcheck` only syntax-checks. The 3 cm `P` envelope escaping as an HTTP 500 (audit §1, `placement_check.py:256-291`) is a **separate** shortlist row, not folded in here. `test_motion_preflight.py` is the drift guard between the mirror and `build_test_v1.ino`; if the sketch's caps or compensation tables ever change, that test fails until the mirror is updated in the same commit.
+- Whether merged: committed directly to `main`.
+- Next action: begin items 6+9 — coherent quiet-window pick-point fusion with exposed uncertainty (§6.2) and unique-result throughput/backpressure telemetry (§7.3).
 
 ## Phase 1 — item 8: mode- and board-epoch-specific ledger memory
 
