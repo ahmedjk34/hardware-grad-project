@@ -629,12 +629,14 @@ const bool SOFT_LIMIT_VERBOSE = true;
 //   BUILD_PLACEMENT_OFFSET_X_CM        0.0   +1.35  (horiz; was -0.4, then the
 //                                                    2026 arm re-seat - measured
 //                                                    1.35 cm toward home at 0)
-//   BUILD_PLACEMENT_OFFSET_Y_CM        0.0    0.0
+//   BUILD_PLACEMENT_OFFSET_Y_CM        0.0   -0.3  (horiz; UNDER TEST here only,
+//                                                   was 0.0 - lands 0.3 too far)
 //   TOOL_OFFSET_NEUTRAL_X/Y_CM         0.0 / 0.0    (not per mode)
 //   TOOL_OFFSET_CW_X/Y_CM             +0.9 / -0.3   (the pickup-rotate swing)
 //   TOOL_OFFSET_CCW_X/Y_CM             0.0 / 0.0    (never measured)
 //   Z_MARGIN_PER_LEVEL_CM              0.0          (not per mode)
-//   Z_MARGIN_FIXED_CM                  0.12
+//   Z_MARGIN_FIXED_CM                  0.15  (UNDER TEST here; was 0.12 - block
+//                                             pressed too hard on the one below)
 //   Z_MARGIN_FIXED_STEPS               0
 //   Z_PICKUP_DROP_FROM_TOP_CM          13.3         (drop from TOP, see below)
 //
@@ -1358,7 +1360,10 @@ float Z_PICKUP_DROP_FROM_TOP_CM = 13.3;
 // SIGN for all three: + = HIGHER above the ground switch, - = lower.
 // Level 0 ignores all three - ground is the physical switch, not a number.
 float Z_MARGIN_PER_LEVEL_CM = 0.0; // cm added to EACH level (cumulative)
-float Z_MARGIN_FIXED_CM = 0.12;    // cm added ONCE to any level >= 1
+float Z_MARGIN_FIXED_CM = 0.15;    // cm added ONCE to any level >= 1
+                                  // (0.12 -> 0.15: placed block was pressing
+                                  //  too hard on the one below; UNDER TEST in
+                                  //  this sketch, other sketches still 0.12)
 long Z_MARGIN_FIXED_STEPS = 0;     // raw step trim, applied last
 
 // ------------------------------------------------------------
@@ -3968,7 +3973,9 @@ float SKEW_Y_PER_COLROW_CM[GRID_MODE_COUNT] = {0.0, 0.0};
 //                       unverified +1.8 intermediate was never confirmed on
 //                       hardware. Back to -0.4 if the arm is re-seated square.
 //   Y vertical    0.0   no fixed Y correction in vertical mode
-//   Y horizontal  0.0   no fixed Y correction in horizontal mode
+//   Y horizontal -0.3   horizontal placements landed 0.3 cm too FAR from the Y
+//                       home switch (rig-measured, UNDER TEST here only; other
+//                       sketches still 0.0). -0.3 pulls them back toward home.
 //
 // A 0.0 HERE IS A REAL STATEMENT, NOT A PLACEHOLDER. It means that mode/axis
 // gets NO fixed placement correction: the correction comes out exactly zero,
@@ -3992,7 +3999,7 @@ float SKEW_Y_PER_COLROW_CM[GRID_MODE_COUNT] = {0.0, 0.0};
 // Keep these paired with the values documented in AGENTS.md; test_grid.py pins
 // every slot against this sketch and fails on any drift.
 float BUILD_PLACEMENT_OFFSET_X_CM[GRID_MODE_COUNT] = {0.0, 1.35};
-float BUILD_PLACEMENT_OFFSET_Y_CM[GRID_MODE_COUNT] = {0.0, 0.0};
+float BUILD_PLACEMENT_OFFSET_Y_CM[GRID_MODE_COUNT] = {0.0, -0.3};
 
 // Returns a MAGNITUDE in steps - "this far away from the home switch" - with no
 // travel-direction factor applied. Only gotoBuildTarget() consumes it, and it
