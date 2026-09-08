@@ -4,11 +4,53 @@ Date: 2026-09-08
 
 ## CURRENT RESUME STATE
 
-- Completed and verified: Section 8 item 1 (pre-existing); Section 8 item 2 (`NO_VISION` propagation for detector failure and stale frames — implemented, tested, committed on `main`); Section 8 item 7 (per-identity gap history, symmetric reset/decay — implemented, tested, committed `074aaf9` on `main`).
+- Completed and verified: Section 8 item 1 (pre-existing); Section 8 item 2 (`NO_VISION` propagation for detector failure and stale frames — implemented, tested, committed on `main`); Section 8 item 7 (per-identity gap history, symmetric reset/decay — implemented, tested, committed `074aaf9` on `main`); Section 8 item 8 (mode- and board-epoch-specific ledger memory — implemented, tested, committed `70f2e17` on `main`).
 - Implemented but unmerged: none.
-- Active or blocked work: Phase 1 continues with item 8 (`python/rig/placement_ledger.py` / `supervisor.py` — make `has_memory` mode- and board-epoch-specific). Items 8, 4 remain serialized in that order per the Phase 0 overlap finding.
+- Active or blocked work: Phase 1 continues with item 4 (Pi-side exact compensated-motion reachability/clamp preflight). Item 4 was the last of the serialized 2 → 7 → 8 → 4 chain; after it, items 6+9 → 3 → 5.
 - Unmerged branches/worktrees: none.
-- Next required action: start item 8 — add `has_memory(mode, board_epoch)` and explicit board/session identity so vertical mode does not report "memory" (and yield VERIFIED on an empty view / FOREIGN on a real board) when only horizontal placements exist. Item 8's epoch-transition path builds on item 7's `_reset_hysteresis()` primitive; invalidate live verdicts/tickets/tracks on a mode or board-epoch change through it. Item 10 is out of scope.
+- Next required action: start item 4 — add an exact Python full-motion reachability/clamp preflight for every compensated correction target (skew + fixed build offset + tool offset + requested nudge), per active mode and the paired calibration values, with any predicted firmware clamp a hard refusal. Item 4 likely shares the link/epoch capability boundary with item 8's `board_epoch` work — build on it rather than duplicating. Item 10 is out of scope.
+
+## Phase 1 — item 8: mode- and board-epoch-specific ledger memory
+
+### Agent `item8_board_epoch`
+
+- Assigned item(s): Section 8 item 8 only — make placement-ledger memory mode- and board-epoch-specific; stop `VERIFIED` / `FOREIGN` / historical placement state leaking across mode changes, resets, reconnects and board epochs; redesign the global `has_memory`. Reuse item 7's `_reset_hysteresis()` reset semantics. No other Section 8 item touched; item 10 not touched.
+- Branch/worktree: `main`; working tree clean at start (items 2 and 7 already on `main`).
+- Files changed:
+  - `python/rig/placement_ledger.py`:
+    - New module sentinel `_CURRENT_EPOCH`.
+    - `Placement` gains `board_epoch: int = 0` (defaulted so existing constructions still type-check; `append` always stamps the live epoch).
+    - `PlacementLedger.__init__` gains `self._board_epoch = 0`; new `board_epoch` property and `new_board_epoch()` (advances the counter, returns it, KEEPS the rows).
+    - New private `_resolve_epoch()` (sentinel → live epoch, `None` → every epoch, int → that epoch).
+    - `append` now builds the `Placement` inside the lock so it can read `self._board_epoch`.
+    - `has_memory` is no longer a `@property` — it is `has_memory(mode=None, board_epoch=_CURRENT_EPOCH) -> bool`, scoped by mode and epoch.
+    - `placements`, `expected_occupancy`, `expected_top_level`, `is_top_of_column`, `has_taller_neighbour` all gain an optional `board_epoch` (default = live epoch) and thread it through.
+    - Module + class docstrings updated for the mode/epoch scoping.
+  - `python/rig/supervisor.py`:
+    - `Supervisor.__init__`: new `self._identity: tuple[str|None,int]|None`, `self._board_epoch: int = 0` (kept `self._mode` for compatibility).
+    - `note_mode(mode)` → `note_mode(mode, board_epoch=0)`: resets **both** histories via `_reset_hysteresis()` when the `(mode, board_epoch)` identity changes — a mode latch OR an epoch change, one primitive (item 7), no second mechanism.
+    - `step()`: reads `epoch = int(getattr(ledger, "board_epoch", 0))`, passes it to `note_mode`, gates on `ledger.has_memory(mode, epoch)`, and scopes `expected_occupancy` / `expected_top_level` to `(mode, epoch)`. NO_MEMORY sentence unchanged (kept in sync with the hardcoded copy in `web/state.py`).
+  - `python/web/app.py`: `_serial_ack` — a genuine `@0 BOOT` calls `supervisor.reset()` and, when `ledger.has_memory()` (something to supersede), `ledger.new_board_epoch()`. Guarded so the expected port-open BOOT during `connect()` (empty ledger) does not bump.
+  - `docs/features/placement-supervision.md`: D3 section + ledger API/gate block updated for mode/epoch scoping.
+  - `docs/features/block-vision-placement-supervision-audit-2026-09-08.md`: shortlist item 8 marked `[x]`.
+- Implementation summary: the leak was a single global `has_memory` boolean read before `Supervisor.step` judged the *active* grid against a per-mode expected set. Horizontal-only placements → vertical mode "has memory" → `classify(expected=∅, …)` → VERIFIED on an empty view, FOREIGN on a real vertical board. A settled verdict also outlived a gantry reboot because nothing scoped the ledger to the physical board it described. Fix: stamp every placement with a `board_epoch`, answer every reader for `(mode, current_epoch)` by default, retain superseded rows only for the append-only record, and make the supervisor treat an epoch change identically to an R/RR latch — both drop the cell AND gap histories through item 7's `_reset_hysteresis()`. `new_board_epoch()` is wired to `@0 BOOT` in the app layer; the deeper reconnect/recovery wiring belongs to item 4's link/epoch boundary and is left for it.
+- Tests added:
+  - `python/tests/test_placement_ledger.py` (+15 checks): epoch 0 default; placements stamped with their epoch; `new_board_epoch()` return/advance; current epoch empty after a bump; old epoch's rows retained and explicitly addressable; every-epoch history view; post-bump placement stamped epoch 1; mode+epoch `has_memory` combinations; `is_top_of_column` / `has_taller_neighbour` scoped to the current epoch.
+  - `python/tests/test_supervisor.py` (+13 checks, new `item 8` block): mode change with horizontal-only memory → NO_MEMORY on an empty view AND on a real vertical board (not FOREIGN); the placed mode still reaches VERIFIED; historical VERIFIED dropped across a new board epoch; historical FOREIGN not produced across a new epoch; reconnect — first new-epoch frame WARMS then the new epoch's own placement settles VERIFIED on its cell; `reset()` re-warms while same-epoch memory is preserved; a settled verdict is stable frame to frame within an unchanged mode/epoch; `board_epoch` stays 0 when nothing bumps it.
+  - `python/tests/web_supervision_test.py` (+1 test): `test_a_gantry_reboot_starts_a_new_board_epoch` — an empty-ledger BOOT does not bump; a BOOT with memory advances the epoch, retains the pre-reboot row, and leaves the current epoch with no memory.
+- Exact test commands and results:
+  - `.venv/bin/python python/tests/test_supervisor.py` — 139 passed, 0 failed (was 126; +13).
+  - `.venv/bin/python python/tests/test_placement_ledger.py` — 57 passed, 0 failed (was 42; +15).
+  - `.venv/bin/python python/tests/test_supervisor_frames.py` — 21 passed, 0 failed.
+  - `.venv/bin/python python/tests/test_grid.py` — 239 passed, 0 failed.
+  - `.venv/bin/python -m pytest -q python/tests/` — 128 passed (item 2's `web_supervision_test.py` +1, `console_pipeline_test.py`, item 7's `test_supervisor.py` all green).
+  - `.venv/bin/python -m pytest -q python/tests/web_supervision_test.py python/tests/console_pipeline_test.py python/tests/orchestrator_test.py` — 63 → 63 (+1 new test) passed.
+  - `.venv/bin/python python/tests/test_placement_check.py` — 41; `test_placement_geometry.py` — 32; `test_build_controller.py` — 30; `test_latest_workers.py` — 25.
+  - `cd web && npx vitest run src/` — 42 files, 563 passed (no frontend change; NO_MEMORY copy unchanged).
+- Commit hash: `70f2e17` (`feat(supervision): scope placement memory by mode and board epoch`) — code + tests + docs + audit checkbox.
+- Unresolved issues: none for item 8. The `@0 BOOT` hook is the only in-process epoch trigger wired today; a web reconnect/recovery route (`recover_after_reset`) does not exist yet and, per Phase 0, its link/epoch boundary is item 4's. `note_mode`'s `board_epoch` default of `0` is only for the single-arg legacy signature; `step` always passes the real epoch. Hardware/camera unverified locally as always.
+- Whether merged: committed directly to `main`.
+- Next action: begin item 4 — Pi-side exact compensated-motion reachability/clamp preflight.
 
 ## Phase 1 — item 7: gap-history reset and decay semantics
 
