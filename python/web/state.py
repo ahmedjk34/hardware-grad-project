@@ -193,6 +193,17 @@ def _neighbour_stack_above_0(top_levels: dict, cell) -> bool:
                for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)))
 
 
+def _cell_occupied(cell, occupied, top_levels) -> bool:
+    """Is ``cell`` carrying anything — a live detection or a ledger placement.
+
+    ``occupied`` is the set of detected cells this frame; ``top_levels`` is the
+    ledger's expected top level per cell (``-1`` / absent when empty). An
+    off-grid ``cell`` is simply absent from both, so this is safe to call for
+    any 3x3 offset around an edge or corner pick cell.
+    """
+    return cell in occupied or top_levels.get(cell, -1) >= 0
+
+
 def _drift_neighbour(cell, centre_cm, observed_cm):
     """The orthogonal neighbour a displaced block has slid toward.
 
@@ -319,10 +330,21 @@ def assess_frame_correction(*, ledger, workspace, observation, state: str,
         pick_is_top = top_levels.get(where_cell, -1) <= 0
 
     drift_neighbour_occupied = False
+    neighbourhood = None
     if map_pick_centre_cm is not None:
         drift_cell = _drift_neighbour(where_cell, map_pick_centre_cm, observed_cm)
-        drift_neighbour_occupied = (drift_cell in occupied
-                                    or top_levels.get(drift_cell, -1) >= 0)
+        drift_neighbour_occupied = _cell_occupied(drift_cell, occupied, top_levels)
+        # The full 3x3 the descent-corridor sweep needs (item 5): a genuine
+        # two-axis drift is refused, and for a one-axis drift the cross-axis
+        # neighbour and the corner past the primary neighbour are checked too,
+        # not just the one cell the block leaned toward. Off-grid offsets read
+        # as empty via `.get`, so an edge/corner pick cell is handled without
+        # an index error and with nothing phantom to foul.
+        wc, wr = where_cell
+        neighbourhood = {
+            (dc, dr): _cell_occupied((wc + dc, wr + dr), occupied, top_levels)
+            for dc in (-1, 0, 1) for dr in (-1, 0, 1)
+        }
 
     return _assess(
         verdict=name, mode=mode, plan_cell=plan_cell, plan_level=plan_level,
@@ -334,6 +356,7 @@ def assess_frame_correction(*, ledger, workspace, observation, state: str,
         pick_is_top_of_column=pick_is_top, grid=grid,
         measured_size_cm=measured_size_cm,
         drift_neighbour_occupied=drift_neighbour_occupied,
+        neighbourhood=neighbourhood,
         localization_sigma_cm=loc_sigma_cm,
         localization_residual_cm=loc_residual_cm,
         track_samples=track_samples, angle_sigma_deg=angle_sigma_deg,

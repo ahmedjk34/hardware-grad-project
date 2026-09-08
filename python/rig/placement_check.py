@@ -46,12 +46,16 @@ Narrow on purpose (the audit)
    checked whether the neighbour was even there. In its place, per
    :mod:`rig.placement_geometry`: a **consistency** check (one axis-aligned
    block, one displacement off — not two blocks, not reaching past a neighbour,
-   not rotated) and a **descent-corridor** check (if the cell the block drifted
-   toward is occupied, the still-open part of that gap must clear the jaw). A
-   block displaced far along an axis whose neighbour is empty is now
-   correctable. :data:`SIZE_TOLERANCE_CM` and :data:`JAW_CLEARANCE_CM` are
-   **provisional** — Stage 15 Stage B (jaw capture tolerance, placement
-   repeatability). Named here so a measurement changes one line.
+   not rotated) and a **descent-corridor** check
+   (:func:`rig.placement_geometry.neighbourhood_clear`): the drift must be
+   along ONE axis (a component over :data:`DIAGONAL_AXIS_TOLERANCE_CM` on both
+   axes is a diagonal, refused while :data:`DIAGONAL_CORRECTION_SUPPORTED` is
+   False — audit §1 P0), and then the primary neighbour, the cross-axis
+   neighbour and the corner cell between them must all clear the jaw. A block
+   displaced far along an axis whose neighbours are empty is still correctable.
+   :data:`SIZE_TOLERANCE_CM` and :data:`JAW_CLEARANCE_CM` are **provisional** —
+   Stage 15 Stage B (jaw capture tolerance, placement repeatability). Named
+   here so a measurement changes one line.
 4. **One stable, block-consistent track.** ``assess_frame_correction`` passes a
    :class:`rig.supervisor.TrackEvidence` fused over the coherent quiet window
    (audit items 6 + 9). With ``require_track`` the correction is refused unless
@@ -81,7 +85,7 @@ from dataclasses import dataclass
 import math
 
 from rig.placement_geometry import (
-    axis_coverage, consistency, corridor_clear, drift_axis,
+    axis_coverage, consistency, drift_axis, neighbourhood_clear,
 )
 from rig.motion_preflight import preflight_correction
 
@@ -98,6 +102,22 @@ SIZE_TOLERANCE_CM = 0.8
 #: The clear gap a descending jaw needs beside a block when the neighbour cell
 #: it drifted toward is occupied. PROVISIONAL — Stage 15 Stage B.
 JAW_CLEARANCE_CM = 0.4
+
+#: Below this, a displacement component on an axis is measurement noise, not a
+#: direction the block slid — the workspace map's own flattening residual is
+#: ~0.27 cm and this is deliberately the correction floor (:data:`CORRECT_BAND_MIN_CM`):
+#: a cross-axis component the correction itself would not bother to fix is not a
+#: second drift axis. A drift over this on BOTH axes is diagonal and is refused
+#: while :data:`DIAGONAL_CORRECTION_SUPPORTED` is False. PROVISIONAL — Stage 15 Stage B.
+DIAGONAL_AXIS_TOLERANCE_CM = 0.5
+
+#: Has the swept jaw envelope for a two-axis (diagonal) descent been
+#: bench-measured (audit §7.5 ``JAW_CLEARANCE_CM``)? While this is False every
+#: genuine two-axis drift is refused outright rather than modelled — the
+#: single-corridor geometry cannot describe a block that has closed on two
+#: neighbours and the corner between them at once. Flip to True ONLY with the
+#: measurement in hand and ``neighbourhood_clear``'s two-axis branch validated.
+DIAGONAL_CORRECTION_SUPPORTED = False
 
 #: A block more than this many degrees off the grid axis cannot be gripped by
 #: grid-aligned jaws: a 20 deg rotation presents a ~4 cm face to a 2.2 cm jaw
@@ -225,6 +245,8 @@ def assess(*, verdict: str, mode: str,
            pick_is_top_of_column: bool, grid=None,
            measured_size_cm: tuple[float, float] | None = None,
            drift_neighbour_occupied: bool = False,
+           neighbourhood: dict | None = None,
+           diagonal_supported: bool = DIAGONAL_CORRECTION_SUPPORTED,
            tool_offset_cm: tuple[float, float] = (0.0, 0.0),
            localization_sigma_cm: float | None = None,
            localization_residual_cm: float | None = None,
@@ -246,7 +268,17 @@ def assess(*, verdict: str, mode: str,
     check falls back to the nominal block when it is None.
     ``drift_neighbour_occupied`` says whether the cell the block slid toward
     carries anything; an empty neighbour is not a corridor hazard at any
-    displacement.
+    displacement. ``neighbourhood`` is the fuller picture the production caller
+    passes: ``{(dcol, drow): occupied}`` over the 3×3 of cells around
+    ``where_cell``. With it, a DISPLACED correction is put through
+    :func:`rig.placement_geometry.neighbourhood_clear` — the primary corridor,
+    the cross-axis neighbour, AND the corner cell between them — and a drift
+    that carries more than :data:`DIAGONAL_AXIS_TOLERANCE_CM` on BOTH axes is
+    refused outright while ``diagonal_supported`` is False (audit §1 P0: no
+    unmeasured diagonal jaw approach). Without ``neighbourhood`` (a bare unit
+    test) only the ``drift_neighbour_occupied`` corridor is checked and the
+    two-axis refusal still applies, but ``diagonal_supported`` is forced False —
+    the corner/cross sweep needs authoritative occupancy and is never inferred.
 
     ``reason`` is always a sentence: with a :class:`Correction` it says the
     block can be returned and how far it is off; with ``None`` it says exactly
@@ -337,6 +369,22 @@ def assess(*, verdict: str, mode: str,
     if judge_band(magnitude) == "IGNORE":
         return _reject(f"the block is only {magnitude:.2f} cm off its cell — below "
                        f"the {CORRECT_BAND_MIN_CM:g} cm floor, not worth disturbing")
+
+    # Diagonal drift (item 5 / audit §1 P0): a component over
+    # DIAGONAL_AXIS_TOLERANCE_CM on BOTH axes has closed on two neighbours and
+    # the corner between them at once — the single-corridor model cannot
+    # describe it and its jaw envelope is unmeasured. Refused before any grid
+    # geometry, so a degenerate no-map path cannot slip a diagonal through.
+    # `neighbourhood_clear` re-checks this below with the full 3x3 in hand.
+    effective_diag = diagonal_supported and neighbourhood is not None
+    if (not effective_diag
+            and abs(dx) > DIAGONAL_AXIS_TOLERANCE_CM
+            and abs(dy) > DIAGONAL_AXIS_TOLERANCE_CM):
+        return _reject(
+            f"the block has drifted {dx:+.2f} cm X / {dy:+.2f} cm Y — on both "
+            f"axes at once; diagonal correction is not supported until its jaw "
+            f"clearance is measured. Clear it by hand")
+
     if grid is not None:
         cov_x = axis_coverage(observed_centre=observed_cm[0],
                               planned_centre=map_pick_centre_cm[0],
@@ -355,14 +403,28 @@ def assess(*, verdict: str, mode: str,
             angle_tolerance_deg=ANGLE_TOLERANCE_DEG)
         if not verdict_geom.ok:
             return _reject(verdict_geom.reason)
-        axis = drift_axis(cov_x, cov_y)
-        cov = cov_x if axis == "x" else cov_y
-        gap_len = grid.gap_x_cm if axis == "x" else grid.gap_y_cm
-        corridor_ok, corridor_reason = corridor_clear(
-            cov, neighbour_occupied=drift_neighbour_occupied, gap_len=gap_len,
-            jaw_clearance_cm=JAW_CLEARANCE_CM)
-        if not corridor_ok:
-            return _reject(corridor_reason)
+
+        # Descent-corridor clearance. With a full `neighbourhood` the primary
+        # corridor, the cross-axis neighbour AND the corner between them are all
+        # swept; without one, only the toward-neighbour corridor is known and
+        # the corner/cross sweep must not be inferred (`effective_diag` is then
+        # already False from the diagonal pre-check above).
+        if neighbourhood is not None:
+            occ_map = {k: bool(v) for k, v in neighbourhood.items()}
+        else:
+            a = drift_axis(cov_x, cov_y)
+            s = 1 if (cov_x if a == "x" else cov_y).direction >= 0 else -1
+            toward = (s, 0) if a == "x" else (0, s)
+            occ_map = {toward: bool(drift_neighbour_occupied)}
+        clearance = neighbourhood_clear(
+            cov_x=cov_x, cov_y=cov_y,
+            gap_x_cm=grid.gap_x_cm, gap_y_cm=grid.gap_y_cm,
+            jaw_clearance_cm=JAW_CLEARANCE_CM,
+            axis_tolerance_cm=DIAGONAL_AXIS_TOLERANCE_CM,
+            occupied=lambda dc, dr: occ_map.get((dc, dr), False),
+            diagonal_supported=effective_diag)
+        if not clearance.ok:
+            return _reject(clearance.reason)
     correction = Correction(
         verdict="DISPLACED", pick_cell=(int(plan_cell[0]), int(plan_cell[1])),
         pick_level=int(plan_level), place_cell=(int(plan_cell[0]), int(plan_cell[1])),

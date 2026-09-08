@@ -199,7 +199,9 @@ and gaps are axis-aligned strips), so each question is one axis at a time.
 | --- | --- |
 | `axis_coverage()` | splits a block's extent on one axis into the part over its planned footprint / the gap / the neighbour it drifted toward / **`beyond`** (past that neighbour). `beyond ≈ 0` for a real single-cell displacement; it grows once the block and the cell are more than a pitch apart. |
 | `consistency()` | is this one axis-aligned block, one displacement off — not two touching blocks (`measured_size` off nominal), not reaching past a neighbour (`beyond`), not rotated. |
-| `corridor_clear()` | on the drift axis only: is there room to lower a jaw between the block and the cell it slid toward — nothing if that neighbour is empty; `gap − cov.gap ≥ JAW_CLEARANCE_CM` if it is occupied. |
+| `drift_axes()` | which machine axes carry a displacement over `DIAGONAL_AXIS_TOLERANCE_CM` (0.5 cm, the map's own residual is ~0.27). One axis = a correctable slide; **two axes = a diagonal**, which `neighbourhood_clear()` refuses until its jaw envelope is measured; zero = within noise of the cell. |
+| `corridor_clear()` | on one axis: is there room to lower a jaw between the block and the cell it slid toward — nothing if that neighbour is empty; `gap − cov.gap ≥ JAW_CLEARANCE_CM` if it is occupied. |
+| `neighbourhood_clear()` | the whole descent decision (item 5 / audit §1 P0): refuse a two-axis drift outright, else sweep the primary neighbour (`corridor_clear`), the cross-axis neighbour **and** the corner cell between them against an authoritative 3×3 occupancy. Off-grid offsets read empty, so an edge/corner pick cell is safe. |
 | `residual_cm()` | `hypot` of the observed-minus-planned centre offset — the one "how far off" number. |
 
 ### `Observation` now carries the block's own geometry
@@ -219,13 +221,16 @@ detection's own box corners), adding three parallel fields:
 `rig/placement_check.assess()` for a `DISPLACED` verdict: the `0.5 cm` **floor**
 stays (below it a pick-lift-place adds more error than it removes); the `1.2 cm`
 **ceiling is gone**. `CORRECT_BAND_MAX_CM` and `judge_band`'s `REFUSE` branch
-were deleted. In their place: `consistency()` + `corridor_clear()`, fed the
-block's `own_size` and the drifted-toward neighbour's ledger occupancy. A block
-displaced far along an axis whose neighbour is **empty** — the whole of vertical
-Y in a normal build — is now correctable. `MOVED` is unchanged
-(`MOVED_PICK_SANITY_CM`). Provisional constants: `SIZE_TOLERANCE_CM = 0.8`,
-`JAW_CLEARANCE_CM = 0.4` — Stage 15 Stage B. Full detail in
-[correction-action.md](correction-action.md), 2026-09-07 note.
+were deleted. In their place: `consistency()` + `neighbourhood_clear()`, fed the
+block's `own_size` and the full 3×3 of ledger/detection occupancy around the
+pick cell. A block displaced far along **one** axis whose neighbours are
+**empty** — the whole of vertical Y in a normal build — is still correctable; a
+block that drifted on **both** axes at once is refused as an unmeasured diagonal
+(item 5). `MOVED` is unchanged (`MOVED_PICK_SANITY_CM`). Provisional constants:
+`SIZE_TOLERANCE_CM = 0.8`, `JAW_CLEARANCE_CM = 0.4`,
+`DIAGONAL_AXIS_TOLERANCE_CM = 0.5`, `DIAGONAL_CORRECTION_SUPPORTED = False` —
+Stage 15 Stage B. Full detail in
+[correction-action.md](correction-action.md), 2026-09-07 and 2026-09-08 notes.
 
 ### `step()` rejects a `DISPLACED` pairing the geometry cannot support
 
@@ -282,6 +287,39 @@ or an unstable track all read as a clean single-block pick.
   its adjacent neighbour cell), `SWITCH_NEIGHBOUR_CM = 3.0`,
   `TRACK_CENTRE_SIGMA_MAX_CM = 0.6`, `TRACK_ANGLE_SIGMA_MAX_DEG = 4.0`,
   `TRACK_SIZE_SIGMA_MAX_CM = 0.8`.
+
+### 2c-ter. 2026-09-08 — refuse diagonal correction; sweep both neighbours + the corner (audit item 5)
+
+The `DISPLACED` descent check took `drift_axis()` — the *larger* of the two
+displacement components — and put only that one neighbour's corridor through
+`corridor_clear()`. A block shoved **diagonally** into a corner gap narrows two
+corridors and the corner between them at once; if the dominant axis' neighbour
+happened to be empty, the correction was approved (audit §1 P0).
+
+- **`drift_axes()`** (plural) reports *every* axis carrying more than
+  `DIAGONAL_AXIS_TOLERANCE_CM = 0.5` cm — deliberately the correction floor, and
+  well above the map's ~0.27 cm flattening residual, so a sub-floor cross
+  component is noise, not a second drift direction.
+- **`neighbourhood_clear()`** replaces the single `corridor_clear()` call.
+  A drift on **both** axes is refused outright — `DIAGONAL_CORRECTION_SUPPORTED
+  = False` until the swept jaw envelope for a two-axis approach is bench-measured
+  (audit §7.5 `JAW_CLEARANCE_CM`). A one-axis drift is swept against an
+  **authoritative** 3×3 occupancy: the primary neighbour (`corridor_clear`), the
+  cross-axis neighbour, **and** the corner cell past the primary neighbour (a
+  hazard only when the block has closed *both* adjacent gaps to within a jaw
+  width). Off-grid offsets read empty, so an edge or corner pick cell is handled
+  without an index error and with nothing phantom to foul.
+- **`assess()`** refuses a two-axis drift *before* any grid geometry (needs only
+  the displacement), so a degenerate no-map path cannot slip one through; the
+  reason quotes the per-axis drift and says "clear it by hand". `web/state.py`
+  builds and passes the full 3×3 (`_cell_occupied` over detections + ledger
+  top-levels). The `diagonal_supported` flag is forced off whenever the caller
+  cannot supply that 3×3 — the corner/cross sweep is never run on inferred
+  occupancy.
+- `MOVED` is untouched: its pick target is a real lattice cell whose gaps are
+  clear by definition, not a gap between two blocks.
+- **No firmware / `config/rig.json` change**; `DIAGONAL_AXIS_TOLERANCE_CM` and
+  `DIAGONAL_CORRECTION_SUPPORTED` are Pi-side supervision policy with no partner.
 
 ### The `include_rejected` intake, and its open edge
 

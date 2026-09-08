@@ -49,6 +49,32 @@ check — see the update note below.
 > unchanged (still `MOVED_PICK_SANITY_CM`). `SIZE_TOLERANCE_CM = 0.8` and
 > `JAW_CLEARANCE_CM = 0.4` are provisional, Stage 15 Stage B.
 
+> **Update — 2026-09-08: diagonal correction is refused; the corridor check
+> sweeps both neighbours and the corner (audit item 5).** The 2026-09-07
+> `corridor_clear` took `drift_axis()` — the *larger* displacement component —
+> and checked only that one neighbour. A block shoved into a corner gap drifts
+> on both axes and closes two corridors plus the corner between them at once;
+> if the dominant axis' neighbour was empty the correction was approved anyway
+> (audit §1 P0). Now, in `rig/placement_geometry.py`:
+>
+> * **`drift_axes`** (plural) — every axis carrying more than
+>   `DIAGONAL_AXIS_TOLERANCE_CM = 0.5` cm (the correction floor; the map's own
+>   residual is ~0.27 cm, so anything under the floor is noise).
+> * **`neighbourhood_clear`** — a two-axis drift is refused outright while
+>   `DIAGONAL_CORRECTION_SUPPORTED = False` (the swept jaw envelope for a
+>   diagonal approach is unmeasured — audit §7.5 `JAW_CLEARANCE_CM`). A
+>   one-axis drift is swept against an **authoritative** 3×3 occupancy: the
+>   primary neighbour, the cross-axis neighbour, **and** the corner cell past
+>   the primary neighbour. Off-grid offsets read empty, so an edge/corner pick
+>   cell is safe.
+>
+> `assess()` refuses the diagonal before any grid geometry, quotes the per-axis
+> drift, and says "clear it by hand"; `web/state.py` supplies the full 3×3 from
+> detections + ledger. `diagonal_supported` is forced off whenever that 3×3 is
+> unavailable — the sweep never runs on inferred occupancy. `MOVED` is
+> untouched (its pick is a real lattice cell). `DIAGONAL_AXIS_TOLERANCE_CM` and
+> `DIAGONAL_CORRECTION_SUPPORTED` are Pi-side policy, no firmware partner.
+
 **Difficulty: 4 / 5**, unevenly distributed — most of the code is easy, nearly
 all of the risk sits in two rows.
 

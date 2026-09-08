@@ -18,7 +18,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from rig.grid import MachineGrid  # noqa: E402
 from rig.placement_check import (  # noqa: E402
-    ANGLE_TOLERANCE_DEG, CORRECT_BAND_MIN_CM, JAW_CLEARANCE_CM, SIZE_TOLERANCE_CM,
+    ANGLE_TOLERANCE_DEG, CORRECT_BAND_MIN_CM, DIAGONAL_AXIS_TOLERANCE_CM,
+    DIAGONAL_CORRECTION_SUPPORTED, JAW_CLEARANCE_CM, SIZE_TOLERANCE_CM,
     Correction, assess, axis_deviation_deg, correction_offset, judge_band,
 )
 
@@ -176,12 +177,105 @@ check("MOVED with the destination occupied -> refused",
       corr is None and "not clear" in reason)
 
 
+# --- item 5: refuse diagonal correction; both-neighbour + corner clearance -- #
+
+def displaced_xy(*, dx_cm, dy_cm, neighbourhood=None,
+                 diagonal_supported=DIAGONAL_CORRECTION_SUPPORTED,
+                 angle=0.0, measured_cm=None):
+    # [2,1] centre in vertical is (7.6, 7.6) cm.
+    return assess(
+        verdict="DISPLACED", mode="vertical", plan_cell=(2, 1), plan_level=0,
+        where_cell=(2, 1), observed_cm=(7.6 + dx_cm, 7.6 + dy_cm),
+        map_pick_centre_cm=(7.6, 7.6), angle_deg=angle,
+        plan_cell_clear=True, taller_neighbour_pick=False,
+        taller_neighbour_place=False, pick_is_top_of_column=True, grid=GRID,
+        measured_size_cm=measured_cm, neighbourhood=neighbourhood,
+        diagonal_supported=diagonal_supported)
+
+
+def full_3x3(*occupied):
+    s = set(occupied)
+    return {(dc, dr): (dc, dr) in s for dc in (-1, 0, 1) for dr in (-1, 0, 1)}
+
+
+# A request that drifts on BOTH axes is refused outright — the ceiling was never
+# measured for a diagonal approach (audit §1 P0).
+corr, reason = displaced_xy(dx_cm=0.9, dy_cm=0.9)
+check("a diagonal DISPLACED request -> refused, no Correction", corr is None, reason)
+check("  ... the reason names both axes and tells the operator to clear it by hand",
+      "both axes" in reason and "by hand" in reason.lower(), reason)
+check("  ... and it quotes the actual per-axis drift",
+      "+0.90 cm X" in reason and "+0.90 cm Y" in reason, reason)
+
+# The abs(dx)==abs(dy) tie is still a diagonal, not a coin toss onto one axis.
+corr, reason = displaced_xy(dx_cm=-0.8, dy_cm=0.8)
+check("a 45-degree tie drift is refused as diagonal", corr is None and "both axes" in reason,
+      reason)
+
+# A cross-axis component within the noise tolerance is NOT a diagonal — the
+# axis-aligned correction is preserved.
+corr, reason = displaced_xy(dx_cm=0.9, dy_cm=0.4)
+check("an axis-aligned drift with sub-tolerance cross noise -> still corrected",
+      isinstance(corr, Correction), reason)
+check("  ... the offset carried is the real vector, cross component and all",
+      corr is not None and abs(corr.dx_cm - 0.9) < 1e-9 and abs(corr.dy_cm - 0.4) < 1e-9)
+
+corr, reason = displaced_xy(dx_cm=0.9, dy_cm=DIAGONAL_AXIS_TOLERANCE_CM)
+check("a cross component exactly at the tolerance is still axis-aligned (strict >)",
+      isinstance(corr, Correction), reason)
+corr, reason = displaced_xy(dx_cm=0.9, dy_cm=DIAGONAL_AXIS_TOLERANCE_CM + 0.05)
+check("one hair over the tolerance on the second axis -> diagonal, refused",
+      corr is None and "both axes" in reason, reason)
+
+# Occupancy cannot rescue an unsupported diagonal, and the diagonal refusal
+# wins over the corner refusal (it is checked first, before any geometry).
+corr, reason = displaced_xy(dx_cm=0.9, dy_cm=0.9, neighbourhood=full_3x3((1, 1)))
+check("a diagonal with an occupied corner -> still refused AS a diagonal",
+      corr is None and "both axes" in reason and "diagonally past" not in reason, reason)
+
+# "Enable the flag but pass no neighbourhood" must not enable diagonals — the
+# corner/cross sweep has no authoritative occupancy to work from.
+corr, reason = displaced_xy(dx_cm=0.9, dy_cm=0.9, diagonal_supported=True,
+                            neighbourhood=None)
+check("diagonal_supported without a neighbourhood -> diagonal still refused (fail-safe)",
+      corr is None and "both axes" in reason, reason)
+
+# With the (future) flag AND a full neighbourhood: a clear diagonal is allowed,
+# an occupied corner past a doubly-closed gap is refused, an occupied primary
+# neighbour in a closed gap is refused. This is the both-neighbour + corner
+# sweep running end to end.
+corr, reason = displaced_xy(dx_cm=0.9, dy_cm=0.9, diagonal_supported=True,
+                            neighbourhood=full_3x3())
+check("(supported) a diagonal into a clear neighbourhood -> a Correction",
+      isinstance(corr, Correction), reason)
+corr, reason = displaced_xy(dx_cm=1.3, dy_cm=1.3, diagonal_supported=True,
+                            neighbourhood=full_3x3((1, 1)))
+check("(supported) a diagonal with both gaps closed onto an occupied corner -> refused",
+      corr is None and "diagonally past" in reason, reason)
+corr, reason = displaced_xy(dx_cm=1.5, dy_cm=0.9, diagonal_supported=True,
+                            neighbourhood=full_3x3((1, 0)))
+check("(supported) a diagonal into an occupied primary neighbour's closed gap -> refused",
+      corr is None and "no room for the jaw" in reason, reason)
+
+# The one-axis path through the full-neighbourhood plumbing still works both ways.
+corr, reason = displaced_xy(dx_cm=1.9, dy_cm=0.0, neighbourhood=full_3x3())
+check("a 1.9 cm axis-aligned drift, empty neighbourhood -> corrected (via the 3x3 path)",
+      isinstance(corr, Correction), reason)
+corr, reason = displaced_xy(dx_cm=1.9, dy_cm=0.0, neighbourhood=full_3x3((1, 0)))
+check("a 1.9 cm axis-aligned drift toward an OCCUPIED neighbour -> refused, 'by hand'",
+      corr is None and "by hand" in reason, reason)
+
+
 # --- the gate constants are provisional, flagged as such ------------------- #
 
 check("the correction floor is the provisional Stage 15 constant",
       CORRECT_BAND_MIN_CM == 0.5)
 check("the geometry-gate tolerances are provisional Stage 15 B constants",
       SIZE_TOLERANCE_CM == 0.8 and JAW_CLEARANCE_CM == 0.4)
+check("the diagonal-axis tolerance is the provisional correction floor",
+      DIAGONAL_AXIS_TOLERANCE_CM == 0.5)
+check("diagonal correction ships DISABLED until its jaw clearance is measured",
+      DIAGONAL_CORRECTION_SUPPORTED is False)
 
 
 print(f"\n{len(PASSED)} passed, {len(FAILED)} failed")

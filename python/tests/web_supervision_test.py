@@ -349,6 +349,26 @@ def test_a_rotated_DISPLACED_block_is_refused_with_a_straighten_it_reason():
     assert supervision_model(sv).correctable is False
 
 
+def test_a_DISPLACED_block_that_drifted_on_both_axes_is_refused_as_a_diagonal():
+    """A block shoved into the corner gap between [2,1], [3,1], [2,2] and [3,2]
+
+    has closed on two neighbours and the corner between them at once. The old
+    code collapsed that to one axis and checked only that neighbour's corridor
+    (audit §1 P0). Item 5: any drift over the tolerance on BOTH axes is refused
+    outright until a diagonal jaw approach is bench-measured.
+    """
+    from web.state import supervision_model
+    app = fake_app()  # ledger [1,1] and [2,1]; [3,1] [2,2] [3,2] all empty
+    diag = at_gap((2, 1), (3, 2))  # the shared corner: off in +X AND +Y
+    seen = drive(app, [frame_at(1, cells=((1, 1),), extra=(diag,)),
+                       frame_at(2, cells=((1, 1),), extra=(diag,))])
+    sv = seen[-1]
+    assert sv.verdict.verdict == "DISPLACED"
+    assert sv.correction is None
+    assert "both axes" in sv.correction_reason and "by hand" in sv.correction_reason.lower()
+    assert supervision_model(sv).correctable is False
+
+
 # --- items 6 + 9: the correction rests on one coherent, stable track ------ #
 #
 # `_supervise` looks the offending block's fused quiet-window track up in the

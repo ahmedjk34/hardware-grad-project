@@ -19,8 +19,9 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from rig.placement_geometry import (  # noqa: E402
-    AxisCoverage, Consistency, axis_coverage, consistency, displacement_cm,
-    drift_axis, overlap_1d, residual_cm, span,
+    AxisCoverage, Consistency, NeighbourhoodClearance, axis_coverage,
+    consistency, displacement_cm, drift_axis, drift_axes, neighbourhood_clear,
+    overlap_1d, residual_cm, span,
 )
 
 PASSED, FAILED = [], []
@@ -140,6 +141,131 @@ rotated = consistency(cov_x=cx, cov_y=cov, measured_size_cm=(6.0, 2.2),
                       size_tolerance_cm=0.6, angle_tolerance_deg=6.0)
 check("a rotated block is refused", not rotated.ok, rotated.reason)
 check("  ... and the angle-off is reported", near(rotated.angle_off_deg, 18.0))
+
+
+# --- item 5: drift_axes — how many machine axes carry a real displacement ---- #
+
+TOL = 0.5  # DIAGONAL_AXIS_TOLERANCE_CM
+
+
+def cx_(disp):
+    return axis_coverage(observed_centre=10.0 + disp, planned_centre=10.0,
+                         block_len=2.2, gap_len=1.6, pitch=3.8)
+
+
+def cy_(disp):
+    return axis_coverage(observed_centre=10.0 + disp, planned_centre=10.0,
+                         block_len=6.0, gap_len=1.6, pitch=7.6)
+
+
+check("drift_axes: a pure-X drift names only x",
+      drift_axes(cx_(0.9), cy_(0.0), axis_tolerance_cm=TOL) == ("x",))
+check("drift_axes: a pure-Y drift names only y",
+      drift_axes(cx_(0.0), cy_(1.5), axis_tolerance_cm=TOL) == ("y",))
+check("drift_axes: a cross component within tolerance is not a second axis",
+      drift_axes(cx_(0.9), cy_(0.4), axis_tolerance_cm=TOL) == ("x",))
+check("drift_axes: a component exactly at the tolerance is still noise (strict >)",
+      drift_axes(cx_(0.9), cy_(0.5), axis_tolerance_cm=TOL) == ("x",))
+check("drift_axes: a real two-axis drift names both, larger first",
+      drift_axes(cx_(1.2), cy_(0.9), axis_tolerance_cm=TOL) == ("x", "y"))
+check("drift_axes: the larger axis leads even when it is y",
+      drift_axes(cx_(0.9), cy_(1.5), axis_tolerance_cm=TOL) == ("y", "x"))
+check("drift_axes: a tie above tolerance still reports both",
+      drift_axes(cx_(0.9), cy_(0.9), axis_tolerance_cm=TOL) == ("x", "y"))
+check("drift_axes: within noise on both axes is no drift at all",
+      drift_axes(cx_(0.3), cy_(0.3), axis_tolerance_cm=TOL) == ())
+
+
+# --- item 5: neighbourhood_clear — both neighbours + the corner -------------- #
+
+def occ(*cells):
+    s = set(cells)
+    return lambda dc, dr: (dc, dr) in s
+
+
+# A genuine two-axis drift is refused before any occupancy is consulted.
+nc = neighbourhood_clear(cov_x=cx_(1.2), cov_y=cy_(1.2), gap_x_cm=1.6, gap_y_cm=1.6,
+                         jaw_clearance_cm=0.4, axis_tolerance_cm=TOL, occupied=occ())
+check("neighbourhood_clear: an unsupported diagonal is refused", not nc.ok, nc.reason)
+check("  ... flagged .diagonal, cites 'diagonal', tells the operator 'by hand'",
+      nc.diagonal and "diagonal" in nc.reason and "by hand" in nc.reason)
+check("  ... and nothing was inspected — occupancy never mattered", nc.checked == ())
+
+# ... and it stays refused-as-diagonal even with the corner cell occupied:
+# occupancy cannot turn an unmeasured diagonal into a measured one.
+nc = neighbourhood_clear(cov_x=cx_(1.2), cov_y=cy_(1.2), gap_x_cm=1.6, gap_y_cm=1.6,
+                         jaw_clearance_cm=0.4, axis_tolerance_cm=TOL,
+                         occupied=occ((1, 1), (1, 0), (0, 1)))
+check("neighbourhood_clear: a diagonal with a full corner is STILL 'diagonal', not 'past'",
+      not nc.ok and nc.diagonal and "past" not in nc.reason, nc.reason)
+
+# A one-axis drift with an empty neighbourhood clears, and the sweep really did
+# look at both cross sides and both corners (cross axis centred -> both signs).
+nc = neighbourhood_clear(cov_x=cx_(1.9), cov_y=cy_(0.0), gap_x_cm=1.6, gap_y_cm=1.6,
+                         jaw_clearance_cm=0.4, axis_tolerance_cm=TOL, occupied=occ())
+check("neighbourhood_clear: a one-axis drift into empty space is clear",
+      nc.ok and not nc.diagonal, nc.reason)
+check("  ... the sweep inspected the primary neighbour, both cross cells, both corners",
+      set(nc.checked) == {(1, 0), (0, 1), (0, -1), (1, 1), (1, -1)})
+
+# The primary neighbour it slid toward, occupied and within a jaw width -> no.
+nc = neighbourhood_clear(cov_x=cx_(1.5), cov_y=cy_(0.0), gap_x_cm=1.6, gap_y_cm=1.6,
+                         jaw_clearance_cm=0.4, axis_tolerance_cm=TOL,
+                         occupied=occ((1, 0)))
+check("neighbourhood_clear: a closed gap to an occupied primary neighbour -> refused",
+      not nc.ok and "no room for the jaw" in nc.reason, nc.reason)
+
+# Far enough that the block edge is inside the occupied neighbour's footprint.
+nc = neighbourhood_clear(cov_x=cx_(1.9), cov_y=cy_(0.0), gap_x_cm=1.6, gap_y_cm=1.6,
+                         jaw_clearance_cm=0.4, axis_tolerance_cm=TOL,
+                         occupied=occ((1, 0)))
+check("neighbourhood_clear: a block overlapping an occupied neighbour -> refused",
+      not nc.ok and "overlaps an occupied neighbour" in nc.reason, nc.reason)
+
+# The same primary neighbour occupied but the block only 0.9 cm off -> 0.7 cm of
+# gap still open, more than the 0.4 cm jaw -> allowed.
+nc = neighbourhood_clear(cov_x=cx_(0.9), cov_y=cy_(0.0), gap_x_cm=1.6, gap_y_cm=1.6,
+                         jaw_clearance_cm=0.4, axis_tolerance_cm=TOL,
+                         occupied=occ((1, 0)))
+check("neighbourhood_clear: 0.7 cm of open gap to an occupied neighbour is enough",
+      nc.ok, nc.reason)
+
+# Boundary / edge pick cell: the block drifts toward the grid edge, so every
+# offset the sweep asks about is off-grid and reads empty -> cleared, no error.
+nc = neighbourhood_clear(cov_x=cx_(-1.9), cov_y=cy_(0.0), gap_x_cm=1.6, gap_y_cm=1.6,
+                         jaw_clearance_cm=0.4, axis_tolerance_cm=TOL, occupied=occ())
+check("neighbourhood_clear: a drift toward an off-grid edge is handled, not an error",
+      nc.ok and (-1, 0) in nc.checked, nc.reason)
+
+# --- item 5: the corner sweep itself, exercised via the future diagonal path - #
+# `diagonal_supported=True` is reserved for when the jaw envelope is measured;
+# these prove the corner / cross-neighbour logic it will rely on is correct.
+
+DX = 1.3  # closes the X gap to 0.3 cm ( < 0.4 jaw )
+DY = 1.3  # closes the Y gap to 0.3 cm
+
+nc = neighbourhood_clear(cov_x=cx_(DX), cov_y=cy_(DY), gap_x_cm=1.6, gap_y_cm=1.6,
+                         jaw_clearance_cm=0.4, axis_tolerance_cm=TOL,
+                         occupied=occ((1, 1)), diagonal_supported=True)
+check("neighbourhood_clear: (supported) both gaps closed + corner occupied -> refused",
+      not nc.ok and "diagonally past" in nc.reason, nc.reason)
+check("  ... the corner cell was in the inspected set", (1, 1) in nc.checked)
+
+nc = neighbourhood_clear(cov_x=cx_(DX), cov_y=cy_(DY), gap_x_cm=1.6, gap_y_cm=1.6,
+                         jaw_clearance_cm=0.4, axis_tolerance_cm=TOL,
+                         occupied=occ(), diagonal_supported=True)
+check("neighbourhood_clear: (supported) the SAME geometry with an empty corner -> clear",
+      nc.ok, nc.reason)
+
+nc = neighbourhood_clear(cov_x=cx_(DX), cov_y=cy_(DY), gap_x_cm=1.6, gap_y_cm=1.6,
+                         jaw_clearance_cm=0.4, axis_tolerance_cm=TOL,
+                         occupied=occ((0, 1)), diagonal_supported=True)
+check("neighbourhood_clear: (supported) a closed gap to an occupied CROSS neighbour -> refused",
+      not nc.ok and "other axis" in nc.reason, nc.reason)
+
+check("NeighbourhoodClearance is a frozen record",
+      isinstance(nc, NeighbourhoodClearance)
+      and getattr(NeighbourhoodClearance, "__dataclass_params__").frozen)
 
 
 print(f"\n{len(PASSED)} passed, {len(FAILED)} failed")
