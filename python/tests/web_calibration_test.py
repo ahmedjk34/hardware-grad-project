@@ -35,7 +35,14 @@ def test_four_corner_calibration_saves_and_changes_geometry(tmp_path):
                 started = await client.post("/api/calibration/start"); assert started.status_code == 200; assert started.json()["next"] == "holder home [0,0]"
                 for point in ((80, 60), (560, 90), (540, 420), (70, 400)):
                     response = await client.post("/api/calibration/corner", json={"x": point[0], "y": point[1], "img_w": 640, "img_h": 480}); assert response.status_code == 200
-                saved = await client.post("/api/calibration/save"); assert saved.status_code == 200; assert saved.json()["calibrated"] is True; assert path.exists(); assert saved.json()["geometry"]["grid"] != before["geometry"]["grid"]
+                saved = await client.post("/api/calibration/save"); assert saved.status_code == 200; assert saved.json()["calibrated"] is True; assert path.exists()
+                # Saving invalidates detections from the previous map.  The
+                # response may briefly have no geometry; only the next bound
+                # analysis result may expose the new grid/detection pair.
+                after = saved.json() if saved.json()["geometry"] is not None else await wait_live(client)
+                assert after["geometry"]["grid"] != before["geometry"]["grid"]
+                frame = app.state.latest_frame
+                assert frame.map_generation == app.state.pipeline.map_generation
     asyncio.run(scenario())
 
 def test_calibration_rejects_degenerate_running_and_stale_camera(tmp_path):

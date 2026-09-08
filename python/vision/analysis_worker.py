@@ -10,6 +10,8 @@ import time
 @dataclass(frozen=True)
 class AnalysisSnapshot:
     detections: tuple
+    source: object | None
+    context: object | None
     source_sequence: int
     map_generation: int
     submitted_at: float | None
@@ -36,6 +38,7 @@ class AnalysisSnapshot:
 @dataclass(frozen=True)
 class _Request:
     frame: object
+    context: object | None
     sequence: int
     generation: int
     submitted_at: float
@@ -51,12 +54,14 @@ class AnalysisWorker:
     live preview.
     """
 
-    def __init__(self, analyzer, *, max_hz=10.0, name="camera-analysis"):
+    def __init__(self, analyzer, *, max_hz=10.0, name="camera-analysis",
+                 consume_each=False):
         if max_hz <= 0:
             raise ValueError("max_hz must be positive")
         self._analyzer = analyzer
         self._interval = 1.0 / float(max_hz)
         self._name = name
+        self._consume_each = bool(consume_each)
         self._condition = threading.Condition()
         self._stop = False
         self._pending: _Request | None = None
@@ -64,11 +69,13 @@ class AnalysisWorker:
         self._completed_count = 0
         self._replaced_count = 0
         self._duplicate_count = 0
+        self._consumed_count = 0
+        self._unconsumed: AnalysisSnapshot | None = None
         self._newest_key = None
         self._last_completed_at = None
         self._rate_hz = 0.0
         self._result = AnalysisSnapshot(
-            (), 0, 0, None, None, 0.0, 0.0, None, 0, 0, 0)
+            (), None, None, 0, 0, None, None, 0.0, 0.0, None, 0, 0, 0)
 
     @property
     def running(self):
@@ -80,12 +87,22 @@ class AnalysisWorker:
         with self._condition:
             self._stop = False
             self._newest_key = None
+            # A restart must not make the previous run's last result appear
+            # consumable again.
+            self._consumed_count = self._completed_count
+            self._unconsumed = None
         self._thread = threading.Thread(target=self._run, name=self._name,
                                         daemon=True)
         self._thread.start()
 
-    def submit(self, frame, sequence, generation=0, **kwargs):
-        request = _Request(frame, int(sequence), int(generation),
+    def submit(self, frame, sequence, generation=0, *, context=None, **kwargs):
+        """Submit one immutable source image and its optional bound context.
+
+        ``context`` is deliberately not forwarded to the analyzer.  It travels
+        with the exact source object into the completed result so a consumer
+        can reconstruct provenance without looking up mutable current state.
+        """
+        request = _Request(frame, context, int(sequence), int(generation),
                            time.monotonic(), dict(kwargs))
         with self._condition:
             if self._stop:
@@ -106,16 +123,49 @@ class AnalysisWorker:
             result = self._result
             # Counts may advance after the most recent completed result.
             return AnalysisSnapshot(
-                result.detections, result.source_sequence,
+                result.detections, result.source, result.context,
+                result.source_sequence,
                 result.map_generation, result.submitted_at,
                 result.completed_at, result.duration_s, self._rate_hz, result.error,
                 self._completed_count, self._replaced_count,
                 self._duplicate_count)
 
+    def consume(self):
+        """Atomically take the newest completed result at most once.
+
+        With ``consume_each=True`` the worker holds one completed result and
+        waits for this call before analyzing its latest pending request.  That
+        makes every completion a one-item bounded handoff.  In the default
+        display-oriented mode, an older completion may still be superseded.
+        Either way, a returned result can never be returned here again.
+        ``snapshot`` remains non-consuming for diagnostics and display tools.
+        """
+        with self._condition:
+            if self._consume_each:
+                result = self._unconsumed
+                if result is None:
+                    return None
+                self._unconsumed = None
+                self._consumed_count = result.completed_count
+                self._condition.notify_all()
+                return result
+            result = self._result
+            if (result.completed_at is None
+                    or result.completed_count <= self._consumed_count):
+                return None
+            self._consumed_count = result.completed_count
+            return AnalysisSnapshot(
+                result.detections, result.source, result.context,
+                result.source_sequence, result.map_generation,
+                result.submitted_at, result.completed_at, result.duration_s,
+                self._rate_hz, result.error, self._completed_count,
+                self._replaced_count, self._duplicate_count)
+
     def stop(self, timeout=2.0):
         with self._condition:
             self._stop = True
             self._pending = None
+            self._unconsumed = None
             self._condition.notify_all()
         thread = self._thread
         if thread is not None:
@@ -126,7 +176,10 @@ class AnalysisWorker:
         last_started = 0.0
         while True:
             with self._condition:
-                while not self._stop and self._pending is None:
+                while (not self._stop
+                       and (self._pending is None
+                            or (self._consume_each
+                                and self._unconsumed is not None))):
                     self._condition.wait()
                 if self._stop:
                     return
@@ -165,7 +218,10 @@ class AnalysisWorker:
                 self._last_completed_at = completed
                 self._completed_count += 1
                 self._result = AnalysisSnapshot(
-                    detections, request.sequence, request.generation,
+                    detections, request.frame, request.context,
+                    request.sequence, request.generation,
                     request.submitted_at, completed, completed - started,
                     self._rate_hz, error, self._completed_count,
                     self._replaced_count, self._duplicate_count)
+                if self._consume_each:
+                    self._unconsumed = self._result

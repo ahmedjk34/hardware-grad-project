@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
-from dataclasses import replace
 
 from camera.gridded_camera_feed import paper_workspace_map
 from rig.block_calibration import (BlockCalibrationAborted,
@@ -68,7 +67,10 @@ async def save(http: Request):
         app.state.pipeline.set_workspace(workspace)
     except (OSError, ValueError) as exc:
         raise HTTPException(400, str(exc)) from exc
-    app.state.latest_frame = replace(frame, workspace=workspace, calibrated=True)
+    # The old detections were analyzed under the old map generation.  Do not
+    # fabricate a frame by joining them to the new workspace; the pipeline will
+    # publish the next coherently analyzed source image.
+    app.state.latest_frame = None
     app.state.calibration_points = []; app.state.controller.clear_selection(); app.state.signal_change()
     return build_state(app)
 
@@ -82,7 +84,7 @@ async def paper(request: PaperRequest, http: Request):
         app.state.pipeline.set_workspace(workspace)
     except (ColorGridError, OSError, ValueError) as exc:
         raise HTTPException(400, str(exc)) from exc
-    app.state.latest_frame = replace(frame, workspace=workspace, calibrated=True)
+    app.state.latest_frame = None
     app.state.controller.clear_selection(); app.state.signal_change(); return build_state(app)
 
 
@@ -289,7 +291,7 @@ def block_save(http: Request):
         app.state.pipeline.set_workspace(workspace)
     except (ColorGridError, OSError, ValueError) as exc:
         raise HTTPException(400, str(exc)) from exc
-    app.state.latest_frame = replace(frame, workspace=workspace, calibrated=True)
+    app.state.latest_frame = None
     app.state.block_calibration = None
     app.state.controller.clear_selection()
     app.state.signal_change()
@@ -312,10 +314,9 @@ def reload_map(http: Request):
         workspace, rejection = app.state.pipeline.reload_workspace()
     except (RuntimeError, OSError, ValueError) as exc:
         raise HTTPException(400, str(exc)) from exc
-    frame = app.state.latest_frame
-    if workspace is not None and frame is not None:
-        app.state.latest_frame = replace(frame, workspace=workspace,
-                                         calibrated=True)
+    # Success or rejection changes the pipeline generation.  In either case
+    # the previous result is no longer current evidence.
+    app.state.latest_frame = None
     app.state.signal_change()
     if workspace is None:
         raise HTTPException(400, rejection or "no calibration on disk")

@@ -401,6 +401,10 @@ def build_state(app) -> StateModel:
     # new coordinates for even one state message.
     if frame is not None and frame.grid_mode != rig.grid.mode:
         frame = None
+    if (frame is not None
+            and getattr(frame, "map_generation", None)
+            != getattr(app.state.pipeline, "map_generation", None)):
+        frame = None
 
     if job.running:
         build_state = "RUNNING"

@@ -115,6 +115,7 @@ def fake_app(*, cells=((1, 1), (2, 1)), cell_phase="idle", locked=False,
                               settle_n=1, settle_m=1),
         supervision=None, supervision_signature=None,
         supervision_baseline=None, supervision_sequence=None,
+        supervision_result_id=None,
         pending_check=None, vision_verification=None,
         cell_phase=cell_phase,
         controller=SimpleNamespace(locked=locked),
@@ -371,6 +372,20 @@ def test_the_frame_after_a_latch_cannot_be_quiet_so_it_cannot_judge():
     assert resumed[0].state == "BUSY" and resumed[0].verdict is None
 
 
+def test_detections_from_an_old_map_generation_never_reach_supervision():
+    app = fake_app()
+    app.state.pipeline = SimpleNamespace(map_generation=8)
+    old = frame_at(1)
+    old.map_generation = 7
+
+    reading = drive(app, [old])[0]
+
+    assert reading.state == "BUSY"
+    assert "MAP CHANGED" in reading.reason
+    assert app.state.supervision_baseline is None
+    assert app.state.supervision_result_id is None
+
+
 # --- refusal 2: the same capture, handed back ------------------------------ #
 
 def test_a_repeated_sequence_is_not_a_second_observation():
@@ -393,6 +408,39 @@ def test_a_repeated_sequence_is_not_a_second_observation():
     drive(app, [restaled])
     assert app.state.supervision is before
     assert app.state.supervision_baseline is second.view
+
+
+def test_a_completed_result_id_is_consumed_only_once():
+    app = fake_app()
+    first = frame_at(1)
+    first.analysis_result_id = 7
+    duplicate = frame_at(99)
+    duplicate.analysis_result_id = 7
+
+    drive(app, [first])
+    before = app.state.supervision
+    baseline = app.state.supervision_baseline
+    drive(app, [duplicate])
+
+    assert app.state.supervision is before
+    assert app.state.supervision_baseline is baseline
+    assert app.state.supervision_sequence == 1
+
+
+def test_a_stale_analysis_result_never_becomes_quiet_evidence():
+    app = fake_app()
+    stale = frame_at(1)
+    stale.stale = True
+
+    first = drive(app, [stale])[0]
+    assert first.state == "BUSY"
+    assert "STALE" in first.reason
+    assert app.state.supervision_baseline is None
+
+    # The next fresh result is only a new baseline.  The stale image cannot be
+    # its quiet predecessor and cannot contribute a supervisor vote.
+    resumed = drive(app, [frame_at(2)])[0]
+    assert resumed.state == "BUSY" and resumed.verdict is None
 
 
 # --- refusal 3: D5's gantry-parked gate ------------------------------------ #

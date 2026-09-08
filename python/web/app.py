@@ -208,6 +208,21 @@ async def _supervise(app: FastAPI, frame, job: BuildJob, loop,
     supervisor = app.state.supervisor
     controller = app.state.controller
 
+    # A calibration reload can invalidate the app's last published result
+    # while a new image is still being analyzed.  Never map old detections
+    # through the replacement workspace.
+    pipeline = getattr(app.state, "pipeline", None)
+    current_generation = getattr(pipeline, "map_generation", None)
+    frame_generation = getattr(frame, "map_generation", current_generation)
+    if frame_generation != current_generation:
+        supervisor.reset()
+        app.state.supervision_baseline = None
+        app.state.supervision_sequence = None
+        app.state.supervision_result_id = None
+        _note_supervision(app, "BUSY", "MAP CHANGED — waiting for coherent evidence",
+                          None, None, None)
+        return
+
     # 1. A mode latch. The frame describes the other lattice — `build_state()`
     #    nulls the frame for exactly this reason, and D13 says supervision
     #    suspends until the first quiet window on the other side. The baseline
@@ -216,6 +231,7 @@ async def _supervise(app: FastAPI, frame, job: BuildJob, loop,
         supervisor.reset()
         app.state.supervision_baseline = None
         app.state.supervision_sequence = None
+        app.state.supervision_result_id = None
         #: M3a. The ledger entry whose placement is waiting on its first quiet
         #: window, and the short sentence that comes out of it.
         app.state.pending_check = None
@@ -225,20 +241,30 @@ async def _supervise(app: FastAPI, frame, job: BuildJob, loop,
                           None, None, None)
         return
 
-    # 2. The SAME ProcessedFrame, handed back. `process_once` returns the last
-    #    frame again — `replace`d, same `view` object — when only its staleness
-    #    changed. Stepping on it would let one camera frame supply two of the
-    #    N-of-M readings, and would difference an array against itself and call
-    #    the result quiet. One step per new capture, which is exactly what Gate
-    #    0's instrument did.
-    if frame.sequence == app.state.supervision_sequence:
+    # 2. The SAME completed analysis result, handed back. `process_once` may
+    #    return the last frame again — `replace`d, same result id and `view`
+    #    object — when only its staleness changes. One completed result gets at
+    #    most one opportunity to advance N-of-M.
+    result_id = getattr(frame, "analysis_result_id", frame.sequence)
+    if result_id == getattr(app.state, "supervision_result_id", None):
+        return
+    app.state.supervision_result_id = result_id
+    app.state.supervision_sequence = frame.sequence
+
+    # A detector result can finish after its exact source image has aged out.
+    # Keep that age attached to the result and fail closed: it is not a quiet
+    # baseline and it cannot contribute a supervisor vote.
+    if frame.stale:
+        supervisor.reset()
+        app.state.supervision_baseline = None
+        _note_supervision(app, "BUSY", "CAMERA STALE — waiting for fresh evidence",
+                          None, None, None)
         return
 
     baseline = app.state.supervision_baseline
     # `view` is a fresh, read-only array per capture, so holding the previous
     # one as the baseline costs a reference and never a copy.
     app.state.supervision_baseline = frame.view
-    app.state.supervision_sequence = frame.sequence
 
     fraction = await loop.run_in_executor(executor, quiet_fraction,
                                           frame.view, baseline)
@@ -442,10 +468,12 @@ def create_app(options: ConsoleAppOptions | None = None) -> FastAPI:
         app.state.supervisor = Supervisor()
         app.state.supervision = None
         app.state.supervision_signature = None
-        #: The previous accepted capture, for D5's frame difference, and the
-        #: sequence it came from. Both are cleared by a mode latch.
+        #: The previous accepted analyzed image, for D5's frame difference,
+        #: plus its source sequence and one-shot worker result id. All three
+        #: are cleared by a mode latch.
         app.state.supervision_baseline = None
         app.state.supervision_sequence = None
+        app.state.supervision_result_id = None
         #: M3a. The ledger entry whose placement is waiting on its first quiet
         #: window, and the short sentence that comes out of it.
         app.state.pending_check = None

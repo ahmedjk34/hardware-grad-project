@@ -126,6 +126,13 @@ def require_fresh_camera(app):
     frame = app.state.latest_frame
     if frame is None:
         raise HTTPException(status_code=409, detail="camera frame is not ready")
+    current_generation = getattr(app.state.pipeline, "map_generation", None)
+    frame_generation = getattr(frame, "map_generation", current_generation)
+    if frame_generation != current_generation:
+        raise HTTPException(
+            status_code=409,
+            detail="camera evidence belongs to an older map; wait for analysis",
+        )
     if frame.stale:
         raise HTTPException(status_code=409,
                             detail="camera frame is stale; selection is unsafe")

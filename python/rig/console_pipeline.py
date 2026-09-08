@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from pathlib import Path
+import threading
+import time
 
 import numpy as np
 
@@ -43,7 +45,7 @@ from vision.fisheye import INTERPOLATIONS, build_maps, undistort
 
 @dataclass(frozen=True)
 class ProcessedFrame:
-    """The most recent corrected feed image and the state derived from it."""
+    """One coherent, completed analysis and the exact image it analyzed."""
 
     view: np.ndarray
     sequence: int
@@ -55,6 +57,24 @@ class ProcessedFrame:
     calibrated: bool
     paper_status: str
     grid_mode: str
+    map_generation: int
+    analysis_result_id: int
+    analysis_completed_at: float
+
+
+@dataclass(frozen=True)
+class FrameAnalysisContext:
+    """Immutable non-detector inputs bound to one submitted source image."""
+
+    view: np.ndarray
+    sequence: int
+    captured_at: float
+    image_size: tuple[int, int]
+    workspace: WorkspaceMap
+    calibrated: bool
+    paper_status: str
+    grid_mode: str
+    map_generation: int
 
 
 class ConsolePipeline:
@@ -96,6 +116,11 @@ class ConsolePipeline:
         self._last_stale = None
         self._last_frame: ProcessedFrame | None = None
         self._started = False
+        # Web calibration/mode routes run on worker threads while process_once
+        # runs on the dedicated pipeline executor.  A map transition and a
+        # frame submission must be indivisible or old workspace geometry can
+        # be labelled with the new generation.
+        self._state_lock = threading.RLock()
 
     @property
     def started(self) -> bool:
@@ -104,6 +129,10 @@ class ConsolePipeline:
     @property
     def latest(self) -> ProcessedFrame | None:
         return self._last_frame
+
+    @property
+    def map_generation(self) -> int:
+        return self._map_generation
 
     def start(self) -> None:
         """Open the source and start the latest-only worker threads once."""
@@ -155,7 +184,7 @@ class ConsolePipeline:
         self.analysis = AnalysisWorker(
             lambda frame, **kwargs: detect_aligned_blocks(
                 frame, grid=self.grid, include_rejected=True, **kwargs),
-            max_hz=self.analysis_hz)
+            max_hz=self.analysis_hz, consume_each=True)
         self.camera = open_camera(self.camera_backend or backend, size, device)
         self.camera.apply(sensor)
         self.frame_pump = LatestFramePump(self.camera)
@@ -207,6 +236,10 @@ class ConsolePipeline:
         why a map on disk was refused, which is far more useful to an operator
         than the map silently not appearing.
         """
+        with self._state_lock:
+            return self._reload_workspace()
+
+    def _reload_workspace(self):
         if not self._started:
             raise RuntimeError("start the pipeline before reloading its workspace")
         self.saved_workspace, self.workspace_rejection = load_workspace(
@@ -218,6 +251,10 @@ class ConsolePipeline:
 
     def set_workspace(self, workspace: WorkspaceMap) -> None:
         """Adopt a just-saved calibration for the active grid only."""
+        with self._state_lock:
+            self._set_workspace(workspace)
+
+    def _set_workspace(self, workspace: WorkspaceMap) -> None:
         if self.grid is None:
             raise RuntimeError("start the pipeline before setting its workspace")
         if not workspace.matches_grid(self.grid):
@@ -226,9 +263,20 @@ class ConsolePipeline:
             raise ValueError("workspace map was made for another camera projection")
         self.saved_workspace = workspace
         self.workspace_rejection = None
+        # A workspace is part of the pixel-to-cell evidence map.  Results
+        # submitted under the previous workspace must not be interpreted with
+        # this one, even when the camera rectification itself did not change.
+        self._map_generation += 1
+        self._last_frame = None
+        self._last_stale = None
 
     def set_grid_mode(self, mode: str, grid: MachineGrid | None = None) -> None:
         """Switch all per-mode camera state after the controller latches the rig."""
+        with self._state_lock:
+            self._set_grid_mode(mode, grid)
+
+    def _set_grid_mode(self, mode: str,
+                       grid: MachineGrid | None = None) -> None:
         if not self._started:
             raise RuntimeError("start the pipeline before changing grid mode")
         if grid is None:
@@ -246,55 +294,97 @@ class ConsolePipeline:
         self._last_stale = None
 
     def process_once(self) -> ProcessedFrame | None:
-        """Process one new capture, or report the one-time fresh→stale change."""
+        """Submit a capture and return each coherent analysis result once.
+
+        Capture remains latest-only and non-blocking.  A returned frame is not
+        necessarily the newest capture: it is the exact immutable image whose
+        detections just completed, paired with the workspace/map generation
+        that existed when that image was submitted.
+        """
+        with self._state_lock:
+            return self._process_once()
+
+    def _process_once(self) -> ProcessedFrame | None:
         if not self._started or self.frame_pump is None:
             raise RuntimeError("start the pipeline before processing frames")
         snapshot = self.frame_pump.snapshot()
-        stale = bool(snapshot.age_s() is not None
-                     and snapshot.age_s() >= STALE_FRAME_AFTER_S)
-        if snapshot.frame is None or snapshot.sequence == self._last_sequence:
-            if self._last_frame is not None and stale != self._last_stale:
+        if snapshot.frame is not None and snapshot.sequence != self._last_sequence:
+            self._last_sequence = snapshot.sequence
+            frame = self._colour.apply(
+                frame_orientation(snapshot.frame, self._capture))
+            if self._maps is None or frame.shape[1::-1] != self._input_size:
+                self._maps = build_maps(self._profile, frame.shape[1::-1],
+                                        self._interpolation, mip=self._mip,
+                                        roi=self._roi)
+                self._input_size = frame.shape[1::-1]
+                self._map_generation += 1
+            view = (undistort(frame, self._maps) if self._enabled else
+                    crop_resize(frame, self._roi, self._maps.out_size,
+                                self._interpolation))
+            image_size = view.shape[1::-1]
+            workspace = self.saved_workspace or approximate_workspace(
+                self.grid, image_size, self.projection)
+            view.flags.writeable = False
+            context = FrameAnalysisContext(
+                view=view,
+                sequence=snapshot.sequence,
+                captured_at=snapshot.captured_at,
+                image_size=image_size,
+                workspace=workspace,
+                calibrated=self.saved_workspace is not None,
+                paper_status=self.paper.status(),
+                grid_mode=self.grid.mode,
+                map_generation=self._map_generation,
+            )
+            self.analysis.submit(
+                view, snapshot.sequence, self._map_generation, context=context,
+                color_threshold=self.color_threshold, min_area=self.min_area)
+            self.paper.submit(view, snapshot.sequence, self._map_generation)
+
+        self.paper.poll(self._map_generation)
+        completed = self.analysis.consume()
+        if completed is not None:
+            coherent = self._coherent_frame(completed)
+            if coherent is not None:
+                self._last_frame = coherent
+                self._last_stale = coherent.stale
+                return coherent
+
+        # Staleness belongs to the analyzed source image, not to a newer raw
+        # capture that may currently be queued or in flight.
+        if self._last_frame is not None:
+            stale = ((time.monotonic() - self._last_frame.captured_at)
+                     >= STALE_FRAME_AFTER_S)
+            if stale != self._last_stale:
                 self._last_stale = stale
                 self._last_frame = replace(self._last_frame, stale=stale)
                 return self._last_frame
-            return None
+        return None
 
-        self._last_sequence = snapshot.sequence
-        frame = self._colour.apply(frame_orientation(snapshot.frame, self._capture))
-        if self._maps is None or frame.shape[1::-1] != self._input_size:
-            self._maps = build_maps(self._profile, frame.shape[1::-1],
-                                    self._interpolation, mip=self._mip,
-                                    roi=self._roi)
-            self._input_size = frame.shape[1::-1]
-            self._map_generation += 1
-        view = (undistort(frame, self._maps) if self._enabled else
-                crop_resize(frame, self._roi, self._maps.out_size,
-                            self._interpolation))
-        image_size = view.shape[1::-1]
-        workspace = self.saved_workspace or approximate_workspace(
-            self.grid, image_size, self.projection)
-        view.flags.writeable = False
-        self.analysis.submit(view, snapshot.sequence, self._map_generation,
-                             color_threshold=self.color_threshold,
-                             min_area=self.min_area)
-        self.paper.submit(view, snapshot.sequence, self._map_generation)
-        self.paper.poll(self._map_generation)
-        analysis_snapshot = self.analysis.snapshot()
-        detections = (analysis_snapshot.detections
-                      if analysis_snapshot.is_current(self._map_generation) else ())
-        stale = bool(snapshot.age_s() is not None
-                     and snapshot.age_s() >= STALE_FRAME_AFTER_S)
-        self._last_stale = stale
-        self._last_frame = ProcessedFrame(
-            view=view,
-            sequence=snapshot.sequence,
-            captured_at=snapshot.captured_at,
-            image_size=image_size,
+    def _coherent_frame(self, completed) -> ProcessedFrame | None:
+        """Validate and materialize one worker result without mutable joins."""
+        context = completed.context
+        if not isinstance(context, FrameAnalysisContext):
+            return None
+        if (completed.source is not context.view
+                or completed.source_sequence != context.sequence
+                or completed.map_generation != context.map_generation
+                or completed.map_generation != self._map_generation):
+            return None
+        stale = ((time.monotonic() - context.captured_at)
+                 >= STALE_FRAME_AFTER_S)
+        return ProcessedFrame(
+            view=context.view,
+            sequence=context.sequence,
+            captured_at=context.captured_at,
+            image_size=context.image_size,
             stale=stale,
-            detections=detections,
-            workspace=workspace,
-            calibrated=self.saved_workspace is not None,
-            paper_status=self.paper.status(),
-            grid_mode=self.grid.mode,
+            detections=completed.detections,
+            workspace=context.workspace,
+            calibrated=context.calibrated,
+            paper_status=context.paper_status,
+            grid_mode=context.grid_mode,
+            map_generation=context.map_generation,
+            analysis_result_id=completed.completed_count,
+            analysis_completed_at=completed.completed_at,
         )
-        return self._last_frame

@@ -35,10 +35,12 @@ def analyze(frame):
 
 analysis = AnalysisWorker(analyze, max_hz=1000)
 analysis.start()
-analysis.submit(np.full((2, 2, 3), 1, np.uint8), 1, 4)
+source_one = np.full((2, 2, 3), 1, np.uint8)
+analysis.submit(source_one, 1, 4, context="frame-one")
 check("analysis worker starts the active request", entered.wait(1.0))
 analysis.submit(np.full((2, 2, 3), 2, np.uint8), 2, 4)
-analysis.submit(np.full((2, 2, 3), 3, np.uint8), 3, 4)
+source_three = np.full((2, 2, 3), 3, np.uint8)
+analysis.submit(source_three, 3, 4, context="frame-three")
 release.set()
 deadline = time.monotonic() + 2.0
 result = analysis.snapshot()
@@ -50,8 +52,15 @@ check("queued analysis is replaced by the newest sequence",
       f"sequence {result.source_sequence}")
 check("analysis result is accepted for its map generation",
       result.is_current(4))
+check("analysis result retains its exact source image and context",
+      result.source is source_three and result.context == "frame-three")
 check("stale analysis is rejected after a map-generation change",
       not result.is_current(5))
+consumed = analysis.consume()
+check("a completed analysis result can be consumed once",
+      consumed is not None and consumed.completed_count == result.completed_count)
+check("the same completed result cannot be consumed twice",
+      analysis.consume() is None)
 check("a capture sequence cannot be analyzed twice",
       not analysis.submit(np.full((2, 2, 3), 3, np.uint8), 3, 4))
 check("duplicate analysis request is counted",
@@ -59,6 +68,33 @@ check("duplicate analysis request is counted",
 check("analysis reports replaced work", result.replaced_count >= 1,
       str(result.replaced_count))
 check("analysis worker shuts down cleanly", analysis.stop())
+
+
+# Supervision opts into a stronger one-item completion handoff: pending camera
+# requests are still replaceable, but a result that has finished cannot be
+# overwritten before it is consumed.
+handoff = AnalysisWorker(lambda frame: [int(frame[0, 0, 0])], max_hz=1000,
+                         consume_each=True)
+handoff.start()
+handoff.submit(np.full((2, 2, 3), 7, np.uint8), 7, 1)
+deadline = time.monotonic() + 2.0
+while handoff.snapshot().source_sequence != 7 and time.monotonic() < deadline:
+    time.sleep(0.005)
+handoff.submit(np.full((2, 2, 3), 8, np.uint8), 8, 1)
+time.sleep(0.03)
+check("an unconsumed completion cannot be overwritten",
+      handoff.snapshot().source_sequence == 7)
+first_handoff = handoff.consume()
+check("the held completion is consumed with its evidence",
+      first_handoff is not None and first_handoff.detections == (7,))
+deadline = time.monotonic() + 2.0
+while handoff.snapshot().source_sequence != 8 and time.monotonic() < deadline:
+    time.sleep(0.005)
+second_handoff = handoff.consume()
+check("the pending latest request completes after consumption",
+      second_handoff is not None and second_handoff.detections == (8,))
+check("the handoff has no duplicate third consumption", handoff.consume() is None)
+check("the one-item handoff worker shuts down cleanly", handoff.stop())
 
 writer_entered = threading.Event()
 writer_release = threading.Event()
