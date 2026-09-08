@@ -252,11 +252,12 @@ const int SERVO_PIN = 6;
 // The feeder is calibrated for a tighter opening when both X/Y home switches
 // are physically active. The home-switch check is made at the instant
 // O/openServo() runs.
-// Build gripper calibration. This manual sketch ONLY runs open 120 deg (other
-// sketches 90); close is the standard 180. Both the feeder-home and general
-// open use SERVO_OPEN_ANGLE, so every open in the manual build cycle is 120.
+// Build gripper calibration. This manual sketch ONLY: open is split -
+// SERVO_HOME_OPEN_ANGLE (120) is used while both X/Y home switches are active
+// (feeder pickup, build phase 4); SERVO_OPEN_ANGLE (100) is used everywhere
+// else, i.e. the release at the target cell (phase 11). Close is standard 180.
 const int SERVO_HOME_OPEN_ANGLE = 120;
-const int SERVO_OPEN_ANGLE = 120;
+const int SERVO_OPEN_ANGLE = 100;
 const int SERVO_CLOSE_ANGLE = 180;
 
 // The servo is commanded and then forgotten - nothing reports back
