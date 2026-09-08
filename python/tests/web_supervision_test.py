@@ -94,11 +94,13 @@ def view(fill: int = 40) -> np.ndarray:
 
 
 def frame_at(sequence, *, cells=((1, 1), (2, 1)), extra=(), fill=40,
-             calibrated=True, mode="vertical"):
+             calibrated=True, mode="vertical", analysis_ok=True,
+             analysis_error=None):
     return SimpleNamespace(
         view=view(fill), sequence=sequence, image_size=SIZE,
         detections=tuple(at_cell(col, row) for col, row in cells) + tuple(extra),
-        workspace=MAP, calibrated=calibrated, grid_mode=mode, stale=False)
+        workspace=MAP, calibrated=calibrated, grid_mode=mode, stale=False,
+        analysis_ok=analysis_ok, analysis_error=analysis_error)
 
 
 def fake_app(*, cells=((1, 1), (2, 1)), cell_phase="idle", locked=False,
@@ -433,14 +435,60 @@ def test_a_stale_analysis_result_never_becomes_quiet_evidence():
     stale.stale = True
 
     first = drive(app, [stale])[0]
-    assert first.state == "BUSY"
+    assert first.state == "NO_VISION"
     assert "STALE" in first.reason
+    assert first.verdict is None
     assert app.state.supervision_baseline is None
 
     # The next fresh result is only a new baseline.  The stale image cannot be
     # its quiet predecessor and cannot contribute a supervisor vote.
     resumed = drive(app, [frame_at(2)])[0]
     assert resumed.state == "BUSY" and resumed.verdict is None
+
+
+# --- detector failure / staleness -> NO_VISION, never REMOVED ------------- #
+
+def test_a_detector_failure_frame_is_NO_VISION_not_an_empty_board():
+    """The worker caught a detector exception and handed back zero detections
+    with `analysis_ok=False`.  That must read as "vision is unavailable", never
+    as "the board was swept clean" — which on a non-empty ledger is REMOVED."""
+    app = fake_app()
+    # Settle a clean VERIFIED first so there IS a verdict to wrongly overwrite.
+    drive(app, [frame_at(1), frame_at(2)])
+    assert app.state.supervision.verdict.verdict == "VERIFIED"
+
+    failed = frame_at(3, analysis_ok=False,
+                      analysis_error="analysis failed: boom")
+    failed.detections = ()
+    reading = drive(app, [failed])[0]
+
+    assert reading.state == "NO_VISION"
+    assert reading.verdict is None
+    assert reading.correction is None
+    assert "boom" in reading.reason
+    assert app.state.supervision_baseline is None
+
+
+def test_detector_failures_do_not_advance_hysteresis_toward_REMOVED():
+    """Several consecutive failed results with a non-empty ledger must not
+    settle any AMBER verdict — the empty tuple is not evidence."""
+    app = fake_app()
+    drive(app, [frame_at(1), frame_at(2)])
+
+    fails = []
+    for seq in range(3, 9):
+        f = frame_at(seq, analysis_ok=False, analysis_error="detector crashed")
+        f.detections = ()
+        fails.append(f)
+    seen = drive(app, fails)
+
+    assert [s.state for s in seen] == ["NO_VISION"] * len(fails)
+    assert all(s.verdict is None for s in seen)
+
+    # And a clean board afterwards still has to re-warm from nothing, not snap
+    # to a verdict on the strength of the failed frames.
+    resumed = drive(app, [frame_at(9), frame_at(10)])
+    assert resumed[-1].verdict.verdict == "VERIFIED"
 
 
 # --- refusal 3: D5's gantry-parked gate ------------------------------------ #

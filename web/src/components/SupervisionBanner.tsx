@@ -16,6 +16,7 @@ const SHAPE: Record<string, string> = {
   BUSY: "○",           // ○ idle
   QUIET: "○",
   NO_MEMORY: "○",
+  NO_VISION: "○",      // ○ not a fault of the board — the camera pipeline
   NO_MAP: "▲",
 };
 const icon = (key: string | null) => (key && SHAPE[key]) || "▲";
@@ -70,6 +71,9 @@ function statusLine(supervision: Supervision): string {
   if (supervision.state === "NO_MAP")
     return "NO MAP — calibrate to enable board checks.";
   if (supervision.state === "WARMING") return "SETTLING — gathering evidence.";
+  if (supervision.state === "NO_VISION")
+    return supervision.reason
+      ?? "NO VISION — the detector could not read this frame. The board is not being checked.";
   if (supervision.state === "BUSY") return supervision.reason ?? "NOT WATCHING";
   return "WATCHING";
 }
@@ -98,7 +102,8 @@ export function SupervisionBanner({ state, onAcknowledge, onCorrect, quiet = fal
     // NO_MAP is genuinely degraded and takes amber. Everything else here is
     // --text-dim / --text-faint and says only what it is doing.
     const dim = supervision.state === "NO_MEMORY" || supervision.state === "BUSY"
-      || supervision.state === "QUIET" || supervision.state === "WARMING";
+      || supervision.state === "QUIET" || supervision.state === "WARMING"
+      || supervision.state === "NO_VISION";
     if (!dim && supervision.state !== "NO_MAP") return null;
     return (
       <p className={`sv-status${supervision.state === "NO_MEMORY" ? " sv-faint" : ""}`}

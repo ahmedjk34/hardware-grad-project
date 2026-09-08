@@ -251,14 +251,27 @@ async def _supervise(app: FastAPI, frame, job: BuildJob, loop,
     app.state.supervision_result_id = result_id
     app.state.supervision_sequence = frame.sequence
 
-    # A detector result can finish after its exact source image has aged out.
-    # Keep that age attached to the result and fail closed: it is not a quiet
-    # baseline and it cannot contribute a supervisor vote.
-    if frame.stale:
+    # NO_VISION — the frame carries no usable observation of the board. Two
+    # causes, one response:
+    #   * the detector raised and the worker emptied its detections
+    #     (`analysis_ok` is False, reason in `analysis_error`);
+    #   * a detector result finished after its exact source image aged out
+    #     (`frame.stale`).
+    # Either way this is NOT an empty board and NOT a quiet baseline. Fail
+    # closed: reset the hysteresis, drop the baseline, publish NO_VISION so the
+    # distinction survives into the state, and never reach `observe()` /
+    # `supervisor.step()` with the empty detection tuple — that is the path that
+    # would otherwise settle a false REMOVED.
+    analysis_ok = getattr(frame, "analysis_ok", True)
+    if not analysis_ok or frame.stale:
         supervisor.reset()
         app.state.supervision_baseline = None
-        _note_supervision(app, "BUSY", "CAMERA STALE — waiting for fresh evidence",
-                          None, None, None)
+        if not analysis_ok:
+            reason = (getattr(frame, "analysis_error", None)
+                      or "VISION UNAVAILABLE — the detector failed on this frame")
+        else:
+            reason = "CAMERA STALE — waiting for fresh evidence"
+        _note_supervision(app, "NO_VISION", reason, None, None, None)
         return
 
     baseline = app.state.supervision_baseline

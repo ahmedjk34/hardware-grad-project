@@ -399,7 +399,7 @@ Any proposed detection resolution, flattening, area, colour, or morphology chang
 ## 8. Ranked shortlist: highest value per effort
 
 1. [x] **Bind detections, quiet image, sequence, and map generation; consume each analysis result once.** Highest safety gain and prerequisite for every temporal improvement. Medium effort.
-2. **Propagate detector failures/staleness as NO_VISION, never empty detections.** Small effort, closes a direct false-REMOVED path.
+2. [x] **Propagate detector failures/staleness as NO_VISION, never empty detections.** Small effort, closes a direct false-REMOVED path.
 3. **Make correction a one-shot coherent ticket with atomic quiet/mode/map/track revalidation.** Medium effort, closes the decision-to-motion race.
 4. **Add exact Python full-motion reachability/clamp preflight for all compensated targets.** Medium effort and a commissioning blocker at edges.
 5. **Refuse diagonal correction and enforce both-neighbour/corner clearance until measured.** Small initial effort with large collision-risk reduction.

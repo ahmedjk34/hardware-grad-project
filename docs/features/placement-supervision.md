@@ -618,7 +618,7 @@ The server decides once.
 
 ```python
 class SupervisionModel(BaseModel):
-    state: Literal["NO_MEMORY", "NO_MAP", "WARMING", "BUSY", "QUIET", "VERDICT"]
+    state: Literal["NO_MEMORY", "NO_MAP", "NO_VISION", "WARMING", "BUSY", "QUIET", "VERDICT"]
     verdict: Literal["VERIFIED", "NOT_DETECTED", "REMOVED",
                      "MOVED", "DISPLACED", "FOREIGN", "DISAGREES"] | None
     severity: Literal["none", "amber", "red"]   # ADDED — never "locked"
@@ -738,6 +738,7 @@ the colour system.
 | --- | --- | --- | --- | --- |
 | `NO_MEMORY` | `NO MEMORY — run a job first` | ○ | `--text-faint` | **not a fault.** Expected after every restart (D3) |
 | `NO_MAP` | `NO MAP — calibrate to enable checks` | ▲ | `--motion` | genuinely degraded; the grid overlay already styles itself `approximate` here |
+| `NO_VISION` | `NO VISION — the detector could not read this frame` / `CAMERA STALE` | ○ | `--text-dim` | **not a board fault.** The detector raised, or the analysed image aged out before its result landed. Distinct from an empty board (never becomes `REMOVED`) and from `BUSY` (the camera pipeline, not the rig, is the thing at fault). Raised in `web/app.py`'s `_supervise`, not by `Supervisor.step`. |
 | `WARMING` | `SETTLING n/3` | ◐ | `--text-dim` | gathering evidence |
 | `BUSY` | `RIG MOVING` / `SCENE NOT STILL` | ○ | `--text-dim` | **not a fault** |
 | `QUIET` | `WATCHING` | ○ | `--text-dim` | the resting state |
@@ -871,6 +872,7 @@ someone's shoulder.
 | `FOREIGN` | `FOREIGN` | `FOREIGN BLOCK AT [4,2] — something is on a cell the plan did not fill. Clear it, then acknowledge.` |
 | `DISAGREES` | `error` | `BOARD DISAGREES — 3 cells differ. Too much changed at once to name a cause. Expected vs observed below.` |
 | `NO_MEMORY` | `no data` | `NO MEMORY — the board is only tracked from the first build after a restart.` |
+| `NO_VISION` | `no detections` / `empty` | `NO VISION — the detector could not read this frame. The board is not being checked.` (or the stale-frame variant) — never rendered as an empty board |
 
 Rules: **name the cell in the first four words**; say **what the operator should
 do**; never say "error" for something the machine may have got right; never
@@ -884,7 +886,7 @@ Inheriting DESIGN.md §8, plus this feature's own:
   a floater can cover the video, which is the one thing the operator needs.
 - **No red for `MOVED`, `DISPLACED` or `REMOVED`.** They are recoverable. Red is
   "a human is required and the machine has stopped".
-- **No colour on `BUSY` / `QUIET` / `NO_MEMORY`** (§6.3).
+- **No colour on `BUSY` / `QUIET` / `NO_MEMORY` / `NO_VISION`** (§6.3).
 - **No banner for `VERIFIED`** (§6.2).
 - **No looping animation on a verdict** (§6.6).
 - **No client-side verdict.** The browser renders the server's opinion and never

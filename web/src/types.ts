@@ -30,9 +30,12 @@ export type BuildPhaseStatus =
 export type BuildPhaseAction = "move" | "grip" | "release" | "rotate" | "park";
 
 /** The observer's own state. BUSY / QUIET / NO_MEMORY are NOT faults and take
- *  no state colour — BUSY is the normal condition for a whole build. */
+ *  no state colour — BUSY is the normal condition for a whole build. NO_VISION
+ *  is verdict-less too: the detector failed on the frame, or the analysed image
+ *  went stale before its result arrived. It is NOT an empty board and NOT
+ *  BUSY. */
 export type SupervisionPhase =
-  | "NO_MEMORY" | "NO_MAP" | "WARMING" | "BUSY" | "QUIET" | "VERDICT";
+  | "NO_MEMORY" | "NO_MAP" | "NO_VISION" | "WARMING" | "BUSY" | "QUIET" | "VERDICT";
 
 export type SupervisionVerdict =
   | "VERIFIED" | "NOT_DETECTED" | "REMOVED" | "MOVED" | "DISPLACED"

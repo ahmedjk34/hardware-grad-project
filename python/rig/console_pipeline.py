@@ -60,6 +60,15 @@ class ProcessedFrame:
     map_generation: int
     analysis_result_id: int
     analysis_completed_at: float
+    #: Whether the analyzer returned a real observation for this frame. False
+    #: when the detector raised (the worker caught it, emptied the detections,
+    #: and left the reason in ``analysis_error``). A consumer MUST treat an
+    #: ``analysis_ok=False`` frame as "vision could not see the board", never as
+    #: an empty board: ``detections`` is forced to ``()`` here precisely so a
+    #: caller that ignores this flag still cannot read a spurious REMOVED out of
+    #: it, but the flag is the real signal and ``stale`` is its sibling.
+    analysis_ok: bool = True
+    analysis_error: str | None = None
 
 
 @dataclass(frozen=True)
@@ -373,13 +382,19 @@ class ConsolePipeline:
             return None
         stale = ((time.monotonic() - context.captured_at)
                  >= STALE_FRAME_AFTER_S)
+        # A detector exception reaches here as `completed.error` set and
+        # `completed.detections` already emptied by the worker. Publish the
+        # frame anyway - supervision needs to SEE the failure and fall to
+        # NO_VISION - but never let the empty tuple read as "board is clear".
+        analysis_ok = completed.error is None
+        detections = completed.detections if analysis_ok else ()
         return ProcessedFrame(
             view=context.view,
             sequence=context.sequence,
             captured_at=context.captured_at,
             image_size=context.image_size,
             stale=stale,
-            detections=completed.detections,
+            detections=detections,
             workspace=context.workspace,
             calibrated=context.calibrated,
             paper_status=context.paper_status,
@@ -387,4 +402,6 @@ class ConsolePipeline:
             map_generation=context.map_generation,
             analysis_result_id=completed.completed_count,
             analysis_completed_at=completed.completed_at,
+            analysis_ok=analysis_ok,
+            analysis_error=completed.error,
         )

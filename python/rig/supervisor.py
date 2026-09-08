@@ -96,7 +96,15 @@ PARKED_CELL_PHASES = ("idle", "complete")
 #: must not take a state colour in the UI: BUSY is the normal condition for the
 #: whole of a build, and colouring it amber would leave the console amber most
 #: of the time, which kills DESIGN.md's reserved palette.
-STATES = ("NO_MEMORY", "NO_MAP", "WARMING", "BUSY", "QUIET", "VERDICT")
+#:
+#: NO_VISION is not produced by :meth:`Supervisor.step` — it is raised one layer
+#: up, in ``web/app.py``'s ``_supervise``, when the analysis result carried a
+#: detector exception or its source image had already gone stale. It exists so
+#: "vision could not observe the board" is never collapsed into "a successful
+#: detection that saw zero blocks": the first must never become REMOVED, and the
+#: distinction has to survive into the published state, not just the verdict.
+STATES = ("NO_MEMORY", "NO_MAP", "NO_VISION", "WARMING", "BUSY", "QUIET",
+          "VERDICT")
 
 #: A DISPLACED verdict pairs the ONE emptied cell with the ONE gap detection by
 #: pure set difference (`classify`); it never checks the two are near each other.

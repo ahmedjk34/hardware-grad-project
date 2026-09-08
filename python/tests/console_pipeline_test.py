@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from pathlib import Path
 import sys
@@ -93,6 +94,39 @@ def test_completed_analysis_binds_detections_image_sequence_and_map():
     assert frame.detections == ("from-12",)
     assert frame.workspace is workspace
     assert frame.map_generation == bound.map_generation
+
+
+def test_a_detector_exception_publishes_NO_VISION_not_zero_detections():
+    """The worker catches the exception, empties the tuple and sets `error`.
+    `_coherent_frame` must carry that through as `analysis_ok=False` and force
+    `detections` empty — a consumer must be able to tell "vision failed" from
+    "a clean frame that saw nothing"."""
+    pipeline = ConsolePipeline()
+    pipeline._map_generation = 4
+    bound = context(workspace=object())
+
+    result = dataclasses.replace(
+        completed(bound, detections=("stale-leftover",)),
+        error="analysis failed: boom", detections=())
+    frame = pipeline._coherent_frame(result)
+
+    assert frame is not None
+    assert frame.analysis_ok is False
+    assert frame.analysis_error == "analysis failed: boom"
+    assert frame.detections == ()
+
+
+def test_a_successful_empty_frame_stays_analysis_ok():
+    pipeline = ConsolePipeline()
+    pipeline._map_generation = 4
+    bound = context(workspace=object())
+
+    frame = pipeline._coherent_frame(completed(bound, detections=()))
+
+    assert frame is not None
+    assert frame.analysis_ok is True
+    assert frame.analysis_error is None
+    assert frame.detections == ()
 
 
 def test_mismatched_source_sequence_is_never_published():

@@ -69,9 +69,16 @@ class SupervisionModel(BaseModel):
     colour. BUSY is the normal condition for the whole of a build; colouring it
     amber would leave the console amber most of the time and kill the reserved
     palette. Not looking is not the same as finding something wrong.
+
+    `NO_VISION` is also verdict-less and takes no state colour: the detector
+    failed on this frame, or the analysed image aged out before its result
+    landed. It is deliberately distinct from a clean board with nothing on it —
+    the server must never turn "vision could not observe" into REMOVED — and
+    from BUSY, so an operator can see the camera pipeline is the thing at fault.
     """
 
-    state: Literal["NO_MEMORY", "NO_MAP", "WARMING", "BUSY", "QUIET", "VERDICT"]
+    state: Literal["NO_MEMORY", "NO_MAP", "NO_VISION", "WARMING", "BUSY",
+                   "QUIET", "VERDICT"]
     verdict: Literal["VERIFIED", "NOT_DETECTED", "REMOVED",
                      "MOVED", "DISPLACED", "FOREIGN", "DISAGREES"] | None
     #: `amber` pauses the runner, `red` stops it. NEVER `LOCKED` — that means
