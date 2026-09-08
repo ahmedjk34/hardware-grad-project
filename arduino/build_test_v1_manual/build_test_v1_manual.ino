@@ -626,8 +626,10 @@ const bool SOFT_LIMIT_VERBOSE = true;
 //   GRID_SHIFT_X_CM / _Y_CM            0.0    0.0   (runtime only)
 //   SKEW_Y_PER_COL_CM                  0.115  0.13  (X-rail twist pulls Y)
 //   SKEW_X_* and all ROW/COLROW terms  0.0    0.0   (unmeasured)
-//   BUILD_PLACEMENT_OFFSET_X_CM        0.0   +1.8   (horiz; was -0.4, +2.2 added
-//                                                    for the 2026 arm re-seat)
+//   BUILD_PLACEMENT_OFFSET_X_CM        0.0   +0.8   (horiz; was -0.4, then +1.8
+//                                                    for the 2026 arm re-seat,
+//                                                    now -1.0 under test HERE
+//                                                    only - other sketches +1.8)
 //   BUILD_PLACEMENT_OFFSET_Y_CM        0.0    0.0
 //   TOOL_OFFSET_NEUTRAL_X/Y_CM         0.0 / 0.0    (not per mode)
 //   TOOL_OFFSET_CW_X/Y_CM             +0.9 / -0.3   (the pickup-rotate swing)
@@ -3957,16 +3959,17 @@ float SKEW_Y_PER_COLROW_CM[GRID_MODE_COUNT] = {0.0, 0.0};
 // THE SHIPPED VALUES, AND WHAT EACH ONE MEANS - the tables read
 // { vertical, horizontal }:
 //
+//   X horizontal +0.8   UNDER TEST in this sketch only. History: -0.4 (toward
+//                       home) -> +1.8 after the 2026 arm re-seat (the +2.2 to
+//                       cancel the claw now gripping ~2.2 cm toward the X+ home
+//                       switch) -> -1.0 from that here, = +0.8, because +1.8
+//                       over-corrected on the rig. The other three sketches
+//                       (build_test_v1, build_vertical_grid,
+//                       build_horizontal_grid) and AGENTS.md still say +1.8;
+//                       reconcile once this value is confirmed on hardware.
 //   X vertical    0.0   no fixed X correction in vertical mode
-//   X horizontal +1.8   horizontal placements are commanded 1.8 cm AWAY from
-//                       the X home switch of the raw lattice. History: this
-//                       was -0.4 (0.4 cm toward home) until the 2026 arm
-//                       re-seat, which left the claw gripping every block
-//                       ~2.2 cm toward the X+ home switch. +1.8 = the old
-//                       -0.4 intent plus +2.2 to cancel the re-seat, so the
-//                       net physical placement is unchanged from before.
-//                       If the arm is ever re-seated square again, this goes
-//                       back to -0.4. VERTICAL was left as-is by choice.
+//   Y vertical    0.0   no fixed Y correction in vertical mode
+//   Y horizontal  0.0   no fixed Y correction in horizontal mode
 //   Y vertical    0.0   no fixed Y correction in vertical mode
 //   Y horizontal  0.0   no fixed Y correction in horizontal mode
 //
@@ -3991,7 +3994,7 @@ float SKEW_Y_PER_COLROW_CM[GRID_MODE_COUNT] = {0.0, 0.0};
 //
 // Keep these paired with the values documented in AGENTS.md; test_grid.py pins
 // every slot against this sketch and fails on any drift.
-float BUILD_PLACEMENT_OFFSET_X_CM[GRID_MODE_COUNT] = {0.0, 1.8};
+float BUILD_PLACEMENT_OFFSET_X_CM[GRID_MODE_COUNT] = {0.0, 0.8};
 float BUILD_PLACEMENT_OFFSET_Y_CM[GRID_MODE_COUNT] = {0.0, 0.0};
 
 // Returns a MAGNITUDE in steps - "this far away from the home switch" - with no
