@@ -298,8 +298,12 @@ const int AUX_STEPPER_IN4 = 37;
 // Approximate number of steps for one output-shaft revolution.
 const int AUX_STEPPER_STEPS_PER_REV = 2048;
 
-// A quarter turn, used by the build's neutral/CW/CCW placement states.
-const int AUX_STEPPER_QUARTER_TURN = AUX_STEPPER_STEPS_PER_REV / 4;
+// The build's CW/CCW placement rotation magnitude, used by every neutral/CW/CCW
+// state. This manual sketch ONLY: 85 deg, not a true 90 deg quarter turn
+// (was AUX_STEPPER_STEPS_PER_REV / 4 = 512 = 90 deg). Rounded to the nearest
+// motor step: 2048 * 85 / 360 ~= 484 steps.
+const int AUX_STEPPER_QUARTER_TURN =
+    (AUX_STEPPER_STEPS_PER_REV * 85 + 180) / 360;
 
 // One manual command is deliberately capped at one turn. The aux mechanism
 // has no limit switch, so a larger move must be consciously split into
@@ -631,13 +635,15 @@ const bool SOFT_LIMIT_VERBOSE = true;
 //   GRID_SHIFT_X_CM / _Y_CM            0.0    0.0   (runtime only)
 //   SKEW_Y_PER_COL_CM                  0.115  0.13  (X-rail twist pulls Y)
 //   SKEW_X_* and all ROW/COLROW terms  0.0    0.0   (unmeasured)
-//   BUILD_PLACEMENT_OFFSET_X_CM       -0.45  +1.35  (vert -0.45 UNDER TEST here;
-//                                                    horiz was -0.4, then the
-//                                                    2026 arm re-seat - measured
-//                                                    1.35 cm toward home at 0)
-//   BUILD_PLACEMENT_OFFSET_Y_CM      -0.45   -0.3  (both UNDER TEST here only;
-//                                                   vert lands 0.45 too far,
-//                                                   horiz lands 0.3 too far)
+//   BUILD_PLACEMENT_OFFSET_X_CM       -0.45  +1.0   (BOTH UNDER TEST here; other
+//                                                    sketches vert 0.0 / horiz
+//                                                    +1.35. vert lands 0.45 too
+//                                                    far; horiz +1.35 landed
+//                                                    0.35 too far -> +1.0)
+//   BUILD_PLACEMENT_OFFSET_Y_CM      -0.45   -0.6  (both UNDER TEST here only;
+//                                                   vert landed 0.45 too far,
+//                                                   horiz 0.3 too far twice ->
+//                                                   -0.3 then -0.6)
 //   TOOL_OFFSET_NEUTRAL_X/Y_CM         0.0 / 0.0    (not per mode)
 //   TOOL_OFFSET_CW_X/Y_CM             +0.9 / -0.3   (the pickup-rotate swing)
 //   TOOL_OFFSET_CCW_X/Y_CM             0.0 / 0.0    (never measured)
@@ -3973,20 +3979,21 @@ float SKEW_Y_PER_COLROW_CM[GRID_MODE_COUNT] = {0.0, 0.0};
 //   X vertical   -0.45  vertical placements landed 0.45 cm too FAR from the X
 //                       home switch (rig-measured, UNDER TEST here only; other
 //                       sketches still 0.0). -0.45 pulls them back toward home.
-//   X horizontal +1.35  horizontal placements are commanded 1.35 cm AWAY from
+//   X horizontal +1.0   horizontal placements are commanded 1.0 cm AWAY from
 //                       the X home switch of the raw lattice. History: -0.4
-//                       (0.4 cm toward home) until the 2026 arm re-seat. With
-//                       this knob at 0 the re-seated arm placed every block
-//                       1.35 cm TOWARD the X+ home switch (measured on the
-//                       rig), so +1.35 pushes them back onto the cell. An
-//                       unverified +1.8 intermediate was never confirmed on
-//                       hardware. Back to -0.4 if the arm is re-seated square.
+//                       (0.4 cm toward home) until the 2026 arm re-seat ->
+//                       +1.35 (re-seated arm placed blocks ~1.35 cm toward
+//                       home at 0) -> +1.0 here (flashed +1.35 still landed
+//                       0.35 cm too far from home, -0.35). UNDER TEST here;
+//                       other sketches still +1.35. Back to -0.4 if the arm
+//                       is re-seated square.
 //   Y vertical   -0.45  vertical placements landed 0.45 cm too FAR from the Y
 //                       home switch (rig-measured, UNDER TEST here only; other
 //                       sketches still 0.0). -0.45 pulls them back toward home.
-//   Y horizontal -0.3   horizontal placements landed 0.3 cm too FAR from the Y
-//                       home switch (rig-measured, UNDER TEST here only; other
-//                       sketches still 0.0). -0.3 pulls them back toward home.
+//   Y horizontal -0.6   horizontal placements landed too FAR from the Y home
+//                       switch: 0.3 cm at knob=0 -> -0.3, then still 0.3 cm too
+//                       far at -0.3 -> -0.6. UNDER TEST here only; other
+//                       sketches still 0.0.
 //
 // A 0.0 HERE IS A REAL STATEMENT, NOT A PLACEHOLDER. It means that mode/axis
 // gets NO fixed placement correction: the correction comes out exactly zero,
@@ -4009,8 +4016,8 @@ float SKEW_Y_PER_COLROW_CM[GRID_MODE_COUNT] = {0.0, 0.0};
 //
 // Keep these paired with the values documented in AGENTS.md; test_grid.py pins
 // every slot against this sketch and fails on any drift.
-float BUILD_PLACEMENT_OFFSET_X_CM[GRID_MODE_COUNT] = {-0.45, 1.35};
-float BUILD_PLACEMENT_OFFSET_Y_CM[GRID_MODE_COUNT] = {-0.45, -0.3};
+float BUILD_PLACEMENT_OFFSET_X_CM[GRID_MODE_COUNT] = {-0.45, 1.0};
+float BUILD_PLACEMENT_OFFSET_Y_CM[GRID_MODE_COUNT] = {-0.45, -0.6};
 
 // Returns a MAGNITUDE in steps - "this far away from the home switch" - with no
 // travel-direction factor applied. Only gotoBuildTarget() consumes it, and it
