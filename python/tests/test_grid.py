@@ -575,8 +575,8 @@ dynamic_skew_defaults = {
     "SKEW_Y_PER_COLROW_CM": {"vertical": 0.0, "horizontal": 0.0},
 }
 placement_offset_defaults = {
-    "BUILD_PLACEMENT_OFFSET_X_CM": {"vertical": 0.0, "horizontal": 1.35},
-    "BUILD_PLACEMENT_OFFSET_Y_CM": {"vertical": 0.0, "horizontal": 0.0},
+    "BUILD_PLACEMENT_OFFSET_X_CM": {"vertical": -0.45, "horizontal": 0.6},
+    "BUILD_PLACEMENT_OFFSET_Y_CM": {"vertical": -0.45, "horizontal": -0.35},
 }
 for constant, expected_by_mode in dynamic_skew_defaults.items():
     actual = firmware_mode_numbers(constant)
@@ -594,7 +594,8 @@ for constant, expected_by_mode in placement_offset_defaults.items():
     for mode_name, expected in expected_by_mode.items():
         check(f"build placement offset {constant}[{mode_name}]", actual[mode_name] == expected,
               f"firmware {actual[mode_name]}, expected {expected}")
-check("live gripper open angle is 100 degrees", firmware_number("SERVO_OPEN_ANGLE") == 100)
+check("live gripper open angle is 95 degrees", firmware_number("SERVO_OPEN_ANGLE") == 95)
+check("live gripper feeder-home open angle is 107 degrees", firmware_number("SERVO_HOME_OPEN_ANGLE") == 107)
 check("live gripper close angle is 180 degrees", firmware_number("SERVO_CLOSE_ANGLE") == 180)
 
 # build_test_v1 is the firmware reference. Its phase-5 ground seek is

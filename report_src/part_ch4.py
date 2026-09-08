@@ -355,7 +355,7 @@ def chapter_4(rep):
         "correction logged as it is applied "
         "(`X-rail skew: Y 0 -> 20 steps (0.100 cm, col skew)`). The source was subsequently "
         "generalised and calibrated to 0.115/0.13 cm per column, with a separate horizontal "
-        "X placement offset of +1.35 cm (a rig measurement after the 2026 arm re-seat; it was "
+        "X placement offset of +0.6 cm (rig-calibrated after the 2026 arm re-seat, walked down from +1.35; it was "
         "-0.4 cm before).")
 
     rep.h3("4.2.6 Z heights and block levels")
@@ -393,7 +393,7 @@ def chapter_4(rep):
         "calibration carries +0.12 cm of fixed margin and no per-level term, which says that the "
         "block height itself is right and the whole stack sits slightly low.")
     rep.note(
-        "The firmware source now carries `Z_MARGIN_FIXED_CM = 0.12`, while the machine's own "
+        "The firmware source now carries `Z_MARGIN_FIXED_CM = 0.48`, while the machine's own "
         "boot report from the logged 3 September session prints `fixed 0.000 cm`. The margin was "
         "introduced after that session and the board has not been re-flashed since the log was "
         "taken. **The sixteen builds analysed in Chapter 5 ran with no fixed Z "

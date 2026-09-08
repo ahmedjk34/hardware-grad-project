@@ -249,10 +249,12 @@ const int SERVO_PIN = 6;
 // The feeder is calibrated for a tighter opening when both X/Y home switches
 // are physically active. The home-switch check is made at the instant
 // O/openServo() runs.
-// Build gripper calibration. Open angle 90 deg (was 100) - both the feeder-home
-// and general open use it, so every open in the build cycle is 90.
-const int SERVO_HOME_OPEN_ANGLE = 90;
-const int SERVO_OPEN_ANGLE = 90;
+// Build gripper calibration. The OPEN angle is split by "are both X/Y home
+// switches active?" (checked when openServo() runs): at the feeder home ->
+// SERVO_HOME_OPEN_ANGLE (107); anywhere else, i.e. the release at the target
+// cell (build phase 11) -> SERVO_OPEN_ANGLE (95). Close is one angle, 180.
+const int SERVO_HOME_OPEN_ANGLE = 107;
+const int SERVO_OPEN_ANGLE = 95;
 const int SERVO_CLOSE_ANGLE = 180;
 
 // The servo is commanded and then forgotten - nothing reports back
@@ -1029,8 +1031,9 @@ float Z_PICKUP_DROP_FROM_TOP_CM = 13.3;
 //   switch, not a computed number, so it cannot drift.
 
 float Z_MARGIN_PER_LEVEL_CM = 0.0; // cm added to EACH level (cumulative)
-float Z_MARGIN_FIXED_CM = 0.18;    // cm added ONCE to any level >= 1
-                                  // (was 0.12; block pressed too hard below)
+float Z_MARGIN_FIXED_CM = 0.48;    // cm added ONCE to any level >= 1
+                                  // (was 0.12; raised to 0.48 - placed block
+                                  //  pressed too hard on the one below)
 long Z_MARGIN_FIXED_STEPS = 0;     // raw step trim, applied last
 
 // ------------------------------------------------------------
@@ -3495,10 +3498,12 @@ float SKEW_Y_PER_COLROW_CM[GRID_MODE_COUNT] = {0.0, 0.0};
 // Fixed, build-only placement correction. It never moves the grid model,
 // camera overlay, Studio, Twin, or direct G target. Positive is away from
 // that axis's home switch; leave every mode/axis slot zero until measured.
-// horizontal X is +1.35 (was -0.4; after the 2026 arm re-seat, with this knob
-// at 0, blocks landed 1.35 cm toward the X+ home switch - measured on the rig).
-float BUILD_PLACEMENT_OFFSET_X_CM[GRID_MODE_COUNT] = {0.0, 1.35};
-float BUILD_PLACEMENT_OFFSET_Y_CM[GRID_MODE_COUNT] = {0.0, 0.0};
+// Rig-calibrated { vertical, horizontal }: X = { -0.45, 0.6 }, Y = { -0.45,
+// -0.35 }. Vertical placements landed 0.45 cm too far from each home switch.
+// Horizontal X: -0.4 -> +1.35 after the 2026 arm re-seat, then walked down to
+// +0.6 as it kept landing too far; Y walked -0.3 -> -0.6 -> -0.35.
+float BUILD_PLACEMENT_OFFSET_X_CM[GRID_MODE_COUNT] = {-0.45, 0.6};
+float BUILD_PLACEMENT_OFFSET_Y_CM[GRID_MODE_COUNT] = {-0.45, -0.35};
 
 long buildPlacementOffsetSteps(uint8_t axis)
 {
@@ -4958,6 +4963,8 @@ void printServoStatus()
   Serial.print(servoIsOpen ? "OPEN" : "CLOSED");
   Serial.print(F("   (open "));
   Serial.print(SERVO_OPEN_ANGLE);
+  Serial.print(F(" deg / feeder-home open "));
+  Serial.print(SERVO_HOME_OPEN_ANGLE);
   Serial.print(F(" deg / close "));
   Serial.print(SERVO_CLOSE_ANGLE);
   Serial.println(F(" deg)"));

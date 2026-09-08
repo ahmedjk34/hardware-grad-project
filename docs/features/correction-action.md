@@ -288,8 +288,8 @@ is the crux:**
 > the `dx` bias is at most `0.115·col` cm on Y and `≈ 0` on X — within or beside
 > the map's own `0.27 cm` flattening error, and `judge_band` (§E.3) refuses
 > anything that lands outside `[0.5, 1.2]` cm anyway. **Horizontal carries the
-> `cw` tool offset `(+0.9, −0.3)`, `BUILD_PLACEMENT_OFFSET_X = +1.35` (was
-> `−0.4` before the 2026 arm re-seat), the
+> `cw` tool offset `(+0.9, −0.3)`, `BUILD_PLACEMENT_OFFSET_X = +0.6` (was
+> `−0.4` before the 2026 arm re-seat, briefly `+1.35`), the
 > pickup-rotate grip geometry, the paper-map ambiguity above, and an unmeasured
 > `blocked_cells` list — every one a reason it is a separate, later piece of
 > work.** The server sets `correctable = False, reason = "horizontal correction

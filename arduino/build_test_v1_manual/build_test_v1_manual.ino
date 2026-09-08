@@ -252,12 +252,11 @@ const int SERVO_PIN = 6;
 // The feeder is calibrated for a tighter opening when both X/Y home switches
 // are physically active. The home-switch check is made at the instant
 // O/openServo() runs.
-// Build gripper calibration. This manual sketch ONLY: the OPEN angle is split
-// by "are both X/Y home switches active?" (checked the instant openServo()
-// runs):
+// Build gripper calibration. The OPEN angle is split by "are both X/Y home
+// switches active?" (checked the instant openServo() runs):
 //   at feeder home -> SERVO_HOME_OPEN_ANGLE (107)   (feeder open, build phase 4)
 //   anywhere else   -> SERVO_OPEN_ANGLE (95)         (release at target, phase 11)
-// Close is the standard single angle, 180.
+// Close is one angle, 180.
 const int SERVO_HOME_OPEN_ANGLE = 107;
 const int SERVO_OPEN_ANGLE = 95;
 const int SERVO_CLOSE_ANGLE = 180;
@@ -631,14 +630,12 @@ const bool SOFT_LIMIT_VERBOSE = true;
 //   GRID_SHIFT_X_CM / _Y_CM            0.0    0.0   (runtime only)
 //   SKEW_Y_PER_COL_CM                  0.115  0.13  (X-rail twist pulls Y)
 //   SKEW_X_* and all ROW/COLROW terms  0.0    0.0   (unmeasured)
-//   BUILD_PLACEMENT_OFFSET_X_CM       -0.45  +0.6   (BOTH UNDER TEST here; other
-//                                                    sketches vert 0.0 / horiz
-//                                                    +1.35. horiz 1.35->1.0->0.6
-//                                                    as it kept landing too far)
-//   BUILD_PLACEMENT_OFFSET_Y_CM      -0.45  -0.35  (both UNDER TEST here only;
-//                                                   vert landed 0.45 too far;
-//                                                   horiz -0.3 -> -0.6 -> -0.35
-//                                                   (last: 0.25 too close))
+//   BUILD_PLACEMENT_OFFSET_X_CM      -0.45  +0.6   (rig-calibrated; vert landed
+//                                                   0.45 too far; horiz walked
+//                                                   -0.4 -> +1.35 (arm re-seat)
+//                                                   -> +1.0 -> +0.6)
+//   BUILD_PLACEMENT_OFFSET_Y_CM      -0.45  -0.35  (vert landed 0.45 too far;
+//                                                   horiz -0.3 -> -0.6 -> -0.35)
 //   TOOL_OFFSET_NEUTRAL_X/Y_CM         0.0 / 0.0    (not per mode)
 //   TOOL_OFFSET_CW_X/Y_CM             +0.9 / -0.3   (the pickup-rotate swing)
 //   TOOL_OFFSET_CCW_X/Y_CM             0.0 / 0.0    (never measured)
@@ -3972,29 +3969,24 @@ float SKEW_Y_PER_COLROW_CM[GRID_MODE_COUNT] = {0.0, 0.0};
 // { vertical, horizontal }:
 //
 //   X vertical   -0.45  vertical placements landed 0.45 cm too FAR from the X
-//                       home switch (rig-measured, UNDER TEST here only; other
-//                       sketches still 0.0). -0.45 pulls them back toward home.
-//   X horizontal +0.6   horizontal placements commanded 0.6 cm AWAY from the X
-//                       home switch. History: -0.4 -> (2026 arm re-seat) +1.35
-//                       -> +1.0 (still 0.35 too far, -0.35) -> +0.6 (still 0.4
-//                       too far, -0.4). UNDER TEST here; other sketches +1.35.
+//                       home switch (rig-measured). -0.45 pulls them back.
+//   X horizontal +0.6   history: -0.4 -> (2026 arm re-seat) +1.35 -> +1.0
+//                       (still 0.35 too far) -> +0.6 (still 0.4 too far).
+//                       Back to -0.4 if the arm is re-seated square.
 //   Y vertical   -0.45  vertical placements landed 0.45 cm too FAR from the Y
-//                       home switch (rig-measured, UNDER TEST here only; other
-//                       sketches still 0.0). -0.45 pulls them back toward home.
-//   Y horizontal -0.35  history: landed 0.3 too far at 0 -> -0.3; still 0.3 too
-//                       far -> -0.6; then 0.25 too CLOSE to home -> +0.25 ->
-//                       -0.35. UNDER TEST here only; other sketches still 0.0.
+//                       home switch (rig-measured). -0.45 pulls them back.
+//   Y horizontal -0.35  history: 0.3 too far -> -0.3; still 0.3 too far ->
+//                       -0.6; then 0.25 too CLOSE to home -> +0.25 -> -0.35.
 //
-// A 0.0 HERE IS A REAL STATEMENT, NOT A PLACEHOLDER. It means that mode/axis
-// gets NO fixed placement correction: the correction comes out exactly zero,
-// gotoBuildTarget() skips its whole correction body for that axis, and the raw
-// lattice target is commanded unmodified. Vertical is deliberately in that
-// state on both axes - vertical placement has never been measured off by a
-// constant - so leave it at zero until a vertical build actually is.
+// A 0.0 IN ANY SLOT IS A REAL STATEMENT, NOT A PLACEHOLDER: that mode/axis
+// gets NO fixed placement correction, gotoBuildTarget() skips its whole
+// correction body for that axis, and the raw lattice target is commanded
+// unmodified. Every slot here is currently non-zero (rig-calibrated); a future
+// re-measurement that comes out clean would legitimately return one to 0.0.
 //
-// Note that "no FIXED correction" is not "no correction": vertical still gets
-// its SKEW_Y_PER_COL_CM nudge (0.115 cm per column), which is the separate,
-// index-dependent knob above. The two are added together per build.
+// "No FIXED correction" would not mean "no correction" anyway: each axis also
+// gets its SKEW_*_PER_COL_CM nudge (Y: 0.115/col vertical, 0.13/col horizontal),
+// the separate index-dependent knob above. The two are added together per build.
 //
 // TURNING A MEASUREMENT INTO A VALUE - a reported ERROR and a requested
 // PLACEMENT take OPPOSITE signs, and this is where inputs get misread:

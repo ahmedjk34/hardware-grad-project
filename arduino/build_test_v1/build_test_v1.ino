@@ -239,10 +239,12 @@ const int SERVO_PIN = 6;
 // The feeder is calibrated for a tighter opening when both X/Y home switches
 // are physically active. The home-switch check is made at the instant
 // O/openServo() runs.
-// Build gripper calibration. Open angle 90 deg (was 100) - both the feeder-home
-// and general open use it, so every open in the build cycle is 90.
-const int SERVO_HOME_OPEN_ANGLE = 90;
-const int SERVO_OPEN_ANGLE = 90;
+// Build gripper calibration. The OPEN angle is split by "are both X/Y home
+// switches active?" (checked when openServo() runs): at the feeder home ->
+// SERVO_HOME_OPEN_ANGLE (107); anywhere else, i.e. the release at the target
+// cell (build phase 11) -> SERVO_OPEN_ANGLE (95). Close is one angle, 180.
+const int SERVO_HOME_OPEN_ANGLE = 107;
+const int SERVO_OPEN_ANGLE = 95;
 const int SERVO_CLOSE_ANGLE = 180;
 
 // The servo is commanded and then forgotten - nothing reports back
@@ -614,10 +616,10 @@ const bool SOFT_LIMIT_VERBOSE = true;
 //   GRID_SHIFT_X_CM / _Y_CM            0.0    0.0   (runtime only)
 //   SKEW_Y_PER_COL_CM                  0.115  0.13  (X-rail twist pulls Y)
 //   SKEW_X_* and all ROW/COLROW terms  0.0    0.0   (unmeasured)
-//   BUILD_PLACEMENT_OFFSET_X_CM        0.0   +1.35  (horiz; was -0.4, then the
-//                                                    2026 arm re-seat - measured
-//                                                    1.35 cm toward home at 0)
-//   BUILD_PLACEMENT_OFFSET_Y_CM        0.0    0.0
+//   BUILD_PLACEMENT_OFFSET_X_CM      -0.45  +0.6   (rig-calibrated; full
+//                                                   history in the BUILD-MOTION
+//                                                   KNOBS block below)
+//   BUILD_PLACEMENT_OFFSET_Y_CM      -0.45  -0.35
 //   TOOL_OFFSET_NEUTRAL_X/Y_CM         0.0 / 0.0    (not per mode)
 //   TOOL_OFFSET_CW_X/Y_CM             +0.9 / -0.3   (the pickup-rotate swing)
 //   TOOL_OFFSET_CCW_X/Y_CM             0.0 / 0.0    (never measured)
@@ -1344,8 +1346,8 @@ float Z_PICKUP_DROP_FROM_TOP_CM = 13.3;
 // SIGN for all three: + = HIGHER above the ground switch, - = lower.
 // Level 0 ignores all three - ground is the physical switch, not a number.
 float Z_MARGIN_PER_LEVEL_CM = 0.0; // cm added to EACH level (cumulative)
-float Z_MARGIN_FIXED_CM = 0.18;    // cm added ONCE to any level >= 1
-                                  // (was 0.12 -> 0.15 -> 0.18: placed block
+float Z_MARGIN_FIXED_CM = 0.48;    // cm added ONCE to any level >= 1
+                                  // (was 0.12; raised to 0.48 - placed block
                                   //  pressed too hard on the one below)
 long Z_MARGIN_FIXED_STEPS = 0;     // raw step trim, applied last
 
@@ -4051,29 +4053,28 @@ float SKEW_Y_PER_COLROW_CM[GRID_MODE_COUNT] = {0.0, 0.0};
 // THE SHIPPED VALUES, AND WHAT EACH ONE MEANS - the tables read
 // { vertical, horizontal }:
 //
-//   X vertical    0.0   no fixed X correction in vertical mode
-//   X horizontal +1.35  horizontal placements are commanded 1.35 cm AWAY from
-//                       the X home switch of the raw lattice. History: this
-//                       was -0.4 (0.4 cm toward home) until the 2026 arm
-//                       re-seat. With this knob at 0 the re-seated arm placed
-//                       every block 1.35 cm TOWARD the X+ home switch (measured
-//                       on the rig), so +1.35 pushes them back onto the cell.
-//                       An unverified +1.8 intermediate was never confirmed on
-//                       hardware. If the arm is ever re-seated square again,
-//                       this goes back to -0.4. VERTICAL was left as-is by choice.
-//   Y vertical    0.0   no fixed Y correction in vertical mode
-//   Y horizontal  0.0   no fixed Y correction in horizontal mode
+//   X vertical   -0.45  vertical placements landed 0.45 cm too FAR from the X
+//                       home switch; -0.45 pulls them back.
+//   X horizontal +0.6   history: -0.4 (0.4 cm toward home) until the 2026 arm
+//                       re-seat -> +1.35 (re-seated arm placed blocks ~1.35 cm
+//                       toward home at knob 0) -> walked down +1.0 -> +0.6 as
+//                       placements kept landing too far from home. An unverified
+//                       +1.8 intermediate was never confirmed on hardware.
+//                       Back to -0.4 if the arm is re-seated square.
+//   Y vertical   -0.45  vertical placements landed 0.45 cm too FAR from the Y
+//                       home switch; -0.45 pulls them back.
+//   Y horizontal -0.35  history: 0.3 cm too far -> -0.3; still 0.3 too far ->
+//                       -0.6; then 0.25 too CLOSE -> +0.25 -> -0.35.
 //
-// A 0.0 HERE IS A REAL STATEMENT, NOT A PLACEHOLDER. It means that mode/axis
-// gets NO fixed placement correction: the correction comes out exactly zero,
-// gotoBuildTarget() skips its whole correction body for that axis, and the raw
-// lattice target is commanded unmodified. Vertical is deliberately in that
-// state on both axes - vertical placement has never been measured off by a
-// constant - so leave it at zero until a vertical build actually is.
+// A 0.0 IN ANY SLOT IS A REAL STATEMENT, NOT A PLACEHOLDER: that mode/axis
+// gets NO fixed placement correction, gotoBuildTarget() skips its whole
+// correction body for that axis, and the raw lattice target is commanded
+// unmodified. Every slot here is currently non-zero (rig-calibrated); a future
+// re-measurement that comes out clean would legitimately return one to 0.0.
 //
-// Note that "no FIXED correction" is not "no correction": vertical still gets
-// its SKEW_Y_PER_COL_CM nudge (0.115 cm per column), which is the separate,
-// index-dependent knob above. The two are added together per build.
+// "No FIXED correction" would not mean "no correction" anyway: each axis also
+// gets its SKEW_*_PER_COL_CM nudge (Y: 0.115/col vertical, 0.13/col horizontal),
+// the separate index-dependent knob above. The two are added together per build.
 //
 // TURNING A MEASUREMENT INTO A VALUE - a reported ERROR and a requested
 // PLACEMENT take OPPOSITE signs, and this is where inputs get misread:
@@ -4085,8 +4086,8 @@ float SKEW_Y_PER_COLROW_CM[GRID_MODE_COUNT] = {0.0, 0.0};
 //
 // Keep these paired with the values documented in AGENTS.md; test_grid.py pins
 // every slot against this sketch and fails on any drift.
-float BUILD_PLACEMENT_OFFSET_X_CM[GRID_MODE_COUNT] = {0.0, 1.35};
-float BUILD_PLACEMENT_OFFSET_Y_CM[GRID_MODE_COUNT] = {0.0, 0.0};
+float BUILD_PLACEMENT_OFFSET_X_CM[GRID_MODE_COUNT] = {-0.45, 0.6};
+float BUILD_PLACEMENT_OFFSET_Y_CM[GRID_MODE_COUNT] = {-0.45, -0.35};
 
 // Returns a MAGNITUDE in steps - "this far away from the home switch" - with no
 // travel-direction factor applied. Only gotoBuildTarget() consumes it, and it
@@ -5923,6 +5924,8 @@ void printServoStatus()
   Serial.print(servoIsOpen ? "OPEN" : "CLOSED");
   Serial.print(F("   (open "));
   Serial.print(SERVO_OPEN_ANGLE);
+  Serial.print(F(" deg / feeder-home open "));
+  Serial.print(SERVO_HOME_OPEN_ANGLE);
   Serial.print(F(" deg / close "));
   Serial.print(SERVO_CLOSE_ANGLE);
   Serial.println(F(" deg)"));

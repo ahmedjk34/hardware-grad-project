@@ -69,11 +69,11 @@ SKEW_Y_PER_COL_CM = {"vertical": 0.115, "horizontal": 0.13}
 SKEW_Y_PER_ROW_CM = {"vertical": 0.0, "horizontal": 0.0}
 SKEW_Y_PER_COLROW_CM = {"vertical": 0.0, "horizontal": 0.0}
 
-# horizontal X was -0.4 until the 2026 arm re-seat; with the knob at 0 the
-# re-seated arm placed blocks 1.35 cm toward the X+ home switch (rig-measured),
-# so +1.35 corrects it.
-BUILD_PLACEMENT_OFFSET_X_CM = {"vertical": 0.0, "horizontal": 1.35}
-BUILD_PLACEMENT_OFFSET_Y_CM = {"vertical": 0.0, "horizontal": 0.0}
+# Rig-calibrated. Vertical -0.45 on both axes (placements landed 0.45 cm too far
+# from each home switch). Horizontal X: -0.4 -> +1.35 after the 2026 arm re-seat
+# -> walked down to +0.6 as it kept landing too far. Horizontal Y: -0.35.
+BUILD_PLACEMENT_OFFSET_X_CM = {"vertical": -0.45, "horizontal": 0.6}
+BUILD_PLACEMENT_OFFSET_Y_CM = {"vertical": -0.45, "horizontal": -0.35}
 # --------------------------------------------------------------------------- #
 
 #: `const float slack = 0.0001;` in `cellTargetPosition()`.

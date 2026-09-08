@@ -52,8 +52,8 @@ float SKEW_Y_PER_COL_CM[GRID_MODE_COUNT]    = {0.115f, 0.130f};
 float SKEW_Y_PER_ROW_CM[GRID_MODE_COUNT]    = {0.0f, 0.0f};
 float SKEW_Y_PER_COLROW_CM[GRID_MODE_COUNT] = {0.0f, 0.0f};
 
-float BUILD_PLACEMENT_OFFSET_X_CM[GRID_MODE_COUNT] = {0.0f, 1.35f};
-float BUILD_PLACEMENT_OFFSET_Y_CM[GRID_MODE_COUNT] = {0.0f, 0.0f};
+float BUILD_PLACEMENT_OFFSET_X_CM[GRID_MODE_COUNT] = {-0.45f, 0.6f};
+float BUILD_PLACEMENT_OFFSET_Y_CM[GRID_MODE_COUNT] = {-0.45f, -0.35f};
 
 long buildSkewSteps(uint8_t axis, long col, long row)
 {
@@ -97,12 +97,10 @@ The shipped skew values are `vertical Y += 0.115 * col` and `horizontal Y +=
 `BUILD_PLACEMENT_OFFSET_*` is the separate fixed-error correction. It is per
 axis and per mode, defaults to zero, and is added once to a `B` target before
 the dynamic skew. Use it only for a measured constant release-position error;
-`BUILD_PLACEMENT_OFFSET_X_CM[horizontal]` is `+1.35`. It was `-0.4` until the
-2026 arm re-seat; with the knob at `0` the re-seated arm placed every block
-1.35 cm toward the X+ home switch (rig-measured), so `+1.35` pushes them back.
-An unverified `+1.8` intermediate was never confirmed on hardware. If the arm
-is ever re-seated square, set this back to `-0.4`. The other three slots remain
-zero until measured.
+The `BUILD_PLACEMENT_OFFSET_*` slots are all rig-calibrated: vertical `-0.45`
+on both axes (placements landed 0.45 cm too far from each home switch);
+horizontal X `+0.6` (`-0.4` -> `+1.35` after the 2026 arm re-seat -> walked
+down as it kept landing too far); horizontal Y `-0.35`.
 
 ## Scope — where this lives, and where it must never leak
 
