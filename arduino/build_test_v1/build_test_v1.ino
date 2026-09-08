@@ -622,7 +622,8 @@ const bool SOFT_LIMIT_VERBOSE = true;
 //   TOOL_OFFSET_CW_X/Y_CM             +0.9 / -0.3   (the pickup-rotate swing)
 //   TOOL_OFFSET_CCW_X/Y_CM             0.0 / 0.0    (never measured)
 //   Z_MARGIN_PER_LEVEL_CM              0.0          (not per mode)
-//   Z_MARGIN_FIXED_CM                  0.12
+//   Z_MARGIN_FIXED_CM                  0.18  (was 0.12; block pressed too hard
+//                                             on the one below)
 //   Z_MARGIN_FIXED_STEPS               0
 //   Z_PICKUP_DROP_FROM_TOP_CM          13.3         (drop from TOP, see below)
 //
@@ -1343,7 +1344,9 @@ float Z_PICKUP_DROP_FROM_TOP_CM = 13.3;
 // SIGN for all three: + = HIGHER above the ground switch, - = lower.
 // Level 0 ignores all three - ground is the physical switch, not a number.
 float Z_MARGIN_PER_LEVEL_CM = 0.0; // cm added to EACH level (cumulative)
-float Z_MARGIN_FIXED_CM = 0.12;    // cm added ONCE to any level >= 1
+float Z_MARGIN_FIXED_CM = 0.18;    // cm added ONCE to any level >= 1
+                                  // (was 0.12 -> 0.15 -> 0.18: placed block
+                                  //  pressed too hard on the one below)
 long Z_MARGIN_FIXED_STEPS = 0;     // raw step trim, applied last
 
 // ------------------------------------------------------------

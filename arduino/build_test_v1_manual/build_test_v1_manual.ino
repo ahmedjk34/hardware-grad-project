@@ -252,11 +252,11 @@ const int SERVO_PIN = 6;
 // The feeder is calibrated for a tighter opening when both X/Y home switches
 // are physically active. The home-switch check is made at the instant
 // O/openServo() runs.
-// Build gripper calibration. Open angle 90 deg (was 100, briefly 120) - both
-// the feeder-home and general open use it, so every open in the build cycle
-// is 90.
-const int SERVO_HOME_OPEN_ANGLE = 90;
-const int SERVO_OPEN_ANGLE = 90;
+// Build gripper calibration. This manual sketch ONLY runs open 120 deg (other
+// sketches 90); close is the standard 180. Both the feeder-home and general
+// open use SERVO_OPEN_ANGLE, so every open in the manual build cycle is 120.
+const int SERVO_HOME_OPEN_ANGLE = 120;
+const int SERVO_OPEN_ANGLE = 120;
 const int SERVO_CLOSE_ANGLE = 180;
 
 // The servo is commanded and then forgotten - nothing reports back
@@ -637,8 +637,8 @@ const bool SOFT_LIMIT_VERBOSE = true;
 //   TOOL_OFFSET_CW_X/Y_CM             +0.9 / -0.3   (the pickup-rotate swing)
 //   TOOL_OFFSET_CCW_X/Y_CM             0.0 / 0.0    (never measured)
 //   Z_MARGIN_PER_LEVEL_CM              0.0          (not per mode)
-//   Z_MARGIN_FIXED_CM                  0.15  (UNDER TEST here; was 0.12 - block
-//                                             pressed too hard on the one below)
+//   Z_MARGIN_FIXED_CM                  0.18  (was 0.12; block pressed too hard
+//                                             on the one below)
 //   Z_MARGIN_FIXED_STEPS               0
 //   Z_PICKUP_DROP_FROM_TOP_CM          13.3         (drop from TOP, see below)
 //
@@ -1362,10 +1362,9 @@ float Z_PICKUP_DROP_FROM_TOP_CM = 13.3;
 // SIGN for all three: + = HIGHER above the ground switch, - = lower.
 // Level 0 ignores all three - ground is the physical switch, not a number.
 float Z_MARGIN_PER_LEVEL_CM = 0.0; // cm added to EACH level (cumulative)
-float Z_MARGIN_FIXED_CM = 0.15;    // cm added ONCE to any level >= 1
-                                  // (0.12 -> 0.15: placed block was pressing
-                                  //  too hard on the one below; UNDER TEST in
-                                  //  this sketch, other sketches still 0.12)
+float Z_MARGIN_FIXED_CM = 0.18;    // cm added ONCE to any level >= 1
+                                  // (was 0.12 -> 0.15 -> 0.18: placed block
+                                  //  pressed too hard on the one below)
 long Z_MARGIN_FIXED_STEPS = 0;     // raw step trim, applied last
 
 // ------------------------------------------------------------

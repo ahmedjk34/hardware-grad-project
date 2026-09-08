@@ -1029,7 +1029,8 @@ float Z_PICKUP_DROP_FROM_TOP_CM = 13.3;
 //   switch, not a computed number, so it cannot drift.
 
 float Z_MARGIN_PER_LEVEL_CM = 0.0; // cm added to EACH level (cumulative)
-float Z_MARGIN_FIXED_CM = 0.12;    // cm added ONCE to any level >= 1
+float Z_MARGIN_FIXED_CM = 0.18;    // cm added ONCE to any level >= 1
+                                  // (was 0.12; block pressed too hard below)
 long Z_MARGIN_FIXED_STEPS = 0;     // raw step trim, applied last
 
 // ------------------------------------------------------------
