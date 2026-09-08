@@ -626,9 +626,11 @@ const bool SOFT_LIMIT_VERBOSE = true;
 //   GRID_SHIFT_X_CM / _Y_CM            0.0    0.0   (runtime only)
 //   SKEW_Y_PER_COL_CM                  0.115  0.13  (X-rail twist pulls Y)
 //   SKEW_X_* and all ROW/COLROW terms  0.0    0.0   (unmeasured)
-//   BUILD_PLACEMENT_OFFSET_X_CM        0.0    0.0   (horiz zeroed HERE under test
-//                                                    only; other sketches +1.8.
-//                                                    history: -0.4 -> +1.8 -> 0.0)
+//   BUILD_PLACEMENT_OFFSET_X_CM        0.0   +1.35  (horiz, UNDER TEST here only;
+//                                                    other sketches +1.8. history:
+//                                                    -0.4 -> +1.8 -> 0.0 (raw
+//                                                    error measured: 1.35 toward
+//                                                    home) -> +1.35)
 //   BUILD_PLACEMENT_OFFSET_Y_CM        0.0    0.0
 //   TOOL_OFFSET_NEUTRAL_X/Y_CM         0.0 / 0.0    (not per mode)
 //   TOOL_OFFSET_CW_X/Y_CM             +0.9 / -0.3   (the pickup-rotate swing)
@@ -3958,13 +3960,14 @@ float SKEW_Y_PER_COLROW_CM[GRID_MODE_COUNT] = {0.0, 0.0};
 // THE SHIPPED VALUES, AND WHAT EACH ONE MEANS - the tables read
 // { vertical, horizontal }:
 //
-//   X horizontal  0.0   UNDER TEST in this sketch only - zeroed to measure the
-//                       raw horizontal placement error on the re-seated arm.
-//                       History: -0.4 (toward home) -> +1.8 after the 2026 arm
-//                       re-seat -> 0.0 here. The other three sketches
-//                       (build_test_v1, build_vertical_grid,
-//                       build_horizontal_grid) and AGENTS.md still say +1.8;
-//                       reconcile once the real value is confirmed on hardware.
+//   X horizontal +1.35  UNDER TEST in this sketch only. With this knob at 0.0
+//                       the re-seated arm placed blocks 1.35 cm TOWARD the X+
+//                       home switch; +1.35 pushes them back out. History: -0.4
+//                       (pre re-seat) -> +1.8 -> 0.0 (raw measurement) -> +1.35.
+//                       The other three sketches (build_test_v1,
+//                       build_vertical_grid, build_horizontal_grid) and
+//                       AGENTS.md still say +1.8; reconcile once +1.35 is
+//                       confirmed on hardware.
 //   X vertical    0.0   no fixed X correction in vertical mode
 //   Y vertical    0.0   no fixed Y correction in vertical mode
 //   Y horizontal  0.0   no fixed Y correction in horizontal mode
@@ -3992,7 +3995,7 @@ float SKEW_Y_PER_COLROW_CM[GRID_MODE_COUNT] = {0.0, 0.0};
 //
 // Keep these paired with the values documented in AGENTS.md; test_grid.py pins
 // every slot against this sketch and fails on any drift.
-float BUILD_PLACEMENT_OFFSET_X_CM[GRID_MODE_COUNT] = {0.0, 0.0};
+float BUILD_PLACEMENT_OFFSET_X_CM[GRID_MODE_COUNT] = {0.0, 1.35};
 float BUILD_PLACEMENT_OFFSET_Y_CM[GRID_MODE_COUNT] = {0.0, 0.0};
 
 // Returns a MAGNITUDE in steps - "this far away from the home switch" - with no
