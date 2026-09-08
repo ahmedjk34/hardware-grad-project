@@ -12,15 +12,13 @@ const state = (overrides: Partial<StateModel> = {}): StateModel => testState({ c
 
 describe("Step 9 confirmed build safety UI", () => {
   it("requires a second tap with the exact displayed command", () => { const build = vi.spyOn(api, "build").mockResolvedValue(state()); render(<BuildButton state={state()} connected />); fireEvent.click(screen.getByRole("button", { name: "BUILD" })); expect(screen.getByRole("button", { name: "CONFIRM B 3 5 0" })).toBeEnabled(); fireEvent.click(screen.getByRole("button", { name: "CONFIRM B 3 5 0" })); expect(build).toHaveBeenCalledWith("B 3 5 0"); });
-  it("offers manual feed after arming and identifies it to the caller", () => {
+  it("requires explicit confirmation that the block is manually staged", () => {
     const onBuild = vi.fn();
-    render(<BuildButton state={state({ feeder_connected: false, hardware_ready: false })}
-                        connected onBuild={onBuild} />);
+    render(<BuildButton state={state()} connected onBuild={onBuild} />);
     fireEvent.click(screen.getByRole("button", { name: "BUILD" }));
     expect(screen.getByText(/place one block in the pickup area/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "CONFIRM B 3 5 0" })).toBeDisabled();
-    fireEvent.click(screen.getByRole("button", { name: "FEED MANUALLY" }));
-    expect(onBuild).toHaveBeenCalledWith("B 3 5 0", "manual");
+    fireEvent.click(screen.getByRole("button", { name: "CONFIRM B 3 5 0" }));
+    expect(onBuild).toHaveBeenCalledWith("B 3 5 0");
   });
   it("changes to the close-claw control only after the rig says it is down", () => {
     const onManualClose = vi.fn();

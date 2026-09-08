@@ -48,13 +48,12 @@ that can produce SVG/Mermaid/Python (recommended — ask it for code, not an ima
 ## F2 · System block diagram
 
 **Goes in:** Section 2.3, Overall System Architecture
-**Caption in the report:** *System block diagram: the three controllers, the two
-independent USB serial links, the camera, and the browser clients on the local
-network.*
+**Caption in the report:** *System block diagram: browser, Raspberry Pi, camera
+and Arduino Mega on the local network.*
 
 ### Prompt
 
-> Draw a system block diagram of a three-controller robotic cell. Layout is
+> Draw a system block diagram of a two-controller robotic cell. Layout is
 > top-to-bottom in four bands.
 >
 > **Band 1 (top): clients.** One box labelled `Browser clients (phone / tablet /
@@ -65,31 +64,24 @@ network.*
 > Inside it, five stacked sub-blocks:
 > - `Vision pipeline` (sub-label: colour correction → lens correction → block detection)
 > - `FastAPI web service` (sub-label: /api/state, /api/build, /api/events, MJPEG stream)
-> - `CellOrchestrator` (sub-label: serialises feeder then gantry)
+> - `PickupCoordinator` (sub-label: manual staging + guarded M then C)
 > - `BuildController + BuildJob` (sub-label: one command at a time)
 > - `Safety gates + session lock`
 >
-> **Band 3: the two controllers, side by side and clearly separate.**
-> - Left box: `Arduino Uno — FEEDER`, firmware `belt_v1`, sub-label `feed state machine, protocol 2`
-> - Right box: `Arduino MEGA 2560 — GANTRY`, firmware `build_test_v1`, sub-label `motion, limits, 14-phase build cycle`
+> **Band 3: the motion controller.**
+> - One box: `Arduino MEGA 2560 — GANTRY`, firmware `build_test_v1`, sub-label `motion, limits, 14-phase build cycle`
 >
-> **Band 4 (bottom): the hardware each controller owns.**
-> - Under the Uno: `Container servo`, `Belt stepper (A4988)`, `Alignment servo`, `Exit HC-SR04`, `Stage IR sensor`
+> **Band 4 (bottom): hardware.**
 > - Under the Mega: `2 x NEMA17 CoreXY (TB6600)`, `NEMA17 Z (TB6600)`, `Gripper servo`, `28BYJ-48 (ULN2003)`, `4 x limit switch`
+> - Beside it: `Manual pickup station — reserved cell [0,0]`
 >
 > **Connections, drawn as labelled arrows:**
 > - Browser ↔ Pi: bidirectional, labelled `HTTPS + WebSocket (local network)`
-> - Pi → Uno: bidirectional, labelled `USB serial A — 9600 8N1, protocol 2`
-> - Pi → Mega: bidirectional, labelled `USB serial B — 9600 8N1, @-ack protocol`
+> - Pi → Mega: bidirectional, labelled `USB serial — 9600 8N1, @-ack protocol`
 > - Camera → Pi: one arrow from a box labelled `OV5647 fisheye camera, 160°, 1296 x 972` into the Vision pipeline block, labelled `CSI ribbon`
 >
-> **The single most important visual element:** draw a **dashed red line with a
-> circle-slash symbol** directly between the Uno box and the Mega box, labelled
-> **`NO CONNECTION — the two Arduinos never exchange a byte`**. This isolation is a
-> deliberate safety property and the diagram exists mainly to show it.
->
-> Keep the two serial links visually distinct (for example one solid, one dashed)
-> so it is obvious they are separate physical links, not a bus.
+> Emphasise that the browser is not a safety boundary: guarded decisions live on
+> the Pi and motion lives on the Mega.
 
 ---
 
@@ -98,7 +90,7 @@ network.*
 **Goes in:** Section 2.4.7, The two grids
 **Caption in the report:** *The two grids overlaid on the same build surface: the
 vertical 7 x 6 lattice and the horizontal 3 x 10 lattice, sharing one envelope and
-one feeder cell at [0,0].*
+one pickup cell at [0,0].*
 
 **Best tool: a matplotlib script.** This is pure geometry, every number below is
 exact, and the figure lives or dies on the edges lining up. Ask an assistant for
@@ -343,34 +335,24 @@ LM2596 buck converter, the two rails and the common ground.*
 >   (4–40 V in, set to 5 V out, 3 A)` which takes its input from the 12 V rail.
 >   Label the output rail `5 V`.
 >
-> **Loads on the 12 V rail (draw as four drops off the bus):**
+> **Loads on the 12 V rail (draw as three drops off the bus):**
 > - `TB6600 #1 → NEMA17, CoreXY motor 1`
 > - `TB6600 #2 → NEMA17, CoreXY motor 2`
 > - `TB6600 #3 → NEMA17, Z axis`
-> - `A4988 → NEMA17, feeder conveyor belt` (motor supply only)
 >
-> **Loads on the 5 V rail (draw as five drops off the bus):**
+> **Loads on the 5 V rail:**
 > - `Gripper servo` (on the Mega)
-> - `Container gate servo` (on the Uno)
-> - `Alignment servo` (on the Uno)
 > - `ULN2003 → 28BYJ-48 claw rotation stepper`
-> - `Exit HC-SR04 ultrasonic sensor`
-> - `Stage IR obstacle sensor`
-> - `A4988 logic / reference supply`
 >
-> **The two Arduinos are NOT on either rail.** Draw them fed from the Pi:
-> `Raspberry Pi 5` → two separate arrows labelled `USB (power + data)` → to
-> `Arduino MEGA 2560` and `Arduino Uno`. Make it clear the same USB cable carries
-> both power and the serial link.
+> **The Mega is NOT on either rail.** Draw it fed from the Pi:
+> `Raspberry Pi 5` → `USB (power + data)` → `Arduino MEGA 2560`.
 >
 > **Ground.** Draw a single common ground rail along the bottom, tied to: the 12 V
-> PSU negative, the buck converter ground, both Arduino grounds, all four motor
-> drivers, the exit ultrasonic sensor, and the stage IR sensor. Label it
-> `COMMON GROUND — all supplies, drivers and sensors share one ground`.
+> PSU negative, the buck converter ground, Mega ground and all three motor
+> drivers. Label it `COMMON GROUND — all supplies and drivers share one ground`.
 >
 > **Annotation, placed as a note box:** `Sequential operation: the build cycle
-> moves Z, then X/Y, then Z again; the feeder belt runs only while the gantry is
-> idle. Peak instantaneous draw is normally one stepper plus logic, well inside
+> moves Z, then X/Y, then Z again. Peak instantaneous draw is normally one stepper plus logic, well inside
 > the 15 A rating.`
 >
 > Do not draw any fuse, flyback diode or reverse-polarity protection — none is
@@ -406,29 +388,25 @@ assumed.*
 > **Then a loop begins: "for each block in the program".** Draw the next three
 > stages inside a labelled loop box.
 >
-> **Stage 3 — FEED** (actor: Arduino Uno)
-> `Pi sends FEED <id>` → `Close container, settle 500 ms` → `Open gate in two
-> stages: 23° → 80° → 150°` → `Wait for EXIT sensor (10 s timeout)` → `Shut gate
-> behind the block` → `Run belt` → `Wait for STAGE sensor (15 s timeout)` →
-> `Nudge square with the alignment servo, 350 ms` → `Re-read STAGE sensor`
+> **Stage 3 — STAGE** (actor: operator)
+> `Put one block at reserved pickup cell [0,0]` → `Explicitly confirm BLOCK STAGED`
 >
 > **★ GATE 1 — a decision diamond, drawn prominently:**
-> `Uno returns @id OK state=block_ready result=staged ?`
-> - **NO** → red path → `No B is sent. Session LOCKS. A person inspects.` (terminate)
+> `Did the operator explicitly confirm staging?`
+> - **NO** → `No motion`
 > - **YES** → continue
 >
-> Annotate gate 1: `This exact message, with a matching id, is the ONLY thing that
-> authorises the gantry to move. ACK / STATE / SENSOR / EVENT lines are progress,
-> never permission.`
+> Annotate gate 1: `This explicit action is the only thing that authorises M.`
 >
 > **Stage 4 — PLACE** (actor: Arduino MEGA)
-> `Pi sends B col row level` → `14-phase pick / rotate / place / park cycle` →
-> `Firmware narrates each phase back as @seq STEP ... status=begin`
+> `Pi sends M col row level` → `Mega descends with open claw` →
+> `Firmware reports await_manual_close` → `Operator aligns and sends C` →
+> `14-phase pick / rotate / place / park cycle continues`
 >
 > **★ GATE 2 — a second decision diamond:**
 > `Mega returns terminal @seq OK ?`
 > - **SAFE / HELD / timeout** → red path → `Session LOCKS. A block is already
->   staged, so no retry and no next feed.` (terminate)
+>   staged, so no retry.` (terminate)
 > - **OK** → continue
 >
 > **Stage 5 — VERIFY**
@@ -444,9 +422,9 @@ assumed.*
 
 ---
 
-## F13 and F14 · The two wiring diagrams — ALREADY DONE
+## F13 · Mega wiring diagram — ALREADY DONE
 
-**Status: generated and already in the report.** These were the two figures that
+**Status: generated and already in the report.** This was the figure that
 made image models hallucinate Arduino boards with invented pins. They are no
 longer prompts.
 
@@ -457,7 +435,7 @@ relabel pins, add components you never mentioned and drop ones you did. No amoun
 of prompt detail fixes it, because the model is drawing a photograph of an idea of
 an Arduino, not reading your netlist.
 
-**What replaced it.** `report_src/mkwiring.py` renders both diagrams as SVG
+**What replaced it.** `report_src/mkwiring.py` renders the diagram as SVG
 directly from a netlist. The board is a plain labelled rectangle — deliberately
 **not** a picture of a real Arduino — with a pin stub per connection, a box per
 peripheral, and one wire per netlist row. The pin numbers appear in exactly one
@@ -466,7 +444,6 @@ place in the script, so the drawing physically cannot disagree with the firmware
 ```
 report_src/mkwiring.py          the generator
 report_src/figs/fig-wiring-mega.svg / .png
-report_src/figs/fig-wiring-uno.svg  / .png
 ```
 
 Regenerate after any firmware pin change:
@@ -474,11 +451,10 @@ Regenerate after any firmware pin change:
 ```bash
 python3 report_src/mkwiring.py
 cd report_src/figs && convert -density 130 -background white fig-wiring-mega.svg fig-wiring-mega.png
-convert -density 130 -background white fig-wiring-uno.svg fig-wiring-uno.png
 ```
 
 **The netlist, for reference.** Transcribed from
-`arduino/build_test_v1/build_test_v1.ino` and `arduino/belt_v1/belt_v1.ino`.
+`arduino/build_test_v1/build_test_v1.ino`.
 
 **Arduino MEGA 2560 — gantry:**
 
@@ -507,28 +483,9 @@ convert -density 130 -background white fig-wiring-uno.svg fig-wiring-uno.png
 > the order IN1, IN3, IN2, IN4 — that is **pins 38, 39, 36, 37**. Wiring the
 > ULN2003 in numerical pin order gives a motor that buzzes and does not turn.
 
-**Arduino Uno — feeder:**
-
-| pin | connects to | note |
-|---|---|---|
-| 2 | A4988 DIR | belt direction |
-| 3 | A4988 STEP | NEMA17 conveyor, 325 steps/s default |
-| 4 | Exit HC-SR04 TRIG | container exit |
-| 5 | Exit HC-SR04 ECHO | proves a block left the hopper |
-| 8 | Stage IR OUT | active-low by default; proves a block reached [0,0] |
-| 6 | Alignment servo signal | rest 90°, nudge 120° |
-| 12 | Container servo signal | closed 23°, stage 1 at 80°, open 150° |
-| USB | Raspberry Pi 5 | 9600 8N1, protocol 2, also powers the board |
-
-> A4988 **ENABLE is tied directly to ground**, not driven by the Arduino — there is
-> no enable pin in the firmware. The exit ultrasonic detection threshold is
-> **< 10.0 cm**, with a 30 ms echo timeout reported as `no_echo` and never treated
-> as a detection. The stage sensor is a digital IR input, not a distance sensor.
-
-**Both boards:** motor supplies come off the **12 V** rail; servos, the ULN2003 and
-the sensors come off the **5 V** rail from the LM2596 — **not** from either
-Arduino's own 5 V pin. One common ground across everything. The two boards have no
-connection to each other.
+The motor supplies come off the **12 V** rail; the gripper servo and ULN2003
+come off the **5 V** rail from the LM2596, not from the Mega's own 5 V pin. One
+common ground runs across the controller, drivers and supplies.
 
 ---
 

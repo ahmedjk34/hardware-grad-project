@@ -9,12 +9,7 @@ import {
   orderBlocks, summarise, supportGraph, type OrderTerm,
 } from "./compile";
 
-// These tests exercise the compiler pipeline (ordering, latching, stats), not
-// belt-cell validation, and the canonical fixtures place on [1,1] — which the
-// shipped rig now blocks. Run them on a belt-free rig; BLOCKED_CELL
-// has its own coverage in validate.test.ts.
 const shipped = structuredClone(rigConfig());
-for (const mode of Object.values(shipped.grid.modes)) mode.blocked_cells = [];
 beforeEach(() => setRigConfig(structuredClone(shipped)));
 afterEach(() => setRigConfig(structuredClone(shipped)));
 
@@ -263,7 +258,7 @@ describe("compile — model to program", () => {
     expect(feeder.valid).toBe(false);
     expect(feeder.program).toEqual([]);
     expect(feeder.stats).toEqual({ blocks: 0, latches: 0, modeSwitches: 0, shifts: 0, levels: 0, estimateSeconds: 0 });
-    expect(feeder.diagnostics.some(d => d.code === "FEEDER_CELL" && d.severity === "error")).toBe(true);
+    expect(feeder.diagnostics.some(d => d.code === "PICKUP_CELL" && d.severity === "error")).toBe(true);
 
     const floating = compile(modelOf([block("air", "vertical", 1, 1, 2)]), options());
     expect(floating.valid).toBe(false);

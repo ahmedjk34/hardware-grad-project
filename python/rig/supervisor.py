@@ -74,11 +74,11 @@ PIXEL_THRESHOLD = 18
 #: NOT_DETECTED or REMOVED for one — that would be the feature lying.
 LEVEL_CEILING = 3
 
-#: D5's "gantry parked" gate, as a set of `CellOrchestrator` phases — and NOT
+#: D5's "gantry parked" gate, as a set of `PickupCoordinator` phases — and NOT
 #: the design's `cell_phase == "idle"`, which does not work.
 #:
 #: `idle` is only ever the value BEFORE the first cell operation of a process.
-#: `CellOrchestrator._phase("complete")` is terminal and sticky: nothing resets
+#: `PickupCoordinator._phase("complete")` is terminal and sticky: nothing resets
 #: it, so after the first placed block `cell_phase` reads `complete` until the
 #: next build starts. Gating on `"idle"` would therefore wedge supervision at
 #: BUSY for the whole of every session after block one — silently, and in

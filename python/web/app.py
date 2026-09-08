@@ -38,11 +38,9 @@ from rig import build_log
 from rig.build_controller import BuildController
 from rig.build_job import BuildJob
 from rig.console_pipeline import ConsolePipeline
-from rig.feeder import Feeder
 from rig.mock_board import MockBoard
-from rig.mock_feeder import MockFeeder
 from rig.link import PLACED
-from rig.orchestrator import CellOrchestrator
+from rig.pickup import PickupCoordinator
 from rig.placement_ledger import PlacementLedger
 from rig.supervisor import (
     PARKED_CELL_PHASES, Interlocks, Supervisor, observe, quiet_fraction,
@@ -71,8 +69,7 @@ _SEMANTIC_FIELDS = (
     "last_result_reason", "build_command_seq", "build_step",
     "build_total_steps", "build_phase", "build_phase_status",
     "build_release_confirmed", "views",
-    "gantry_connected", "feeder_connected", "cell_phase",
-    "feeder_transaction_id", "feeder_state", "feeder_error",
+    "gantry_connected", "cell_phase",
     # M3a. The per-build verdict is the one camera opinion the run report
     # keeps, so it publishes IMMEDIATELY rather than waiting on the 5 Hz
     # geometry throttle — a verification that arrives a fifth of a second late
@@ -467,7 +464,7 @@ def _publish_build_result(app: FastAPI, outcome) -> None:
 
 
 def create_app(options: ConsoleAppOptions | None = None) -> FastAPI:
-    """Create a service whose lifespan owns one pipeline and both board links."""
+    """Create a service whose lifespan owns one pipeline and the Mega link."""
     options = options or ConsoleAppOptions()
 
     @asynccontextmanager
@@ -485,11 +482,7 @@ def create_app(options: ConsoleAppOptions | None = None) -> FastAPI:
                            "overlay": True}
         app.state.driver = None
         app.state.mock_board = None
-        app.state.mock_feeder = None
         app.state.cell_phase = "idle"
-        app.state.feeder_transaction_id = None
-        app.state.feeder_state = "idle"
-        app.state.feeder_error = None
         app.state.calibration_points = []
         # The placed-block calibration run, when one is in progress.
         # Its lock is what stops two impatient clicks from issuing two
@@ -567,7 +560,7 @@ def create_app(options: ConsoleAppOptions | None = None) -> FastAPI:
             })
             app.state.progress.on_progress(progress, event.event_id)
             if progress.phase == "await_manual_close":
-                app.state.orchestrator.manual_close_ready()
+                app.state.pickup.manual_close_ready()
             # build.log: closes the previous phase with its measured duration and
             # opens this one, so the firmware ETA and the wall-clock time sit
             # side by side.
@@ -612,58 +605,8 @@ def create_app(options: ConsoleAppOptions | None = None) -> FastAPI:
         def on_ack(ack) -> None:
             loop.call_soon_threadsafe(_serial_ack, ack)
 
-        def _feeder_line(line: str) -> None:
-            tagged = f"[UNO/FEEDER RX] {line}"
-            app.state.log.append(tagged)
-            app.state.hub.publish("serial", {"line": tagged, "stream": "feeder"})
-
-        def _feeder_error(message: str) -> None:
-            app.state.feeder_error = message
-            app.state.cell_phase = "error"
-            controller = getattr(app.state, "controller", None)
-            if controller is not None and not controller.locked:
-                controller.locked_reason = message
-            tagged = f"[UNO/FEEDER ERROR] {message}"
-            app.state.log.append(tagged)
-            app.state.hub.publish("serial", {"line": tagged, "stream": "error"})
-            publish_state(app, force=True)
-
-        def _feeder_message(message) -> None:
-            if message.request_id > 0:
-                app.state.feeder_transaction_id = message.request_id
-            state = message.fields.get("state")
-            if state:
-                app.state.feeder_state = state
-            if message.type == "ERROR":
-                app.state.feeder_error = message.reason or "feeder error"
-                app.state.cell_phase = "error"
-            elif message.type == "OK":
-                app.state.cell_phase = "ready_for_pick"
-            elif state in {"moving_to_stage", "aligning", "verifying_stage"}:
-                app.state.cell_phase = "staging"
-            elif message.request_id > 0:
-                app.state.cell_phase = "feeding"
-            app.state.hub.publish("feeder", {
-                "request_id": message.request_id,
-                "message_type": message.type,
-                "fields": dict(message.fields),
-            })
-            publish_state(app, force=True)
-
-        def feeder_line(line: str) -> None:
-            loop.call_soon_threadsafe(_feeder_line, str(line))
-
-        def feeder_error(message: str) -> None:
-            loop.call_soon_threadsafe(_feeder_error, str(message))
-
-        def feeder_message(message) -> None:
-            loop.call_soon_threadsafe(_feeder_message, message)
-
         def _cell_phase(phase: str) -> None:
             app.state.cell_phase = phase
-            if phase == "feeding":
-                app.state.feeder_error = None
-                app.state.feeder_transaction_id = None
             # `complete` is assigned on the worker just before it returns its
             # BuildResult. Let the driver publish the durable build_result
             # first, then its state snapshot; otherwise a fast loop turn could
@@ -691,7 +634,6 @@ def create_app(options: ConsoleAppOptions | None = None) -> FastAPI:
             mode=options.mode,
         )
         board = MockBoard(build_seconds=options.build_seconds) if mock else None
-        feeder_board = MockFeeder(feed_seconds=min(options.build_seconds / 4, 0.1)) if mock else None
         from rig.link import Rig  # Import after configuration, never monkeypatch it.
         rig = Rig(
             on_line=on_line,
@@ -701,23 +643,12 @@ def create_app(options: ConsoleAppOptions | None = None) -> FastAPI:
             mode=options.mode,
             serial_factory=(lambda *_args, **_kwargs: board) if board else None,
         )
-        feeder = Feeder(
-            on_line=feeder_line,
-            on_error=feeder_error,
-            on_message=feeder_message,
-            serial_factory=(lambda *_args, **_kwargs: feeder_board) if feeder_board else None,
-        )
-        if feeder.port_name and feeder.port_name == rig.port_name:
-            raise RuntimeError(
-                "serial.port and feeder.port name the same device; configure "
-                "distinct stable /dev/serial/by-id paths"
-            )
-        orchestrator = CellOrchestrator(feeder, rig, on_phase=cell_phase)
+        pickup = PickupCoordinator(rig, on_phase=cell_phase)
         # `ledger=` is how the memory reaches the controller without the
         # controller learning anything about OpenCV: it is pure data, it is
         # written on the PLACED branch only, and `BuildController` still has no
         # idea a camera exists.
-        controller = BuildController(rig, level=0, orchestrator=orchestrator,
+        controller = BuildController(rig, level=0, pickup=pickup,
                                      ledger=app.state.ledger)
         job = BuildJob(controller, timeout=300.0)
         executor = ThreadPoolExecutor(max_workers=1,
@@ -725,11 +656,9 @@ def create_app(options: ConsoleAppOptions | None = None) -> FastAPI:
         app.state.pipeline = pipeline
         app.state.rig = rig
         app.state.controller = controller
-        app.state.feeder = feeder
-        app.state.orchestrator = orchestrator
+        app.state.pickup = pickup
         app.state.job = job
         app.state.mock_board = board
-        app.state.mock_feeder = feeder_board
         app.state.pipeline_executor = executor
 
         try:
@@ -741,11 +670,9 @@ def create_app(options: ConsoleAppOptions | None = None) -> FastAPI:
             # This occurs before the ASGI server accepts traffic.  It can wait
             # for the Mega's boot banner without exposing a half-owned rig.
             rig.connect(home_before_configure=(rig.grid.mode == "horizontal"))
-            feeder.connect()
             build_log.build.run_started(
                 mode=rig.grid.mode, cols=rig.cols, rows=rig.rows,
                 port=rig.port_name, baud=rig.baud, mock=mock,
-                feeder_port=feeder.port_name, feeder_baud=feeder.baud,
             )
             app.state.driver = asyncio.create_task(
                 _drive_pipeline(app, pipeline, job, 1.0 / options.driver_hz,
@@ -764,7 +691,6 @@ def create_app(options: ConsoleAppOptions | None = None) -> FastAPI:
             # be slow, but its outcome is needed before it is safe to close.
             job.join()
             pipeline.stop()
-            feeder.close()
             rig.close()
             # After the pipeline: the worker may still be inside process_once.
             executor.shutdown(wait=True)

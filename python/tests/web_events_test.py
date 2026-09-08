@@ -86,6 +86,9 @@ async def select_and_build(client, app, *, cell=(3, 2), level=0):
     response = await client.post("/api/build",
                                  json={"confirm": True, "command": command})
     assert response.status_code == 200, response.text
+    await wait_for(client, lambda body: body["cell_phase"] == "awaiting_manual_close")
+    close = await client.post("/api/manual-close", json={"confirm": True})
+    assert close.status_code == 200, close.text
     return command
 
 
@@ -332,16 +335,8 @@ def test_a_build_streams_its_phases_then_exactly_one_result(
     steps = [event for event in delivered if event.type == "build_step"]
     results = [event for event in delivered if event.type == "build_result"]
     serial = [event for event in delivered if event.type == "serial"]
-    feeder = [event for event in delivered if event.type == "feeder"]
-    staged = [event for event in feeder
-              if event.payload["message_type"] == "OK"
-              and event.payload["fields"].get("state") == "block_ready"
-              and event.payload["fields"].get("result") == "staged"]
-
     assert len(results) == 1, "one command settles exactly once"
-    assert len(staged) == 1, "one matching Uno terminal stages one block"
-    assert staged[0].event_id < results[0].event_id
-    assert all(staged[0].event_id < event.event_id for event in steps)
+    assert all(event.type != "feeder" for event in delivered)
     assert results[0].payload["result"] == expected_result
     assert results[0].payload["locked"] is expect_locked
 
@@ -357,7 +352,7 @@ def test_a_build_streams_its_phases_then_exactly_one_result(
         assert steps == [], "the Mega rejection refuses before gantry motion"
         assert final["build_phase_status"] in {"aborted", "locked"}
         assert final["build_state"] == "LOCKED", (
-            "the Uno already staged a block, so SAFE on the Mega cannot feed again")
+            "the operator already staged a block, so SAFE on the Mega cannot retry")
         assert "pickup state requires inspection" in final["locked_reason"]
     else:
         assert [event.payload["step"] for event in steps] == sorted(
@@ -520,7 +515,7 @@ def test_a_fresh_socket_is_told_the_state_then_the_replay(tmp_path):
     assert opening.to_json()["at"] > 0
     # Minted, not published: nobody else was handed this client's own frame.
     assert opening.event_id <= last_id
-    assert all(event.type in {"serial", "feeder", "build_step", "build_result"}
+    assert all(event.type in {"serial", "build_step", "build_result"}
                for event in replay)
 
 

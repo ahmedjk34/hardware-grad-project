@@ -192,12 +192,10 @@ THE PROJECT WE AIMED TO MAKE IT A GOOD SIZE SO IT FITS ON THE TABLE, BUT NOT RLL
 
 ## 2.3 Overall System Architecture
 
-**Q2.3.1 [CONFIRM]** Architecture: Raspberry Pi 5 is the sole master (vision,
-web server, orchestration, every safety rule); Arduino MEGA 2560 runs the
-gantry (X/Y/Z, claw servo, rotation stepper) on its own USB serial link;
-Arduino Uno runs the feeder (container servo, belt, alignment servo, 2×
-HC-SR04) on a second, independent USB serial link; the two Arduinos never talk
-to each other. Correct?
+**Q2.3.1 [UPDATED]** Current architecture: Raspberry Pi 5 is the sole master
+(vision, web server, pickup coordination, every safety rule); Arduino MEGA
+2560 runs the gantry on one USB serial link. The operator manually stages each
+block at `[0,0]` and completes the `M` then firmware-gated `C` handshake.
 
 **Answer:**
 YES
@@ -295,12 +293,11 @@ for the report. The repo confirms these; please confirm/expand each:
 - Electromagnet + magnetised flat chess pieces → **mechanical gripper +
   rotation stepper + 3D wooden blocks**.
 - Added a **Z axis** (the reference is 2-axis only).
-- Added the whole **feeder/hopper/conveyor** subsystem (the reference has no
-  feeder — pieces are already on the board).
+- Added a reserved **manual pickup station** at `[0,0]`.
 - Reed-switch board + 4 multiplexers → **overhead fisheye camera + CV**.
 - LCD + arcade buttons → **browser PWA + 3D Studio + digital twin**.
-- Arduino Nano → **Arduino MEGA + Arduino Uno + Raspberry Pi 5**.
-- 2× A4988 → **3× TB6600 (gantry) + 1× A4988 (feeder belt)**.
+- Arduino Nano → **Arduino MEGA + Raspberry Pi 5**.
+- 2× A4988 → **3× TB6600 (gantry)**.
 - 12 V / 2 A → **12 V / 15 A + LM2596 buck converter**.
 - **No chess engine / AI** — human designs the structure.
   Is anything above wrong, and what did I miss?
@@ -369,19 +366,17 @@ enclosure / cable chain / strain relief?
 CONENCTORS
 
 **Q2.5.5 [CONFIRM]** Control architecture: high-level (Pi) decides _what_ and
-_whether_ (target cell, level, mode, all safety gating, the FEED→BUILD
-sequencing); low-level (each Arduino) owns _how_ (step generation, homing, limit
+_whether_ (target cell, level, mode, all safety gating, manual staging
+confirmation); low-level (the Arduino) owns _how_ (step generation, homing, limit
 enforcement, the servo/stepper timing). The Pi never sends motor steps — it
-sends `B col row level` / `FEED id` and the firmware turns those into motion.
+sends `M col row level` and a gated `C`, and firmware turns those into motion.
 Correct?
 
 **Answer:**
 YEAH
 
-**Q2.5.6 [CONFIRM]** Firmware↔firmware isolation: there is no wire between the
-Mega and the Uno; the Pi is the only thing that couples them, and only a
-correlated `@id OK state=block_ready result=staged` from the Uno authorises the
-Mega `B`. Correct?
+**Q2.5.6 [UPDATED]** There is one firmware controller. Explicit operator
+staging authorises Mega `M`; only `await_manual_close` authorises `C`.
 
 **Answer:**
 YES SLAVED DONMT COMMUNICATE
@@ -390,10 +385,9 @@ YES SLAVED DONMT COMMUNICATE
 
 **Q2.6.1 [CONFIRM]** End-to-end flow: (1) human designs the structure in the 3D
 Build Studio and compiles it to an ordered list of `B col row level` commands
-separated by `R`/`RR` mode latches; (2) for each block the Pi sends `FEED` to
-the Uno, which opens the container in two stages, runs the belt, confirms exit
-with the HC-SR04, and confirms the pickup point with the stage IR sensor; (3) on the Uno's
-terminal staged-OK the Pi sends `B col row level` to the Mega, which runs its
+separated by `R`/`RR` mode latches; (2) for each block the operator stages one
+block at `[0,0]` and explicitly confirms; (3) the Pi sends `M`, waits for
+`await_manual_close`, and sends `C` on a second explicit action; the Mega runs its
 14-phase pick/rotate/place/park cycle and narrates each phase back over serial;
 (4) the overhead camera (optionally) verifies; (5) repeat until the structure
 is complete, with the digital twin mirroring progress live. Is this the correct
@@ -454,9 +448,7 @@ firmware trusts the operator to start neutral)?
 **Q3.3.1 [CONFIRM]** Roles: Pi 5 (8 GB) = vision + FastAPI web server + Studio
 serving + orchestration + all safety = master. MEGA 2560 = gantry motion + claw
 
-- rotation + the 14-phase build + the `@`-line ack/step protocol. Uno = feeder
-  state machine + ultrasonic exit confirmation + IR stage confirmation +
-  protocol-2 serial. Correct division?
+- rotation + the 14-phase build + the `@`-line ack/step protocol. Correct division?
 
 **Answer:** YES
 
@@ -610,11 +602,9 @@ READ THE CODE AND DOCS, RELY ON THEM
 
 ## 4.4 Main System Operation
 
-**Q4.4.1 [EVIDENCE]** Has the **full** feed→place operation (Uno FEED → staged
-OK → Mega B → PLACED) ever run end-to-end on hardware? The repo says the feeder
-firmware + Pi client + orchestrator are built and **mock-tested only**, physical
-feeder commissioning still required. If it has run, describe the result. If not,
-say so plainly for the report.
+**Q4.4.1 [UPDATED EVIDENCE]** Has the full manual `M` →
+`await_manual_close` → explicit `C` → `PLACED` operation run end-to-end on
+hardware? If it has, describe the result; otherwise say so plainly.
 
 **Answer:**
 WE ACTUALLY HAVE A FILE IN LOGS, USE IT
@@ -622,10 +612,10 @@ WE ACTUALLY HAVE A FILE IN LOGS, USE IT
 **Q4.4.2 [EVIDENCE]** The `logs/serial.log` / `logs/build.log` in the repo
 contain 16 successful `PLACED` builds on 2026-09-03 with `mock=False`, full
 `@0 BOOT` / `@0 READY` / `@n STEP` / `@n OK` output, ~20–32 s each, vertical
-mode, level 0, direct `B` (no feeder). **Confirm these are genuine hardware
+mode, level 0, direct `B`. **Confirm these are genuine hardware
 runs of the gantry** (this contradicts several docs that say the `@`-ack/STEP
 firmware was "never flashed" — see readiness notes). What firmware version is
-currently on the Mega and the Uno?
+currently on the Mega?
 
 **Answer:**
 THEY ARE ONLY FOR THE BUILD PROCESS ON MEGA CURRENTLY, BUT ITS SUPER USEFUL

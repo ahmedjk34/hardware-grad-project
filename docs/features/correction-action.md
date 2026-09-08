@@ -290,8 +290,7 @@ is the crux:**
 > anything that lands outside `[0.5, 1.2]` cm anyway. **Horizontal carries the
 > `cw` tool offset `(+0.9, −0.3)`, `BUILD_PLACEMENT_OFFSET_X = +0.6` (was
 > `−0.4` before the 2026 arm re-seat, briefly `+1.35`), the
-> pickup-rotate grip geometry, the paper-map ambiguity above, and an unmeasured
-> `blocked_cells` list — every one a reason it is a separate, later piece of
+> pickup-rotate grip geometry and the paper-map ambiguity above — both reasons it is a separate, later piece of
 > work.** The server sets `correctable = False, reason = "horizontal correction
 > is not supported"` for it.
 
@@ -336,8 +335,8 @@ function body is commented out. `python/tests/test_grid.py` fails on exactly
 this drift — `FAIL  rig sketch phase 5 uses zGoPickup(), not zGoGround()` — and
 it is the one known-failing check in the gate (234 passed, 1 failed).
 [AGENTS.md is stale in two places](placement-supervision-progress.md#f10--test_gridpy-is-failing-on-an-unrelated-firmware-change)
-because of it (the `Z_PICKUP_DROP_FROM_TOP_CM` "one documented exception" and
-§3b-bis's `blocked_cells`). **Do not try to fix it here — P5, the user owns it.**
+because of it (the `Z_PICKUP_DROP_FROM_TOP_CM` "one documented exception").
+**Do not try to fix it here — P5, the user owns it.**
 
 **What Z-descent-to-grip exists today:** `zGoLevel(level)` — level 0 is a ground
 seek (`zGoGround()`, into the pin-28 switch), every other level is an exact step
@@ -380,8 +379,8 @@ is the *sequencing verb* around it.
   recently tuned) are position-independent — the claw closes wherever it is — so
   they compose at a free XY. But invoking them from the Pi over raw serial
   bypasses `BuildController`'s operation lock, the camera/selection guards and
-  the failure lockout, which [AGENTS.md §2a](../../AGENTS.md#2a-uno-feeder-link--independent-port-strict-handoff)
-  forbids ("manual feed must never become an unguarded direct-Mega call"). The
+  the failure lockout, which [AGENTS.md §2a](../../AGENTS.md#2a-manual-pickup-handoff--strict-operator-gate)
+  forbids. The
   sequence must be **one firmware verb with an `@` ack**, driven by one
   `link.py` method with `build()`'s abort discipline.
 

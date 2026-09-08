@@ -592,7 +592,7 @@ def test_an_in_flight_cell_phase_refuses_every_verdict():
 def test_complete_is_parked_or_supervision_dies_after_the_first_block():
     """The one that would have wedged the feature silently.
 
-    `CellOrchestrator._phase("complete")` is terminal and sticky — nothing
+    `PickupCoordinator._phase("complete")` is terminal and sticky — nothing
     resets it — so `cell_phase` reads `complete` from the first placed block
     until the next build starts. The design's `cell_phase == "idle"` would hold
     supervision at BUSY for every session after block one, in exactly the

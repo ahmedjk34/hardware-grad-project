@@ -91,10 +91,9 @@ def chapter_2(rep):
         "position. The controller sets a lock, refuses every further mutation, and the only "
         "recovery is a person inspecting the rig and restarting the service. There is no retry "
         "button, because a retry is the thing that breaks the machine.",
-        "**Nothing is auto-retried across the two boards.** Once the feeder has staged a block, "
-        "even a perfectly safe gantry rejection locks the cell: a block is already at the "
-        "pickup point, so feeding another would double-load it.",
-        "**Cell [0,0] is the feeder and is never a build target.** It is refused in the "
+        "**Nothing is auto-retried after manual staging.** Once the operator has confirmed a "
+        "block at pickup, even a pre-motion gantry rejection locks the cell for inspection.",
+        "**Cell [0,0] is the pickup and is never a build target.** It is refused in the "
         "firmware, in the Pi and in the browser, in all three, because placing a block there "
         "would drop it on the stack the claw picks from.",
         "**Every move is preceded by a re-home.** Position is trusted only immediately after a "
@@ -118,8 +117,8 @@ def chapter_2(rep):
     rep.p(
         "The machine had to sit on an ordinary table and stay there, and that decision came "
         "before any other. It sets the frame, and the frame sets everything downstream: how far "
-        "the gantry can travel, how many cells fit inside that travel, where the feeder can "
-        "stand, and how high the camera has to be to see the whole surface at once.")
+        "the gantry can travel, how many cells fit inside that travel, and how high the camera "
+        "has to be to see the whole surface at once.")
     rep.p(
         "The frame is built from a single 6 m length of aluminium profile, cut into the pieces "
         "the design needed, and the cut list is the clearest statement of the machine's size:")
@@ -127,7 +126,6 @@ def chapter_2(rep):
         "**4 legs**, 15 cm each, which is what holds the gantry above the build surface.",
         "**3 members along X**, 30 cm each.",
         "**2 members along Y**, 60 cm each.",
-        "**2 members for the feeder**, 30 cm each, one on either side of the conveyor.",
         "**1 member for the Z column**, approximately 30 cm.",
     ])
     rep.p(
@@ -154,11 +152,7 @@ def chapter_2(rep):
         "means in practice. Making the machine bigger would mean longer profile, and the table "
         "is what says no.")
     rep.p(
-        "Two other physical facts followed from the same decision. The feeder was built as a "
-        "**separate module standing alongside the gantry on the left** instead of as a hopper "
-        "hung above the build surface, because there is no room above the surface once the "
-        "camera is there and because a hopper over the work area would drop blocks into the "
-        "structure being built. And the camera had to see the whole surface at once from a "
+        "The camera had to see the whole surface at once from a "
         "height that still cleared the gantry, which put it about 50 cm up on its own support "
         "structure and made a wide-angle lens unavoidable, with all the distortion and colour "
         "cost that Chapter 3 then has to answer.")
@@ -202,39 +196,28 @@ def chapter_2(rep):
 
     rep.h2("2.3 Overall System Architecture")
     rep.p(
-        "The system follows a strict master-slave architecture with one master and two "
-        "independent slaves, chosen so that no part of the machine can move without the master "
+        "The system follows a strict master-slave architecture with one master and one "
+        "motion controller, chosen so that no part of the machine can move without the master "
         "having decided that it should. **A Raspberry Pi 5 (8 GB) is the sole master.** It owns "
-        "the camera, the web server, the orchestration between the two boards and every safety "
+        "the camera, the web server, guarded build coordination and every safety "
         "rule in the system. **An Arduino MEGA 2560 runs the gantry** on its own USB serial "
-        "link, and **an Arduino Uno runs the feeder** on a second, entirely separate USB serial "
-        "link. The two Arduinos have no wire between them and neither can command the other; "
-        "the Pi is the only thing that couples them.")
+        "link. The operator manually stages each block at the reserved pickup cell [0,0].")
     rep.p(
-        "That isolation is a deliberate safety property rather than a wiring convenience. A "
-        "block is only allowed to be picked up because the Pi received one exact terminal "
-        "message from the Uno saying a block is staged, and correlated it with the request it "
-        "sent. If the boards could talk to each other, that permission could be granted "
-        "somewhere the master cannot see.")
-    rep.figure("System block diagram: the three controllers, the two independent USB serial "
-               "links, the camera, and the browser clients on the local network.",
-               placeholder="Block diagram, to be drawn. Suggested division: browser / Pi "
-                           "(FastAPI + vision + orchestration) / Uno feeder / Mega gantry, "
-                           "with the two serial links drawn as separate arrows and the camera "
-                           "on the Pi.")
+        "Manual staging is deliberately confirm-gated. The Pi sends the Mega's `M` command, "
+        "waits for the firmware's open-claw alignment pause, and permits `C` only after the "
+        "firmware reports `await_manual_close`.")
+    rep.figure("System block diagram: browser, Raspberry Pi, camera and Mega gantry.",
+               placeholder="Browser / Pi (FastAPI + vision + pickup coordination) / Mega "
+                           "gantry, with one serial link and the camera on the Pi.")
     rep.defs([
         ("Raspberry Pi 5, 8 GB (the master)",
          "Camera capture and the whole vision pipeline, the FastAPI web service, the Studio, "
-         "the two-board orchestration, and every safety gate and session lock. It talks to the "
-         "browser over HTTPS and a WebSocket, and to the two boards over two USB serial links."),
+         "manual pickup coordination, and every safety gate and session lock. It talks to the "
+         "browser over HTTPS and a WebSocket, and to the Mega over one USB serial link."),
         ("Arduino MEGA 2560 (the gantry)",
          "X, Y and Z motion, the claw servo, the rotation stepper, homing, limit enforcement, "
          "the grid geometry and the fourteen-phase build cycle. It answers on its own serial "
          "link at 9600 8N1 with `@`-prefixed acknowledgement lines."),
-        ("Arduino Uno (the feeder)",
-         "The hopper gate servo, the belt stepper, the alignment servo, the exit ultrasonic "
-         "sensor and the stage IR sensor, together with the complete feed state machine. It answers on a second, "
-         "entirely separate serial link at 9600 8N1, speaking protocol 2."),
         ("The vision system",
          "An OV5647 fisheye camera on the Pi's CSI bus. Colour correction, lens correction, "
          "block detection, grid calibration and the pixel-to-cell mapping all run in-process on "
@@ -255,8 +238,8 @@ def chapter_2(rep):
     rep.h3("2.4.1 Overall structure")
     rep.p(
         "The machine is a rectangular aluminium-profile frame carrying a CoreXY gantry over a "
-        "flat build surface, with a vertical Z column on the moving carriage, a feeder module "
-        "standing alongside the frame on the left, and a camera looking straight down from a "
+        "flat build surface, with a vertical Z column on the moving carriage, a reserved pickup "
+        "station at home, and a camera looking straight down from a "
         "wooden support structure above. Every custom part is 3D-printed and every structural "
         "member is aluminium profile; nothing in the moving assembly is an off-the-shelf "
         "mechanism.")
@@ -269,8 +252,6 @@ def chapter_2(rep):
         "surface the machine can reach. It is a record only: it does not replace the travel cap, "
         "and the extra reach is not modelled.",
         "**Wooden platform: 80 x 60 cm**, the base the gantry assembly stands on.",
-        "**Feeder module: approximately 100 x 40 cm**, standing to the left of the gantry and "
-        "feeding directly to cell [0,0]. The conveyor belt itself is about 30 x 10 cm of that.",
     ])
     rep.note(
         "**On the two sets of dimensions.** An earlier revision of the firmware documentation "
@@ -369,7 +350,7 @@ def chapter_2(rep):
                                   "rotation angle is likewise not sensed: the firmware tracks "
                                   "it relative to an assumed neutral start and the operator is "
                                   "trusted to begin with the claw physically neutral."),
-        ("Why that is acceptable", "The build cycle returns the claw to neutral at the feeder "
+        ("Why that is acceptable", "The build cycle returns the claw to neutral at pickup "
                                    "before every pickup and again after every placement, so a "
                                    "tracked angle is only ever one cycle old. A manual jog to "
                                    "an arbitrary angle is explicitly marked uncalibrated and "
@@ -389,44 +370,12 @@ def chapter_2(rep):
                placeholder="Close-up photograph or CAD view of the end effector, with the servo "
                            "and the rotation stepper labelled and the grip axis marked.")
 
-    rep.h3("2.4.5 The feeder module")
+    rep.h3("2.4.5 The pickup station")
     rep.p(
-        "The feeder is a self-contained module that stands to the left of the gantry frame and "
-        "delivers a block to the gantry's cell [0,0]. It exists because the reference design "
-        "does not need one: chess pieces are already on the board. A stacking machine consumes "
-        "its parts, so something has to supply them, one at a time, in a known place and a known "
-        "orientation.")
-    rep.p("Physically it is four things in a line:")
-    rep.numbered([
-        "**The container.** A hopper sized for the block footprint, with vertical elevation so a "
-        "column of blocks can queue inside it, closed by a servo-driven gate on Uno pin 12. The "
-        "gate does not simply open: it moves in two deliberate stages, 23 degrees closed to 80 "
-        "degrees, then 80 to 150 degrees, with a 500 ms settle at each stage. Opening in one "
-        "large movement releases blocks in a clump; opening in two lets the column settle "
-        "against the gate and release the bottom block on its own.",
-        "**The exit sensor.** An HC-SR04 at the container's exit (TRIG 4, ECHO 5) that confirms "
-        "a block has physically left the container and is on the belt. As soon as it fires the "
-        "container is shut again, so a second block cannot follow the first out.",
-        "**The belt.** A GT2-driven conveyor about 30 x 10 cm, built from a belt sheet on "
-        "3D-printed rollers and driven by a NEMA17 through an A4988 (DIR 2, STEP 3), running at "
-        "a configurable 325 steps/s by default. The belt carries the block from the container "
-        "toward the pickup point.",
-        "**The stage sensor and the aligner.** A digital IR obstacle sensor at the pickup point "
-        "(OUT 8, active-low by default) stops the belt the moment the block arrives, and an alignment servo on pin 6 "
-        "nudges the block square, moving from its 90-degree rest to 120 degrees and back after "
-        "350 ms. The stage sensor is then read again: only if the block is still there does the "
-        "feeder report success.",
-    ])
-    rep.p(
-        "The pickup point is the gantry's vertical cell [0,0], whose centre is the machine's "
-        "home corner. Because the lattice is anchored on that corner, a pickup is a plain home "
-        "with no move afterwards, and the claw closes on the block's centre without any "
-        "additional positioning. The feeder never rotates: it always presents a block standing, "
-        "whichever grid mode the gantry is latched into.")
-    rep.figure("The feeder module: hopper with its two-stage servo gate, the conveyor belt, "
-               "the alignment servo, the exit HC-SR04 and the pickup-stage IR sensor.",
-               placeholder="Photograph of the feeder alongside the gantry, with the exit and stage "
-                           "sensors and the gate servo labelled, and the pickup point marked.")
+        "The pickup station is the gantry's reserved cell [0,0], whose centre is the machine's "
+        "home corner. The operator presents one standing block there for each placement. The "
+        "production `M` workflow descends with the claw open and pauses so the operator can "
+        "align the block before explicitly authorising the close.")
 
     rep.h3("2.4.6 The workpiece and the build surface")
     rep.p(
@@ -463,19 +412,19 @@ def chapter_2(rep):
     rep.p(
         "The vertical grid fills its travel exactly on both axes (6 x 3.8 = 22.8 and "
         "5 x 7.6 = 38.0), which is not a coincidence to be tuned away: it is what 'the build "
-        "area is the travel area' means. Both grids share the same feeder cell at [0,0] and "
+        "area is the travel area' means. Both grids share the same pickup cell at [0,0] and "
         "neither builds on it, so the buildable counts are 7 x 6 - 1 = **41 cells** vertical and "
         "3 x 10 - 1 = **29 cells** horizontal. The lattice mathematics, the +1.9 cm registration "
         "the horizontal grid carries, and why that registration is not a tool offset, are set "
         "out in Section 4.2.3.")
     rep.p(
         "Drawn on top of one another the two grids show what the mode latch actually changes. "
-        "The two lattices share one physical envelope and one feeder cell, and a horizontal "
+        "The two lattices share one physical envelope and one pickup cell, and a horizontal "
         "column spans two vertical columns plus the gap between them (6.0 = 2.2 + 1.6 + 2.2, so "
         "7.6 = 2 x 3.8), which is why the same surface reads as 7 x 6 cells one way round and "
         "3 x 10 the other.")
     rep.figure("The two grids overlaid on the same build surface: the vertical 7 x 6 lattice "
-               "and the horizontal 3 x 10 lattice, sharing one envelope and one feeder cell "
+               "and the horizontal 3 x 10 lattice, sharing one envelope and one pickup cell "
                "at [0,0].",
                placeholder="Overlay drawing or photograph of both grids on the same surface, "
                            "to be supplied.")
@@ -522,41 +471,37 @@ def chapter_2(rep):
         "logic-level runs from the 5 V rail.")
     rep.bullets([
         "**The 12 V rail**, straight off the supply, feeds the three TB6600 drivers (the two "
-        "CoreXY NEMA17s and the Z NEMA17) and the A4988 driving the feeder belt motor.",
-        "**The 5 V rail**, from the LM2596 buck converter, feeds the gripper servo, the "
-        "container and alignment servos, the 28BYJ-48 rotation stepper through its ULN2003, "
-        "exit HC-SR04, stage IR sensor, and the A4988's logic and reference supply.",
-        "**Both Arduinos are powered over USB from the Pi**, which is also how they communicate.",
+        "CoreXY NEMA17s and the Z NEMA17).",
+        "**The 5 V rail**, from the LM2596 buck converter, feeds the gripper servo and the "
+        "28BYJ-48 rotation stepper through its ULN2003.",
+        "**The Mega is powered over USB from the Pi**, which is also how it communicates.",
         "**The Raspberry Pi runs from its own official USB-C supply**, deliberately not from the "
         "buck converter.",
-        "**One common ground** is shared by the 12 V supply, the buck converter, both Arduinos, "
-        "all four drivers and every sensor.",
+        "**One common ground** is shared by the 12 V supply, the buck converter, the Mega, "
+        "all drivers and every switch.",
     ])
     rep.p(
-        "The assorted resistors and capacitors in the bill of materials are used around the "
-        "A4988 belt driver, for its current-reference network and for local decoupling on the "
-        "motor supply.")
+        "The assorted resistors and capacitors in the bill of materials provide local filtering "
+        "and decoupling.")
     rep.p(
         "The supply is rated at **15 A**, which is generous for what this machine actually "
         "draws. A NEMA17 of the size used here takes on the order of 1.5 A per phase, the "
         "28BYJ-48 through its ULN2003 takes well under 0.3 A, a hobby servo draws a few "
         "hundred milliamperes while it is moving and almost nothing once it has arrived, and "
-        "the feeder sensors draw only a few tens of milliamperes together. Adding the worst case of "
-        "every one of those together still leaves most of the supply unused.")
+        "the control electronics draw comparatively little. Adding the worst case still leaves "
+        "most of the supply unused.")
     rep.p(
         "In practice the machine never comes close even to that sum, because **the build "
         "cycle is sequential by construction and very little runs at the same time**. The "
         "fourteen phases move one thing at a time: Z travels while X and Y are stopped, X and "
         "Y traverse while Z is parked at the top switch, the gripper servo moves while nothing "
         "else does, and the rotation stepper turns only between a completed move and the next "
-        "one. The feeder belt runs only while the gantry is idle waiting for a block. The "
-        "instantaneous draw is usually one stepper plus the logic, so the 15 A rating is sized "
+        "one. The instantaneous draw is usually one stepper plus the logic, so the 15 A rating is sized "
         "for the whole machine and not for any moment it actually reaches.")
     rep.figure("Power distribution schematic: the 12 V supply, the LM2596 buck converter, the "
                "two rails and the common ground.",
                placeholder="Schematic to be drawn, showing the 12 V rail to the three TB6600s "
-                           "and the A4988, the 5 V rail to the servos, the ULN2003 and the "
-                           "sensors, and the separate Pi supply.")
+                           ", the 5 V rail to the servo and ULN2003, and the separate Pi supply.")
 
     rep.h3("2.5.2 Wiring and construction")
     rep.p(
@@ -576,15 +521,14 @@ def chapter_2(rep):
         "decides what and whether; each Arduino decides how.**")
     rep.defs([
         ("High level (Raspberry Pi)",
-         "Chooses the target cell, the stack level and the grid mode; sequences the feeder "
-         "before the gantry; applies every safety gate; owns the session lock; and decides "
+         "Chooses the target cell, the stack level and the grid mode; coordinates manual pickup; "
+         "applies every safety gate; owns the session lock; and decides "
          "whether a command may be issued at all. It never sends a motor step. What it sends is "
-         "`B col row level` or `FEED id`, and nothing more detailed than that."),
-        ("Low level (Arduino MEGA, Arduino Uno)",
+         "`M col row level` followed by the firmware-gated `C`, and nothing more detailed."),
+        ("Low level (Arduino MEGA)",
          "Turns those commands into motion. The Mega owns step generation, direction polarity, "
          "homing, limit enforcement, the grid-to-steps arithmetic, the servo and stepper timing "
-         "and the phase sequence. The Uno owns the feed state machine, the servo angles, the "
-         "belt rate, exit-ultrasonic threshold and stage-IR polarity."),
+         "and the phase sequence."),
         ("The reason for the split",
          "The firmware owns everything that cannot change without reflashing, which is exactly "
          "the set of numbers that would be dangerous if the Pi held a stale copy: the step "
@@ -604,12 +548,9 @@ def chapter_2(rep):
         "of silent.")
 
     rep.p(
-        "The two firmwares are isolated from each other by construction. There is no wire "
-        "between the Mega and the Uno, neither knows the other exists, and the only thing that "
-        "couples them is the Pi's orchestrator. The permission to move the gantry is one exact "
-        "message, `@id OK state=block_ready result=staged`, whose `id` matches the request the "
-        "Pi sent; a terminal message with the wrong id is ignored, and every other message the "
-        "Uno emits is progress telemetry that never counts as success.")
+        "The production permission to begin is the operator's explicit staging confirmation. "
+        "Permission to close the claw is separate and comes only after the Mega reports its "
+        "`await_manual_close` phase.")
 
     # ------------------------------------------------------------------
     rep.h2("2.6 System Workflow")
@@ -627,14 +568,11 @@ def chapter_2(rep):
         "changes, and emits a deterministic list of `B col row level` commands separated by `R` "
         "and `RR` mode latches. An invalid model compiles to nothing at all rather than to a "
         "half-program.",
-        "**Feed.** For each block in the program, the Pi sends `FEED <id>` to the Uno. The Uno "
-        "closes the container, opens it in two stages, waits for the exit sensor to confirm a "
-        "block has left, shuts the gate behind it, runs the belt, stops on the stage sensor, "
-        "nudges the block square, re-reads the stage sensor, and returns exactly one terminal "
-        "result.",
-        "**Place.** Only on the Uno's correlated terminal success does the Pi send "
-        "`B col row level` to the Mega. The Mega runs its fourteen-phase cycle: raise clear, "
-        "home to the feeder, neutralise the claw, open, descend to the ground switch, grip, "
+        "**Stage and align.** For each block, the operator puts one block at [0,0], confirms "
+        "staging, and the Pi sends `M col row level`. The Mega descends open and waits for "
+        "alignment; the operator then explicitly sends `C`.",
+        "**Place.** The Mega continues its fourteen-phase cycle: raise clear, "
+        "home to pickup, neutralise the claw, open, descend to the pickup height, grip, "
         "lift, traverse to the target cell, apply the grid's rotation, descend to the target "
         "level, release, then park by raising Z, homing X/Y and un-rotating the claw. It "
         "narrates every phase back over serial before that phase runs.",

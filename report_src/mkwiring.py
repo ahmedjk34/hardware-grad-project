@@ -7,7 +7,6 @@ below. The pin numbers are transcribed from the firmware sources and are the
 only place they appear, so the drawing cannot disagree with the machine.
 
   Mega : arduino/build_test_v1/build_test_v1.ino  SECTION 1, 1B, 1C, 6
-  Uno  : arduino/belt_v1/belt_v1.ino              header comment + pin consts
 """
 
 import os
@@ -196,42 +195,3 @@ draw(
         ]},
     ],
     outname="fig-wiring-mega.svg")
-
-# =============================================================== UNO ========
-# arduino/belt_v1/belt_v1.ino
-uno_left = [
-    {"pin": "2",  "to": "A4988  DIR",  "note": "belt direction"},
-    {"pin": "3",  "to": "A4988  STEP", "note": "NEMA17 conveyor, 325 steps/s"},
-]
-uno_right = [
-    {"pin": "4",  "to": "EXIT HC-SR04  TRIG", "note": "container exit"},
-    {"pin": "5",  "to": "EXIT HC-SR04  ECHO", "note": "block left the hopper"},
-    {"pin": "8",  "to": "STAGE IR  OUT", "note": "block reached [0,0]"},
-    {"pin": "6",  "to": "ALIGNMENT SERVO",    "note": "rest 90 deg / nudge 120 deg", "col": PWR5},
-    {"pin": "12", "to": "CONTAINER SERVO",    "note": "closed 23 / stage 80 / open 150", "col": PWR5},
-]
-draw(
-    "Figure — Arduino Uno, feeder controller: complete wiring",
-    "Every pin transcribed from arduino/belt_v1/belt_v1.ino",
-    ("Arduino Uno", "FEEDER  —  firmware belt_v1, protocol 2"),
-    uno_left, uno_right,
-    rails=[
-        ("12 V", PWR12, "A4988 motor supply"),
-        ("5 V",  PWR5,  "from LM2596 — both servos, exit HC-SR04, stage IR, A4988 logic / Vref"),
-        ("GND",  GND,   "common ground, shared with the Mega side"),
-    ],
-    notes=[
-        {"lines": [
-            "A4988 ENABLE is tied directly to GROUND, not driven by the Arduino. There is no enable pin in the firmware.",
-        ]},
-        {"lines": [
-            "EXIT ULTRASONIC SENSOR: detection threshold is distance < 10.0 cm. The echo timeout is 30 ms and reports",
-            "\"no echo\", which is never treated as a detection — 'I heard nothing' and 'nothing is there' are different.",
-            "The stage IR sensor is a digital active-low input by default; it reports detected/not detected, not distance.",
-        ]},
-        {"lines": [
-            "SERVO POWER comes from the 5 V rail, not the Uno's 5 V pin. USB to the Raspberry Pi carries both the",
-            "serial link (9600 8N1, protocol 2) and board power. This board has NO connection to the Arduino MEGA.",
-        ]},
-    ],
-    outname="fig-wiring-uno.svg")

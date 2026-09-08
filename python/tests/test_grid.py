@@ -35,16 +35,16 @@ def check(name, condition, detail=""):
 # The map, transcribed from printGrid() with GRID_COLS=4, GRID_ROWS=3
 # ------------------------------------------------------------------
 
-EXPECTED = """  # = machine   . = buildable cell   F = feeder   X = belt
-  (every cell is a real block; [0,0] is the feeder)
+EXPECTED = """  # = machine   . = buildable cell   P = pickup
+  (every cell is a real block; [0,0] is the pickup)
 
   3 | . . . . .
   2 | . . . . .
   1 | . . . . .
-  0 | F . . . .
+  0 | P . . . .
     +----------
      0 1 2 3 4
-     ^ [0,0] feeder; X = belt-blocked; rest buildable"""
+     ^ [0,0] pickup; rest buildable"""
 
 small = MachineGrid(cols=5, rows=4)
 check("ascii_map matches printGrid()", small.ascii_map() == EXPECTED)
@@ -55,7 +55,7 @@ if small.ascii_map() != EXPECTED:
 # LAST line of cells, not the first.
 marked = small.ascii_map(here=(1, 1)).splitlines()
 check("'#' at [1,1] is bottom-left", marked[5] == "  1 | . # . . .", repr(marked[5]))
-check("the feeder is marked on the bottom row", marked[6] == "  0 | F . . . .",
+check("the pickup is marked on the bottom row", marked[6] == "  0 | P . . . .",
       repr(marked[6]))
 
 # Column numbers are last-digit-only, as the firmware does to keep alignment.
@@ -119,9 +119,9 @@ check("bounds are 0-based, like cellInRange()",
 check("row 0 and column 0 are ordinary build targets now",
       from_cfg.contains_build_target(0, 5)
       and from_cfg.contains_build_target(6, 0))
-check("[0,0] is the feeder and is NOT a build target",
+check("[0,0] is the pickup and is NOT a build target",
       not from_cfg.contains_build_target(0, 0)
-      and from_cfg.is_feeder(0, 0))
+      and from_cfg.is_pickup(0, 0))
 check("build target still rejects negative/outside coordinates",
       not from_cfg.contains_build_target(-1, 1)
       and not from_cfg.contains_build_target(7, 0)
@@ -143,8 +143,8 @@ check("last physical cell centre lands exactly on the travel caps",
           zip(from_cfg.cell_center_cm(6, 5), (22.8, 38.0)))
       and math.isclose(from_cfg.x_last_center_cm, from_cfg.workspace_width_cm)
       and math.isclose(from_cfg.y_last_center_cm, from_cfg.workspace_height_cm))
-check("the feeder is [0,0]'s centre, which IS home - a pick-up is a plain home",
-      from_cfg.feeder_center_cm() == (0.0, 0.0))
+check("the pickup is [0,0]'s centre, which IS home - a pick-up is a plain home",
+      from_cfg.pickup_center_cm() == (0.0, 0.0))
 check("all placement centres remain inside holder travel",
       from_cfg.x_first_center_cm >= 0 and from_cfg.y_first_center_cm >= 0
       and from_cfg.x_last_center_cm <= from_cfg.workspace_width_cm
@@ -517,50 +517,10 @@ for constant, json_key in per_mode_pairs.items():
               actual[mode_name] == expected,
               f"firmware {actual[mode_name]}, JSON {expected}")
 
-# Belt-blocked cells: a per-mode {col,row} list, baked into GRID_BLOCKED_* in
-# the sketch and mirrored in config/rig.json. Not a straight per-mode scalar,
-# so it has its own parser: two 2D tables plus a live-count vector.
-def firmware_blocked_cells():
-    def table(name):
-        found = re.search(
-            rf"long\s+{name}\[GRID_MODE_COUNT\]\[GRID_BLOCKED_MAX\]\s*=\s*\{{(.*?)\}}\s*;",
-            sketch, re.DOTALL)
-        if found is None:
-            return None
-        return [[int(part) for part in block.split(",")]
-                for block in re.findall(r"\{([^{}]*)\}", found.group(1))]
-
-    counts = re.search(
-        r"long\s+GRID_BLOCKED_COUNT\[GRID_MODE_COUNT\]\s*=\s*\{([^}]*)\}\s*;", sketch)
-    cols, rows = table("GRID_BLOCKED_COL"), table("GRID_BLOCKED_ROW")
-    if counts is None or cols is None or rows is None:
-        return None
-    count_vals = [int(part) for part in counts.group(1).split(",")]
-    if not (len(count_vals) == len(cols) == len(rows) == len(FIRMWARE_MODE_ORDER)):
-        return None
-    return {
-        mode_name: {(cols[idx][i], rows[idx][i]) for i in range(count_vals[idx])}
-        for idx, mode_name in enumerate(FIRMWARE_MODE_ORDER)
-    }
-
-
-fw_blocked = firmware_blocked_cells()
-if fw_blocked is None:
-    check("firmware GRID_BLOCKED_* tables parse", False, "no readable tables")
-else:
-    for mode_name in ("vertical", "horizontal"):
-        want = {tuple(pair) for pair in
-                config["grid"]["modes"][mode_name].get("blocked_cells", [])}
-        check(f"firmware/config pair GRID_BLOCKED[{mode_name}]",
-              fw_blocked[mode_name] == want,
-              f"firmware {sorted(fw_blocked[mode_name])}, JSON {sorted(want)}")
-    grid_v = MachineGrid.from_config(config, mode="vertical")
-    check("[0,1] and [1,1] are blocked build targets in vertical",
-          not grid_v.contains_build_target(0, 1) and grid_v.is_blocked(0, 1)
-          and not grid_v.contains_build_target(1, 1) and grid_v.is_blocked(1, 1))
-    check("[2,1] and [3,3] are buildable in vertical",
-          grid_v.contains_build_target(2, 1)
-          and grid_v.contains_build_target(3, 3))
+grid_v = MachineGrid.from_config(config, mode="vertical")
+check("formerly obstructed [0,1], [1,0], and [1,1] are buildable",
+      all(grid_v.contains_build_target(c, r)
+          for c, r in ((0, 1), (1, 0), (1, 1))))
 
 # Dynamic build-motion compensation is deliberately firmware-only: it bends
 # the holder path, not the rectangular grid that the Pi/camera draw.  It must
@@ -795,8 +755,8 @@ check("the shift does not touch the column count",
       shifted_v.cols == base_v.cols)
 check("clearing the shift restores the full grid",
       MachineGrid.from_config(mode="vertical", shift_y_cm=0.0).rows == base_v.rows)
-check("the feeder is never shifted",
-      shifted_v.feeder_center_cm() == (0.0, 0.0))
+check("the pickup is never shifted",
+      shifted_v.pickup_center_cm() == (0.0, 0.0))
 check("[0,0] stays the feeder / non-build target under a shift",
       not shifted_v.contains_build_target(0, 0))
 check("describe() reports the shift and the clip",

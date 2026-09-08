@@ -8,9 +8,9 @@ const block: ModelBlock = {
 };
 
 describe("M2 local placement checks", () => {
-  it("reserves [0,0] as the feeder in either mode", () => {
+  it("reserves [0,0] as the pickup cell in either mode", () => {
     expect(placementStatus(emptyModel(), "vertical", { col: 0, row: 0, level: 0 }))
-      .toEqual({ legal: false, reason: "[0,0] is the feeder" });
+      .toEqual({ legal: false, reason: "[0,0] is the pickup cell" });
     expect(placementStatus(emptyModel(), "horizontal", { col: 0, row: 0, level: 4 }).legal)
       .toBe(false);
   });

@@ -102,10 +102,10 @@ def test_idle_reboot_blocks_the_next_command():
         rig.close()
 
 
-def test_feeder_and_overlapping_build_are_refused():
+def test_pickup_cell_and_overlapping_build_are_refused():
     rig, _board = make_rig(build_seconds=0.2)
     try:
-        with pytest.raises(ValueError, match="feeder"):
+        with pytest.raises(ValueError, match="pickup"):
             rig.build(0, 0, 0)
 
         started = threading.Event()

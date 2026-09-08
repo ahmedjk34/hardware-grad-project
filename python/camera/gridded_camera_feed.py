@@ -116,9 +116,6 @@ from camera.tk_camera_window import TkCameraWindow  # noqa: E402
 
 
 ENVELOPE_COLOR = (170, 170, 170)
-# Belt-blocked cells: the same red the Studio uses for them (--danger #FF5C5C),
-# hatched and struck through. BGR.
-BLOCKED_COLOR = (92, 92, 255)
 CALIBRATION_COLOR = (255, 180, 30)       # orange: diagonal
 CALIBRATION_HORIZONTAL = (255, 255, 0)   # cyan: screen-horizontal
 CALIBRATION_VERTICAL = (255, 0, 255)     # magenta: screen-vertical
@@ -492,7 +489,6 @@ def _grid_geometry(workspace, image_size):
         g.workspace_width_cm, g.workspace_height_cm,
         g.trim_x_cm, g.trim_y_cm,
         g.error_offset_x_cm, g.error_offset_y_cm,
-        tuple(sorted(getattr(g, "blocked", ()))),
     )
     cached = _GRID_GEOMETRY_CACHE.get(key)
     if cached is not None:
@@ -534,44 +530,11 @@ def _grid_geometry(workspace, image_size):
     # real footprints and are drawn by the loop above; [0,0] is the feeder.
     extra_polygons = []
 
-    # Belt-blocked cells: real, drawn cells the feeder belt occupies, so the
-    # claw can never descend there. Marked exactly as the Studio marks them -
-    # a red outline, struck through, with a light hatch. Geometry is the same
-    # cell_polygon() the grid loop uses, so it stays put under perspective.
-    blocked_polygons = tuple(
-        tuple(_pixel(point) for point in
-              workspace.cell_polygon(col, row, image_size))
-        for col, row in sorted(getattr(g, "blocked", ()))
-        if g.contains(col, row)
-    )
-
-    cached = (envelope, tuple(lines), tuple(labels), tuple(extra_polygons),
-              blocked_polygons)
+    cached = (envelope, tuple(lines), tuple(labels), tuple(extra_polygons))
     if len(_GRID_GEOMETRY_CACHE) >= 16:
         _GRID_GEOMETRY_CACHE.pop(next(iter(_GRID_GEOMETRY_CACHE)))
     _GRID_GEOMETRY_CACHE[key] = cached
     return cached
-
-
-def _draw_blocked_cell(frame, quad):
-    """A belt-blocked cell, drawn the Studio's way: red outline, struck through,
-    with a light diagonal hatch. ``quad`` is the cell's four pixel corners.
-    """
-    poly = np.asarray(quad, dtype=np.int32)
-    p0, p1, p2, p3 = (np.asarray(point, dtype=np.float64) for point in quad)
-
-    # Light hatch: parallel strokes across the cell, one edge pair to the other.
-    for step in (0.2, 0.4, 0.6, 0.8):
-        a = tuple(np.round(p0 + (p1 - p0) * step).astype(int))
-        b = tuple(np.round(p3 + (p2 - p3) * step).astype(int))
-        cv2.line(frame, a, b, BLOCKED_COLOR, 1, cv2.LINE_AA)
-
-    # Struck through: both diagonals.
-    cv2.line(frame, tuple(poly[0]), tuple(poly[2]), BLOCKED_COLOR, 2, cv2.LINE_AA)
-    cv2.line(frame, tuple(poly[1]), tuple(poly[3]), BLOCKED_COLOR, 2, cv2.LINE_AA)
-
-    # Outline last so it stays crisp over the hatch.
-    cv2.polylines(frame, [poly], True, BLOCKED_COLOR, 2, cv2.LINE_AA)
 
 
 def draw_machine_grid(frame, workspace, hover_point, calibrated, *, detail=False):
@@ -582,16 +545,13 @@ def draw_machine_grid(frame, workspace, hover_point, calibrated, *, detail=False
     ``workspace.mapped_grid``.
     """
     image_size = frame.shape[1::-1]
-    (envelope, lines, labels, extra_polygons,
-     blocked_polygons) = _grid_geometry(workspace, image_size)
+    envelope, lines, labels, extra_polygons = _grid_geometry(workspace, image_size)
     cv2.polylines(frame, [envelope], True, ENVELOPE_COLOR, 2, cv2.LINE_AA)
     color = GRID_COLOR if calibrated else WARN_COLOR
     for p0, p1 in lines:
         cv2.line(frame, p0, p1, color, 1, cv2.LINE_AA)
     for polygon in extra_polygons:
         cv2.polylines(frame, [polygon], True, color, 1, cv2.LINE_AA)
-    for quad in blocked_polygons:
-        _draw_blocked_cell(frame, quad)
     if detail:
         for label, at in labels:
             cv2.putText(frame, label, at, cv2.FONT_HERSHEY_SIMPLEX, 0.34,

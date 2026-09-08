@@ -12,7 +12,7 @@ import { fromFileRig, shiftsOf, structureOf } from "../studio/rigmodel";
 import { BLOCK_CYCLE_SECONDS, DEFAULT_STUDIO_SETTINGS, LATCH_HOMING_SECONDS } from "../studio/settings";
 import { loadTwinModel } from "../studio/twin";
 import {
-  buildPosition, currentOp, currentOperationText, feederPrompt, initialRun,
+  buildPosition, currentOp, currentOperationText, stagingPrompt, initialRun,
   programRows, runTiming, step,
   type RunEvent, type RunState, type RunStyle,
 } from "../studio/runner";
@@ -64,7 +64,7 @@ export function RunnerPanel({ state, connected, modelId, api, delay, onActiveCha
   onToast?: (toast: RunnerToast) => void;
   /**
    * Building mode's floating control cluster. Drops everything now carried by
-   * the toasts — the phase readout, the feeder card, the elapsed/ETA line, the
+   * the toasts — the phase readout, the pickup prompt, the elapsed/ETA line, the
    * run-report table, the read-only program dump — and keeps only the controls
    * an operator presses. The state machine and every guarded route are
    * untouched; the console renders this panel without the flag.
@@ -239,10 +239,16 @@ export function RunnerPanel({ state, connected, modelId, api, delay, onActiveCha
       colours: Object.fromEntries(modelDocument.blocks.map(block => [block.id, block.colour])),
     };
   }, [compiled, modelDocument, run]);
-  const prompt = feederPrompt(run.phase === "idle" ? previewRun : run);
+  const prompt = stagingPrompt(run.phase === "idle" ? previewRun : run);
   const position = buildPosition(run);
   const timing = runTiming(run, now, BLOCK_CYCLE_SECONDS, LATCH_HOMING_SECONDS);
   const op = currentOp(run);
+  // The guarded select response has already verified this exact operation.
+  // Reflect it locally while the coalesced state snapshot catches up so the
+  // explicit staging confirmation is never disabled by a stale selection.
+  const confirmationState: StateModel = op?.op === "build" && run.selectedCommand
+    ? { ...server, selected: [op.col, op.row], command: run.selectedCommand }
+    : server;
   const operation = currentOperationText(run);
   const canStart = !!modelDocument && !!compiled?.valid && connected
     && (style === "dry" || (style === "step" ? server.gantry_connected : server.hardware_ready))
@@ -255,7 +261,7 @@ export function RunnerPanel({ state, connected, modelId, api, delay, onActiveCha
   useEffect(() => {
     if (!onToast || !prompt) return;
     // `idle` is included on purpose: with a build chosen, "what needs to be
-    // done" is already "load block 1 into the feeder".
+    // done" is already "stage block 1 at pickup".
     if (run.phase === "done" || run.phase === "locked"
         || run.phase === "stopped-mismatch") return;
     onToast({
@@ -339,9 +345,9 @@ export function RunnerPanel({ state, connected, modelId, api, delay, onActiveCha
       )}
 
       {!compact && prompt && run.phase !== "done" && run.phase !== "locked" && run.phase !== "stopped-mismatch" && (
-        <div className="feeder" aria-live="polite">
+        <div className="pickup-prompt" aria-live="polite">
           <strong className={prompt.same ? "is-same" : ""}>
-            {!prompt.same && <span className="feeder-swatch" data-colour={prompt.colour.toLowerCase()} aria-hidden="true" />}
+            {!prompt.same && <span className="pickup-swatch" data-colour={prompt.colour.toLowerCase()} aria-hidden="true" />}
             {prompt.same ? "NEXT: SAME COLOUR" : `NEXT: ${prompt.colour}`}
           </strong>
           <span>{prompt.text}</span>
@@ -359,9 +365,9 @@ export function RunnerPanel({ state, connected, modelId, api, delay, onActiveCha
       )}
 
       {run.phase === "awaiting-confirm" && run.pendingConfirm === "build" && (
-        <BuildButton state={server} connected={connected}
-                     onBuild={(_command, feedMode) => applyEvent({
-                       type: "confirm", feedMode, now: Date.now(),
+        <BuildButton state={confirmationState} connected={connected}
+                     onBuild={() => applyEvent({
+                       type: "confirm", now: Date.now(),
                      })} />
       )}
 
@@ -403,26 +409,14 @@ export function RunnerPanel({ state, connected, modelId, api, delay, onActiveCha
           <button type="button" className="btn btn-ghost"
                   disabled={run.stopAfterCurrent || run.phase === "stopped-mismatch"}
                   onClick={() => {
-                    if (state.cell_phase === "feeding" || state.cell_phase === "staging") {
-                      void (api?.stop ?? transportApi.stop)().catch(error =>
-                        dispatchRef.current({
-                          type: "transport-error",
-                          reason: error instanceof Error ? error.message : String(error),
-                          now: Date.now(),
-                        }));
-                    }
                     applyEvent({ type: "stop-after", now: Date.now() });
                   }}>
-            {run.stopAfterCurrent ? "STOPPING AFTER THIS BLOCK"
-              : state.cell_phase === "feeding" || state.cell_phase === "staging"
-                ? "CANCEL FEED" : "STOP AFTER THIS BLOCK"}
+            {run.stopAfterCurrent ? "STOPPING AFTER THIS BLOCK" : "STOP AFTER THIS BLOCK"}
           </button>
         </div>
       )}
       {!compact && (
-        <p className="reason runner-honest">{state.cell_phase === "feeding" || state.cell_phase === "staging"
-          ? "feed cancellation stops the Uno; inspect the pickup area before recovery"
-          : "the block in flight will finish — Mega motion cannot be interrupted"}</p>
+        <p className="reason runner-honest">The block in flight will finish — Mega motion cannot be interrupted</p>
       )}
 
       {run.phase === "rejected" && (

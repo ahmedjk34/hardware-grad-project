@@ -84,12 +84,12 @@ def test_select_level_mode_and_stale_camera_guards(tmp_path):
                 assert deselected.json()["selected"] is None
                 assert (await select_cell(client, app)).status_code == 200
 
-                feeder_x, feeder_y, (width, height) = point_in_cell(app, 0, 0)
-                feeder = await client.post("/api/select", json={
-                    "x": feeder_x, "y": feeder_y, "img_w": width, "img_h": height,
+                pickup_x, pickup_y, (width, height) = point_in_cell(app, 0, 0)
+                pickup = await client.post("/api/select", json={
+                    "x": pickup_x, "y": pickup_y, "img_w": width, "img_h": height,
                 })
-                assert feeder.status_code == 400
-                assert feeder.json()["detail"].startswith("[0,0] is the feeder")
+                assert pickup.status_code == 400
+                assert pickup.json()["detail"].startswith("[0,0] is the pickup cell")
 
                 outside = await client.post("/api/select", json={
                     "x": -1, "y": -1, "img_w": width, "img_h": height,
@@ -144,20 +144,20 @@ def test_build_placed_rejected_and_aborted_paths_are_server_guarded(tmp_path):
                 })
                 assert placed.status_code == 200
                 assert placed.json()["build_state"] == "RUNNING"
+                assert app.state.mock_board.written[-1] == "M 3 5 0"
                 busy = await client.post("/api/deselect")
                 assert busy.status_code == 409
                 display_only = await client.post("/api/view", json={"overlay": False})
                 assert display_only.status_code == 200
                 assert display_only.json()["views"]["overlay"] is False
+                await wait_for_state(client, lambda state: state["cell_phase"] == "awaiting_manual_close")
+                assert (await client.post("/api/manual-close", json={"confirm": True})).status_code == 200
                 done = await wait_for_state(client, lambda state: state["last_result"] == "placed")
                 assert done["build_state"] == "READY"
                 assert done["selected"] is None
                 assert done["hardware_ready"] is True
                 assert done["gantry_connected"] is True
-                assert done["feeder_connected"] is True
-                assert any(line.endswith("OK state=block_ready result=staged")
-                           for line in app.state.mock_feeder.timeline)
-                assert sum(line.startswith("B ")
+                assert sum(line.startswith("M ")
                            for line in app.state.mock_board.written) == 1
 
                 assert (await select_cell(client, app)).status_code == 200
@@ -166,6 +166,8 @@ def test_build_placed_rejected_and_aborted_paths_are_server_guarded(tmp_path):
                     "confirm": True, "command": "B 3 5 0",
                 })
                 assert rejected.status_code == 200
+                await wait_for_state(client, lambda state: state["cell_phase"] == "awaiting_manual_close")
+                assert (await client.post("/api/manual-close", json={"confirm": True})).status_code == 200
                 locked = await wait_for_state(client, lambda state: state["build_state"] == "LOCKED")
                 assert locked["last_result"] == "aborted"
                 assert "simulated safe refusal" in locked["locked_reason"]
@@ -175,7 +177,7 @@ def test_build_placed_rejected_and_aborted_paths_are_server_guarded(tmp_path):
     asyncio.run(scenario())
 
 
-def test_feeder_failure_and_operator_cancel_never_send_mega_build(tmp_path):
+def test_build_uses_manual_staging_and_requires_the_firmware_close_gate(tmp_path):
     app = create_app(ConsoleAppOptions(
         mock=True, settings_path=mock_settings(tmp_path),
         workspace_map_path=tmp_path / "workspace_map.json", build_seconds=0.1,
@@ -188,69 +190,14 @@ def test_feeder_failure_and_operator_cancel_never_send_mega_build(tmp_path):
                                          base_url="http://test") as client:
                 await wait_for_state(client, lambda state: state["camera"] == "LIVE")
                 assert (await select_cell(client, app)).status_code == 200
-                app.state.mock_feeder.fail_next("stage_timeout")
-                assert (await client.post("/api/build", json={
-                    "confirm": True, "command": "B 3 5 0",
-                })).status_code == 200
-                failed = await wait_for_state(
-                    client, lambda state: state["build_state"] == "LOCKED")
-                assert failed["last_result"] == "aborted"
-                assert "stage_timeout" in failed["locked_reason"]
-                assert not any(line.startswith("B ")
-                               for line in app.state.mock_board.written)
-
-        # A new service process is the required recovery from LOCKED.
-        second = create_app(ConsoleAppOptions(
-            mock=True, settings_path=mock_settings(tmp_path),
-            workspace_map_path=tmp_path / "workspace_map_2.json",
-            build_seconds=0.1,
-        ))
-        async with LifespanManager(second):
-            second.state.mock_feeder.feed_seconds = 1.0
-            transport = httpx.ASGITransport(app=second)
-            async with httpx.AsyncClient(transport=transport,
-                                         base_url="http://test") as client:
-                await wait_for_state(client, lambda state: state["camera"] == "LIVE")
-                assert (await select_cell(client, second)).status_code == 200
-                assert (await client.post("/api/build", json={
-                    "confirm": True, "command": "B 3 5 0",
-                })).status_code == 200
-                await wait_for_state(client, lambda state: state["cell_phase"] == "feeding")
-                stopped = await client.post("/api/stop")
-                assert stopped.status_code == 200
-                cancelled = await wait_for_state(
-                    client, lambda state: state["build_state"] == "LOCKED")
-                assert "cancelled" in cancelled["locked_reason"]
-                assert "STOP" in second.state.mock_feeder.writes
-                assert not any(line.startswith("B ")
-                               for line in second.state.mock_board.written)
-
-    asyncio.run(scenario())
-
-
-def test_manual_feed_build_skips_the_uno_and_runs_the_same_mega_command(tmp_path):
-    app = create_app(ConsoleAppOptions(
-        mock=True, settings_path=mock_settings(tmp_path),
-        workspace_map_path=tmp_path / "workspace_map.json", build_seconds=0.1,
-    ))
-
-    async def scenario():
-        async with LifespanManager(app):
-            transport = httpx.ASGITransport(app=app)
-            async with httpx.AsyncClient(transport=transport,
-                                         base_url="http://test") as client:
-                await wait_for_state(client, lambda state: state["camera"] == "LIVE")
-                assert (await select_cell(client, app)).status_code == 200
-                feeder_writes = list(app.state.mock_feeder.writes)
+                early = await client.post("/api/manual-close", json={"confirm": True})
+                assert early.status_code == 409
                 response = await client.post("/api/build", json={
                     "confirm": True,
                     "command": "B 3 5 0",
-                    "feed_mode": "manual",
                 })
                 assert response.status_code == 200
                 assert response.json()["build_state"] == "RUNNING"
-                assert response.json()["feeder_transaction_id"] is None
-                assert response.json()["feeder_state"] == "manual"
                 ready = await wait_for_state(
                     client, lambda state: state["cell_phase"] == "awaiting_manual_close")
                 assert ready["build_phase"] == "await_manual_close"
@@ -261,7 +208,6 @@ def test_manual_feed_build_skips_the_uno_and_runs_the_same_mega_command(tmp_path
                 done = await wait_for_state(
                     client, lambda state: state["last_result"] == "placed")
                 assert done["build_state"] == "READY"
-                assert app.state.mock_feeder.writes == feeder_writes
                 assert sum(line.startswith("M ")
                            for line in app.state.mock_board.written) == 1
 

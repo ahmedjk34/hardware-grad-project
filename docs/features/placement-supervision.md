@@ -1050,7 +1050,7 @@ numbers in the record's §1.
 **Two corrections to this milestone, both from the code rather than the rig:**
 
 - D5's parked interlock is `PARKED_CELL_PHASES = ("idle", "complete")`, **not**
-  `cell_phase == "idle"`. `CellOrchestrator._phase("complete")` is terminal and
+  `cell_phase == "idle"`. `PickupCoordinator._phase("complete")` is terminal and
   sticky, so `"idle"` would have wedged supervision at `BUSY` for every session
   after the first placed block — silently (F14).
 - `_supervise` runs **last** in the driver loop turn, after the build result is

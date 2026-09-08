@@ -3,7 +3,7 @@ import type { Op } from "./compile";
 import {
   initialRun,
   currentOperationText,
-  feederPrompt,
+  stagingPrompt,
   noProgress,
   runTiming,
   programRows,
@@ -24,7 +24,15 @@ const shiftOp = (cm: number): Op => ({
 });
 
 function dispatch(state: RunState, event: RunEvent) {
-  return step(state, event);
+  const turn = step(state, event);
+  // Most legacy transition tests focus on behavior after a build starts. Keep
+  // them compact while the dedicated confirmation test below proves that a
+  // real RUN pauses for the operator's staging attestation.
+  if (event.type === "verified" && state.style === "run"
+      && turn.state.phase === "awaiting-confirm") {
+    return step(turn.state, { type: "confirm", now: event.now + 1 });
+  }
+  return turn;
 }
 
 function start(program: Op[], style: "step" | "run" | "dry" = "run") {
@@ -192,6 +200,17 @@ describe("runner reducer", () => {
     expect(turn.effects).toEqual([{ kind: "build", command: "B 3 2 1", dry: false }]);
   });
 
+  it("RUN also waits for explicit manual-staging confirmation", () => {
+    let turn = start([build("a", 3, 2, 1)], "run");
+    turn = step(turn.state, { type: "selected", command: "B 3 2 1", now: 110 });
+    turn = step(turn.state, { type: "verified", actual: "B 3 2 1", now: 111 });
+    expect(turn.state.phase).toBe("awaiting-confirm");
+    expect(turn.state.inFlight).toBe(false);
+    expect(turn.effects).toEqual([]);
+    turn = step(turn.state, { type: "confirm", now: 120 });
+    expect(turn.effects).toEqual([{ kind: "build", command: "B 3 2 1", dry: false }]);
+  });
+
   it("DRY RUN uses the same reducer but marks every transport effect dry", () => {
     let turn = start([mode("horizontal"), build("a", 1, 2, 0)], "dry");
     expect(turn.effects).toEqual([{ kind: "mode", mode: "horizontal", command: "RR", dry: true }]);
@@ -234,21 +253,21 @@ describe("runner reducer", () => {
     expect(refused.effects).toEqual([]);
   });
 
-  it("turns repeated feeder colours into a quiet SAME COLOUR prompt", () => {
+  it("turns repeated pickup colours into a quiet SAME COLOUR prompt", () => {
     let turn = start([build("a", 3, 2, 0), build("b", 3, 2, 1)], "run");
-    expect(feederPrompt(turn.state)).toEqual({ colour: "RED", same: false, text: "block 1 of 2 · B 3 2 0" });
+    expect(stagingPrompt(turn.state)).toEqual({ colour: "RED", same: false, text: "block 1 of 2 · B 3 2 0" });
     turn = dispatch(turn.state, { type: "selected", command: "B 3 2 0", now: 110 });
     turn = dispatch(turn.state, { type: "verified", actual: "B 3 2 0", now: 111 });
     turn = dispatch(turn.state, { type: "build-settled", result: "placed", reason: null, now: 711 });
-    expect(feederPrompt(turn.state)).toEqual({ colour: "BLUE", same: false, text: "block 2 of 2 · B 3 2 1" });
+    expect(stagingPrompt(turn.state)).toEqual({ colour: "BLUE", same: false, text: "block 2 of 2 · B 3 2 1" });
   });
 
-  it("shows the next feeder instruction while the current RUN block is moving", () => {
+  it("does not invite staging another block while the current one is moving", () => {
     let turn = start([build("a", 3, 2, 0), build("b", 3, 2, 1)], "run");
     turn = dispatch(turn.state, { type: "selected", command: "B 3 2 0", now: 110 });
     turn = dispatch(turn.state, { type: "verified", actual: "B 3 2 0", now: 111 });
     expect(turn.state.phase).toBe("building");
-    expect(feederPrompt(turn.state)).toEqual({ colour: "BLUE", same: false, text: "block 2 of 2 · B 3 2 1" });
+    expect(stagingPrompt(turn.state)).toBeNull();
   });
 
   it("derives elapsed and ETA from the measured mock cycle constant", () => {

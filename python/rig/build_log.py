@@ -175,13 +175,10 @@ class BuildLog:
         return f"+{now - self._t0:.2f}s"
 
     def run_started(self, *, mode: str | None, cols: int, rows: int,
-                    port: str, baud: int, mock: bool,
-                    feeder_port: str | None = None,
-                    feeder_baud: int | None = None) -> None:
+                    port: str, baud: int, mock: bool) -> None:
         """A run banner, written to BOTH logs so they line up by eye."""
         line = (f"SERVER RUN  {_stamp()}  mode={mode} grid={cols}x{rows} "
-                f"mega_port={port} mega_baud={baud} "
-                f"feeder_port={feeder_port} feeder_baud={feeder_baud} mock={mock}")
+                f"mega_port={port} mega_baud={baud} mock={mock}")
         rule = "=" * 78
         for sink in (_build_sink, _serial_sink):
             if sink.enabled:
@@ -191,7 +188,7 @@ class BuildLog:
                 sink.write(rule)
 
     def build_requested(self, command: str, *, selection, level: int,
-                        mode: str | None, feed_mode: str = "automatic") -> None:
+                        mode: str | None) -> None:
         self._t0 = time.monotonic()
         self._pending = None
         if not self._sink.enabled:
@@ -200,7 +197,7 @@ class BuildLog:
         self._sink.write("-" * 78)
         self._sink.write(f"BUILD  {_stamp()}  {command}")
         self._sink.write(
-            f"  selection={selection}  level={level}  mode={mode}  feed_mode={feed_mode}")
+            f"  selection={selection}  level={level}  mode={mode}")
         self._sink.write(f"  {self._rel():>8}  request accepted by /api/build")
 
     def job_started(self) -> None:

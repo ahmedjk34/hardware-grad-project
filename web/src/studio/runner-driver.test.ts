@@ -75,14 +75,14 @@ describe("runner effect driver with a mocked API", () => {
     expect(events).toEqual([{ type: "build-running", now: 52 }]);
   });
 
-  it("forwards an explicit manual-feed build without changing its command", async () => {
+  it("forwards a manually staged build without changing its command", async () => {
     const { api, calls } = mockApi();
     await executeEffect({
-      kind: "build", command: "B 3 2 1", dry: false, feedMode: "manual",
+      kind: "build", command: "B 3 2 1", dry: false,
     }, {
       api, state: () => state(), dispatch: () => {}, now: () => 52,
     });
-    expect(api.build).toHaveBeenCalledWith("B 3 2 1", "manual");
+    expect(api.build).toHaveBeenCalledWith("B 3 2 1");
     expect(calls).toEqual(["build:B 3 2 1"]);
   });
 

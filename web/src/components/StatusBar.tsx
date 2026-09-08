@@ -38,10 +38,6 @@ export function StatusBar({ state, connected }: { state: StateModel; connected: 
       <span className={`chip ${state.gantry_connected ? "is-ready" : "is-danger"}`}>
         Gantry
       </span>
-      <span className={`chip ${state.feeder_connected ? "is-ready" : "is-danger"}`}>
-        Feeder
-      </span>
-
       <span className={`chip ${connected ? "is-ready" : "is-danger"}`}>
         <Icon name={connected ? "link" : "unlink"} size={13} />
         Socket

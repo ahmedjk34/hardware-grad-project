@@ -7,10 +7,10 @@ def chapter_6(rep):
     rep.h2("6.1 Conclusion")
     rep.p(
         "This project set out to build a machine that constructs a human-designed 3D block "
-        "structure with no human placing a block by hand, and that confirms every physical "
-        "transition with a sensor or a camera rather than with a timer. The result is a complete "
+        "structure from manually staged blocks, and that reports every physical transition "
+        "rather than hiding it behind a timer. The result is a complete "
         "robotic cell: a CoreXY gantry with an added Z axis and a rotating mechanical claw, a "
-        "separate feeder that doses one block at a time and proves it twice, an overhead vision "
+        "reserved pickup station with a two-step operator confirmation, an overhead vision "
         "system that maps camera pixels to grid cells, and a browser software chain in which a "
         "person designs a structure, compiles it, and watches a live digital twin mirror the "
         "real build from the machine's own telemetry.")
@@ -32,10 +32,8 @@ def chapter_6(rep):
         "to 5 were exercised on hardware.",
         "**Two block orientations. Met.** Two separately calibrated grids, latched by a command "
         "that moves nothing; both were exercised on hardware.",
-        "**A feeder with confirmation at both ends. Met in design and in firmware**, with both "
-        "sensors, all four terminal failures and the two-stage gate implemented and "
-        "commissioned. The full feed-to-place chain on hardware is the one piece of evidence "
-        "this report could not produce from the logs (Section 5.6.2).",
+        "**A guarded pickup handoff. Met in software and firmware.** The operator confirms "
+        "staging, `M` pauses with an open claw, and only the reported alignment gate enables `C`.",
         "**Vision detection and pixel-to-cell mapping. Met.** 29 of 29 detection with correct "
         "rejection of non-blocks, a 0.85 px mean fit residual, and 0.27 cm of mapping error "
         "through the saved format.",
@@ -55,9 +53,8 @@ def chapter_6(rep):
     rep.p(
         "What the project demonstrates best is not any one of those. It is the discipline "
         "underneath them: a design in which no part of the system is allowed to assume what "
-        "another part has actually done. The feeder does not report success because time passed; "
-        "it reports success because a sensor saw a block and then saw it again after the aligner "
-        "moved. The gantry does not tell the Pi it is fine; it narrates each of its fourteen "
+        "another part has actually done. The pickup flow separates staging confirmation from "
+        "permission to close the claw. The gantry does not tell the Pi it is fine; it narrates each of its fourteen "
         "phases before running it and predicts how long the slow ones will take. The twin does "
         "not animate a placement; it draws what the firmware said and stops short of the cell "
         "until the release event arrives. And when the machine cannot prove what physically "
@@ -103,7 +100,7 @@ def chapter_6(rep):
         "comparison made mid-cycle would report blocks missing that are simply behind the arm. "
         "The park state at the end of every build is the natural moment, and it is already a "
         "known, repeatable position.",
-        "**A firmware verb that can retrieve a block from a cell.** `B` picks from the feeder "
+        "**A firmware verb that can retrieve a block from a cell.** `B` picks from pickup "
         "and places; there is no pick-from-cell, so at present the machine can notice a wrong "
         "placement and can do nothing about it. A `P col row level` verb would make the "
         "supervision actionable rather than advisory.",
@@ -148,11 +145,8 @@ def chapter_6(rep):
         "stall detection, would turn the one failure the machine cannot currently see into one "
         "it can. It would also allow the re-home before every move to be dropped, which is worth "
         "about a third of the cycle time.",
-        "**Painted blocks and a colour-sorting feeder.** The supply is currently bare wood in "
-        "one uniform colour, and both the detector and the Studio already carry colour "
-        "handling that nothing exercises: the Studio can assign a colour per block and "
-        "preview which one must be staged next, while the feeder stages whatever is at the "
-        "bottom of the hopper. Painting the supply and adding a sorting stage would turn "
+        "**Painted blocks.** The supply is currently bare wood in one uniform colour, while the "
+        "detector and Studio already carry colour handling. Painting the supply would turn "
         "colour into a real design dimension instead of unused capability.",
         "**A faster serial link.** 9600 baud is the reason telemetry is limited to one line per "
         "phase. Raising it, in all three places that define it together, would allow "
@@ -192,9 +186,7 @@ def references(rep):
         "A. B. Kahn, \"Topological sorting of large networks\", Communications of the ACM, "
         "5(11), 1962. The ordering algorithm used by the Studio's compiler.",
 
-        "Toshiba, \"TB6600 Stepper Motor Driver\" application data, and Allegro MicroSystems, "
-        "\"A4988 DMOS Microstepping Driver with Translator and Overcurrent Protection\". The "
-        "gantry and feeder motor drivers.",
+        "Toshiba, \"TB6600 Stepper Motor Driver\" application data. The gantry motor drivers.",
 
         "Raspberry Pi Ltd., \"Raspberry Pi 5 Product Brief\" and \"Picamera2 Library Manual\". "
         "The master controller and the only supported camera interface on the Pi 5's CSI bus.",
@@ -222,7 +214,6 @@ def appendices(rep):
         [
             ["Raspberry Pi 5, 8 GB RAM", "1", "Master controller"],
             ["Arduino MEGA 2560", "1", "Gantry controller"],
-            ["Arduino Uno", "1", "Feeder controller"],
             ["Raspberry Pi camera module, OV5647, 160 deg fisheye, + ribbon", "1",
              "DORHEA module"],
         ],
@@ -231,15 +222,12 @@ def appendices(rep):
         "Motion, actuators and sensors.",
         ["Item", "Qty", "Note"],
         [
-            ["NEMA17 stepper motor", "4", "2 CoreXY, 1 Z, 1 feeder belt"],
+            ["NEMA17 stepper motor", "3", "2 CoreXY, 1 Z"],
             ["TB6600 stepper driver", "3", "The three gantry axes"],
-            ["A4988 stepper driver", "1", "Feeder belt"],
             ["28BYJ-48 stepper motor, 5 V", "1", "Claw rotation"],
             ["ULN2003 driver board", "1", "For the 28BYJ-48"],
-            ["Hobby servo", "3", "Gripper, container gate, aligner"],
+            ["Hobby servo", "1", "Gripper"],
             ["Micro limit switch", "4", "X home, Y home, Z bottom, Z top"],
-            ["HC-SR04 ultrasonic sensor", "1", "Container exit"],
-            ["IR obstacle sensor", "1", "Pickup stage, active-low by default"],
         ],
         widths=[8.4, 1.4, 5.2], size=9)
     rep.table(
@@ -248,13 +236,12 @@ def appendices(rep):
         [
             ["Linear rail + linear motion bearing", "1", "1.5 m x 15 mm; carries the Z axis"],
             ["Aluminium profile", "3.6 m", "Cut from 6 m stock: 4 legs at 15 cm, 3 members "
-                                            "along X at 30 cm, 2 along Y at 60 cm, 2 for the "
-                                            "feeder at 30 cm, 1 for the Z column at ~30 cm"],
+                                            "along X at 30 cm, 2 along Y at 60 cm, and 1 for "
+                                            "the Z column at ~30 cm"],
             ["GT2 timing pulley", "~9", "Drive and idler pulleys, CoreXY and Z"],
             ["GT2 timing belt", "5 m", "Plus 1 m of additional belt"],
-            ["Belt sheet", "1", "The conveyor surface"],
             ["Castor wheel", "8", "X/Y guidance, on 3D-printed carriages"],
-            ["3D-printed parts", "many", "Carriages, the claw, the conveyor parts, mounts"],
+            ["3D-printed parts", "many", "Carriages, the claw and mounts"],
             ["Wooden blocks, 2.2 x 6.0 x 1.5 cm",
              "30", "Bare wood, one uniform colour"],
         ],
@@ -314,22 +301,6 @@ def appendices(rep):
         "36 and 37, and which is the correct coil order for most 28BYJ-48 and ULN2003 boards and is "
         "not the same as pin order. Wiring it in numerical order produces a motor that buzzes "
         "and does not turn.")
-    rep.table(
-        "Arduino Uno feeder controller: pin map.",
-        ["Pin", "Direction", "Connected to", "Function"],
-        [
-            ["2", "output", "A4988 DIR", "Belt direction"],
-            ["3", "output", "A4988 STEP", "Belt step pulse (ENABLE is tied to ground)"],
-            ["4", "output", "Exit HC-SR04 TRIG", "Container-exit sensor trigger"],
-            ["5", "input", "Exit HC-SR04 ECHO", "Container-exit sensor echo"],
-            ["6", "output", "Alignment servo signal", "Rest 90 deg, nudge 120 deg"],
-            ["8", "input", "Stage IR OUT", "Pickup-point presence sensor, active-low by default"],
-            ["12", "output", "Container servo signal",
-             "Closed 23 deg, stage 1 at 80 deg, open 150 deg"],
-            ["USB", "serial", "Raspberry Pi", "9600 8N1, protocol 2"],
-        ],
-        widths=[1.4, 2.6, 4.4, 6.6], size=9)
-
     # ---- C ----
     rep.h2("Appendix C: Serial Protocols")
 
@@ -376,34 +347,6 @@ def appendices(rep):
     rep.p(
         "The `text=` field is omitted above for width; on the wire every `STEP` line also "
         "carries the underscored human label.")
-
-    rep.h3("C.3 Feeder (Uno) protocol 2")
-    rep.code(
-        "@0 READY firmware=belt_v1 protocol=2 board=uno\n"
-        "\n"
-        "> FEED 42\n"
-        "@42 RECV   cmd=FEED\n"
-        "@42 SENSOR sensor=stage detected=0\n"
-        "@42 ACK    cmd=FEED accepted=1\n"
-        "@42 STATE  state=closing\n"
-        "@42 EVENT  phase=container_closing\n"
-        "@42 STATE  state=opening_stage_1\n"
-        "@42 STATE  state=opening_stage_2\n"
-        "@42 STATE  state=waiting_for_exit\n"
-        "@42 STATE  state=moving_to_stage\n"
-        "@42 SENSOR sensor=exit distance_cm=7.4 detected=1\n"
-        "@42 EVENT  phase=exit_detected_container_closed_belt_running distance_cm=7.4\n"
-        "@42 STATE  state=aligning\n"
-        "@42 SENSOR sensor=stage detected=1\n"
-        "@42 STATE  state=verifying_stage\n"
-        "@42 STATE  state=block_ready\n"
-        "@42 SENSOR sensor=stage detected=1\n"
-        "@42 EVENT  phase=block_ready\n"
-        "@42 OK     state=block_ready result=staged")
-    rep.p(
-        "Only the final `OK` is permission to pick the block up. `ACK`, `STATE`, `SENSOR` and "
-        "`EVENT` are progress telemetry. The four terminal failures are `stage_occupied`, "
-        "`exit_timeout`, `stage_timeout` and `cancelled`.")
 
     # ---- D ----
     rep.h2("Appendix D: Firmware Constants")
@@ -472,7 +415,7 @@ def appendices(rep):
         widths=[1.8, 0.8, 1.2, 1.0, 1.2, 1.0, 0.9, 2.1, 2.6, 2.6], size=8.5)
     rep.p(
         "Cell counts are counts; the firmware's `S` command and its internal tables speak in "
-        "highest indices, which is one less. Cell [0,0] is the feeder in both modes and is never "
+        "highest indices, which is one less. Cell [0,0] is pickup in both modes and is never "
         "built on, so the buildable counts are 41 and 29. Edge overhang budgets are 1.1 / 3.0 cm "
         "for vertical and 3.0 / 1.1 cm for horizontal, and they are what the geometry check "
         "measures the block **edges** against; they move nothing.")
@@ -490,9 +433,9 @@ def appendices(rep):
                              "the settled result with the total elapsed. Every timestamp in a "
                              "section is relative to that build's start, so the section reads as "
                              "a stopwatch."),
-        ("`logs/serial.log`", "Every line to and from either Arduino, each stamped with the wall "
+        ("`logs/serial.log`", "Every line to and from the Mega, each stamped with the wall "
                               "clock and the gap since the previous serial line, tagged "
-                              "`[MEGA/GANTRY]` or `[UNO/FEEDER]`. A stall on the cable or a slow "
+                              "`[MEGA/GANTRY]`. A stall on the cable or a slow "
                               "phase shows up directly as a large delta in the second column."),
     ])
     rep.p("One complete build section, verbatim from `logs/build.log`:")
@@ -535,6 +478,6 @@ def appendices(rep):
         "   +29.84s  build finished, total 29.84s")
     rep.p(
         "[[VALUE NEEDED: any measured data tables you take after this report is drafted, "
-        "placement accuracy trials, homing repeatability trials, feeder-sensor readings, "
+        "placement accuracy trials, homing repeatability trials, "
         "and a pick-and-place success count) belong here as additional tables in this "
         "appendix.]]")

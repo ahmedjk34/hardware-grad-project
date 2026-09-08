@@ -10,9 +10,8 @@ def chapter_3(rep):
     rep.h3("3.1.1 Motors and drivers")
     rep.p(
         "Three NEMA17 stepper motors move the gantry: two frame-mounted motors driving the "
-        "CoreXY belt path, and one motor on the moving carriage driving Z. A fourth NEMA17 "
-        "drives the feeder belt and belongs to the Uno and not to the gantry. Each of the "
-        "three gantry motors has its own TB6600 driver, and each TB6600 takes a direction pulse "
+        "CoreXY belt path, and one motor on the moving carriage driving Z. Each motor has its "
+        "own TB6600 driver, and each TB6600 takes a direction pulse "
         "and a step pulse from the Mega.")
     rep.table(
         "Motor and driver inventory.",
@@ -24,20 +23,16 @@ def chapter_3(rep):
              "CoreXY belt, the other of the pair"],
             ["Motor 3", "NEMA17, 1.8 deg/step", "TB6600", "Arduino MEGA",
              "Z axis, independent of X/Y"],
-            ["Motor 4", "NEMA17, 1.8 deg/step", "A4988", "Arduino Uno", "Feeder conveyor belt"],
             ["Rotation", "28BYJ-48, 5 V, 2,048 steps per output revolution", "ULN2003",
              "Arduino MEGA", "90-degree claw rotation"],
             ["Gripper", "Hobby servo", "direct PWM", "Arduino MEGA", "Claw jaws, OPEN / CLOSE"],
-            ["Container gate", "Hobby servo", "direct PWM", "Arduino Uno",
-             "Two-stage hopper gate"],
-            ["Aligner", "Hobby servo", "direct PWM", "Arduino Uno", "Squares the staged block"],
         ],
         widths=[2.2, 4.6, 1.8, 2.6, 3.8], size=9)
     rep.p(
         "The full motor electrical specification is "
         "[[VALUE NEEDED: NEMA17 holding torque (N.cm) and rated phase current (A) for the "
         "motors actually fitted]], and the driver current limits are set to "
-        "[[VALUE NEEDED: the Vref / current limit set on each TB6600 and on the A4988]]. The "
+        "[[VALUE NEEDED: the Vref / current limit set on each TB6600]]. The "
         "microstepping is not recorded anywhere in the repository either, but it can be "
         "recovered from the calibration with some confidence, and doing so is worth the space "
         "because it is the one place where the machine's software constants and its physical "
@@ -154,7 +149,7 @@ def chapter_3(rep):
         ("Outputs", "None. The servo is commanded and forgotten; nothing reports when the jaws "
                     "have arrived."),
         ("Typical workflow", "Inside a build the jaws open at phase 4 while the claw is still "
-                             "clear above the feeder, close at phase 6 once Z is on the ground "
+                             "clear above pickup, close at phase 6 once Z is at pickup height "
                              "switch, and open again at phase 11 once Z is at the target level."),
         ("Validation and constraints", "Because nothing reports arrival, every open and close "
                                        "inside a build is followed by a fixed 600 ms settle "
@@ -181,7 +176,7 @@ def chapter_3(rep):
         "The mechanism has neither a home switch nor an angle sensor, so its state is tracked "
         "and not measured. Three things keep that tracking honest:")
     rep.bullets([
-        "**The build always returns the claw to neutral over the feeder before it descends** "
+        "**The build always returns the claw to neutral over pickup before it descends** "
         "(phase 3), and again after the block is placed (phase 14). The tracked angle is "
         "never more than one cycle old.",
         "**A manual jog is marked uncalibrated.** `A <degrees>` is a signed relative jog capped "
@@ -236,17 +231,13 @@ def chapter_3(rep):
         ("Raspberry Pi 5", "8 GB of RAM, a Debian-based operating system and its own USB-C "
                            "supply. It owns camera capture through Picamera2, the whole vision "
                            "pipeline, the FastAPI service and its WebSocket event stream, the "
-                           "browser application it serves, both serial clients, the two-board "
-                           "orchestrator, and every safety gate and session lock in the system."),
+                           "browser application it serves, the Mega serial client, manual pickup "
+                           "coordinator, and every safety gate and session lock in the system."),
         ("Arduino MEGA 2560", "An ATmega2560 with 8 KB of SRAM and 256 KB of flash, on USB "
                               "serial at 9600. It owns X/Y/Z step generation and direction, "
                               "homing, the hardware and software limits, the grid-to-steps "
                               "arithmetic, the gripper servo, the rotation stepper, the "
                               "fourteen-phase build cycle and the acknowledgement protocol."),
-        ("Arduino Uno", "An ATmega328P with 2 KB of SRAM and 32 KB of flash, on its own USB "
-                        "serial link at 9600. It owns the feed state machine, the container and "
-                        "alignment servos, the belt driver, exit HC-SR04, stage IR sensor and the "
-                        "correlated protocol-2 serial interface."),
     ])
 
     rep.h3("3.3.1 Why a MEGA for the gantry")
@@ -435,7 +426,7 @@ def chapter_3(rep):
     rep.h2("3.5 Sensors and Feedback")
     rep.p(
         "The complete sensor inventory of this machine is short, and its shortness is the point: "
-        "everything the system knows about its own physical state comes from seven devices.")
+        "everything the system knows about its own physical state comes from five devices.")
     rep.table(
         "Sensor inventory.",
         ["Sensor", "Qty", "Where", "What it establishes", "Signal"],
@@ -445,13 +436,6 @@ def chapter_3(rep):
              "The machine's origin, and the physical ends of Z travel. Three of them define a "
              "zero; the Z top one is a stop only.",
              "NC contact to an internal pull-up, confirmed for 200 us before it is believed"],
-            ["HC-SR04 ultrasonic", "1", "Feeder container exit (TRIG 4, ECHO 5)",
-             "That exactly one block has physically left the hopper onto the belt.",
-             "Trigger pulse and echo width, 30 ms timeout, detection below 10.0 cm"],
-            ["IR obstacle sensor", "1", "Feeder pickup point (OUT 8)",
-             "That a block has arrived at the pickup point, and, read again after the aligner "
-             "moves, that it is still there.",
-             "Digital presence, active-low by default"],
             ["Overhead camera", "1", "Approximately 50 cm above the build surface",
              "Which blocks are on the surface, where, and what colour.",
              "1296 x 972 frames over CSI through Picamera2"],
@@ -464,31 +448,7 @@ def chapter_3(rep):
         "every move, and the only thing that would catch a stall is the camera noticing the "
         "block did not arrive, which is designed but not implemented (Section 5.7.2).")
 
-    rep.h3("3.5.1 Feeder sensor acquisition")
-    rep.p(
-        "The exit HC-SR04 is read by the standard method: hold the trigger low, pulse it high for "
-        "10 us, then measure the echo pulse width with a 30 ms timeout and convert at 343 m/s.")
-    rep.code(
-        "duration    = pulseIn(echoPin, HIGH, 30000);   // us, 0 on timeout\n"
-        "distance_cm = duration == 0 ? -1.0\n"
-        "                            : duration * 0.0343f / 2.0f;\n"
-        "detected    = distance_cm >= 0.0f\n"
-        "           && distance_cm < DETECT_DISTANCE_CM;   // 10.0 cm")
-    rep.p(
-        "Two details in that path are deliberate. A timeout returns -1 and is reported on the wire as "
-        "`distance_cm=no_echo`, which is **never** treated as a detection: 'I heard nothing' and "
-        "'nothing is there' are different statements and collapsing them is how a feeder decides "
-        "an empty belt is fine. The stage sensor is instead read as a digital presence signal; "
-        "`STAGE_IR_DETECTED_LEVEL` records whether the installed module is active-low or active-high. "
-        "The sensors are sampled every 100 ms only while a feed cycle is actually running, with "
-        "structured readings reported at admission, detection and verification rather than continuously.")
-    rep.p(
-        "The 10 cm threshold applies only to the exit ultrasonic sensor. The stage IR module's "
-        "sensitivity and active level must be commissioned at the pickup fixture. "
-        "[[VALUE NEEDED: measured exit distances, stage-IR false-positive/negative observations, "
-        "and the number of complete feed cycles verified on the current sensor pair.]]")
-
-    rep.h3("3.5.2 Limit switch acquisition")
+    rep.h3("3.5.1 Limit switch acquisition")
     rep.p(
         "All four switches are normally closed to an internal pull-up, so a broken wire reads as "
         "a permanently tripped switch and stops the axis rather than letting it run into its "
@@ -503,15 +463,13 @@ def chapter_3(rep):
 
     rep.h3("3.6.1 Power")
     rep.p(
-        "The power architecture is described in Section 2.5.1: a 12 V / 15 A supply feeding the four "
-        "stepper drivers directly, an LM2596 buck converter producing a 5 V rail for the three "
-        "servos, the 28BYJ-48 through its ULN2003, both feeder sensors and the A4988's "
-        "logic supply, both Arduinos powered over USB from the Pi, the Pi on its own official "
+        "The power architecture is described in Section 2.5.1: a 12 V / 15 A supply feeding the three "
+        "stepper drivers directly, an LM2596 buck converter producing a 5 V rail for the gripper "
+        "servo and 28BYJ-48 through its ULN2003, the Mega powered over USB from the Pi, the Pi on its own official "
         "supply, and one common ground across all of it.")
     rep.p(
-        "The 15 A rating leaves the machine with comfortable headroom, because the four NEMA17 "
-        "axes never all move at once: the build cycle moves Z, then X and Y, then Z again, and "
-        "the feeder belt runs only while the gantry is idle. Even three axes simultaneously "
+        "The 15 A rating leaves the machine with comfortable headroom, because the three NEMA17 "
+        "axes never all move at once: the build cycle moves Z, then X and Y, then Z again. Even three axes simultaneously "
         "energised at a typical 1.5 A per phase is a small fraction of the supply. On a "
         "brown-out the failure mode would be a driver losing steps or an Arduino resetting "
         "mid-motion, and the second of those is detected: an unexpected `@0 BOOT` line during a "
@@ -536,9 +494,8 @@ def chapter_3(rep):
         "**Session lock on uncertainty.** An abort, a timeout, a board reset or a cable loss "
         "locks the session; every further mutation is refused and the only recovery is a person "
         "plus a service restart.",
-        "**The feeder refuses to double-load.** A `FEED` request arriving while the stage sensor "
-        "already sees a block is refused outright with `stage_occupied`, before the container "
-        "opens.",
+        "**Manual close is firmware-gated.** The production `M` command pauses with the claw "
+        "open; `C` is permitted only after `await_manual_close`.",
         "**One command at a time**, enforced at five independent layers from the HTTP route down "
         "to the serial client (Section 4.4.3).",
         "**Cell [0,0] is never a build target**, refused in the firmware, on the Pi and in the "
@@ -579,24 +536,18 @@ def chapter_3(rep):
     rep.p(
         "In the finished machine the electronics sit off the moving gantry entirely. The four "
         "stepper drivers and the buck converter are mounted on the frame beside the 12 V supply, "
-        "with the two Arduinos alongside them; only the motors, the switches, the servo and the "
+        "with the Mega alongside them; only the motors, the switches, the servo and the "
         "rotation stepper have wiring that travels with the carriage. The Raspberry Pi sits "
-        "beside the rig with two USB leads running to the two Arduinos and the camera ribbon "
+        "beside the rig with one USB lead running to the Mega and the camera ribbon "
         "running up to the overhead mount.")
-    rep.p("The three integration rules that make the assembly work are:")
+    rep.p("The two integration rules that make the assembly work are:")
     rep.numbered([
-        "**Each board is addressed by a stable device path, never by enumeration order.** A Mega "
-        "enumerates as `/dev/ttyACM0` and a clone as `/dev/ttyUSB0`, and which board gets which "
-        "number depends on plug order. The configuration names each board's "
-        "`/dev/serial/by-id/...` path instead, and the service refuses to start if the two "
-        "entries name the same device.",
-        "**Each board's identity is validated on connect.** The Uno must announce "
-        "`@0 READY firmware=belt_v1 protocol=2 board=uno` and it is matched field by field "
-        "against the configuration; a mismatch closes the port and fails startup rather than "
-        "proceeding with the wrong firmware. The Mega's handshake waits for its own "
+        "**The Mega is addressed by a stable device path, never by enumeration order.** A Mega "
+        "enumerates as `/dev/ttyACM0` and a clone as `/dev/ttyUSB0`; configuration uses its "
+        "`/dev/serial/by-id/...` path. The handshake waits for the Mega's own "
         "`@0 READY grid=... mode=...` sync marker.",
-        "**Exactly one process owns each resource.** One camera object, one Mega serial port, "
-        "one Uno serial port, all created once by the web service's lifespan. Running a "
+        "**Exactly one process owns each resource.** One camera object and one Mega serial port "
+        "are created once by the web service's lifespan. Running a "
         "commissioning script while the service is up will contend for the same board and reset "
         "it, which is documented as an operational rule because there is no OS-level exclusive "
         "lock enforcing it.",
@@ -605,9 +556,6 @@ def chapter_3(rep):
                "drivers, the four limit switches, the gripper servo and the ULN2003 rotation "
                "stepper. Every pin is transcribed from the firmware source.",
                image="fig-wiring-mega.png", width_cm=15.5)
-    rep.figure("Complete wiring diagram: Arduino Uno feeder controller, the A4988 belt driver, "
-               "the container and alignment servos, exit HC-SR04 and stage IR sensor.",
-               image="fig-wiring-uno.png", width_cm=15.5)
     rep.p(
-        "The complete pin assignments for both controllers are tabulated in Appendix B, taken "
-        "directly from the two firmware sources and not from any documentation of them.")
+        "The complete Mega pin assignments are tabulated in Appendix B, taken directly from "
+        "the firmware source and not from secondary documentation.")

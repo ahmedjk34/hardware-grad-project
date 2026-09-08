@@ -19,8 +19,7 @@ def _static_grid(workspace, image_size: tuple[int, int]) -> tuple[dict[str, Any]
     key = (image_size, tuple(workspace.corners), grid.mode, grid.cols, grid.rows,
            grid.block_x_cm, grid.block_y_cm, grid.gap_x_cm, grid.gap_y_cm,
            grid.trim_x_cm, grid.trim_y_cm, grid.error_offset_x_cm,
-           grid.error_offset_y_cm,
-           tuple(sorted(getattr(grid, "blocked", ()))))
+           grid.error_offset_y_cm)
     cached = _STATIC_GRID_CACHE.get(key)
     if cached is not None:
         return cached
@@ -33,10 +32,6 @@ def _static_grid(workspace, image_size: tuple[int, int]) -> tuple[dict[str, Any]
                 "row": row,
                 "polygon": [[float(x), float(y)] for x, y in polygon],
             }
-            # A cell the feeder belt occupies: real and drawn, never a build
-            # target. The browser marks it red and struck through.
-            if grid.is_blocked(col, row):
-                cell["blocked"] = True
             cells.append(cell)
     cached = tuple(cells)
     if len(_STATIC_GRID_CACHE) >= 16:

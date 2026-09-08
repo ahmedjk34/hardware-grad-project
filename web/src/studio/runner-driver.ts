@@ -9,17 +9,15 @@
  */
 import * as realApi from "../api";
 import type { StateModel } from "../types";
-import type { FeedMode } from "../api";
 import type { Effect, RunEvent } from "./runner";
 
 export interface RunnerApi {
   setLevel(value: number): Promise<StateModel>;
   select(x: number, y: number, imgW: number, imgH: number): Promise<StateModel>;
   selectAxis(axis: "col" | "row", value: number): Promise<StateModel>;
-  build(command: string, feedMode?: FeedMode): Promise<StateModel>;
+  build(command: string): Promise<StateModel>;
   mode(next: "vertical" | "horizontal"): Promise<StateModel>;
   shift(mode: "vertical" | "horizontal", x_cm: number, y_cm: number): Promise<StateModel>;
-  stop?(): Promise<StateModel>;
   closeManualPick?(): Promise<StateModel>;
 }
 
@@ -110,9 +108,7 @@ export async function executeEffect(effect: Effect, context: DriverContext): Pro
   }
 
   if (effect.kind === "build") {
-    const response = effect.feedMode === "manual"
-      ? await api.build(effect.command, "manual")
-      : await api.build(effect.command);
+    const response = await api.build(effect.command);
     if (response.build_state !== "RUNNING") {
       throw new Error(`runner expected build_state RUNNING, got ${response.build_state}`);
     }

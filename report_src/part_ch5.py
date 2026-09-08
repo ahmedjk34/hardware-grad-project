@@ -56,11 +56,10 @@ def chapter_5(rep):
         "implementations, one in Python and one in TypeScript, are held to each other by "
         "fixtures dumped from the Python side, so the browser cannot silently disagree with the "
         "Pi about where a cell is.",
-        "**Protocol-level simulation.** A fake Mega and a fake Uno speak exactly the same "
-        "acknowledgement grammar as the real firmwares, including their failure, reset and "
-        "cancellation behaviours, and a mock camera renders blocks at real grid cells. The "
-        "complete browser-to-orchestrator-to-serial path runs against them, which is how the "
-        "two-board handoff and the session-lock behaviour were tested exhaustively without ever "
+        "**Protocol-level simulation.** A fake Mega speaks the same acknowledgement grammar as "
+        "the real firmware, including failure and reset behaviour, and a mock camera renders "
+        "blocks at real grid cells. The complete browser-to-pickup-coordinator-to-serial path "
+        "runs against it, which is how the manual-close gate and session lock were tested without "
         "risking the machine.",
         "**Firmware host builds.** There is no Arduino toolchain on the development machine, so "
         "firmware changes are compiled against a stub-Arduino host harness that proves the "
@@ -68,7 +67,7 @@ def chapter_5(rep):
         "specifies. A clean compile is explicitly **not** treated as a test of behaviour.",
         "**Hardware bring-up and runs on the rig.** Anything touching motion, limits or Z is "
         "flashed to the real board and watched. Every real run appends to two log files: one "
-        "stopwatch per build, and every line to and from either Arduino with the gap since the "
+        "stopwatch per build, and every line to and from the Mega with the gap since the "
         "previous line. Those logs are the primary evidence in this chapter.",
     ])
     rep.p(
@@ -88,17 +87,16 @@ def chapter_5(rep):
         ("Manipulation", "The claw picks up a single staged block, holds it through the whole "
                          "carry, releases it on the commanded cell, and the rotation returns the "
                          "claw to neutral."),
-        ("Feeder", "Exactly one block reaches the pickup point per request; the exit and stage "
-                   "sensors both fire in the right order; and each of the four terminal failures "
-                   "can be provoked deliberately and reports the right reason with the belt "
-                   "stopped."),
+        ("Pickup", "The operator confirmation sends `M`; the claw remains open until firmware "
+                   "reports `await_manual_close`; an early close is refused; and any unknown "
+                   "post-staging result locks the session."),
         ("Vision", "Every block on a full board is found, with no false detections from the "
                    "rails or the holder offcuts, and the fitted grid passes its parity, aspect "
                    "and residual gates instead of merely reporting them."),
         ("Protocol", "Exactly one terminal acknowledgement per command; `SAFE` and `HELD` never "
                      "confused; and a non-terminal line never satisfies a waiter."),
-        ("Integrated", "A complete structure is built from a compiled program with no manual "
-                       "intervention, and any failure locks the session instead of continuing."),
+        ("Integrated", "A complete structure is built from a compiled program with explicit "
+                       "manual staging for each block, and any failure locks instead of continuing."),
     ])
 
     # ------------------------------------------------------------------
@@ -212,7 +210,7 @@ def chapter_5(rep):
     rep.h3("5.2.4 Homing repeatability and lost steps")
     rep.p(
         "Homing repeatability was not measured with an instrument, but the sixteen builds carry "
-        "strong indirect evidence. Phase 2 (home X/Y to the feeder) took between 0.57 and 0.58 s "
+        "strong indirect evidence. Phase 2 (home X/Y to pickup) took between 0.57 and 0.58 s "
         "on **every single build across all five sessions**, and phase 1 (Z seek to the top "
         "switch) took between 0.42 and 0.43 s on every build after the first of each session. A "
         "homing move whose duration is constant to 0.01 s is a homing move that starts from the "
@@ -293,7 +291,7 @@ def chapter_5(rep):
         "clean return to neutral at phase 14.")
     rep.p(
         "The design leans on the fact that a tracked angle is never more than one cycle old, since "
-        "the claw is returned to neutral over the feeder before every pickup and again after "
+        "the claw is returned to neutral over pickup before every pickup and again after "
         "every placement, rather than on the stepper being perfect. "
         "[[VALUE NEEDED: if you want to quantify the rotation, measure the angular error after "
         "N consecutive quarter turns in the same direction.]]")
@@ -477,28 +475,7 @@ def chapter_5(rep):
     # ------------------------------------------------------------------
     rep.h2("5.5 Sensor Testing")
 
-    rep.h3("5.5.1 Feeder sensors")
-    rep.p(
-        "The current feeder uses an exit HC-SR04 and a digital IR sensor at the pickup stage. "
-        "The documented commissioning checklist requires the exit sensor to report a real "
-        "distance or `no_echo`, the stage sensor to change cleanly between `detected=0` and "
-        "`detected=1`, and each of the four terminal failures to be "
-        "provokable on purpose: start with the stage occupied, leave the hopper empty, obstruct "
-        "the belt, and cancel a running feed, with the right reason reported and the belt "
-        "stopped in every case.")
-    rep.p(
-        "The 10 cm threshold applies only to the exit sensor. A small but important firmware "
-        "detail is that an ultrasonic "
-        "timeout returns -1 and is reported on the wire as `distance_cm=no_echo`, and that is "
-        "**never** treated as a detection. 'I heard nothing' and 'nothing is there' are "
-        "different statements, and a feeder that collapsed them would decide an empty belt was "
-        "fine.")
-    rep.p(
-        "[[VALUE NEEDED: measured exit distances, the installed IR sensor's active level and "
-        "sensitivity setting, plus the number of complete feed cycles and any false positives "
-        "or negatives observed with the current hardware.]]")
-
-    rep.h3("5.5.2 Limit switches")
+    rep.h3("5.5.1 Limit switches")
     rep.p(
         "All four switches performed without a missed trip or a false trigger in any logged "
         "session; the machine's own boot report reads the state of each one and every session in "
@@ -549,18 +526,16 @@ def chapter_5(rep):
         "the only thing keeping an encoderless machine's position honest, which is not a trade "
         "this project was willing to make.")
 
-    rep.h3("5.6.2 The complete feed-to-place chain")
+    rep.h3("5.6.2 The complete manual-pick-to-place chain")
     rep.p(
         "The sixteen logged builds are direct gantry placements: the block was staged by hand at "
         "the pickup point and the `B` was issued on its own, which is the commissioning path "
-        "described in Section 4.5.5. The full production chain (Uno `FEED`, correlated terminal staged "
-        "success, then Mega `B`) was exercised end to end against the protocol-level simulation "
-        "with its complete failure, reset and cancellation behaviours, and the physical feeder "
-        "was commissioned against the checklist in Section 5.5.1.")
+        "described in Section 4.5.5. The production `M` then firmware-gated `C` chain is exercised "
+        "end to end against protocol-level simulation, including early-close refusal and failure lockout.")
     rep.p(
         "[[VALUE NEEDED: a logged run of the complete chain on hardware. The evidence would be a "
-        "session in logs/serial.log showing an interleaved [UNO/FEEDER] FEED, its terminal "
-        "'OK state=block_ready result=staged', and then the [MEGA/GANTRY] B for the same block. "
+        "session in logs/serial.log showing [MEGA/GANTRY] M, await_manual_close, explicit C, "
+        "and the terminal OK for the same block. "
         "If you have run this, re-running one multi-block Studio program with logging on would "
         "produce the single strongest piece of evidence in the whole report.]]")
 
@@ -610,10 +585,8 @@ def chapter_5(rep):
                              "issues (a freeze/pump race and a same-colour warm-block case), "
                              "both load-sensitive and neither a regression. It covers the serial "
                              "protocol parsers and the `SAFE`/`HELD` distinction, the mock board, "
-                             "the feeder protocol including identity, id correlation, reset, "
-                             "cancel and malformed-success rejection, the orchestrator's pickup "
-                             "invariant, the console pipeline, and the full web path with both "
-                             "mocks."),
+                             "the manual pickup coordinator, reset and failure lockout, the "
+                             "console pipeline, and the full web path with the Mega and camera mocks."),
         ("The vision and firmware harnesses", "**17 of 21 pass.** Twenty-one plain-assert scripts "
                                               "run individually, covering the grid parity between "
                                               "the live sketch and the configuration, block "

@@ -27,7 +27,7 @@ class BuildController:
 
     rig: object
     level: int = 0
-    orchestrator: object | None = None
+    pickup: object | None = None
     #: The as-built memory, when one is wired in. Optional so every existing
     #: construction — the tests', the calibration paths' — is unchanged, and
     #: PURE DATA: a `PlacementLedger` holds cells, levels, modes and
@@ -67,15 +67,10 @@ class BuildController:
         if self.locked:
             raise BuildStateError(self.locked_reason)
         col, row = (int(value) for value in cell)
-        if self.rig.grid.is_feeder(col, row):
+        if self.rig.grid.is_pickup(col, row):
             raise BuildStateError(
-                "[0,0] is the feeder - it is where blocks are picked up from, "
+                "[0,0] is the pickup cell - it is where blocks are picked up from, "
                 "in both modes, and is never built on"
-            )
-        if self.rig.grid.is_blocked(col, row):
-            raise BuildStateError(
-                f"[{col},{row}] is blocked by the feeder belt - the claw "
-                "cannot descend there at any level"
             )
         if not self.rig.grid.contains_build_target(col, row):
             raise BuildStateError(
@@ -134,7 +129,7 @@ class BuildController:
             home_before_horizontal=home_before_horizontal,
         )
 
-    def build(self, timeout: float = 300.0, *, manual_feed: bool = False) -> BuildResult:
+    def build(self, timeout: float = 300.0) -> BuildResult:
         """Run one selected cell operation; lock if physical state is unknown."""
         if self.locked:
             raise BuildStateError(self.locked_reason)
@@ -143,15 +138,12 @@ class BuildController:
 
         col, row = self.selected
         try:
-            if self.orchestrator is None:
+            if self.pickup is None:
                 # Commissioning/tests may still use a staged block and address
-                # the Mega directly. Production injects CellOrchestrator.
+                # the Mega directly. Production injects PickupCoordinator.
                 result = self.rig.build(col, row, self.level, timeout=timeout)
-            elif manual_feed:
-                result = self.orchestrator.place_manually_staged_block(
-                    col, row, self.level, timeout=timeout)
             else:
-                result = self.orchestrator.place_block(
+                result = self.pickup.place_staged_block(
                     col, row, self.level, timeout=timeout)
         except RigError as exc:
             self.locked_reason = (

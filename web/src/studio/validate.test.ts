@@ -4,8 +4,8 @@ import { aabbOf, footprintContains, intersects } from "./geometry";
 import { type Model, type ModelBlock } from "./model";
 import { DEFAULT_STUDIO_SETTINGS } from "./settings";
 import {
-  RULES, blockedCell, clawClearance, clippedByShift, collision, duplicateCell,
-  edgeOverhang, feederCell, geometryDrift, island, levelCeiling,
+  RULES, clawClearance, clippedByShift, collision, duplicateCell,
+  edgeOverhang, pickupCell, geometryDrift, island, levelCeiling,
   outOfGrid, primaryDiagnostic, snapshotRigGeometry, supportMetrics,
   unsupported, validateModel, validatePlacement,
   type Rule, type ValidationContext,
@@ -50,24 +50,10 @@ interface RuleCase {
 }
 
 const cases: RuleCase[] = [
-  { name: "permits an ordinary target", code: "FEEDER_CELL", rule: feederCell,
+  { name: "permits an ordinary target", code: "PICKUP_CELL", rule: pickupCell,
     blocks: [block("b1", "vertical", 1, 0, 0)], subject: "b1", fires: false },
-  { name: "reserves [0,0] in either mode", code: "FEEDER_CELL", rule: feederCell,
+  { name: "reserves [0,0] in either mode", code: "PICKUP_CELL", rule: pickupCell,
     blocks: [block("b1", "horizontal", 0, 0, 2)], subject: "b1", fires: true },
-
-  { name: "rejects a shipped feeder-belt cell in vertical", code: "BLOCKED_CELL", rule: blockedCell,
-    blocks: [block("b1", "vertical", 0, 1, 0)], subject: "b1", fires: true },
-  { name: "rejects a belt cell at every level", code: "BLOCKED_CELL", rule: blockedCell,
-    blocks: [block("b1", "vertical", 1, 0, 4)], subject: "b1", fires: true },
-  { name: "leaves a reverted cell buildable again", code: "BLOCKED_CELL", rule: blockedCell,
-    blocks: [block("b1", "vertical", 2, 1, 0)], subject: "b1", fires: false },
-  { name: "leaves an ordinary vertical cell alone", code: "BLOCKED_CELL", rule: blockedCell,
-    blocks: [block("b1", "vertical", 3, 3, 0)], subject: "b1", fires: false },
-  { name: "does not block the same indices in horizontal", code: "BLOCKED_CELL", rule: blockedCell,
-    blocks: [block("b1", "horizontal", 0, 1, 0)], subject: "b1", fires: false },
-  { name: "honours an added belt cell from config", code: "BLOCKED_CELL", rule: blockedCell,
-    config: changed(c => { c.grid.modes.horizontal.blocked_cells = [[1, 2]] as [number, number][]; }),
-    blocks: [block("b1", "horizontal", 1, 2, 0)], subject: "b1", fires: true },
 
   { name: "uses a modified mode count for a legal edge cell", code: "OUT_OF_GRID", rule: outOfGrid,
     config: changed(c => { c.grid.modes.horizontal.cols = 2; }),
@@ -247,7 +233,7 @@ describe("clearance follows authored build order", () => {
 describe("the two validator entry points", () => {
   it("runs the same ordered RULES for a model and a ghost candidate", () => {
     expect(RULES.map(rule => rule.code)).toEqual([
-      "FEEDER_CELL", "BLOCKED_CELL", "OUT_OF_GRID", "CLIPPED_BY_SHIFT", "EDGE_OVERHANG",
+      "PICKUP_CELL", "OUT_OF_GRID", "CLIPPED_BY_SHIFT", "EDGE_OVERHANG",
       "LEVEL_CEILING", "DUPLICATE_CELL", "COLLISION", "UNSUPPORTED",
       "CLAW_CLEARANCE", "GEOMETRY_DRIFT", "ISLAND",
     ]);
@@ -262,6 +248,6 @@ describe("the two validator entry points", () => {
   it("uses fixed priority when the ghost has more than one reason", () => {
     const candidate = block("ghost", "vertical", 0, 0, 20);
     const diagnostic = primaryDiagnostic(validatePlacement(modelOf(), candidate, context()));
-    expect(diagnostic?.code).toBe("FEEDER_CELL");
+    expect(diagnostic?.code).toBe("PICKUP_CELL");
   });
 });

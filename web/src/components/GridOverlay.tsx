@@ -113,7 +113,7 @@ export function GridOverlay({ state, onSelect, onHover, selectable = true }: {
       {showGrid && geometry.grid.map(cell => (
         <polygon
           key={`${cell.col}-${cell.row}`}
-          className={`grid-cell${geometry.calibrated ? "" : " approximate"}${cell.col === 0 && cell.row === 0 ? " feeder" : ""}${cell.blocked ? " blocked" : ""}`}
+          className={`grid-cell${geometry.calibrated ? "" : " approximate"}${cell.col === 0 && cell.row === 0 ? " feeder" : ""}`}
           strokeWidth={1.5 * stroke}
           points={points(cell.polygon)}
         />
@@ -147,21 +147,6 @@ export function GridOverlay({ state, onSelect, onHover, selectable = true }: {
           <title>{cellTitle(verdictName, cell.col, cell.row)}</title>
         </polygon>
       ))}
-      {/* Belt-blocked cells: struck through, same read as the 3D Studio. */}
-      {showGrid && geometry.grid.filter(cell => cell.blocked).map(cell => (
-        <g key={`blocked-${cell.col}-${cell.row}`} className="grid-blocked-cross">
-          <line
-            strokeWidth={1.5 * stroke}
-            x1={cell.polygon[0][0]} y1={cell.polygon[0][1]}
-            x2={cell.polygon[2][0]} y2={cell.polygon[2][1]}
-          />
-          <line
-            strokeWidth={1.5 * stroke}
-            x1={cell.polygon[1][0]} y1={cell.polygon[1][1]}
-            x2={cell.polygon[3][0]} y2={cell.polygon[3][1]}
-          />
-        </g>
-      ))}
       {showGrid && geometry.grid.filter(cell => cell.col === 0 && cell.row === 0).map(cell => {
         const box = bounds(cell.polygon);
         return (
@@ -173,7 +158,7 @@ export function GridOverlay({ state, onSelect, onHover, selectable = true }: {
             textAnchor="middle"
             dominantBaseline="middle"
             fontSize={12 * stroke}
-          >FEED</text>
+          >PICKUP</text>
         );
       })}
 

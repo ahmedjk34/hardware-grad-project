@@ -1091,37 +1091,6 @@ float GRID_MAX_EDGE_OVERHANG_Y_CM[GRID_MODE_COUNT] = {3.0, 1.1};
 long GRID_COLS[GRID_MODE_COUNT] = {6, 2};
 long GRID_ROWS[GRID_MODE_COUNT] = {5, 9};
 
-// ------------------------------------------------------------
-// BELT-BLOCKED CELLS - a fixed obstruction, not a shift            <<< NEW
-// ------------------------------------------------------------
-// The feeder belt sits across a few cells next to the pick-up point. They are
-// still real, drawable, addressable cells - a block WOULD fit there - but the
-// claw can never descend into one, at ANY level, because the belt is in the
-// way. B and G refuse them before anything moves, exactly like the feeder
-// ([0,0]), which is a separate always-on case and is NOT listed here.
-//
-// PER MODE: what the belt fouls when blocks stand up (vertical) it need not
-// foul when they lie down (horizontal), because the two grids put their cell
-// centres in different places. Horizontal currently lists none; fill its row
-// in when that grid is measured against the belt.
-//
-// PAIRED with config/rig.json -> grid.modes.<mode>.blocked_cells. The Mega
-// cannot read that file, so the list is baked in here; test_grid.py parses
-// this table and fails if the two disagree. Change both in the same commit.
-//
-// Fixed-capacity table: GRID_BLOCKED_MAX slots per mode, the first
-// GRID_BLOCKED_COUNT[mode] of which are live. {-1,-1} pads the unused tail.
-const uint8_t GRID_BLOCKED_MAX = 8;
-long GRID_BLOCKED_COUNT[GRID_MODE_COUNT] = {3, 0};
-long GRID_BLOCKED_COL[GRID_MODE_COUNT][GRID_BLOCKED_MAX] = {
-    {0, 1, 1, -1, -1, -1, -1, -1},   // vertical: [0,1] [1,0] [1,1]
-    {-1, -1, -1, -1, -1, -1, -1, -1} // horizontal
-};
-long GRID_BLOCKED_ROW[GRID_MODE_COUNT][GRID_BLOCKED_MAX] = {
-    {1, 0, 1, -1, -1, -1, -1, -1},   // vertical: [0,1] [1,0] [1,1]
-    {-1, -1, -1, -1, -1, -1, -1, -1} // horizontal
-};
-
 // Read these rather than indexing the tables. Everything downstream of here
 // is written against the ACTIVE mode and never mentions the other one.
 //
@@ -1707,7 +1676,7 @@ const char CMD_GRID_MODE_VERTICAL = 'R';
 const char CMD_BUILD = 'B'; // B <col> <row> <level>
 // M follows the same validated 14-phase route as B, but pauses after the
 // open claw reaches the feeder. A later C is the operator's explicit consent
-// to close the jaws and continue. B itself must stay automatic for the Uno.
+// to close the jaws and continue. B remains available for direct commissioning.
 const char CMD_MANUAL_BUILD = 'M'; // M <col> <row> <level>
 // P <pcol> <prow> <plevel> <dx_cm> <dy_cm> <qcol> <qrow> <qlevel>
 // Pick a block that is already on the board (at cell [pcol,prow], level plevel,
@@ -3389,51 +3358,6 @@ bool cellIsFeeder(long col, long row)
   return col == 0 && row == 0;
 }
 
-// A fixed obstruction (the feeder belt) sits in this cell for the ACTIVE mode,
-// so the claw can never descend into it - at any level. Refused by B and G
-// before anything moves, the same as the feeder. The list is GRID_BLOCKED_*
-// in SECTION 6C and is paired with config/rig.json.
-bool cellIsBeltBlocked(long col, long row)
-{
-  long n = GRID_BLOCKED_COUNT[gridMode];
-  if (n > (long)GRID_BLOCKED_MAX)
-  {
-    n = (long)GRID_BLOCKED_MAX;
-  }
-  for (long i = 0; i < n; i++)
-  {
-    if (GRID_BLOCKED_COL[gridMode][i] == col &&
-        GRID_BLOCKED_ROW[gridMode][i] == row)
-    {
-      return true;
-    }
-  }
-  return false;
-}
-
-// How many belt-blocked cells land inside the currently reachable grid, for
-// the "N buildable cells" summary. A blocked entry outside gridColsNow() /
-// gridRowsNow() (e.g. clipped away by a shift) is not subtracted twice.
-long gridBlockedCountNow()
-{
-  long n = GRID_BLOCKED_COUNT[gridMode];
-  if (n > (long)GRID_BLOCKED_MAX)
-  {
-    n = (long)GRID_BLOCKED_MAX;
-  }
-  long inRange = 0;
-  for (long i = 0; i < n; i++)
-  {
-    long c = GRID_BLOCKED_COL[gridMode][i];
-    long r = GRID_BLOCKED_ROW[gridMode][i];
-    if (c >= 0 && c <= gridColsNow() && r >= 0 && r <= gridRowsNow())
-    {
-      inRange++;
-    }
-  }
-  return inRange;
-}
-
 // 0 is a real coordinate AND a real block footprint. It no longer means
 // "leave that axis alone" - B 0 3 and B 4 0 are ordinary placements now.
 bool cellInRange(long col, long row)
@@ -3892,16 +3816,6 @@ bool gotoCellForRotation(long col, long row, int8_t rotation)
   {
     Serial.println(F("  [0,0] is the FEEDER - going to its centre."));
     return goToFeeder();
-  }
-
-  // The feeder belt is parked in this cell for the active mode. G would only
-  // drive the gantry over it (no Z descent), but there is nothing to do there
-  // and lowering by hand afterwards would hit the belt - so refuse it, the
-  // same as a build does. See GRID_BLOCKED_* / config/rig.json.
-  if (cellIsBeltBlocked(col, row))
-  {
-    Serial.println(F("  ERROR - cell blocked by the feeder belt. Nothing to do there."));
-    return false;
   }
 
   long targetX = 0;
@@ -4905,14 +4819,6 @@ bool buildBlock(long col, long row, long level, int8_t wantRot, bool manualPicku
   {
     return buildReject("cell out of range");
   }
-  // A fixed obstruction (the feeder belt) is parked in this cell for the
-  // active mode - the claw cannot descend there at any level. Refused here,
-  // before the pick-up, exactly like the feeder. See GRID_BLOCKED_* / rig.json.
-  if (cellIsBeltBlocked(col, row))
-  {
-    return buildReject("cell blocked by feeder belt");
-  }
-
   // Reject an impossible compensated holder target before the claw picks up a
   // block.  The same check is repeated in gotoCellForRotation() for direct G.
   long holderTargetX;
@@ -5286,9 +5192,6 @@ bool replaceBlock(long pcol, long prow, long plevel,
 
   if (cellIsFeeder(pcol, prow) || cellIsFeeder(qcol, qrow))
     return buildReject("the feeder cell is not a correction target");
-
-  if (cellIsBeltBlocked(pcol, prow) || cellIsBeltBlocked(qcol, qrow))
-    return buildReject("cell blocked by feeder belt");
 
   long maxLevel = maxBuildLevel();
   if (plevel < 0 || plevel > maxLevel || qlevel < 0 || qlevel > maxLevel)
@@ -6039,15 +5942,8 @@ void printGridConfig()
   Serial.print(F(" cols x "));
   Serial.print(gridSlotsOf(AXIS_Y));
   Serial.print(F(" rows  = "));
-  Serial.print(gridSlotsOf(AXIS_X) * gridSlotsOf(AXIS_Y) - 1 - gridBlockedCountNow());
-  Serial.print(F(" buildable cells (+1 feeder"));
-  if (gridBlockedCountNow() > 0)
-  {
-    Serial.print(F(", "));
-    Serial.print(gridBlockedCountNow());
-    Serial.print(F(" belt-blocked"));
-  }
-  Serial.println(F(")"));
+  Serial.print(gridSlotsOf(AXIS_X) * gridSlotsOf(AXIS_Y) - 1);
+  Serial.println(F(" buildable cells (+1 feeder)"));
 
   Serial.print(F("Coordinates: col 0.."));
   Serial.print(gridColsNow());
@@ -6244,10 +6140,6 @@ void printGridPosition()
     {
       Serial.print(F(" FEEDER"));
     }
-    else if (cellIsBeltBlocked(liveCol, liveRow))
-    {
-      Serial.print(F(" BELT-BLOCKED"));
-    }
     Serial.println();
   }
 
@@ -6416,8 +6308,8 @@ void printGrid()
   }
 
   Serial.println();
-  Serial.println(F("  # = machine   . = buildable cell   F = feeder   X = belt"));
-  Serial.println(F("  (every cell is a real block; [0,0] is the feeder)"));
+  Serial.println(F("  # = machine   . = buildable cell   P = pickup"));
+  Serial.println(F("  (every cell is a real block; [0,0] is the pickup)"));
   Serial.println();
 
   for (long r = gridRowsNow(); r >= 0; r--)
@@ -6438,11 +6330,7 @@ void printGrid()
       }
       else if (cellIsFeeder(c, r))
       {
-        Serial.print(F(" F"));
-      }
-      else if (cellIsBeltBlocked(c, r))
-      {
-        Serial.print(F(" X"));
+        Serial.print(F(" P"));
       }
       else
       {
@@ -6469,7 +6357,7 @@ void printGrid()
       Serial.print(F(" "));
   }
   Serial.println();
-  Serial.println(F("     ^ [0,0] feeder; X = belt-blocked; rest buildable"));
+  Serial.println(F("     ^ [0,0] pickup; rest buildable"));
   Serial.println(F("======================================"));
 }
 

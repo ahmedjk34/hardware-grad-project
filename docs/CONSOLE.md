@@ -15,7 +15,7 @@ camera pipeline consumes), [AGENTS.md](../AGENTS.md) (the Pi/firmware
 contract), [docs/ack-protocol.md](ack-protocol.md) (the serial protocol this
 console's `/api/events` stream carries),
 [docs/communication-pipeline.md](communication-pipeline.md) (the full
-browser → Pi → Uno + Mega path this console drives).
+browser → Pi → Mega path this console drives).
 
 ---
 
@@ -24,7 +24,7 @@ browser → Pi → Uno + Mega path this console drives).
 **Built and tested.** All ten of the original build steps are implemented;
 `npm test -- --run` is 492/492 green across 38 files (console + Studio
 combined, they now share a test run); the relevant backend suites
-(`pytest python/tests -k "web or link or mock_board or feeder or orchestrator"`)
+(`pytest python/tests -k "web or link or mock_board or pickup"`)
 are 62/62 green.
 
 | Piece | State |
@@ -43,7 +43,7 @@ are 62/62 green.
 **Grown beyond the original ten steps, undocumented until now:**
 
 - `python/web/events.py` — a durable, replayable `/api/events` history
-  (`serial`, `feeder`, `build_step`, `build_result` event types with server-assigned
+  (`serial`, `build_step`, `build_result` event types with server-assigned
   ids), added to carry the ack-protocol `STEP` channel (see
   [ack-protocol.md](ack-protocol.md)).
 - `python/web/progress.py` — the full build-progress state machine:
@@ -85,11 +85,11 @@ replaced:
    moves.
 2. The panel shows `B <col> <row> <level>` — the exact command.
 3. Operator taps **BUILD**, then a second **CONFIRM** (two deliberate taps).
-4. The server sends one correlated `FEED` to the Uno. Only its exact terminal
-   staged success permits the selected `B` to be sent to the Mega. The camera
-   keeps streaming throughout and every mutation stays disabled until the
-   complete two-board operation settles.
-5. Result: **PLACED** (green, selection clears), **REJECTED** (amber, bad
+4. The operator stages one block at pickup and explicitly confirms it. The
+   server sends Mega `M <col> <row> <level>`; after the open-claw descent, the
+   firmware's `await_manual_close` event enables one explicit `C`.
+5. The camera keeps streaming while the Mega grips, carries, places and parks.
+6. Result: **PLACED** (green, selection clears), **REJECTED** (amber, bad
    input, nothing moved, selection kept), or **ABORTED** / timeout (red, the
    machine's physical state is unknown, session locks — a human inspects the
    rig and restarts the process; there is no software recovery, and the UI
@@ -122,15 +122,14 @@ chooses every target).
    mutations until a human restarts the process.
 4. **The safety model lives below the web layer, not in it.**
    `rig/build_controller.py`, `rig/build_job.py` and `rig/link.py` enforce:
-   feeder cell `[0,0]` is never a build target, out-of-envelope cells are
+   pickup cell `[0,0]` is never a build target, out-of-envelope cells are
    refused, only one build runs at a time, a stale camera blocks selection and
    build, an aborted build locks. The web backend reuses those modules
    unchanged and re-checks everything server-side — **the browser is never
    trusted.**
-5. **There is exactly one owner of the camera and one owner of each serial
-   port.** One process, one `Picamera2` object, one Mega `serial.Serial`, and
-   one Uno `serial.Serial`. The FastAPI lifespan owns all three. No second
-   script, reload worker, per-request connection, or board-to-board link.
+5. **There is exactly one owner of the camera and the serial port.** One
+   process, one `Picamera2` object and one Mega `serial.Serial`. The FastAPI
+   lifespan owns both. No second script, reload worker or per-request connection.
 6. **Calibration is optional for selection.** Without a saved
    `config/workspace_map.json`, the app still lets an operator select cells on
    an *approximate* grid computed from `config/rig.json` geometry — drawn
@@ -147,7 +146,7 @@ chooses every target).
    [features/placement-supervision.md](features/placement-supervision.md).
 8. **There are two grids, latched by mode.** `vertical` (7 × 6 addressable,
    6 × 5 positive build cells) and `horizontal` (3 × 10 addressable, 2 × 9
-   positive). `[0,0]` is the feeder in both. Switching mode changes what every coordinate means, so it
+   positive). `[0,0]` is the pickup cell in both. Switching mode changes what every coordinate means, so it
    clears any selection, and entering `horizontal` requires X/Y to be homed
    first. See AGENTS.md §3.
 9. **The camera pipeline is heavy and already built.** Colour correction,
@@ -184,9 +183,8 @@ chooses every target).
   │   │    ├─ LatestFramePump → camera source    │
   │   │    ├─ AnalysisWorker (block detection)   │
   │   │    └─ PaperGridTracker (printed grid)    │
-  │   ├─ Feeder (Uno serial, or MockFeeder)       │
   │   ├─ Rig     (Mega serial, or MockBoard)      │
-  │   ├─ CellOrchestrator → BuildController/Job   │
+  │   ├─ PickupCoordinator → BuildController/Job │
   │   └─ MJPEG encoder (encode-once, fan-out)     │
   │                                               │
   │  GET  /api/state         full snapshot        │
@@ -202,8 +200,8 @@ chooses every target).
   │                            placed-block)      │
   └───────────────┬───────────────┬──────────────┘
                   ▼               ▼
-           CSI camera       USB serial → Uno feeder
-        (or MockCamera)     USB serial → Mega gantry
+           CSI camera       USB serial → Mega gantry
+        (or MockCamera)          (or MockBoard)
 ```
 
 **Backend modules** (`python/`):
@@ -215,12 +213,10 @@ chooses every target).
 | `camera/gridded_camera_feed.py` → `PaperGridTracker` | async printed-grid detection |
 | `rig/build_controller.py` → `BuildController` | selection, level, mode-cycle, the one safety gate every mutation goes through |
 | `rig/build_job.py` → `BuildJob` | one-build-at-a-time worker thread |
-| `rig/feeder.py` → `Feeder` | protocol-2 Uno client, READY identity validation, correlated terminal results |
-| `rig/orchestrator.py` → `CellOrchestrator` | serializes the pickup resource: staged Uno success first, then Mega `B` |
+| `rig/pickup.py` → `PickupCoordinator` | serializes the pickup resource, always uses Mega `M`, gates `C`, and locks failures after staging |
 | `rig/link.py` → `Rig`, `BuildResult` | the serial protocol client; `str(result)` ∈ `{"placed","rejected","aborted"}` |
 | `rig/workspace.py` → `WorkspaceMap` | pixel ↔ cell math; `.cell_at()`, `.target_polygon()`, `.from_grid()`, `.save()` |
 | `rig/mock_board.py` → `MockBoard` | protocol-level fake Mega, promoted from the old test-only `FakeSerial` |
-| `rig/mock_feeder.py` → `MockFeeder` | protocol-2 fake Uno with failure/reset/disconnect/cancel controls |
 | `vision/mock_camera.py` → `MockCamera` | renders blocks at real grid cells plus a printed-lattice stand-in, so detection is exercisable off the Pi |
 | `rig/console_pipeline.py` → `ConsolePipeline`, `ProcessedFrame` | the headless capture+detect loop; owns exactly one camera, applies orientation then colour correction exactly once, does **not** own a serial `Rig` |
 | `web/app.py` | FastAPI app factory, one-owner lifespan, `GET /api/state`, `WS /api/events` |
@@ -231,7 +227,7 @@ chooses every target).
 | `web/routes_calibration.py` | corner calibration, printed-sheet calibration, and the placed-block calibration sub-flow |
 | `web/mjpeg.py` | one latest-JPEG slot shared across clients, no encoding while nobody is subscribed |
 | `web/geometry.py` | cached grid polygons + current selection/detection geometry for `StateModel` |
-| `web/events.py` | durable, replayable `/api/events` history (`serial`, `feeder`, `build_step`, `build_result`) |
+| `web/events.py` | durable, replayable `/api/events` history (`serial`, `build_step`, `build_result`) |
 | `web/progress.py` | the idle→accepted→validating→running→parking→placed/rejected/aborted→locked state machine |
 
 **Frontend modules** (`web/src/`): `App.tsx`, `store.ts` (client state store),

@@ -10,9 +10,9 @@ def chapter_4(rep):
     rep.h3("4.1.1 A hierarchy, and what closed-loop means here")
     rep.p(
         "The control system is hierarchical, with a hard boundary between the two levels. The "
-        "Raspberry Pi decides **what** should happen and **whether** it is allowed to; each "
+        "Raspberry Pi decides **what** should happen and **whether** it is allowed to; the "
         "Arduino decides **how**. The Pi never sends a motor step, a direction bit or a "
-        "millisecond delay: it sends `B col row level` or `FEED <id>`, and the firmware turns "
+        "millisecond delay: it sends `M col row level` and a firmware-gated `C`, and the firmware turns "
         "that into motion using numbers the Pi does not hold a copy of.")
     rep.p(
         "That boundary is drawn where it is because of one rule: **the firmware owns everything "
@@ -22,7 +22,7 @@ def chapter_4(rep):
         "machine. Nothing can push them over serial, so a copy of them in the Pi's configuration "
         "would be a lie that nobody notices until the rig drives into something. What the "
         "configuration file does own is what can change without reflashing: the grid counts, the "
-        "block and gap geometry, the trims, the two serial ports.")
+        "block and gap geometry, the trims, and the serial port.")
     rep.p(
         "At the motor level the machine is **entirely open-loop**. There are no encoders, the "
         "step counters are trusted, and the only thing that keeps them honest is that every "
@@ -255,7 +255,7 @@ def chapter_4(rep):
         "0.8 and 1.6, and that alternation was an artefact of the wrong gap and not a "
         "feature of the paper.")
     rep.p(
-        "Cell [0,0] is the **feeder** in both modes and is never built on. The feeder never "
+        "Cell [0,0] is the **pickup cell** in both modes and is never built on. Pickup never "
         "rotates: a block is always presented standing, on the vertical [0,0] footprint, "
         "whichever mode is latched. Because the lattice is centre-anchored, that cell's centre "
         "**is** the home corner, so a pick-up is a plain home with no move afterwards and the "
@@ -267,7 +267,7 @@ def chapter_4(rep):
     rep.p(
         "The horizontal grid ships with a trim of **+1.9 cm on both axes**, and the reason is "
         "geometric rather than empirical. The block is picked up standing at the vertical [0,0] "
-        "feeder, centred on home, and then rotated 90 degrees about the grip. The rotated 6.0 cm "
+        "pickup, centred on home, and then rotated 90 degrees about the grip. The rotated 6.0 cm "
         "face overhangs the 2.2 cm vertical footprint by 6.0/2 - 2.2/2 = 1.9 cm per side, so a "
         "+1.9 cm trim on each axis seats horizontal [0,0] flush against the vertical [0,0] "
         "block's edge (the near edge in X, the far edge in Y).")
@@ -585,7 +585,7 @@ def chapter_4(rep):
         [
             ["1", "`raise_clear`", "move", "Raise Z into the top switch, clear of everything "
                                            "already built."],
-            ["2", "`home_feeder`", "move", "Home X and Y to the feeder cell [0,0]. Its centre "
+            ["2", "`home_feeder`", "move", "Home X and Y to the pickup cell [0,0]. Its centre "
                                            "**is** home, so there is no move afterwards."],
             ["3", "`neutralise_claw`", "rotate", "Return the claw to neutral before picking up. "
                                                  "Normally a no-op, because phase 14 already "
@@ -620,52 +620,17 @@ def chapter_4(rep):
         "the rig somewhere unknown, so the command's terminal result is downgraded from `OK` to "
         "`HELD`. Placed but not parked is not a success.")
     rep.figure("The fourteen-phase build cycle, drawn against the machine's axes: the pick at "
-               "the feeder, the carry at top-switch height, the placement at the target level, "
+               "pickup, the carry at top-switch height, the placement at the target level, "
                "and the park.",
                placeholder="Sequence diagram or annotated side elevation of the rig with the "
                            "fourteen phases numbered along the tool path.")
 
-    rep.h3("4.4.2 The feed cycle")
+    rep.h3("4.4.2 Manual staging and pickup")
     rep.p(
-        "One `FEED <id>` is one complete dosing operation on the Uno, and it is a state machine "
-        "rather than a sequence of delays, so that a stop command remains available throughout.")
-    rep.table(
-        "The feeder state machine.",
-        ["State", "Belt", "Sensor sampled", "Leaves when"],
-        [
-            ["`closing`", "stopped", "-", "500 ms have elapsed"],
-            ["`opening_stage_1`", "stopped", "-", "500 ms (gate at 80 degrees)"],
-            ["`opening_stage_2`", "stopped", "-", "500 ms (gate at 150 degrees)"],
-            ["`waiting_for_exit`", "stopped", "exit, every 100 ms",
-             "a block is detected, or 10 s timeout"],
-            ["`moving_to_stage`", "running", "stage, every 100 ms",
-             "a block is detected, or 15 s timeout"],
-            ["`aligning`", "stopped", "-", "350 ms (the aligner nudges and returns)"],
-            ["`verifying_stage`", "stopped", "stage, read once after settling",
-             "block still present -> success; block gone -> the belt resumes"],
-            ["`block_ready`", "stopped", "-", "terminal success"],
-        ],
-        widths=[3.4, 2.0, 3.6, 6.0], size=9)
-    rep.p("Three moments in that sequence are the whole reason the feeder exists:")
-    rep.bullets([
-        "**Before the container opens**, the stage sensor is read. If it already sees a block, "
-        "the request is refused outright with `stage_occupied` and nothing moves. The pickup "
-        "point is a single-owner resource, and an in-flight transaction is never cancelled and "
-        "replaced, because its first block may already have left the hopper.",
-        "**The instant the exit sensor fires**, the container is shut again, before the belt "
-        "starts, so a second block cannot follow the first out. This is what turns a gate into a "
-        "doser.",
-        "**After the aligner has moved**, the stage sensor is read a second time. Only if the "
-        "block is still there is `@id OK state=block_ready result=staged` emitted. If it has "
-        "gone, the belt resumes instead of the feeder reporting a success it cannot see.",
-    ])
-    rep.p(
-        "This is **sensor-stopped staging, not a fixed belt-duration guess**, and the two "
-        "observations also distinguish an empty or blocked hopper path from a block that left "
-        "the hopper and never arrived. The four terminal failures are `stage_occupied`, "
-        "`exit_timeout` (no block seen leaving within 10 s), `stage_timeout` (a released block "
-        "did not reach the pickup sensor within 15 s) and `cancelled`, and each names a different "
-        "physical problem for the operator.")
+        "For every production placement, the operator puts one block at reserved cell [0,0] "
+        "and explicitly confirms staging. The Pi then sends `M col row level`. The Mega "
+        "approaches pickup, descends with the claw open, reports `await_manual_close`, and "
+        "waits. Only then does the interface enable the explicit `C` that grips and continues.")
 
     rep.h3("4.4.3 The guard stack")
     rep.p(
@@ -674,82 +639,61 @@ def chapter_4(rep):
     rep.numbered([
         "**The HTTP route** refuses a request that is not explicitly confirmed, one whose command "
         "string does not match the server's own computed command, a stale camera frame, a build "
-        "that is already running, a locked session, or either board not being connected.",
+        "that is already running, a locked session, or the Mega not being connected.",
         "**The build worker** refuses a second build on the worker thread. One at a time, and "
         "off the event loop, so a blocking multi-minute call cannot stall the web service.",
         "**The safety state** refuses everything while the session is locked, or when no cell is "
         "selected. This layer holds the selection, the level and the mode, and converts any "
         "exception from below into a session lock.",
-        "**The two-board handoff** refuses when its own lock is set, or when another placement "
+        "**The pickup coordinator** refuses when its own lock is set, or when another placement "
         "already owns the pickup point.",
-        "**The serial clients** refuse an overlapping transaction, a board that is not "
-        "connected, or a board whose identity does not match the configuration.",
+        "**The serial client** refuses an overlapping transaction or a Mega that is not connected.",
     ])
     rep.p(
         "Above all five sits the rule that the browser is a mirror. It sends a request and "
         "renders what the server reports; every guard is re-checked on the Pi, and a greyed-out "
         "button in the interface is a courtesy, never the safety mechanism.")
 
-    rep.h3("4.4.4 The two-board handoff")
+    rep.h3("4.4.4 The manual pickup handoff")
     rep.p(
-        "One placement is **one indivisible operation owned by the Pi**: stage exactly one block "
-        "on the Uno, then, only on its exact terminal success, place it with the Mega.")
+        "One placement is **one indivisible operation owned by the Pi**: confirm exactly one "
+        "manually staged block, then complete the Mega's guarded pickup and placement.")
     rep.code(
-        "Pi (CellOrchestrator)              Uno (belt_v1)            MEGA (build_test_v1)\n"
-        "  phase=feeding\n"
-        "  feed(timeout=45s) ---- FEED <id> -->\n"
-        "                     <-- @id RECV cmd=FEED\n"
-        "                     <-- @id ACK cmd=FEED accepted=1\n"
-        "                     <-- @id STATE state=closing ... verifying_stage\n"
-        "                     <-- @id EVENT phase=...           (progress only)\n"
-        "                     <-- @id OK state=block_ready result=staged   <- the ONLY success\n"
-        "  phase=ready_for_pick\n"
+        "Pi (PickupCoordinator)                         MEGA (build_test_v1)\n"
+        "  operator confirms one block staged\n"
         "  phase=placing\n"
-        "  build(col,row,level) ------------------- B <col> <row> <level> -->\n"
-        "                                       <-- @seq RECV cmd=B ...\n"
+        "  build(col,row,level) ------------------- M <col> <row> <level> -->\n"
+        "                                       <-- @seq RECV cmd=M ...\n"
         "                                       <-- @seq STEP step=n/14 phase=... status=begin\n"
+        "                                       <-- phase=await_manual_close\n"
+        "  explicit close ---------------------- C -->\n"
         "                                       <-- @seq OK col=... row=... level=...  <- PLACED\n"
         "  phase=complete  ->  BuildResult(PLACED)")
     rep.p("The rules enforced on that sequence are absolute:")
     rep.bullets([
-        "**Only** a terminal `@id OK state=block_ready result=staged` whose `id` matches the "
-        "request authorises the `B`. `ACK`, `STATE`, `SENSOR` and `EVENT` are progress and never "
-        "success. A terminal with the wrong id is ignored.",
-        "A malformed success, meaning anything other than `result=staged`, is treated as a **failure**, "
-        "not as permission.",
-        "On any feeder error, timeout, disconnect or reset before the `OK`: **no `B` is sent**, "
-        "the orchestrator locks and the result is `ABORTED`.",
-        "After the `B` has been sent, **any** non-placed Mega result also locks, including a "
-        "`SAFE` rejection, which is entirely safe for a bare gantry but not for the cell, "
-        "because a block is already staged and feeding another would double-load the pickup "
-        "point.",
-        "One `FEED` at a time. The next one never starts until the previous `B` has returned a "
-        "terminal `PLACED`.",
+        "Only an explicit operator confirmation authorises `M`.",
+        "The close is rejected until the firmware reports `await_manual_close`.",
+        "After staging is confirmed, **any** non-placed Mega result locks because the pickup "
+        "or claw state may be unknown.",
+        "The next operation never starts until the previous placement has returned a terminal result.",
     ])
     rep.table(
         "Result and lock behaviour.",
         ["Outcome", "Result", "Session", "Recovery"],
         [
-            ["Uno staged, Mega `OK`", "`placed`", "READY, selection cleared", "continue"],
-            ["Uno error / timeout / reset before `B`", "`aborted`", "**LOCKED**",
-             "inspect the pickup area, restart the service"],
-            ["Uno `OK`, then Mega `SAFE` / rejected", "`aborted`", "**LOCKED**",
+            ["Mega `OK` after manual pickup", "`placed`", "READY, selection cleared", "continue"],
+            ["Mega `SAFE` / rejected after staging", "`aborted`", "**LOCKED**",
              "a block is staged; inspect, then restart"],
-            ["Uno `OK`, then Mega `HELD` / timeout / cable loss", "`aborted`", "**LOCKED**",
+            ["Mega `HELD` / timeout / cable loss", "`aborted`", "**LOCKED**",
              "machine state unknown; inspect, then restart"],
-            ["Operator stop during the feed", "`aborted` (`cancelled`)", "**LOCKED**",
-             "inspect, then restart"],
         ],
         widths=[5.4, 2.8, 3.2, 3.6], size=9)
     rep.p(
         "The lock is deliberately sticky: a new service process is the required recovery. "
-        "Nothing is auto-retried, because a retried `FEED` or `B` risks a double-load or a "
+        "Nothing is auto-retried, because a retried placement risks a duplicate operation or a "
         "duplicate placement, and neither of those announces itself.")
     rep.p(
-        "Stop has two meanings depending on where the operation is. While the Uno owns it "
-        "(feeding or staging), stop actively sends the Uno a `STOP`, the feed waiter observes a "
-        "terminal `cancelled`, and the session locks for inspection. Once the Mega is moving, "
-        "stop is **stop after the current block**, because the Mega does not read serial inside "
+        "Once the Mega is moving, stop is **stop after the current block**, because the Mega does not read serial inside "
         "its build cycle. The interface says exactly that, in those words, and never offers a "
         "control that implies otherwise.")
 
@@ -879,17 +823,14 @@ def chapter_4(rep):
     rep.p(
         "It never relaxes a safety rule. A `HELD` result locks the run; a `SAFE` rejection pauses "
         "it and keeps it resumable; a lost socket pauses and resumes on the next phase event "
-        "and not on a timer; and 'STOP AFTER THIS BLOCK' becomes 'CANCEL FEED' while the "
-        "feeder still owns the operation, because during that window a stop genuinely can act. "
-        "The panel's next-block colour line is a preview only, and never implies that a second "
-        "feed is already running.")
+        "and not on a timer. The panel's next-block colour line is a preview only, and never "
+        "implies that a second operation is already running.")
 
     rep.h3("4.5.5 Commissioning and simulation modes")
     rep.defs([
         ("Full simulation",
-         "The entire software chain (web service, orchestrator, both serial clients and camera) "
-         "runs against a protocol-level fake Mega, a protocol-2 fake Uno with failure, reset and "
-         "cancel controls, and a mock camera that renders blocks at real grid cells. No hardware "
+         "The entire software chain (web service, pickup coordinator, Mega serial client and camera) "
+         "runs against a protocol-level fake Mega and a mock camera that renders blocks at real grid cells. No hardware "
          "at all. This is how the console and the Studio are developed and rehearsed, and how "
          "the runner's cycle-time constant was measured."),
         ("Desktop click-to-build",
@@ -897,9 +838,8 @@ def chapter_4(rep):
          "fastest way to drive the rig from the machine it is plugged into: click a cell on the "
          "camera view, choose a level, confirm the displayed command."),
         ("Serial commissioning consoles",
-         "One per board. A direct line to the Mega for homing, jogging, grid reports and single "
-         "builds, and one to the Uno for status, feed, belt direction and the container gate. "
-         "These are the tools the commissioning checklists are written against."),
+         "A direct line to the Mega for homing, jogging, grid reports and single builds. "
+         "This is the tool the commissioning checklists are written against."),
         ("Standalone calibration tools",
          "Camera Studio, which owns the lens, colour, sensor and framing settings and writes "
          "them to disk; the printed-sheet detector on its own; the evidence-assisted collector; "
@@ -910,5 +850,5 @@ def chapter_4(rep):
         "be developed at all. The rig is a shared, slow, physically hazardous resource that "
         "takes half a minute to answer a question. A protocol-level fake that speaks exactly the "
         "same acknowledgement grammar turns that half a minute into a millisecond, and it is why "
-        "the two-board handoff, the session-lock behaviour and the whole browser stack could be "
+        "the pickup handoff, the session-lock behaviour and the whole browser stack could be "
         "tested exhaustively without ever risking the machine.")

@@ -1,12 +1,12 @@
 # Rig operator console — server guide
 
 This guide runs the browser console in the `hardware-grad-project` checkout.
-The service owns exactly one camera and two Arduino serial connections, so run
+The service owns exactly one camera and one Arduino serial connection, so run
 one backend process only. Do not start multiple Uvicorn workers or launch a
 second camera/serial client while the service is running.
 
-For how a placement actually travels from the browser through the Pi to both
-boards and back, see
+For how a placement travels from the browser through the Pi to the Mega and
+back, see
 [docs/communication-pipeline.md](communication-pipeline.md).
 
 ## 1. Prerequisites
@@ -16,8 +16,7 @@ You need:
 - Python 3 and the repository virtual environment at `.venv/`.
 - Node.js and npm for the browser app.
 - For mock operation: no hardware.
-- For real operation: a configured camera, a powered Arduino Mega and Uno, and
-  both flashed sketches selected by `config/rig.json`.
+- For real operation: a configured camera and a powered, flashed Arduino Mega.
 
 On a desktop, create the environment once with:
 
@@ -43,9 +42,6 @@ npm install
 Before starting, inspect `config/rig.json`:
 
 - `serial.port`, `serial.baud`, and `board.*` identify the Mega gantry.
-- `feeder.port`, `feeder.baud`, and the remaining `feeder.*` fields identify
-  and validate the Uno. The committed empty port is deliberate: replace it
-  with the Uno's real stable `/dev/serial/by-id/...` path on the rig.
 - `grid.active_mode` selects the vertical or horizontal layout.
 - `workspace.width_cm` and `workspace.height_cm` are the holder travel
   envelope; they are not the observed build footprint.
@@ -90,30 +86,28 @@ npm run dev -- --host 127.0.0.1
 
 Open the URL Vite prints, normally `http://127.0.0.1:5173/`. The Vite proxy
 forwards `/api/*` and `/api/events` to the backend on port 8000. Mock mode
-provides a simulated camera, Uno, and Mega; it does not move hardware.
+provides a simulated camera and Mega; it does not move hardware.
 
 The mock workflow is:
 
 1. Wait for the camera badge to become `LIVE`.
 2. Tap a grid cell. The server returns the authoritative selection and `B`
-   command.
-3. Tap `BUILD`, then tap the displayed `CONFIRM B ...` button.
-4. Watch the RUNNING banner and terminal result.
-5. Use **Calibrate** for four-corner calibration if you want to exercise the
+   command label.
+3. Tap `BUILD`, stage one block at pickup, then tap the displayed confirmation.
+4. When the Mega pauses with its claw open, align the block and tap `CLOSE CLAW`.
+5. Watch the RUNNING banner and terminal result.
+6. Use **Calibrate** for four-corner calibration if you want to exercise the
    generated map path. The current mock artwork is not a full-fidelity printed
    calibration sheet; test the printed-sheet route with a real sheet/camera.
 
 ## 4. Run with the real rig
 
-First discover, flash, and bench-check both configured boards:
+First discover, flash, and bench-check the configured Mega:
 
 ```bash
 scripts/flash.sh boards
-scripts/flash.sh gantry compile
-scripts/flash.sh gantry upload
-scripts/flash.sh feeder compile
-scripts/flash.sh feeder upload
-.venv/bin/python python/feeder_console.py status
+scripts/flash.sh compile
+scripts/flash.sh upload
 ```
 
 Then start only the backend on the Pi (or the machine physically connected to
@@ -124,8 +118,8 @@ cd /home/ahmedjk34/hardware-grad-project
 PYTHONPATH=python .venv/bin/python -m web --host 0.0.0.0 --port 8000
 ```
 
-Do not pass `--mock`. The backend opens and validates both configured ports
-during startup. If either cannot connect cleanly, stop and inspect the camera,
+Do not pass `--mock`. The backend opens and validates the configured Mega port
+during startup. If it cannot connect cleanly, stop and inspect the camera,
 USB cables, board resets, and the values in `config/rig.json`; do not work
 around it by starting another process.
 
@@ -180,19 +174,18 @@ the app shell may be precached; stale rig state or camera imagery is unsafe.
 ### The `/api/events` protocol
 
 Every frame carries `type`, a monotonic `event_id` and an `at` timestamp in
-epoch milliseconds. There are six fact types plus one envelope:
+epoch milliseconds. There are five fact types plus one envelope:
 
 | `type` | Carries |
 | --- | --- |
 | `state` | the whole `StateModel` snapshot, under `state` |
 | `build_step` | one firmware build phase: `command_seq`, `step`, `total`, `phase`, `label`, `action`, `status`, `eta_ms` |
 | `build_result` | one settled build: `command_seq`, `result`, `reason`, `locked`, `locked_reason`, `from_prose` |
-| `feeder` | one parsed Uno transaction message: `request_id`, `message_type`, and `fields` |
-| `serial` | one board-labelled raw line, under `line`, with `stream` (`rig` / `feeder` / `error`) |
+| `serial` | one Mega raw line, under `line`, with `stream` (`rig` / `error`) |
 | `heartbeat` | nothing but its id — proof the socket is alive |
 | `replay` | the envelope a reconnect's missed events arrive in: `events`, plus `gap` |
 
-**Priority.** `serial`, `feeder`, `build_step` and `build_result` are DURABLE: delivered
+**Priority.** `serial`, `build_step` and `build_result` are DURABLE: delivered
 exactly once each, in order, and kept in a bounded server-side replay buffer.
 `state` is COALESCED: each client holds only the newest pending snapshot,
 because a snapshot describes *now* and an older one has no value once a newer
@@ -235,12 +228,10 @@ block.
 ## 6. Safety rules while operating
 
 - A build always requires selection followed by a second confirmation tap.
-- During `RUNNING`, the server rejects mutations. During Uno feeding/staging,
-  cancel sends `STOP` and then locks for inspection. During Mega motion, stop
-  means stop after the current block because the Mega may not be listening.
-- A low-level Mega rejection is safe only before a feeder handoff. In a
-  production cell operation the Uno has already staged a block, so any Mega
-  non-success locks and prevents another feed.
+- During `RUNNING`, the server rejects mutations. Mega motion cannot be
+  interrupted; the runner's stop control means stop after the current block.
+- Once the operator confirms a block is staged, any Mega non-success locks the
+  session because pickup/claw state may be unknown.
 - A placed build clears the selection.
 - An aborted build, timeout, reset, or cable-loss/unknown outcome locks the
   session. Stop touching the controls, inspect the physical rig, and restart
@@ -263,9 +254,9 @@ yourself when they get large. `pytest` never writes to them — only the
   predicted beside the time the phase actually took (`(firmware ETA 2.57s,
   +0.23s)`), and the settled result with the total elapsed. Every timestamp in
   a section is relative to that build's start, so it reads as a stopwatch.
-- **`logs/serial.log`** — every line to (`>>`) and from (`<<`) either Arduino,
+- **`logs/serial.log`** — every line to (`>>`) and from (`<<`) the Mega,
   each stamped with the wall clock and the gap since the previous serial line.
-  `[UNO/FEEDER]` and `[MEGA/GANTRY]` identify the source.
+  `[MEGA/GANTRY]` identifies the source.
   A stall on the cable or a slow phase shows up directly as a large delta in
   the second column. The terminal ack and a one-line `-- final: …` summary
   close each build.
@@ -303,11 +294,9 @@ and use the Vite dev server so its proxy remains active.
 Pi CSI camera is not available there. A stale frame is intentionally refused
 for selection and calibration.
 
-**A board does not connect.** Verify the relevant `serial.*` or `feeder.*`
-entry and board/sketch in `config/rig.json`; check that no other process owns
-either port. Stable by-id paths must identify roles without relying on USB
-enumeration order. The service validates the Uno's board/firmware/protocol
-identity and the Mega handshake before it accepts requests.
+**The board does not connect.** Verify `serial.*` and `board.*` in
+`config/rig.json`; check that no other process owns the port. The service
+validates the Mega handshake before it accepts requests.
 
 **The overlay is amber.** No valid saved workspace map exists for the active
 mode. Approximate-grid operation is supported; use four-corner or printed-sheet

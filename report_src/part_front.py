@@ -89,28 +89,26 @@ def front_matter(rep):
         "Small-scale automated assembly is one of those problems that looks solved from a "
         "distance and stops looking solved the moment a real machine has to do it. A gantry "
         "that moves to a coordinate is straightforward. A machine that takes a structure a "
-        "person designed, feeds itself one part at a time, picks each part up, turns it the "
+        "person designed, receives one manually staged part at a time, picks each part up, turns it the "
         "right way round, stacks it on top of the parts already placed, and knows at every "
         "moment whether that actually happened, is a different problem, and most of the "
         "difference is feedback rather than motion.")
     rep.p(
         "This is where our project comes in: a vision-assisted Cartesian robotic cell that "
-        "builds three-dimensional structures out of 2.2 x 6.0 x 1.5 cm wooden blocks with no "
-        "human placing a single block by hand. The system is built around three controllers "
+        "builds three-dimensional structures out of 2.2 x 6.0 x 1.5 cm wooden blocks. The "
+        "operator stages each block at pickup; the system is built around two controllers "
         "and one brain. A Raspberry Pi 5 is the sole master: it runs the camera, the web "
         "server, the orchestration and every safety rule. An Arduino MEGA 2560 runs the "
         "gantry, a CoreXY X/Y stage with an added Z axis, a servo claw and a 28BYJ-48 "
         "rotation stepper, and executes a fourteen-phase pick-place-park cycle for every "
-        "block. An Arduino Uno runs a separate feeder module, a two-stage hopper gate, a "
-        "belt and an alignment servo, and confirms with an exit HC-SR04 and a stage IR sensor that "
-        "exactly one block left the hopper and arrived at the fixed pickup point. The two "
-        "Arduinos never talk to each other; the Pi is the only thing that couples them, and "
-        "it does so over two independent USB serial links.")
+        "block. The Pi and Mega communicate over one USB serial link. Production placement uses "
+        "an explicit manual-staging confirmation followed by the Mega's open-claw `M` pause and "
+        "a separately authorised `C` close.")
     rep.p(
         "The block can be laid either way round, which is why the machine carries two "
         "separately calibrated grids and not one: a vertical grid of 7 x 6 addressable "
         "cells and a horizontal grid of 3 x 10, sharing one 22.8 x 38.0 cm holder-travel "
-        "envelope and one feeder cell at [0,0]. An overhead 160-degree fisheye camera watches "
+        "envelope and one reserved pickup cell at [0,0]. An overhead 160-degree fisheye camera watches "
         "the build surface through a colour-corrected, lens-corrected pipeline, detects the "
         "wooden blocks by warm-colour segmentation, and maps camera pixels to physical "
         "centimetres to grid cells through a saved workspace homography.")
@@ -201,12 +199,12 @@ def chapter_1(rep):
         "except through a fixed matrix of 64 reed switches under it, and never has to supply "
         "itself with pieces. Building in three dimensions turned that reference from a finished "
         "machine into a base frame: what we kept from it is the CoreXY X/Y skeleton and its "
-        "limit-switch homing, and the Z axis, the claw, the feeder, the camera and all three "
+        "limit-switch homing, and the Z axis, the claw, the camera and both "
         "controllers were built on top of that.")
-    rep.figure("The completed rig: CoreXY gantry, Z axis and claw, feeder module on the left, "
+    rep.figure("The completed rig: CoreXY gantry, Z axis and claw, pickup area, "
                "and the overhead camera on its wooden support frame.",
                placeholder="Photograph of the finished machine, three-quarter view, with the "
-                           "gantry, the feeder and the camera mount all in shot.")
+                           "gantry, pickup area and camera mount all in shot.")
 
     rep.h2("1.2 Problem Statement")
     rep.p(
@@ -253,8 +251,8 @@ def chapter_1(rep):
 
     rep.h2("1.3 Project Objectives")
     rep.p(
-        "This work was done to build a complete, self-feeding robotic cell that constructs a "
-        "human-designed 3D block structure end to end, and to make every stage of that "
+        "This work was done to build a complete robotic cell that constructs a human-designed "
+        "3D block structure from manually staged blocks, and to make every stage of that "
         "construction confirmed by a sensor or by the camera rather than by a timer.")
     rep.p("The main objectives of this project are:")
     rep.numbered([
@@ -265,10 +263,8 @@ def chapter_1(rep):
         "**Enable** both block orientations, so a structure can mix blocks standing and lying, "
         "by turning the claw 90 degrees between the pickup and the placement and carrying a "
         "second, separately calibrated grid for the rotated footprint.",
-        "**Deliver** a feeder module that doses exactly one block at a time from a hopper to a "
-        "fixed pickup point, and that confirms the block both leaving the container and arriving "
-        "at the pickup point with independent exit and stage sensors, so that no placement is ever "
-        "started on an assumption that a block is there.",
+        "**Require** explicit confirmation that one block is staged at the reserved pickup cell, "
+        "then keep the claw open until a second confirmation after the firmware's alignment pause.",
         "**Support** an overhead vision system that detects the wooden blocks on the build "
         "surface and converts camera pixels into physical centimetres and then into grid cells, "
         "so the camera can be used both to calibrate the machine's grid and to verify what "
@@ -285,7 +281,7 @@ def chapter_1(rep):
         "and requires a person; and in which no software layer is allowed to retry an operation "
         "whose physical outcome it cannot prove.",
         "**Achieve** a repeatable cycle time per block. Target: under 45 seconds per block, "
-        "including feeding, for a machine of this size and step rate.",
+        "excluding operator staging time, for a machine of this size and step rate.",
     ])
     rep.p(
         "Autonomous planning of **which** block goes where is deliberately not an objective. The "
@@ -301,17 +297,14 @@ def chapter_1(rep):
     rep.bullets([
         "A Cartesian gantry with CoreXY X/Y motion, an added Z axis, a servo-driven mechanical "
         "claw, and a stepper that rotates the claw 90 degrees, giving two block orientations.",
-        "A separate feeder module: a two-stage hopper gate, a conveyor belt, an alignment servo "
-        "with an exit ultrasonic sensor and a stage IR sensor, presenting one block at a time "
-        "at a fixed pickup point.",
+        "A fixed pickup cell at [0,0], with explicit operator staging and open-claw alignment confirmation.",
         "An overhead fisheye camera with lens correction, software colour correction, block "
         "detection, and camera-to-machine grid calibration.",
         "A browser operator console served from the Pi, with a live camera view and "
         "click-to-build.",
         "A 3D Build Studio: design, physics validation, compilation to a command program, a "
         "live digital twin, and a guarded execution runner with a run report.",
-        "Two independent serial protocols, one per Arduino, and the Pi-side orchestration and "
-        "safety layers that couple them.",
+        "One Mega serial protocol and the Pi-side pickup coordination and safety layers.",
     ])
     rep.p("The following aspects are considered out of scope:")
     rep.numbered([
@@ -349,11 +342,10 @@ def chapter_1(rep):
         "end-to-end chain in which every physical transition is confirmed by something other "
         "than a clock, and in which the machine is designed to stop rather than guess.")
     rep.p(
-        "Three parts of that chain are worth calling out. The **two-board handoff** is the "
-        "clearest: a placement is one indivisible operation owned by the Pi, and the gantry is "
-        "only allowed to move after the feeder has returned one exact terminal message proving "
-        "a block is staged. There is no timeout that means success and no progress message that "
-        "counts as permission. The **acknowledged phase protocol** is the second: rather than "
+        "Three parts of that chain are worth calling out. The **manual pickup handoff** is the "
+        "clearest: a placement is one indivisible operation owned by the Pi, begins only after "
+        "explicit staging confirmation, and cannot close the claw before the firmware's "
+        "alignment gate. The **acknowledged phase protocol** is the second: rather than "
         "letting the Pi guess what is happening during a forty-second silence, the firmware "
         "narrates its own fourteen phases on a separate machine-readable channel, including its "
         "own prediction of how long each Z move should take, which turns an opaque wait into "

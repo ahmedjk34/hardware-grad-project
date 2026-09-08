@@ -2,35 +2,30 @@
 
 **Vision-Assisted Cartesian Robotic System for 3D Block Construction**
 
-A robotic cell that stacks wooden blocks into 3D structures with no human
-placing a single block by hand. Blocks live in a hopper; a feeder stage doses
-them one at a time onto a belt and stages each one at a fixed pickup point; a
-Cartesian gantry with a rotating claw picks each block up and places it at a
-commanded grid cell; an overhead camera watches the build surface throughout
-and verifies what actually landed. A human designs the structure in a browser
-in 3D — the system compiles that design into the build program and runs it.
+A robotic cell that stacks manually staged wooden blocks into 3D structures.
+For each placement, the operator puts one block at the fixed pickup point and
+explicitly confirms it in the browser. A Cartesian gantry with a rotating claw
+picks it up and places it at a commanded grid cell; an overhead camera watches
+the build surface and verifies what actually landed. A human designs the
+structure in a browser in 3D, and the system compiles that design into the
+build program and runs it.
 
-Three controllers, one brain:
+Two controllers, one brain:
 
 | Controller | Owns | Talks to the Pi over |
 | --- | --- | --- |
-| **Raspberry Pi 5** | vision, web server/Studio, orchestration — **the master** | — |
+| **Raspberry Pi 5** | vision, web server/Studio, guarded build control — **the master** | — |
 | **Arduino MEGA 2560** | the gantry: X/Y/Z motion, claw, rotation, placement | serial (built, in daily use) |
-| **Arduino Uno** | the feeder module: container, belt, alignment | its own USB serial link to the Pi |
 
 ## The end-to-end flow
 
-1. **Feed.** The Pi tells the Uno to release a block. The container opens in
-   two stages so blocks queue and drop one at a time. An ultrasonic sensor at
-   the container's exit confirms a block actually left the container onto the
-   belt — not just that the container is open.
-2. **Stage.** The belt carries the block toward the pickup area. A second
-   servo nudges it square as it arrives. A digital IR sensor at the pickup
-   area detects the block is in position and stops the belt. The Uno
-   reports "block ready" back to the Pi. This closes the loop at both ends of
-   the feed path instead of guessing on a timer.
-3. **Place.** The Pi hands off to the Mega. The claw picks the staged block up
-   from the fixed pickup point (grid cell `[0,0]`), optionally rotates 90° if
+1. **Stage and confirm.** The operator puts one block at the fixed pickup cell
+   `[0,0]`, selects the target, and explicitly confirms that the block is
+   physically staged.
+2. **Align and grip.** The Pi sends the Mega's manual-pick command. The Mega
+   descends with the claw open and pauses; only after the firmware reports
+   `await_manual_close` can the operator align the block and send `C`.
+3. **Place.** The claw grips the staged block, optionally rotates 90° if
    the build needs the block laid the other way round, moves to the target
    `[col, row, level]`, and releases it. The Mega narrates every phase of the
    ~14-step build back over serial so the Pi always knows exactly where the
@@ -47,7 +42,7 @@ Three controllers, one brain:
    finished design into an ordered pick/place/rotate program. A **digital
    twin**, synced to the real build's serial telemetry, mirrors the physical
    rig live in the browser while it runs. Running the program repeats steps
-   1–4 once per block until the structure is complete.
+   1–4 once per block, pausing for both operator confirmations each time.
 
 Autonomous "which block goes where" planning is not part of this project —
 the human designs the structure; the system is responsible for building
@@ -56,12 +51,10 @@ of open-loop timing.
 
 ## Hardware
 
-- **Controllers:** Raspberry Pi 5 (master) + Arduino MEGA 2560 (gantry) +
-  Arduino Uno (feeder, protocol 2)
+- **Controllers:** Raspberry Pi 5 (master) + Arduino MEGA 2560 (gantry)
 - **Motion:** gantry X / Y / Z, plus a claw servo and an auxiliary rotation
   stepper, driven by the Mega
-- **Feed:** A4988-driven belt, container and alignment servos, an exit HC-SR04
-  and a pickup-stage IR sensor, driven by the Uno
+- **Pickup:** one block is manually staged at reserved cell `[0,0]`
 - **Camera:** DORHEA Raspberry Pi Camera Module — OV5647 sensor, 5 MP, 160°
   fisheye lens, mounted ~50 cm above the surface, pointing straight down
 - **Controlled holder displacement:** 22.8 cm X × 38.0 cm Y
@@ -76,8 +69,8 @@ of open-loop timing.
 
 | Directory | What it holds |
 | --- | --- |
-| [arduino/](arduino/) | Firmware. `build_test_v1/` is the Mega gantry sketch; `belt_v1/` is the Uno feeder sketch; the other sketches are commissioning aids |
-| [python/](python/) | Everything on the Raspberry Pi: vision, two independent serial clients, feed→place orchestration, and the FastAPI web server |
+| [arduino/](arduino/) | Firmware. `build_test_v1/` is the live Mega gantry sketch; the other sketches are commissioning aids |
+| [python/](python/) | Everything on the Raspberry Pi: vision, the Mega serial client, guarded pickup coordination, and the FastAPI web server |
 | [web/](web/) | The React PWA: the operator console (click-to-build) and the 3D Build Studio (design, validate, compile, run, digital twin) |
 | [docs/](docs/) | Living reference docs — how the console and Studio actually work, grid/calibration geometry, block vision internals, the server guide, the visual design language |
 | [plans/](plans/) | Historical/archived plans only; anything built has been folded into `docs/` — see [plans/README.md](plans/README.md) |
@@ -91,8 +84,7 @@ of open-loop timing.
 | Web operator console | **built** — all ten build steps (see [docs/CONSOLE.md](docs/CONSOLE.md)) |
 | 3D Build Studio (design/validate/compile/twin/run) | **built** through Milestone 7 (see [docs/STUDIO.md](docs/STUDIO.md)); Milestone 8 ("wow pass") not started |
 | Placement supervision (verify placements, notice human interference) | **designed, not started** — full design at [docs/feature-ideas.md](docs/feature-ideas.md) Appendix A |
-| Feeder module — container + belt + ultrasonic exit / IR staging (Uno) | **protocol-2 firmware and Pi client built; physical commissioning still required.** The Uno reports correlated progress and exactly one terminal result per feed |
-| Pi-owned feeder → gantry orchestration | **built and mock-tested** — two USB serial links; only matching `OK state=block_ready result=staged` authorizes Mega `B`; failures lock out unsafe continuation |
+| Manual pickup coordination | **built and mock-tested** — explicit staging confirmation, Mega `M` open-claw pause, explicit `C`, and failure lockout |
 | Autonomous block-to-target planning | **not implemented**, and out of scope — the human designs the structure |
 
 ## Getting started
@@ -101,9 +93,7 @@ of open-loop timing.
 - Python tools, setup and usage → **[python/README.md](python/README.md)**
 - Per-tool walkthrough → **[python/GUIDE.md](python/GUIDE.md)**
 - Firmware → **[arduino/README.md](arduino/README.md)**, open the relevant sketch in `arduino/` with the Arduino IDE
-- Full browser → Pi → Uno + Mega communication pipeline, end to end → **[docs/communication-pipeline.md](docs/communication-pipeline.md)**
-- Uno feeder hardware, state machine and serial protocol → **[docs/feeder-controller.md](docs/feeder-controller.md)**
-- Uno commissioning CLI → `python/feeder_console.py`; dual-role flashing → `scripts/flash.sh feeder …`
+- Full browser → Pi → Mega communication pipeline, end to end → **[docs/communication-pipeline.md](docs/communication-pipeline.md)**
 - Web operator console — how to run it → **[docs/server-guide.md](docs/server-guide.md)**, how it's built → **[docs/CONSOLE.md](docs/CONSOLE.md)**
 - 3D Build Studio, current state → **[docs/STUDIO.md](docs/STUDIO.md)**
 - What the camera does and where each capability appears in the UI → **[docs/CAMERA.md](docs/CAMERA.md)**; how the detector itself works → **[docs/BLOCK-VISION.md](docs/BLOCK-VISION.md)**

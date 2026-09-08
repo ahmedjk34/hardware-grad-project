@@ -28,13 +28,6 @@ describe("which cells the lattice draws", () => {
         .toEqual([[0, 0]]);
     });
 
-    it(`${mode}: the feeder-belt cells read as "blocked"`, () => {
-      const blocked = latticeCells(mode)
-        .filter(cell => cell.kind === "blocked")
-        .map(cell => `${cell.col},${cell.row}`).sort();
-      expect(blocked).toEqual(mode === "vertical" ? ["0,1", "1,0", "1,1"] : []);
-    });
-
     it(`${mode}: every cell sits where coords.ts puts it, at its true footprint`, () => {
       const size = blockExtents(mode);
       for (const cell of latticeCells(mode)) {

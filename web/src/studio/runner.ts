@@ -20,7 +20,6 @@
  * machine's position is not.
  */
 import type { BuildPhaseAction } from "../types";
-import type { FeedMode } from "../api";
 import type { ModeName } from "./coords";
 import type { Op } from "./compile";
 
@@ -93,7 +92,7 @@ export interface RunState {
 export type Effect =
   | { kind: "select"; col: number; row: number; level: number; dry?: true }
   | { kind: "verify"; expect: string; actual: string | null }
-  | { kind: "build"; command: string; dry: boolean; feedMode?: FeedMode }
+  | { kind: "build"; command: string; dry: boolean }
   | { kind: "mode"; mode: ModeName; command: string; dry: boolean }
   /** A `shiftX` / `shiftY` latch — the running-bond course change. Moves
    *  nothing; the reducer issues it without a confirm gate in every style. */
@@ -104,7 +103,7 @@ export type RunEvent =
   | { type: "start"; program: Op[]; style: RunStyle; modelName: string; colours: Record<string, string>; now: number }
   | { type: "selected"; command: string | null; now: number }
   | { type: "verified"; actual: string | null; now: number }
-  | { type: "confirm"; now: number; feedMode?: FeedMode }
+  | { type: "confirm"; now: number }
   | { type: "build-running"; now: number }
   | { type: "build-step"; commandSeq: number | null; step: number; total: number;
       phaseId: string; label: string; action: BuildPhaseAction;
@@ -195,7 +194,7 @@ function advance(state: RunState, now: number): Turn {
   };
 }
 
-function issueBuild(state: RunState, now: number, feedMode: FeedMode = "automatic"): Turn {
+function issueBuild(state: RunState, now: number): Turn {
   const blocked = guarded(state);
   if (blocked) return blocked;
   const op = state.program[state.cursor];
@@ -208,10 +207,7 @@ function issueBuild(state: RunState, now: number, feedMode: FeedMode = "automati
       // about this one until the rig says something about it.
       progress: noProgress(),
     },
-    effects: [{
-      kind: "build", command: op.text, dry: state.style === "dry",
-      ...(feedMode === "manual" ? { feedMode } : {}),
-    }],
+    effects: [{ kind: "build", command: op.text, dry: state.style === "dry" }],
   };
 }
 
@@ -362,7 +358,7 @@ export function step(state: RunState, event: RunEvent): Turn {
         mismatch: { program: op.text, rig: event.actual ?? "null" },
       });
     }
-    if (state.style === "step") {
+    if (state.style !== "dry") {
       return noEffects({ ...state, phase: "awaiting-confirm", pendingConfirm: "build" });
     }
     return issueBuild(state, event.now);
@@ -371,7 +367,7 @@ export function step(state: RunState, event: RunEvent): Turn {
   if (event.type === "confirm") {
     if (state.phase !== "awaiting-confirm") return noEffects(state);
     if (state.pendingConfirm === "mode") return issueMode(state, event.now);
-    if (state.pendingConfirm === "build") return issueBuild(state, event.now, event.feedMode);
+    if (state.pendingConfirm === "build") return issueBuild(state, event.now);
     return noEffects(state);
   }
 
@@ -508,17 +504,9 @@ export function buildPosition(state: RunState): { current: number; total: number
   return { current, total };
 }
 
-export function feederPrompt(state: RunState): { colour: string; same: boolean; text: string } | null {
-  let targetIndex = state.cursor;
-  const current = currentOp(state);
-  // Once a build is in flight, the Uno transaction for that block is over.
-  // Preview the next required colour while the Mega works, but never imply
-  // that another feed is happening: the orchestrator waits for terminal B.
-  if (state.inFlight && current?.op === "build") {
-    const next = state.program.findIndex((item, index) => index > state.cursor && item.op === "build");
-    if (next < 0) return null;
-    targetIndex = next;
-  }
+export function stagingPrompt(state: RunState): { colour: string; same: boolean; text: string } | null {
+  if (state.inFlight) return null;
+  const targetIndex = state.cursor;
   const op = state.program[targetIndex];
   if (!op || op.op !== "build") return null;
   const total = state.program.filter(item => item.op === "build").length;

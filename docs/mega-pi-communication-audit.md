@@ -5,9 +5,8 @@ implementation, not generic Arduino serial behavior and not an assumed deployed
 state. In particular, the repository itself says that the structured `@` ACK
 firmware is compile-verified but has **never been flashed** (`docs/ack-protocol.md:3-7`).
 
-This is a deep audit of the Pi ↔ Mega link only. For the end-to-end pipeline
-across both boards, see **[communication-pipeline.md](communication-pipeline.md)**;
-for the Uno half, **[feeder-controller.md](feeder-controller.md)**.
+This is a deep audit of the Pi ↔ Mega link. For the end-to-end production
+pipeline, see **[communication-pipeline.md](communication-pipeline.md)**.
 
 ## Executive findings
 
@@ -116,10 +115,6 @@ one — see `docs/features/placement-supervision-progress.md` F15.
 * **Standalone Mega grid-fill tools:** `build_vertical_grid` and
   `build_horizontal_grid`. They are large near-copies intended for supervised
   level-0 fills, not selected by the flash config or imported by Python.
-* **Current Uno feeder:** `belt_v1`. It has a nonblocking protocol-2
-  `FEED`/`STOP` state machine and `@0 READY ... board=uno`. The independent Pi
-  client is `rig/feeder.py`; `CellOrchestrator` permits the Mega `B` only after
-  exact correlated feeder success. Its STOP must not be attributed to the Mega.
 * **Hardware tests:** `container_servo_test`, `uln2003_motor_test`.
 * **Archived:** everything under `arduino/archive/`; plans under
   `plans/archive/` describe earlier or proposed states and are not runtime code.

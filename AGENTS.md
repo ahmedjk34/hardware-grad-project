@@ -2,11 +2,10 @@
 
 Rules for anyone — human or agent — editing this repo.
 
-The rig has one Raspberry Pi 5 master and two compiled controllers: an Arduino
-MEGA 2560 for the gantry and an Arduino Uno for the feeder. **Neither Arduino
-can read `config/rig.json`.** They have no filesystem; their numbers are baked
-in at flash time. A handful of values therefore genuinely exist in more than
-one place, and this file is the list of them.
+The rig has one Raspberry Pi 5 master and one compiled controller: an Arduino
+MEGA 2560 for the gantry. **The Arduino cannot read `config/rig.json`.** It has
+no filesystem; its numbers are baked in at flash time. A handful of values
+therefore genuinely exist in more than one place, and this file lists them.
 
 **If you change one of these, change its partner in the same commit.**
 
@@ -223,48 +222,21 @@ README or a script — that is how the duplicate comes back.
 A genuine Mega enumerates as `/dev/ttyACM0`; a CH340 clone as `/dev/ttyUSB0`.
 Switching boards is then a one-line edit to `rig.json`.
 
-### 2a. Uno feeder link — independent port, strict handoff
+### 2a. Manual pickup handoff — strict operator gate
 
-The Pi owns a second, independent USB serial link for the Uno. There is no
-Uno↔Mega wire protocol and neither board may command the other.
+Every production placement is one indivisible Pi-owned operation. The operator
+places one block at `[0,0]` and explicitly confirms staging. The guarded path
+then sends Mega `M <col> <row> <level>`. `M` performs the validated approach,
+lowers the **open** claw, and pauses. Only after firmware announces
+`await_manual_close` may the UI send its one `C` byte to close the claw and
+finish the placement cycle.
 
-| Where | What |
-| --- | --- |
-| `config/rig.json` → `feeder.port` | what `rig/feeder.py` opens and `scripts/flash.sh feeder upload` uses |
-| `config/rig.json` → `feeder.baud` | must match `Serial.begin(9600)` in `belt_v1.ino` and `arduino/README.md` |
-| `config/rig.json` → `feeder.fqbn` / `.sketch` | what the feeder flash role compiles |
-| `config/rig.json` → `feeder.firmware` / `.protocol` | exact identity required from the Uno's `@0 READY` banner |
-
-Do not guess or commit a machine-specific Uno device name. Until its real
-`/dev/serial/by-id/...` path is known, `feeder.port` stays an explicit empty
-placeholder and production startup fails with setup instructions. Never use
-`/dev/ttyACM*` ordering to distinguish the boards.
-
-Every production placement is one indivisible Pi-owned operation. The normal
-path stages through the Uno:
-
-```text
-Uno: FEED <id> → matching @id OK state=block_ready result=staged
-Mega: B <col> <row> <level> → terminal placement result
-```
-
-The explicit Web UI **manual feed** confirmation is the one production
-exception: after the operator places one block in the feeder/pickup area and
-clicks `FEED MANUALLY`, `CellOrchestrator.place_manually_staged_block()` skips
-the Uno command and sends Mega `M <col> <row> <level>`. `M` performs the same
-validated approach as `B`, lowers the **open** claw, and pauses. Only after the
-firmware announces `await_manual_close` may the UI send its one `C` byte to
-close the claw and finish the same placement cycle. It still owns the same
-operation lock, camera/selection guards, failure lockout and placement result
-handling; manual feed must never become an unguarded direct-Mega call.
-
-Outside that explicit operator attestation, no Uno terminal success means no
-Mega `B`. No Mega terminal success means no next `FEED`: even a pre-motion Mega
-rejection leaves the already-staged pickup state requiring inspection. The
-same is true after manual staging. `BuildController` + `BuildJob` remain the
-outer single-operation guard; `CellOrchestrator` owns both staging paths.
-Direct Mega build calls are reserved for explicit calibration/commissioning
-paths where a person has staged the block.
+`BuildController` + `BuildJob` remain the outer single-operation guard;
+`PickupCoordinator` owns the pickup lock and the firmware-gated close. Any Mega
+non-success after staging locks the session because pickup/claw state may be
+unknown. Direct `B` calls are reserved for explicit calibration or
+commissioning paths where a person has staged the block and accepts bypassing
+the open-claw alignment pause.
 
 ### 3. Grid dimensions — the one the firmware forgets
 
@@ -567,7 +539,7 @@ the firmware-only `BUILD_PLACEMENT_OFFSET_*` tables instead.
 
 Block cells are **0-based and every one of them is a real block**, coordinate
 zero included. Col 0 is the X switch side, row 0 is the Y switch side, rows
-increase upward and columns rightward. `[0,0]` is the **feeder** in both modes —
+increase upward and columns rightward. `[0,0]` is the **pickup cell** in both modes —
 where blocks are picked up from, never built on — so `B 0 0 <level>` stays an
 inert no-op, while `B 0 3` and `B 4 0` are ordinary placements (they used to be
 the "move one axis only" sentinel). Cells are written `[col,row]`, the same
@@ -586,38 +558,6 @@ Where the grid sits **on the camera image** is NOT part of this numbering
 convention. `gridded_camera_feed.py` derives it from four clicked envelope
 corners and saves `workspace_map.json`; `MachineGrid.origin` / `swap_axes`
 remain useful only for count-only/legacy drawings without that homography.
-
-### 3b-bis. Belt-blocked cells — a fixed obstruction, per mode
-
-| Where | What |
-| --- | --- |
-| `config/rig.json` → `grid.modes.<mode>.blocked_cells` | `[[col,row], …]`, **authoritative for the Pi and the Studio** |
-| `build_test_v1.ino` SECTION 6C | `GRID_BLOCKED_COL[][] / GRID_BLOCKED_ROW[][] / GRID_BLOCKED_COUNT[]` — the compiled copy, capacity `GRID_BLOCKED_MAX` |
-| `python/rig/grid.py` | `MachineGrid.blocked` / `.is_blocked()`; `contains_build_target()` excludes them |
-| `python/rig/workspace.py` | `WorkspaceMap` embeds `blocked_cells` in `physical_grid`, so a saved map draws them |
-| `python/camera/gridded_camera_feed.py` | `draw_machine_grid()` marks them on the live camera grid — red outline, struck through, hatched (the Studio's style) |
-| `web/src/studio/coords.ts` | `blockedCells()` / `isBlocked()`; `validate.ts` rule `BLOCKED_CELL`; `lattice.ts` kind `"blocked"`; `scene/Lattice.tsx` draws them |
-| `python/tests/test_grid.py` | parses the firmware tables and fails on any drift from `rig.json` |
-
-The feeder belt physically sits across a few cells next to the pick-up point,
-so the claw can never descend into one — **at any level**, which makes this a
-cell predicate with no level argument, exactly like the feeder. `B` and `G`
-refuse a blocked cell before anything moves (firmware `cellIsBeltBlocked()` →
-`buildReject("cell blocked by feeder belt")`). These cells are **still real,
-drawable, addressable cells** — the grid keeps its dimensions, the Studio still
-draws them (hatched red, struck through), `positionToIndex()` still names
-them; they are simply not build targets.
-
-**Per mode**, because the two grids put their cell centres in different places:
-what the belt fouls with blocks standing up (`vertical`) it need not foul with
-them lying down (`horizontal`). The shipped list is `vertical` `[0,1] [1,0]
-[1,1]` and `horizontal` `[]`; fill horizontal's in when that grid is measured
-against the belt. `[0,0]` is the feeder and is tracked separately — never put
-it in `blocked_cells`.
-
-**Paired value:** the Mega cannot read `rig.json`, so if you change one side
-change the other in the same commit. `test_grid.py` parses
-`GRID_BLOCKED_COL/ROW/COUNT` out of the sketch and fails on a mismatch.
 
 ### 3c. Tool-centre offsets — holder position is not block position
 

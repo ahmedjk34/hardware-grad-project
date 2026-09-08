@@ -99,7 +99,6 @@ export const Lattice = memo(function Lattice({ mode, shift, ...handlers }: {
   const cells = useMemo(() => latticeCells(mode, shift), [mode, shift]);
   const plain = cells.filter(cell => cell.kind === "cell");
   const clipped = cells.filter(cell => cell.kind === "clipped");
-  const blocked = cells.filter(cell => cell.kind === "blocked");
   const feeder = cells.find(cell => cell.kind === "feeder");
   const hatch = useMemo(() => {
     const texture = hatchTexture("--text-dim");
@@ -108,18 +107,8 @@ export const Lattice = memo(function Lattice({ mode, shift, ...handlers }: {
     if (feeder) texture.repeat.set(Math.max(1, feeder.sizeX), Math.max(1, feeder.sizeZ));
     return texture;
   }, [feeder?.sizeX, feeder?.sizeZ]);
-  // The belt hatch is red rather than dim: this cell is refused, not just
-  // decorative like the feeder. Sized off any blocked cell's footprint.
-  const beltHatch = useMemo(() => {
-    const texture = hatchTexture("--danger");
-    const sample = blocked[0];
-    if (sample) texture.repeat.set(Math.max(1, sample.sizeX), Math.max(1, sample.sizeZ));
-    return texture;
-  }, [blocked[0]?.sizeX, blocked[0]?.sizeZ]);
-
   const outlines = useMemo(() => outlineGeometry(plain, false), [plain]);
   const clippedOutlines = useMemo(() => outlineGeometry(clipped, true), [clipped]);
-  const blockedOutlines = useMemo(() => outlineGeometry(blocked, true), [blocked]);
 
   return (
     <group>
@@ -132,26 +121,6 @@ export const Lattice = memo(function Lattice({ mode, shift, ...handlers }: {
       <lineSegments geometry={clippedOutlines}>
         <lineBasicMaterial color={tokenColor("--motion")} />
       </lineSegments>
-      <lineSegments geometry={blockedOutlines}>
-        <lineBasicMaterial color={tokenColor("--danger")} />
-      </lineSegments>
-
-      {/* Belt-blocked cells: hatched red and struck through. Still wired to the
-          surface handlers - like the feeder, hovering one resolves the target
-          and validate.ts's BLOCKED_CELL rule refuses it with a reason, rather
-          than the cell being silently un-clickable. */}
-      {blocked.map(cell => (
-        <mesh key={`belt-${cell.col}-${cell.row}`} rotation={[-Math.PI / 2, 0, 0]}
-              position={[cell.centre.x, GROUND_Y, cell.centre.z]}
-              onPointerMove={surfaceHandler(mode, shift, handlers.onSurfaceMove)}
-              onPointerDown={surfaceHandler(mode, shift, handlers.onSurfaceDown)}
-              onPointerUp={surfaceHandler(mode, shift, handlers.onSurfaceUp)}
-              onPointerOut={handlers.onSurfaceLeave}>
-          <planeGeometry args={[cell.sizeX, cell.sizeZ]} />
-          <meshBasicMaterial map={beltHatch} transparent opacity={0.55} side={DoubleSide} />
-        </mesh>
-      ))}
-
       {feeder && (
         <Fragment>
           <mesh rotation={[-Math.PI / 2, 0, 0]}
@@ -164,7 +133,7 @@ export const Lattice = memo(function Lattice({ mode, shift, ...handlers }: {
             <meshBasicMaterial map={hatch} transparent opacity={0.5} side={DoubleSide} />
           </mesh>
           <Html center position={[feeder.centre.x, GROUND_Y, feeder.centre.z]}>
-            <span className="studio-tag">FEED</span>
+            <span className="studio-tag">PICKUP</span>
           </Html>
         </Fragment>
       )}

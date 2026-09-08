@@ -99,10 +99,6 @@ def main():
               str(grid_block))
         check("horizontal carries its own block footprint (6.0 x 2.2)",
               (pg["block_x_cm"], pg["block_y_cm"]) == (6.0, 2.2))
-        check("horizontal blocked-cell list is config's (empty), not vertical's",
-              pg["blocked_cells"]
-              == [list(p) for p in sorted(horizontal.blocked)] == [])
-
         # A horizontal cell centre must round-trip through the derived map.
         loaded = WorkspaceMap.load(path, mode="horizontal")
         for col, row in ((0, 0), (2, 5), (2, 9)):

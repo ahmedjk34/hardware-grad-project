@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Run one confirmed build off the UI thread, without blocking the camera.
 
-``BuildController.build`` waits for Uno staging and Mega motion, which is
-minutes of dead time. A camera UI that calls it directly stops reading frames and its
+``BuildController.build`` waits for Mega motion, which is minutes of dead time.
+A camera UI that calls it directly stops reading frames and its
 window goes grey — the operator loses sight of the rig exactly while it moves.
 
 ``BuildJob`` moves that wait onto a worker thread so the UI keeps grabbing and
@@ -57,7 +57,7 @@ class BuildJob:
         thread = self._thread
         return thread is not None and thread.is_alive()
 
-    def start(self, *, manual_feed: bool = False) -> None:
+    def start(self) -> None:
         """Send the controller's selected command on a worker thread."""
         if self.running:
             raise BuildStateError(BUSY_MESSAGE)
@@ -68,7 +68,7 @@ class BuildJob:
         with self._lock:
             self._outcome = None
         self._thread = threading.Thread(
-            target=self._run, args=(bool(manual_feed),), name="rig-build",
+            target=self._run, name="rig-build",
             daemon=True,
         )
         self._thread.start()
@@ -86,15 +86,9 @@ class BuildJob:
         if thread is not None:
             thread.join(timeout)
 
-    def _run(self, manual_feed: bool = False) -> None:
+    def _run(self) -> None:
         try:
-            if manual_feed:
-                outcome = BuildOutcome(result=self._controller.build(
-                    timeout=self._timeout, manual_feed=True))
-            else:
-                # Preserve compatibility with commissioning controllers that
-                # implement the historical build(timeout=...) surface.
-                outcome = BuildOutcome(result=self._controller.build(timeout=self._timeout))
+            outcome = BuildOutcome(result=self._controller.build(timeout=self._timeout))
         except BuildStateError as exc:
             outcome = BuildOutcome(error=exc)
         except RigError as exc:

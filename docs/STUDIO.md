@@ -287,7 +287,7 @@ whose far block hangs off the machine.
 
 ```ts
 latticeCells(mode, shift?) → LatticeCell[]
-  { col, row, kind: "feeder" | "cell" | "clipped" | "blocked", centre: Vec3, sizeX, sizeZ }
+  { col, row, kind: "pickup" | "cell" | "clipped", centre: Vec3, sizeX, sizeZ }
 rulerTicks(lengthCm, stepCm = 1, majorEvery = 5) → { cm, major, at }[]
 ```
 
@@ -295,14 +295,10 @@ Everything is in **scene units**, converted only by `machineToScene`, so
 `Lattice.tsx` draws the list and computes nothing. The **requested** grid always
 comes back whole: a shift clips what the machine can reach without changing what
 was asked for, and the Studio draws clipped cells struck through rather than
-deleting them. **The feeder outranks clipping** — `[0,0]` reads as the feeder in
+deleting them. **The pickup outranks clipping** — `[0,0]` reads as pickup in
 every state, including one a shift has put out of reach, because it is never
-built on either way. **A `"blocked"` cell outranks clipping too**: it is one of
-`grid.modes.<mode>.blocked_cells` (`coords.ts` `isBlocked()`), a cell the feeder
-belt physically occupies, and the belt is there whatever the shift is. It stays
-a real, drawn, addressable cell — `Lattice.tsx` hatches it red and strikes it
-through — but `validate.ts`'s `BLOCKED_CELL` rule refuses any block placed on
-it, at every level, exactly as `FEEDER_CELL` refuses `[0,0]`.
+built on either way. `validate.ts` reports `PICKUP_CELL` for `[0,0]`; every
+other requested, reachable cell proceeds through the ordinary rules.
 
 ### 5.4 `studio/view.ts` — where the camera stands
 
@@ -811,12 +807,11 @@ proof M7 exists to supply; `routes_command.require_mutable`, `BuildJob.start`
 and `BuildController` still repeat the guard server-side.
 
 The next-block colour guidance is pure too. Before START it previews the first
-block. While the Mega is placing, it previews the next required colour, but it
-does not claim another feed is active: the server waits for the current Mega
-terminal before starting the next Uno transaction. Live cell phases come from
-the backend as feeding → staging → ready-for-pick → placing → complete/error.
-During feeding/staging the run control can send Uno `STOP`; during Mega motion
-it remains the honest stop-after-current control.
+block. While the Mega is placing, it previews the next required colour without
+claiming another operation has started. Every real STEP or RUN placement waits
+for explicit manual-staging confirmation, then follows the firmware-gated
+`M` → `await_manual_close` → `C` path. During Mega motion the only stop control
+is the honest stop-after-current policy.
 
 ### 5.15 `runner-driver.ts` and `run-report.ts`
 
@@ -896,9 +891,8 @@ it is always visible. It is never inferred from the lattice: it comes from
 ### 6.3 `scene/Lattice.tsx`
 
 Every addressable cell at its true footprint with the true gaps: `--signal` fills
-at 30 % with outlines, the feeder hatched and labelled `FEED`, cells the live
-shift has clipped in `--motion`, crossed through, and belt-blocked cells hatched
-in `--danger` and crossed through (one mesh each — there are only a handful).
+at 30 % with outlines, the pickup hatched and labelled `PICKUP`, and cells the
+live shift has clipped in `--motion`, crossed through.
 Plain fills and clipped fills are one instanced draw each instead of one
 mesh/draw per cell. Cell outlines and crosses remain one merged line geometry
 each.
@@ -1444,37 +1438,9 @@ then already stale and so is anything built from it. `tests/test_workspace_trans
 covers the copy, the geometry swap, the round-trip and every guard; no existing
 test changed.
 
-### Belt-blocked cells — a twelfth diagnostic, `BLOCKED_CELL`
+### Firmware build phase 5 uses a fixed pickup descent — no Studio change
 
-The feeder belt sits across a few cells next to `[0,0]` (shipped: vertical
-`[0,1] [1,0] [1,1]`, horizontal none), so the claw can never descend into one.
-The list lives in `config/rig.json` → `grid.modes.<mode>.blocked_cells`, paired
-with the firmware's `GRID_BLOCKED_*` tables (see `AGENTS.md` §3b-bis). It also
-rides the saved `workspace_map.json` (`WorkspaceMap.physical_grid`) and is drawn
-on the web console's camera overlay (`python/web/geometry.py` →
-`components/GridOverlay.tsx`), same red-crossed style. Studio side:
-
-- `coords.ts` gains `blockedCells(mode)` / `isBlocked(mode, col, row)`; the
-  `ModeGeometry` type gains `blocked_cells?: [number, number][]`.
-- `lattice.ts` `CellKind` gains `"blocked"`, ranked above `"clipped"` and
-  below `"feeder"` — the belt is there whatever the shift is. `Lattice.tsx`
-  draws these cells hatched in `--danger` and struck through, still wired to
-  the surface handlers so hovering one resolves a target and the validator
-  explains the refusal (same UX as the feeder).
-- `validate.ts` gains rule `blockedCell` / code `BLOCKED_CELL`, second in
-  `RULES` and `PRIORITY` right after `FEEDER_CELL`. It is an `error`, fires at
-  every level, and flows through `compile.ts` unchanged (`validateModel`).
-- `GEOMETRY_DRIFT` deliberately does **not** track `blocked_cells`: a model
-  that predates the belt should not warn wholesale — the per-block
-  `BLOCKED_CELL` rule flags exactly the placements that are now illegal.
-- Test fixtures that placed on `[1,1]` / `[0,1]` (compile/bond/placement,
-  Python `test_block_grid` / `test_build_*`) moved to clear cells or a
-  belt-free rig; `BLOCKED_CELL` has its own coverage in `validate.test.ts`,
-  `lattice.test.ts` and `coords.test.ts`.
-
-### Firmware build phase 5 stopped ground-seeking (feeder belt) — no Studio change
-
-A feeder belt was fitted at `[0,0]`, above the table ground. Build phase 5
+The physical pickup platform at `[0,0]` is above the table ground. Build phase 5
 (`lower_to_ground`) now re-seeks the top switch (a no-op — phase 1 just made
 it) and steps a fixed `Z_PICKUP_DROP_FROM_TOP_CM` (13.3 cm) below where it
 physically stopped, instead of seeking the ground switch and re-zeroing Z.
@@ -1812,15 +1778,15 @@ A real backend run (`python -m web`) now appends two plain-text files under
 - `logs/build.log` — one stopwatch section per `/api/build`: the request, the
   job handoff, the board `RECV`, every firmware phase with the firmware's own
   ETA beside the measured duration, and the settled result with total elapsed.
-- `logs/serial.log` — serial diagnostics with board-labelled Uno/Mega lines, each with the wall clock
+- `logs/serial.log` — Mega serial diagnostics with each line's wall clock
   and the gap since the previous line, so a stall reads as a large delta; the
   terminal ack and a `-- final: …` line close each build.
 
 Off by default (every call a no-op); `web.app.main()` calls
 `rig.build_log.configure()`, so `pytest` never writes to `logs/`. The Studio
 still dispatches one guarded `/api/build` at a time; that route now owns the
-complete Uno-feed then Mega-place operation. Code: `python/rig/build_log.py`,
-`rig/feeder.py`, `rig/orchestrator.py`, and `web/app.py`. Operator notes are in
+complete manually staged Mega placement. Code: `python/rig/build_log.py`,
+`rig/pickup.py`, and `web/app.py`. Operator notes are in
 `docs/server-guide.md` §7.
 
 ### Fix: the Studio library drawer could never read a saved model

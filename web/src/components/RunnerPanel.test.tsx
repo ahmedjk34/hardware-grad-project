@@ -38,8 +38,14 @@ function mockedApi(command = "B 3 2 0"): RunnerApi {
     build: vi.fn(async sent => readyState({ selected: [3, 2], command: sent, build_state: "RUNNING" })),
     mode: vi.fn(async next => readyState({ mode: next })),
     shift: vi.fn(async (mode, x_cm, y_cm) => readyState({ mode, shift_cm: [x_cm, y_cm] })),
-    stop: vi.fn(async () => readyState({ build_state: "RUNNING", cell_phase: "feeding" })),
   };
+}
+
+async function confirmStaged(api: RunnerApi): Promise<void> {
+  await waitFor(() => expect(screen.getByRole("button", { name: "BUILD" })).toBeEnabled());
+  fireEvent.click(screen.getByRole("button", { name: "BUILD" }));
+  fireEvent.click(screen.getByRole("button", { name: /CONFIRM B/ }));
+  await waitFor(() => expect(api.build).toHaveBeenCalled());
 }
 
 describe("RunnerPanel", () => {
@@ -75,23 +81,9 @@ describe("RunnerPanel", () => {
 
   it("states the honest stop semantics and exposes no cancel or retry control", () => {
     render(<RunnerPanel state={readyState()} connected modelId="example-tower" api={mockedApi()} />);
-    expect(screen.getByText("the block in flight will finish — Mega motion cannot be interrupted")).toBeInTheDocument();
+    expect(screen.getByText("The block in flight will finish — Mega motion cannot be interrupted")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /cancel/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /retry/i })).not.toBeInTheDocument();
-  });
-
-  it("sends Uno cancellation while the server reports feeding", async () => {
-    const api = mockedApi();
-    const { rerender } = render(
-      <RunnerPanel state={readyState()} connected modelId="example-tower" api={api} />,
-    );
-    fireEvent.click(screen.getByRole("button", { name: "RUN" }));
-    fireEvent.click(screen.getByRole("button", { name: "START RUN" }));
-    await waitFor(() => expect(api.build).toHaveBeenCalledOnce());
-    rerender(<RunnerPanel state={readyState({ build_state: "RUNNING", cell_phase: "feeding" })}
-                          connected modelId="example-tower" api={api} />);
-    fireEvent.click(screen.getByRole("button", { name: "CANCEL FEED" }));
-    await waitFor(() => expect(api.stop).toHaveBeenCalledOnce());
   });
 
   it("pauses on the server's REJECTED result at the same block", async () => {
@@ -99,7 +91,7 @@ describe("RunnerPanel", () => {
     const { rerender } = render(<RunnerPanel state={readyState()} connected modelId="example-tower" api={api} />);
     fireEvent.click(screen.getByRole("button", { name: "RUN" }));
     fireEvent.click(screen.getByRole("button", { name: "START RUN" }));
-    await waitFor(() => expect(api.build).toHaveBeenCalledOnce());
+    await confirmStaged(api);
     rerender(<RunnerPanel state={readyState({ build_state: "RUNNING", selected: [3, 2], command: "B 3 2 0" })}
                           connected modelId="example-tower" api={api} />);
     rerender(<RunnerPanel state={readyState({ last_result: "rejected", last_result_reason: "feeder empty",
@@ -121,7 +113,8 @@ describe("RunnerPanel", () => {
     const { rerender } = render(<RunnerPanel state={readyState()} connected modelId="example-tower" api={api} />);
     fireEvent.click(screen.getByRole("button", { name: "RUN" }));
     fireEvent.click(screen.getByRole("button", { name: "START RUN" }));
-    await waitFor(() => expect(api.build).toHaveBeenCalledWith("B 3 2 0"));
+    await confirmStaged(api);
+    expect(api.build).toHaveBeenCalledWith("B 3 2 0");
 
     // This is the production WebSocket order: the durable placed result is
     // delivered before the coalesced READY snapshot.
@@ -129,7 +122,8 @@ describe("RunnerPanel", () => {
                           connected modelId="example-tower" api={api}
                           lastResult={settled("placed", null)} />);
 
-    await waitFor(() => expect(api.build).toHaveBeenCalledWith("B 3 2 1"));
+    await confirmStaged(api);
+    expect(api.build).toHaveBeenCalledWith("B 3 2 1");
     expect(api.setLevel).toHaveBeenCalledWith(1);
     expect(screen.queryByText("RUN PAUSED")).not.toBeInTheDocument();
   });
@@ -150,7 +144,8 @@ describe("RunnerPanel", () => {
     const { rerender } = render(<RunnerPanel state={readyState()} connected modelId="example-tower" api={api} />);
     fireEvent.click(screen.getByRole("button", { name: "RUN" }));
     fireEvent.click(screen.getByRole("button", { name: "START RUN" }));
-    await waitFor(() => expect(api.build).toHaveBeenCalledWith("B 3 2 0"));
+    await confirmStaged(api);
+    expect(api.build).toHaveBeenCalledWith("B 3 2 0");
 
     rerender(<RunnerPanel state={running} connected modelId="example-tower" api={api}
                           progress={phaseAt(14, "park_rotation", "Return the claw to neutral",
@@ -163,7 +158,8 @@ describe("RunnerPanel", () => {
                           progress={phaseAt(14, "park_rotation", "Return the claw to neutral",
                                             { action: "park", status: "parking" })}
                           lastResult={settled("placed", null)} />);
-    await waitFor(() => expect(api.build).toHaveBeenCalledWith("B 3 2 1"));
+    await confirmStaged(api);
+    expect(api.build).toHaveBeenCalledWith("B 3 2 1");
 
     // The snapshot that follows the result: the SAME phase, now stamped
     // `placed` and carrying the result's (higher) event id. Block 2 is in
@@ -182,7 +178,7 @@ describe("RunnerPanel", () => {
     const { rerender } = render(<RunnerPanel state={readyState()} connected modelId="example-tower" api={api} />);
     fireEvent.click(screen.getByRole("button", { name: "RUN" }));
     fireEvent.click(screen.getByRole("button", { name: "START RUN" }));
-    await waitFor(() => expect(api.build).toHaveBeenCalledOnce());
+    await confirmStaged(api);
     rerender(<RunnerPanel state={readyState({ build_state: "RUNNING", selected: [3, 2], command: "B 3 2 0" })}
                           connected modelId="example-tower" api={api} />);
     rerender(<RunnerPanel state={readyState({ build_state: "LOCKED", last_result: "aborted",
@@ -201,7 +197,7 @@ describe("RunnerPanel", () => {
     const { rerender } = render(<RunnerPanel state={readyState()} connected modelId="example-tower" api={api} />);
     fireEvent.click(screen.getByRole("button", { name: "RUN" }));
     fireEvent.click(screen.getByRole("button", { name: "START RUN" }));
-    await waitFor(() => expect(api.build).toHaveBeenCalledOnce());
+    await confirmStaged(api);
 
     // The command is out and the board has not announced a phase yet. The
     // panel must say that, not invent a first step.
@@ -222,7 +218,7 @@ describe("RunnerPanel", () => {
     const { rerender } = render(<RunnerPanel state={readyState()} connected modelId="example-tower" api={api} />);
     fireEvent.click(screen.getByRole("button", { name: "RUN" }));
     fireEvent.click(screen.getByRole("button", { name: "START RUN" }));
-    await waitFor(() => expect(api.build).toHaveBeenCalledOnce());
+    await confirmStaged(api);
 
     // Every phase of the build, INCLUDING the confirmed release and parking.
     for (const [step, phase, label] of [
@@ -249,7 +245,7 @@ describe("RunnerPanel", () => {
     const { rerender } = render(<RunnerPanel state={readyState()} connected modelId="example-tower" api={api} />);
     fireEvent.click(screen.getByRole("button", { name: "RUN" }));
     fireEvent.click(screen.getByRole("button", { name: "START RUN" }));
-    await waitFor(() => expect(api.build).toHaveBeenCalledOnce());
+    await confirmStaged(api);
     rerender(<RunnerPanel state={running} connected modelId="example-tower" api={api}
                           progress={progress} />);
     await waitFor(() => expect(screen.getByText(/reported by the rig/)).toBeInTheDocument());

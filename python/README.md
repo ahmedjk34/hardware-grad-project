@@ -12,7 +12,6 @@ setup and layout.
 ```
 python/
 ├── rig_console.py              commission the Mega directly over USB
-├── feeder_console.py           commission the Uno feeder directly over USB
 ├── grid/                       tools that draw a measurement grid
 │   ├── undistorted_grid_viewer.py  correction + grid  ← the main tool
 │   ├── grid_viewer.py              grid overlay labelled in pixels
@@ -33,10 +32,8 @@ python/
 │   ├── grid.py                 the machine's cells, and which way round they sit
 │   ├── build_controller.py     selection/confirmation outcome safety state
 │   ├── build_job.py            runs one build off the UI thread, one at a time
-│   ├── link.py                 independent Mega serial client
-│   ├── feeder.py               independent protocol-3 Uno serial client
-│   ├── orchestrator.py         strict Uno terminal success → Mega B handoff
-│   ├── mock_feeder.py          deterministic pyserial-shaped feeder fake
+│   ├── link.py                 Mega serial client
+│   ├── pickup.py               guarded manual-pick M → C coordination
 │   └── build_log.py            append-only logs/{build,serial}.log for a web run
 ├── tests/
 │   ├── test_block_detector.py  block detection against the committed captures
@@ -47,8 +44,7 @@ python/
 │   ├── test_color_grid.py      the printed sheet, on synthetic and real captures
 │   ├── test_grid.py            the cell numbering, against the firmware's own map
 │   ├── test_link.py            link.py against a fake board — no rig needed
-│   ├── feeder_test.py          Uno protocol parsing, identity, correlation, reset
-│   └── orchestrator_test.py    the FEED-terminal-OK-then-Mega-B pickup invariant
+│   └── pickup_test.py          manual pickup handshake and failure lockout
 └── vision/                     importable library — no windows, no argv, no prints
     ├── camera_source.py        Picamera2 on the Pi, V4L2 elsewhere
     ├── block_detector.py       colour + contour block detection and geometry
@@ -73,17 +69,15 @@ colour blob.
 Future robot-coordinate code should consume these detections rather than
 opening the camera independently.
 
-The production FastAPI/Studio path owns both serial ports for its full
-lifespan. A normal build goes through `CellOrchestrator`: it stages exactly one
-block with a correlated Uno request, then and only then calls the existing Mega
-build. The Web UI's explicit `FEED MANUALLY` confirmation is the supported
-exception: the operator first puts one block in the pickup area, and the same
-orchestrator lock sends Mega `M <col> <row> <level>` instead. `M` lowers the
-open claw and waits; the UI exposes `CLOSE CLAW` only once that descent is
-confirmed, then sends the one allowed `C` to continue placement. All
-post-staging failures lock the session on either path. `rig_console.py`,
-`feeder_console.py`, and direct-Mega calibration tools are commissioning
-surfaces; do not run them alongside the server.
+The production FastAPI/Studio path owns the Mega serial port for its full
+lifespan. Every build goes through `PickupCoordinator`: the operator first puts
+one block in the pickup area and explicitly confirms it, then the coordinator's
+single-operation lock sends Mega `M <col> <row> <level>`. `M` lowers the open
+claw and waits; the UI exposes `CLOSE CLAW` only once the firmware announces
+that descent, then sends the one allowed `C` to continue placement. Any failure
+after staging locks the session for inspection. `rig_console.py` and direct-
+Mega calibration tools are commissioning surfaces; do not run them alongside
+the server.
 
 `camera/gridded_camera_feed.py` reuses that feed and adds the machine grid from
 the repository-level `config/rig.json`. Positive block rectangles are

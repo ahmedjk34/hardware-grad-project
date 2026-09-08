@@ -82,7 +82,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 
-from rig.config import (active_grid_mode, blocked_cells, grid_geometry, load,
+from rig.config import (active_grid_mode, grid_geometry, load,
                         max_edge_overhang_cm)
 
 # Which image corner holds machine cell [0,0].
@@ -136,12 +136,6 @@ class MachineGrid:
     # equal to cols/rows whenever no shift trims the grid.
     requested_cols: int | None = None
     requested_rows: int | None = None
-    # Cells a fixed obstruction (the feeder belt) sits in: real, drawable cells
-    # that the claw can never descend into, at any level. Per mode, paired with
-    # the firmware's GRID_BLOCKED_* tables (test_grid.py holds them equal).
-    # `[0,0]` is the feeder and is tracked separately, never listed here.
-    blocked: frozenset[tuple[int, int]] = frozenset()
-
     @classmethod
     def from_config(cls, cfg: dict | None = None, mode: str | None = None,
                     **kwargs) -> "MachineGrid":
@@ -178,7 +172,6 @@ class MachineGrid:
             # can preview "what would a 1.6 cm shift do" without editing cfg.
             shift_x_cm=float(kwargs.pop("shift_x_cm", grid.get("shift_x_cm", 0.0))),
             shift_y_cm=float(kwargs.pop("shift_y_cm", grid.get("shift_y_cm", 0.0))),
-            blocked=frozenset(kwargs.pop("blocked", blocked_cells(grid))),
             **kwargs,
         )
 
@@ -437,12 +430,12 @@ class MachineGrid:
             raise ValueError(f"cell [{col},{row}] is outside {self.cols}x{self.rows}")
         return self.cell_center_x_cm(col), self.cell_center_y_cm(row)
 
-    # --- the feeder ---------------------------------------------------------
+    # --- the pickup cell ----------------------------------------------------
 
-    def feeder_center_cm(self) -> tuple[float, float]:
+    def pickup_center_cm(self) -> tuple[float, float]:
         """Where the claw descends to pick up, in BOTH modes.
 
-        The feeder never rotates: a block is always presented standing, on the
+        A manually staged block is always presented standing, on the
         VERTICAL [0,0] footprint. Because the lattice is centre-anchored, that
         cell's centre IS the home corner - so this is (0, 0) and a pick-up is a
         plain home with no move afterwards. The claw closes on the middle of
@@ -454,19 +447,9 @@ class MachineGrid:
         return 0.0, 0.0
 
     @staticmethod
-    def is_feeder(col: int, row: int) -> bool:
-        """[0,0] is the feeder in both modes and is never built on."""
+    def is_pickup(col: int, row: int) -> bool:
+        """[0,0] is the pickup cell in both modes and is never built on."""
         return col == 0 and row == 0
-
-    def is_blocked(self, col: int, row: int) -> bool:
-        """Whether a fixed obstruction (the feeder belt) sits in ``[col,row]``.
-
-        A real, drawable cell the claw can never descend into, at any level.
-        Per mode: what the belt fouls in the vertical layout it need not foul
-        in the horizontal one. Firmware refuses ``B``/``G`` for these cells the
-        same way it refuses the feeder; the two lists are paired.
-        """
-        return (int(col), int(row)) in self.blocked
 
     def cell_bounds_cm(self, col: int, row: int) -> tuple[float, float, float, float]:
         """Physical block edges, excluding the visible 0.5 cm gaps."""
@@ -535,15 +518,13 @@ class MachineGrid:
     def contains_build_target(self, col: int, row: int) -> bool:
         """Whether coordinates are valid for the firmware's ``B`` command.
 
-        Every cell except the feeder and the belt-blocked cells. ``[0,0]`` is
+        Every cell except the pickup cell. ``[0,0]`` is
         where blocks come FROM in both modes, so ``B 0 0`` stays the inert
         no-op it has always been - but ``B 0 3`` and ``B 4 0`` are ordinary
         placements now, where they used to be the "move one axis only"
-        calibration sentinel. A ``blocked`` cell has a fixed obstruction in it
-        and the firmware refuses it before anything moves.
+        calibration sentinel.
         """
-        return (self.contains(col, row) and not self.is_feeder(col, row)
-                and not self.is_blocked(col, row))
+        return self.contains(col, row) and not self.is_pickup(col, row)
 
     # --- reporting --------------------------------------------------------
 
@@ -573,7 +554,6 @@ class MachineGrid:
             and self.error_offset_y_cm == other.error_offset_y_cm
             and self.shift_x_cm == other.shift_x_cm
             and self.shift_y_cm == other.shift_y_cm
-            and self.blocked == other.blocked
         )
 
     def describe(self) -> str:
@@ -609,8 +589,8 @@ class MachineGrid:
         numbers, which the firmware does to keep the map aligned.
         """
         lines = [
-            "  # = machine   . = buildable cell   F = feeder   X = belt",
-            "  (every cell is a real block; [0,0] is the feeder)",
+            "  # = machine   . = buildable cell   P = pickup",
+            "  (every cell is a real block; [0,0] is the pickup)",
             "",
         ]
         for r in range(self.max_row, -1, -1):
@@ -618,15 +598,13 @@ class MachineGrid:
             for c in range(0, self.cols):
                 if here == (c, r):
                     marker = "#"
-                elif self.is_feeder(c, r):
-                    marker = "F"
-                elif self.is_blocked(c, r):
-                    marker = "X"
+                elif self.is_pickup(c, r):
+                    marker = "P"
                 else:
                     marker = "."
                 cells += f" {marker}"
             lines.append(f"{r:>3} |{cells}")
         lines.append("    +" + "--" * self.cols)
         lines.append("     " + " ".join(str(c % 10) for c in range(0, self.cols)))
-        lines.append("     ^ [0,0] feeder; X = belt-blocked; rest buildable")
+        lines.append("     ^ [0,0] pickup; rest buildable")
         return "\n".join(lines)

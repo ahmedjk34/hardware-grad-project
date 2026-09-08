@@ -111,41 +111,6 @@ def max_edge_overhang_cm(geometry: dict, axis: str) -> float:
     return float(geometry[f"block_{axis}_cm"]) / 2.0
 
 
-# Deliberately NOT in GRID_MODE_FIELDS: a config written before belt cells were
-# a thing has no such key, and an empty list changes no existing behaviour.
-def blocked_cells(geometry: dict) -> frozenset[tuple[int, int]]:
-    """The mode's belt-obstructed cells as a set of ``(col, row)`` pairs.
-
-    These are cells a fixed obstruction (the feeder belt) sits in, so the claw
-    can never descend there. Firmware bakes the same list into
-    ``GRID_BLOCKED_*`` per mode; the two are paired and ``test_grid.py`` fails
-    on a mismatch. All-level: a belt cell is blocked at every stack level, so
-    there is no level argument, exactly like the feeder.
-    """
-    raw = geometry.get("blocked_cells", [])
-    if not isinstance(raw, (list, tuple)):
-        raise ValueError("config/rig.json: blocked_cells must be a list of [col, row] pairs")
-    out: set[tuple[int, int]] = set()
-    for entry in raw:
-        if (not isinstance(entry, (list, tuple)) or len(entry) != 2
-                or not all(isinstance(value, int) and not isinstance(value, bool)
-                           for value in entry)):
-            raise ValueError(
-                f"config/rig.json: blocked_cells entry {entry!r} is not an [int, int] pair"
-            )
-        col, row = int(entry[0]), int(entry[1])
-        if col < 0 or row < 0:
-            raise ValueError(
-                f"config/rig.json: blocked_cells entry [{col}, {row}] has a negative index"
-            )
-        if (col, row) == (0, 0):
-            raise ValueError(
-                "config/rig.json: [0,0] is the feeder, not a blocked_cells entry"
-            )
-        out.add((col, row))
-    return frozenset(out)
-
-
 class UnknownGridMode(ValueError):
     """A grid mode was asked for that config/rig.json does not define.
 

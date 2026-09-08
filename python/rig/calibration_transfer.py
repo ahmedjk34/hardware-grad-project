@@ -12,8 +12,7 @@ So a calibrated ``vertical`` map already contains everything a ``horizontal``
 map's four corners need: the same four image points. :func:`transfer_workspace_map`
 copies them into the target mode's entry and pairs them with that mode's
 geometry via ``MachineGrid.from_config(mode=...)`` - which carries horizontal's
-``+1.9 cm`` pickup-cell registration (``trim_{x,y}_cm``), its ``3x10`` counts and
-its ``blocked_cells`` list.
+``+1.9 cm`` pickup-cell registration (``trim_{x,y}_cm``) and its ``3x10`` counts.
 
 What this does NOT do is measure the target mode. A real placed-block run on the
 target grid would also fold in whatever its firmware motion compensations

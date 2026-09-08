@@ -1,61 +1,5 @@
 # Firmware
 
-## Container + belt controller
-
-Flash `belt_v1/belt_v1.ino` to an **Arduino Uno** for the feeder. Its wiring is:
-
-- A4988 belt driver: `DIR = 2`, `STEP = 3`
-- A4988 `ENABLE` is not used; connect it to GND
-- Exit IR obstacle sensor: `OUT = 4` (default active-low; pin 5 is unused)
-- Alignment-servo signal: pin `6`
-- Pickup/stage IR obstacle sensor: `OUT = 8` (default active-low)
-- Container-servo signal: pin `12`
-
-`FEED [id]` (or its `RUN [id]` alias) performs one complete feeder cycle:
-run the belt forward for one second, close the container through 150° → 87°
-→ 23°, then open it through the same stages in reverse, wait for the
-exit IR sensor to see a block, run the belt, wait 1.25 seconds before closing
-the gate, and stop the belt immediately when the stage IR sensor sees the
-block. The two opening movements are approximately equal halves of the gate
-travel. The alignment servo then nudges the
-block square and the stage sensor verifies that it remained present. Each
-servo position change is followed by a one-second settling interval.
-
-Every controller command must end in a newline. A feed cycle is identified by
-the optional numeric `id` and reports structured telemetry:
-
-```text
-@42 RECV cmd=FEED
-@42 ACK cmd=FEED accepted=1
-@42 STATE state=waiting_for_exit
-@42 EVENT phase=waiting_for_exit
-@42 STATE state=moving_to_stage
-@42 SENSOR sensor=exit detected=1
-@42 EVENT phase=exit_detected_belt_running_waiting_to_close
-@42 STATE state=stage_belt_settling
-@42 SENSOR sensor=stage detected=1
-@42 EVENT phase=stage_detected_belt_settling
-@42 EVENT phase=stage_settled_aligning
-@42 EVENT phase=block_ready
-@42 OK state=block_ready result=staged
-```
-
-`@id OK state=block_ready result=staged` is the successful terminal response and means the
-Mega may pick from `[0,0]`. `ACK`, `STATE`, `SENSOR`, and `EVENT` are progress
-telemetry; `OK` or `ERROR` is terminal. A terminal `@id ERROR
-state=... reason=stage_occupied`, `exit_timeout`, `stage_timeout`, or
-`cancelled` means it must not. The Uno prints
-`@0 READY firmware=belt_v1 protocol=3 board=uno` at boot. See
-[the full feeder-controller protocol](../docs/feeder-controller.md) for every
-message type and controller recovery rule.
-
-Use `STOP` to cancel a cycle safely. Manual commands are `STATUS` (or `P`),
-`OPEN`, `CLOSE`, `ON`, `OFF`, `F`, `B`, `S <speed>`, `US`, and `HELP`. The
-default belt speed is 325 steps per second. `US`/`STATUS` read both IR sensors
-and report each as `detected=0` or `detected=1`.
-If the belt turns the wrong physical direction, swap the forward and reverse
-direction-level constants in the sketch.
-
 ## `build_test_v1/` is the sketch on the rig
 
 Flash this one. Everything on the Python side is written against the commands
@@ -69,21 +13,17 @@ rotation settings as `build_test_v1/`: open **100°**, close **180°**, fixed pl
 ```
 ./scripts/flash.sh                    # Mega: compile, then upload
 ./scripts/flash.sh compile            # Mega syntax check (back-compatible)
-./scripts/flash.sh feeder compile     # Uno syntax check
-./scripts/flash.sh feeder upload      # Uno upload using feeder.port
-./scripts/flash.sh all compile        # syntax-check both production sketches
 ./scripts/flash.sh boards             # what is actually plugged in
 ```
 
-The script reads each role's port, FQBN and sketch path from `config/rig.json`,
-so none of them are written down twice.
+The script reads the Mega port, FQBN and sketch path from `config/rig.json`, so
+none of them are written down twice.
 
 Board is an Arduino MEGA 2560. Serial is **9600 baud**. Multi-character
 commands need a newline; single digits do not. `V <angle>` sets the gripper
 servo to an arbitrary angle from 0 to 180 degrees. The `O` command checks the
 X/Y home switches and opens to **100 degrees**. `C` closes it at
-**180 degrees**. These are the Mega build gripper settings; the Uno feeder
-gate uses separate angles documented in the feeder section.
+**180 degrees**.
 
 The firmware keeps the physical block height at **1.5 cm**. Its fixed Z
 placement margin is **+0.12 cm**, raising releases at levels 1 and above by
@@ -127,7 +67,8 @@ same validated route as `B`, but after the open claw reaches the pickup height
 it announces `phase=await_manual_close` and waits. Align the block, then send
 the single `C` command to close the claw and complete the existing placement.
 While waiting, the firmware ignores every other input so a low claw cannot be
-moved accidentally. Normal `B` commands and Uno-fed builds remain automatic.
+moved accidentally. `B` remains available for explicit commissioning paths;
+the production web flow uses `M` so the alignment pause cannot be bypassed.
 
 **`R` and `RR` no longer jog it.** They are the grid mode latch — `R` selects
 the vertical grid, `RR` the horizontal one — and neither moves anything. See

@@ -116,7 +116,7 @@ Defaults: `{"grid": True, "detect": True, "paper": False, "overlay": True}`
 
 | Toggle | Draws |
 | --- | --- |
-| **`grid`** | every cell as its **real block footprint** polygon — via `WorkspaceMap.target_polygon`, so actual gaps are preserved rather than drawing pitch rectangles. Feeder `[0,0]` marked; belt-blocked cells struck through with a cross; cell labels; **`approximate` styling when `calibrated` is false**, so an uncalibrated grid never looks authoritative |
+| **`grid`** | every cell as its **real block footprint** polygon — via `WorkspaceMap.target_polygon`, so actual gaps are preserved rather than drawing pitch rectangles. Pickup `[0,0]` is marked and remains non-buildable; cell labels use **`approximate` styling when `calibrated` is false**, so an uncalibrated grid never looks authoritative |
 | **`detect`** | every detected block as a clean rectangle, coloured by hue name (red / orange / yellow / green / blue). The rectangle keeps the block's **measured centre** — a misplaced block looks misplaced, deliberately (BLOCK-VISION §2) |
 | **`paper`** | printed calibration-sheet tracking. Off by default; toggling it on is what starts the tracker |
 | **`overlay`** | master switch for all of the above |

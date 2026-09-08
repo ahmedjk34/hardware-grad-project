@@ -68,7 +68,6 @@ class ViewRequest(BaseModel):
 class BuildRequest(BaseModel):
     confirm: bool
     command: str
-    feed_mode: Literal["automatic", "manual"] = "automatic"
 
 
 class ManualCloseRequest(BaseModel):
@@ -92,25 +91,6 @@ MODE_BUSY_MESSAGE = "a grid-mode latch is homing X/Y; wait for it to finish"
 def _latching(app) -> bool:
     lock = getattr(app.state, "mode_latch_lock", None)
     return bool(lock is not None and lock.locked())
-
-
-@router.post("/stop", response_model=StateModel)
-async def stop(http: Request) -> StateModel:
-    """Cancel an active Uno feed; Mega motion remains stop-after-current only."""
-    app = http.app
-    if not app.state.job.running:
-        raise HTTPException(status_code=409, detail="no cell operation is running")
-    try:
-        stopped = app.state.orchestrator.cancel()
-    except Exception as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    if not stopped:
-        raise HTTPException(
-            status_code=409,
-            detail="gantry placement cannot be interrupted; stop applies after this block",
-        )
-    _signal(app)
-    return _state(app)
 
 
 def require_mutable(app) -> None:
@@ -495,25 +475,14 @@ async def build(request: BuildRequest, http: Request) -> StateModel:
             status_code=409,
             detail="Mega gantry must be connected before build",
         )
-    if request.feed_mode == "automatic" and not app.state.feeder.connected:
-        raise HTTPException(
-            status_code=409,
-            detail="Uno feeder must be connected for automatic feed; use manual feed only after placing a block in the pickup area",
-        )
     if not request.confirm:
         raise HTTPException(status_code=400, detail="build requires confirm=true")
     if request.command != app.state.controller.command:
         raise HTTPException(status_code=400,
                             detail="command does not match the current selection")
     controller = app.state.controller
-    if request.feed_mode == "manual":
-        # A prior automatic cycle's transaction must not appear to belong to
-        # this manually staged block in state snapshots or run reports.
-        app.state.feeder_transaction_id = None
-        app.state.feeder_state = "manual"
-        app.state.feeder_error = None
     try:
-        app.state.job.start(manual_feed=request.feed_mode == "manual")
+        app.state.job.start()
     except BuildStateError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     # Open this build's section in logs/build.log now that the job is running:
@@ -522,7 +491,6 @@ async def build(request: BuildRequest, http: Request) -> StateModel:
     build_log.build.build_requested(
         request.command, selection=controller.selected,
         level=controller.level, mode=controller.mode,
-        feed_mode=request.feed_mode,
     )
     build_log.build.job_started()
     # The console's own half of the progress story: the command is ACCEPTED.
@@ -542,7 +510,7 @@ async def manual_close(request: ManualCloseRequest, http: Request) -> StateModel
     if not app.state.job.running or app.state.cell_phase != "awaiting_manual_close":
         raise HTTPException(status_code=409, detail="the claw is not waiting for manual alignment")
     try:
-        app.state.orchestrator.close_manual_pick()
+        app.state.pickup.close_manual_pick()
     except (BuildStateError, RigError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     _signal(app)

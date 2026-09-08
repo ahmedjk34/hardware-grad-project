@@ -99,8 +99,7 @@ def cell(grid: MachineGrid, col: int, row: int, level: int) -> dict:
     cz = level * BLOCK_HEIGHT_CM * 10 + BLOCK_HEIGHT_CM * 10 / 2
     half_z = BLOCK_HEIGHT_CM * 10 / 2
     return {"col": col, "row": row, "level": level,
-            "feeder": MachineGrid.is_feeder(col, row),
-            "blocked": grid.is_blocked(col, row),
+            "pickup": MachineGrid.is_pickup(col, row),
             "center_mm": [cx * 10, cy * 10, cz],
             "footprint_mm": [x0 * 10, y0 * 10, x1 * 10, y1 * 10],
             "aabb_mm": {"min": [x0 * 10, y0 * 10, cz - half_z],

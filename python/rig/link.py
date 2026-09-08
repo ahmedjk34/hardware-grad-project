@@ -66,7 +66,7 @@ Two hardware facts this module is shaped around
 Build rotation is not per-block
 -------------------------------
 `build()` takes no rotation. Which way a block is laid is a property of the
-active GRID, not of the block: the vertical grid places blocks as the feeder
+active GRID, not of the block: the vertical grid places blocks from the pickup
 presents them, the horizontal grid turns every one of them 90° CW. Choose
 with `set_mode()`, which sends the firmware's `R` / `RR` latch. See
 docs/dual-orientation-grid.md D7 and D8.
@@ -705,7 +705,7 @@ class Rig:
                     self.close()
                     raise RigError(
                         f"configured gantry port announced board={board!r}, "
-                        "not the Mega; check serial.port and feeder.port"
+                        "not the Mega; check serial.port"
                     )
                 return
             last_line_at = at
@@ -1082,15 +1082,10 @@ class Rig:
             col, row, level = int(col), int(row), int(level)
         except (TypeError, ValueError) as exc:
             raise ValueError("build coordinates and level must be integers") from exc
-        if self.grid.is_feeder(col, row):
+        if self.grid.is_pickup(col, row):
             raise ValueError(
-                "[0,0] is the feeder - it is where blocks are picked up from, "
+                "[0,0] is the pickup cell - it is where blocks are picked up from, "
                 "in both modes, and is never built on"
-            )
-        if self.grid.is_blocked(col, row):
-            raise ValueError(
-                f"build target [{col},{row}] is blocked by the feeder belt - "
-                "the claw cannot descend there at any level"
             )
         if not self.grid.contains_build_target(col, row):
             raise ValueError(
@@ -1148,10 +1143,8 @@ class Rig:
 
         for col, row, what in ((pick_col, pick_row, "pick"),
                                (place_col, place_row, "place")):
-            if self.grid.is_feeder(col, row):
-                raise ValueError(f"{what} cell [0,0] is the feeder, not a correction target")
-            if self.grid.is_blocked(col, row):
-                raise ValueError(f"{what} cell [{col},{row}] is blocked by the feeder belt")
+            if self.grid.is_pickup(col, row):
+                raise ValueError(f"{what} cell [0,0] is the pickup cell, not a correction target")
             if not self.grid.contains_build_target(col, row):
                 raise ValueError(
                     f"{what} cell [{col},{row}] is outside "
