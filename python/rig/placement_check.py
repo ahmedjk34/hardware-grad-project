@@ -75,6 +75,7 @@ import math
 from rig.placement_geometry import (
     axis_coverage, consistency, corridor_clear, drift_axis,
 )
+from rig.motion_preflight import preflight_correction
 
 #: The correction FLOOR, in cm. Below this the pick offset is not worth a
 #: pick-lift-place cycle — the machine's own placement repeatability would add
@@ -178,6 +179,25 @@ def _reject(reason: str):
     return None, reason
 
 
+def _preflight_reject(correction: Correction, *, mode: str, grid,
+                      tool_offset_cm: tuple[float, float]):
+    """``(None, reason)`` if this correction's compensated motion would clamp.
+
+    Runs the exact firmware mirror over both legs of the ``P`` move. Skipped
+    when ``grid`` is ``None`` — the map-less path has already been rejected
+    above for having no cm position, so there is no geometry to preflight and
+    nothing that could reach here.
+    """
+    if grid is None:
+        return None
+    pf = preflight_correction(
+        grid=grid, mode=mode,
+        pick_cell=correction.pick_cell, place_cell=correction.place_cell,
+        dx_cm=correction.dx_cm, dy_cm=correction.dy_cm,
+        tool_offset_cm=tool_offset_cm)
+    return None if pf.ok else _reject(pf.reason)
+
+
 def assess(*, verdict: str, mode: str,
            plan_cell: tuple[int, int], plan_level: int | None,
            where_cell: tuple[int, int], observed_cm: tuple[float, float] | None,
@@ -186,7 +206,9 @@ def assess(*, verdict: str, mode: str,
            taller_neighbour_place: bool,
            pick_is_top_of_column: bool, grid=None,
            measured_size_cm: tuple[float, float] | None = None,
-           drift_neighbour_occupied: bool = False) -> tuple[Correction | None, str]:
+           drift_neighbour_occupied: bool = False,
+           tool_offset_cm: tuple[float, float] = (0.0, 0.0),
+           ) -> tuple[Correction | None, str]:
     """May the claw correct this verdict? Returns ``(Correction | None, reason)``.
 
     ``plan_cell`` / ``plan_level`` is where the block belongs (the ledger's
@@ -209,6 +231,15 @@ def assess(*, verdict: str, mode: str,
     why not, for the operator. ``/api/supervision/correct`` re-runs this same
     function rather than trusting the published flag — a correction is motion,
     so the client's copy is never authoritative (DESIGN.md §8).
+
+    A :class:`Correction` is only returned once its FULL compensated motion —
+    the mode's ``SKEW_*`` / ``BUILD_PLACEMENT_OFFSET_*`` plus the pick nudge,
+    on both the pick and the place leg — is proven to stay inside the firmware
+    travel with no clamp (:mod:`rig.motion_preflight`, audit §1 "Pi preflight
+    absent"). ``tool_offset_cm`` is ``toolOffsetCmOf`` for this mode's build
+    rotation; vertical (the only :data:`SUPPORTED_MODES` today) turns the claw
+    for nothing, so its ``neutral`` slot is a genuine ``(0.0, 0.0)`` and the
+    default holds — a future horizontal path must pass ``tool_offsets.cw``.
     """
     if verdict not in ("MOVED", "DISPLACED"):
         return _reject("only a MOVED or DISPLACED block can be returned by the claw")
@@ -250,6 +281,10 @@ def assess(*, verdict: str, mode: str,
             verdict="MOVED", pick_cell=(int(where_cell[0]), int(where_cell[1])),
             pick_level=0, place_cell=(int(plan_cell[0]), int(plan_cell[1])),
             place_level=int(plan_level), dx_cm=dx, dy_cm=dy, magnitude_cm=magnitude)
+        clamp = _preflight_reject(correction, mode=mode, grid=grid,
+                                  tool_offset_cm=tool_offset_cm)
+        if clamp is not None:
+            return clamp
         return correction, (f"the block is on {list(where_cell)} instead of "
                             f"{list(plan_cell)}; the claw can move it back")
 
@@ -288,5 +323,9 @@ def assess(*, verdict: str, mode: str,
         verdict="DISPLACED", pick_cell=(int(plan_cell[0]), int(plan_cell[1])),
         pick_level=int(plan_level), place_cell=(int(plan_cell[0]), int(plan_cell[1])),
         place_level=int(plan_level), dx_cm=dx, dy_cm=dy, magnitude_cm=magnitude)
+    clamp = _preflight_reject(correction, mode=mode, grid=grid,
+                              tool_offset_cm=tool_offset_cm)
+    if clamp is not None:
+        return clamp
     return correction, (f"the block is {magnitude:.2f} cm off {list(plan_cell)}, "
                         f"in the gap; the claw can pick it up and set it back")

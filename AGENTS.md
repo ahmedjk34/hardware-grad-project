@@ -1464,6 +1464,18 @@ into something.
 The firmware owns all of it. If the Pi needs one of these numbers, it parses the
 `5` report — it does not keep its own copy.
 
+**The one deliberate exception: `python/rig/motion_preflight.py`.** It mirrors
+the firmware's compensated-build clamp (`gotoBuildTargetOffset()`) so the Pi can
+refuse a CORRECTION whose full motion — cell centre − tool offset, then
+`BUILD_PLACEMENT_OFFSET_*` + `SKEW_*` + the `P` nudge, on both legs — would be
+clamped onto the travel and misplace the block (the audit's "Pi preflight
+absent" P0). Reproducing that arithmetic needs the X/Y step caps and the two
+firmware-only compensation tables, so they are copied there as plain constants —
+**read-only, never pushed to the rig, never merged into `rig.json`.**
+`python/tests/test_motion_preflight.py` parses `build_test_v1.ino` and fails on
+any drift, exactly as `test_grid.py` guards the paired values. Change the sketch
+and change that mirror in the same commit.
+
 **The dividing line:** `rig.json` owns what can change without reflashing. The
 firmware owns what cannot.
 

@@ -91,6 +91,7 @@ from rig import build_log
 from rig.config import (DEFAULT_GRID_MODE, GRID_MODES, load,
                         serial_port_candidates)
 from rig.grid import MachineGrid
+from rig.motion_preflight import preflight_correction, tool_offset_for_mode
 
 # ------------------------------------------------------------------
 # Ack lines
@@ -1162,6 +1163,24 @@ class Rig:
         if abs(dx_cm) > 3.0 or abs(dy_cm) > 3.0:
             raise ValueError(
                 f"pick nudge ({dx_cm:.2f}, {dy_cm:.2f}) cm exceeds the 3 cm safety limit")
+
+        # Exact full-motion preflight (audit §1 "Pi preflight absent"). The
+        # firmware validates only the UNCOMPENSATED holder target; the mode's
+        # SKEW_* / BUILD_PLACEMENT_OFFSET_* and this nudge are added afterwards
+        # inside gotoBuildTargetOffset(), where an off-travel target is clamped,
+        # warned about on the console, and driven anyway. Mirror that clamp over
+        # both legs here so a correction that would misplace the block sends
+        # nothing - the same fail-closed contract as the guards above.
+        if self.grid.has_physical_scale:
+            pf = preflight_correction(
+                grid=self.grid, mode=self.grid.mode or DEFAULT_GRID_MODE,
+                pick_cell=(pick_col, pick_row), place_cell=(place_col, place_row),
+                dx_cm=dx_cm, dy_cm=dy_cm,
+                tool_offset_cm=tool_offset_for_mode(
+                    self._cfg, self.grid.mode or DEFAULT_GRID_MODE))
+            if not pf.ok:
+                raise ValueError(
+                    f"correction refused before motion: {pf.reason}")
 
         command = (f"P {pick_col} {pick_row} {pick_level} "
                    f"{dx_cm:.3f} {dy_cm:.3f} "
