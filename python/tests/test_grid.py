@@ -575,7 +575,7 @@ dynamic_skew_defaults = {
     "SKEW_Y_PER_COLROW_CM": {"vertical": 0.0, "horizontal": 0.0},
 }
 placement_offset_defaults = {
-    "BUILD_PLACEMENT_OFFSET_X_CM": {"vertical": 0.0, "horizontal": -0.4},
+    "BUILD_PLACEMENT_OFFSET_X_CM": {"vertical": 0.0, "horizontal": 1.8},
     "BUILD_PLACEMENT_OFFSET_Y_CM": {"vertical": 0.0, "horizontal": 0.0},
 }
 for constant, expected_by_mode in dynamic_skew_defaults.items():
