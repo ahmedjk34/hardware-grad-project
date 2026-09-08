@@ -300,10 +300,12 @@ const int AUX_STEPPER_STEPS_PER_REV = 2048;
 
 // The build's CW/CCW placement rotation magnitude, used by every neutral/CW/CCW
 // state. This manual sketch ONLY: 85 deg, not a true 90 deg quarter turn
-// (was AUX_STEPPER_STEPS_PER_REV / 4 = 512 = 90 deg). Rounded to the nearest
-// motor step: 2048 * 85 / 360 ~= 484 steps.
-const int AUX_STEPPER_QUARTER_TURN =
-    (AUX_STEPPER_STEPS_PER_REV * 85 + 180) / 360;
+// (was AUX_STEPPER_STEPS_PER_REV / 4 = 512 = 90 deg).
+//   2048 steps/rev * 85 deg / 360 deg = 483.6 -> 484 steps (~85.1 deg).
+// MUST be a plain literal: `AUX_STEPPER_STEPS_PER_REV * 85` = 174080 overflows
+// the MEGA's 16-bit int and yields a NEGATIVE constant, which makes the
+// while-loops in rotateClawTo() spin the claw forever.
+const int AUX_STEPPER_QUARTER_TURN = 484;
 
 // One manual command is deliberately capped at one turn. The aux mechanism
 // has no limit switch, so a larger move must be consciously split into
