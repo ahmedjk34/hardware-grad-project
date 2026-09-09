@@ -567,6 +567,20 @@ reset (P2) went with it.
 > verdict, not a bug: there are cells the plan cannot account for. The operator
 > dismisses per D12.
 
+#### The one exception — the feeder cell `[0,0]`
+
+Blocks are hand-fed at `[0,0]` and picked up from it (AGENTS.md §2a); the ledger
+never records a placement there. So a detection **on or within
+`FEEDER_RADIUS_CM` of** `[0,0]` is dropped in `observe()` before it can become a
+cell, a gap, a track or a detail record, and `classify()` also subtracts
+`FEEDER_CELL` from both `expected` and `observed` for a synthetic caller. A
+hand-fed block waiting to be picked up is therefore never `FOREIGN` / `MOVED` /
+`DISPLACED` / `DISAGREES`, and never warms a cell in the hysteresis. The radius
+is kept under half the smaller vertical pitch (1.9 cm) so a real placement on
+`[1,0]` or `[0,1]` is still judged normally. `rig.feeder_check.feeder_has_block`
+is the *only* reader of that region — a presence-only, fail-closed check the
+autonomous-RUN pickup uses — and it produces no verdict.
+
 To keep that from being noisy, the one signal that used to bypass D7's
 hysteresis — `in_gap` — now gets it: a non-zero `in_gap` reaches the classifier
 only after `SETTLE_N` of the last `SETTLE_M` judged frames saw a gap detection.

@@ -27,6 +27,12 @@ export const BASE_STATE: StateModel = {
     expected: [], observed: [], unjudged: [], reason: null, judged_at_ms: null,
     acknowledged: false,
   },
+  // The DULL state has a block ready at the feeder, so an autonomous RUN in a
+  // test advances without a special step. A test about the WAITING state sets
+  // this false.
+  auto_pickup: false,
+  feeder_block_present: true,
+  feeder_block_reason: "block staged 0.4 cm from the feeder centre",
   views: {}, geometry: null,
 };
 

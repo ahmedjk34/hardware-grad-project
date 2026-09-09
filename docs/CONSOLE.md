@@ -22,10 +22,13 @@ browser → Pi → Mega path this console drives).
 ## 1. Status at a glance
 
 **Built and tested.** All ten of the original build steps are implemented;
-`npm test -- --run` is 492/492 green across 38 files (console + Studio
+`npm test -- --run` is 559/559 green across 42 files (console + Studio
 combined, they now share a test run); the relevant backend suites
 (`pytest python/tests -k "web or link or mock_board or pickup"`)
-are 62/62 green.
+are green. Two pre-existing `web_*` failures on `main`
+(`test_build_placed_rejected_and_aborted_paths_are_server_guarded`,
+`test_a_build_streams_its_phases_then_exactly_one_result[failure1-aborted-True]`)
+are unrelated to the console feature set.
 
 | Piece | State |
 | --- | --- |
@@ -85,9 +88,17 @@ replaced:
    moves.
 2. The panel shows `B <col> <row> <level>` — the exact command.
 3. Operator taps **BUILD**, then a second **CONFIRM** (two deliberate taps).
-4. The operator stages one block at pickup and explicitly confirms it. The
-   server sends Mega `M <col> <row> <level>`; after the open-claw descent, the
-   firmware's `await_manual_close` event enables one explicit `C`.
+4. The operator stages one block at pickup and confirms it. The server sends
+   Mega `M <col> <row> <level>`; after the open-claw descent, the firmware's
+   `await_manual_close` event enables one explicit `C`. **STEP run-style and the
+   single-build console** confirm with a manual **CLOSE CLAW** tap. **An
+   autonomous RUN** confirms with the camera: `rig.feeder_check` sees a block on
+   the feeder cell `[0,0]`, so the driver sends the `C` itself, and it also
+   holds the next `M` until a block is staged — the run is hands-off between
+   blocks, human only drops the next one under the parked claw. It fails closed
+   (no map / no vision / stale → wait for the manual `C`), the CLOSE CLAW button
+   stays live as the override, and a RUN that has waited > 3 min for a block
+   pauses with a prompt. See AGENTS.md §2a.
 5. The camera keeps streaming while the Mega grips, carries, places and parks.
 6. Result: **PLACED** (green, selection clears), **REJECTED** (amber, bad
    input, nothing moved, selection kept), or **ABORTED** / timeout (red, the
@@ -98,9 +109,10 @@ replaced:
 **Explicitly not in scope:** a physical emergency-stop button or hardware
 safety interlock; WebRTC or hardware video encoding; real user accounts (a
 single shared secret is enough for a trusted LAN); multiple operators
-coordinating simultaneously; anything autonomous (no auto-placement, no
-block-detection-driven building — the operator or a compiled Studio program
-chooses every target).
+coordinating simultaneously; autonomous **target selection** (the operator or a
+compiled Studio program chooses every cell — the camera never picks what to
+build). An autonomous RUN does close the pickup claw on camera evidence and
+chain its own blocks, but only through a program a human compiled and started.
 
 ---
 

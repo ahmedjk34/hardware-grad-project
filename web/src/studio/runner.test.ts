@@ -26,8 +26,12 @@ const shiftOp = (cm: number): Op => ({
 function dispatch(state: RunState, event: RunEvent) {
   const turn = step(state, event);
   // Most legacy transition tests focus on behavior after a build starts. Keep
-  // them compact while the dedicated confirmation test below proves that a
-  // real RUN pauses for the operator's staging attestation.
+  // them compact while the dedicated gate tests below prove that a real RUN
+  // waits — STEP for the operator's BUILD tap, RUN for the feeder detector.
+  if (event.type === "verified" && state.style === "run"
+      && turn.state.phase === "awaiting-feeder") {
+    return step(turn.state, { type: "feeder-ready", now: event.now + 1 });
+  }
   if (event.type === "verified" && state.style === "run"
       && turn.state.phase === "awaiting-confirm") {
     return step(turn.state, { type: "confirm", now: event.now + 1 });
@@ -200,15 +204,34 @@ describe("runner reducer", () => {
     expect(turn.effects).toEqual([{ kind: "build", command: "B 3 2 1", dry: false }]);
   });
 
-  it("RUN also waits for explicit manual-staging confirmation", () => {
+  it("RUN waits on the feeder detector instead of a BUILD tap, then sends on its own", () => {
     let turn = start([build("a", 3, 2, 1)], "run");
     turn = step(turn.state, { type: "selected", command: "B 3 2 1", now: 110 });
     turn = step(turn.state, { type: "verified", actual: "B 3 2 1", now: 111 });
-    expect(turn.state.phase).toBe("awaiting-confirm");
+    // No BUILD tap in an autonomous RUN — it waits for a block at the feeder.
+    expect(turn.state.phase).toBe("awaiting-feeder");
     expect(turn.state.inFlight).toBe(false);
+    expect(turn.state.pendingConfirm).toBeNull();
     expect(turn.effects).toEqual([]);
-    turn = step(turn.state, { type: "confirm", now: 120 });
+    // A stray confirm cannot launch it — only the feeder detector's word can.
+    expect(step(turn.state, { type: "confirm", now: 115 }).effects).toEqual([]);
+    turn = step(turn.state, { type: "feeder-ready", now: 120 });
     expect(turn.effects).toEqual([{ kind: "build", command: "B 3 2 1", dry: false }]);
+    expect(turn.state.phase).toBe("building");
+  });
+
+  it("RUN waiting too long for a block at the feeder pauses, and CONTINUE resumes waiting", () => {
+    let turn = start([build("a", 3, 2, 1)], "run");
+    turn = step(turn.state, { type: "selected", command: "B 3 2 1", now: 110 });
+    turn = step(turn.state, { type: "verified", actual: "B 3 2 1", now: 111 });
+    expect(turn.state.phase).toBe("awaiting-feeder");
+    turn = step(turn.state, { type: "feeder-timeout", now: 200 });
+    expect(turn.state.phase).toBe("paused");
+    expect(turn.state.pauseReason).toBe("feeder-timeout");
+    expect(turn.effects).toEqual([]);
+    // CONTINUE re-arms the same block; a feeder-timeout never stops the run.
+    turn = step(turn.state, { type: "continue", now: 210 });
+    expect(turn.effects).toEqual([{ kind: "select", col: 3, row: 2, level: 1 }]);
   });
 
   it("DRY RUN uses the same reducer but marks every transport effect dry", () => {

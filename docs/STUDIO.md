@@ -53,7 +53,7 @@ per-file counts as approximate.)
 | `studio/library.test.ts` | 20 | CRUD, index/body split, one corrupt body costing one card, unavailable and full storage, the budget refusal, export/import |
 | `studio/examples.test.ts` | 23 | the three examples as fixtures — round trip, no errors, compiled program, grid bounds, author order |
 | `studio/twin.test.ts` | 60 | every row of Plan 4 §9.2, LOCKED's explicit `animating === false`, the confirmation fold, all fourteen firmware phase ids, "exports no descent timer", and three **recorded** `/api/events` sessions (placed, rejected, aborted) replayed through the real store |
-| `studio/runner.test.ts` | 25 | every named transition, serial phases that never advance the cursor, socket-loss pause and phase-driven resume, HELD locks / SAFE does not, feeder sequencing, abort program position, elapsed/ETA arithmetic, plus an exhaustive all-event walk proving no second build and no serial effect while RUNNING |
+| `studio/runner.test.ts` | 37 | every named transition, serial phases that never advance the cursor, socket-loss pause and phase-driven resume, HELD locks / SAFE does not, feeder sequencing, abort program position, elapsed/ETA arithmetic, plus an exhaustive all-event walk proving no second build and no serial effect while RUNNING |
 | `studio/runner-driver.test.ts` | 7 | the level/select/verify/build/mode request sequence against a mocked API, axis selection, zero-API dry transport and the defensive RUNNING refusal |
 | `studio/run-report.test.ts` | 2 | deterministic event-derived Markdown, verbatim failures, durations, verification and camera evidence |
 | `components/RunnerPanel.test.tsx` | 13 | full dry tower with no API traffic, mismatch stop, feeder cancel, honest stop copy, rejected pause and abort lock, the rig's own phase readout, fourteen phases advancing nothing, stale-on-disconnect, and CLEAR BUILD STATE: it calls `/api/session/reset` as well as clearing the panel, it is live on an idle panel the server still remembers and disabled on `NO_MEMORY`, and a refused reset leaves the panel untouched |
@@ -1110,7 +1110,17 @@ decide ordering, commands, feeder sequence, ETA or failure policy.
 
 STEP reuses the console's existing `BuildButton`, including its expiring
 two-tap arm; `BuildButton` gained only an optional callback at the point where
-it would otherwise call `api.build`. RUN exposes `STOP AFTER THIS BLOCK`, and
+it would otherwise call `api.build`. **RUN has no BUILD tap.** After a cell
+verifies it enters `awaiting-feeder` and waits for the server's
+`feeder_block_present` (`rig.feeder_check`), then dispatches its `M` on the
+`feeder-ready` event with no human input; the server closes the pickup claw
+itself once the firmware reaches `await_manual_close`. The panel arms this by
+`POST /api/auto-pickup` for the life of the run and disarms it on end / unmount;
+STEP and DRY never arm it, and the manual **CLOSE CLAW** override stays rendered
+whenever `cell_phase === "awaiting_manual_close"`. A run that waits
+> 3 min for a block emits `feeder-timeout` → `pauseReason: "feeder-timeout"`;
+`CONTINUE` resumes waiting. See AGENTS.md §2a. RUN also exposes
+`STOP AFTER THIS BLOCK`, and
 the always-visible line underneath says `the block in flight will finish — the
 rig cannot be interrupted`. Pressing it changes the disabled control to
 `STOPPING AFTER THIS BLOCK`; it does not alter the current effect. DRY RUN keeps
@@ -1304,6 +1314,25 @@ first in the diff.
 
 Newest first. One entry per landed change; note anything that contradicts the
 plan or that a future reader could not infer.
+
+### Camera-gated pickup for an autonomous RUN
+
+RUN run-style no longer stops for a **BUILD** tap or a **CLOSE CLAW** tap per
+block. A new reducer phase `awaiting-feeder` (events `feeder-ready`,
+`feeder-timeout`; `pauseReason: "feeder-timeout"`) sits between `verifying` and
+`building`: the panel dispatches `feeder-ready` when the server snapshot's
+`feeder_block_present` is true, driven from `rig.feeder_check.feeder_has_block`
+(presence only, fails closed). The panel arms the server with
+`POST /api/auto-pickup` for the life of a RUN; the driver loop then sends the
+`C` at `await_manual_close` on its own and disarms on lock / `/api/session/reset`.
+STEP, DRY and the single-build console are unchanged and still tap. The manual
+CLOSE CLAW override stays rendered in every style. `StateModel` gained
+`auto_pickup`, `feeder_block_present`, `feeder_block_reason`.
+
+Supervision now ignores the feeder cell entirely: `rig.supervisor.FEEDER_CELL` /
+`FEEDER_RADIUS_CM` drop any detection on or near `[0,0]` before a verdict, so a
+hand-fed block waiting to be picked up is never `FOREIGN` / `MOVED` /
+`DISPLACED`. `runner.test.ts` is 37 (was 25).
 
 ### Fix: CLEAR BUILD STATE cleared the panel and nothing else
 

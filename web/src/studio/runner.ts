@@ -25,9 +25,9 @@ import type { Op } from "./compile";
 
 export type RunStyle = "step" | "run" | "dry";
 export type RunPhase =
-  | "idle" | "arming" | "verifying" | "awaiting-confirm" | "building"
-  | "settled" | "rejected" | "aborted" | "paused" | "stopped-mismatch"
-  | "locked" | "done";
+  | "idle" | "arming" | "verifying" | "awaiting-confirm" | "awaiting-feeder"
+  | "building" | "settled" | "rejected" | "aborted" | "paused"
+  | "stopped-mismatch" | "locked" | "done";
 export type ServerBuildState = "READY" | "RUNNING" | "LOCKED";
 
 export interface RunLogEntry {
@@ -77,7 +77,8 @@ export interface RunState {
   pendingConfirm: "build" | "mode" | null;
   selectedCommand: string | null;
   stopAfterCurrent: boolean;
-  pauseReason: "stale" | "operator-stop" | "server-running" | "board-verdict" | null;
+  pauseReason: "stale" | "operator-stop" | "server-running" | "board-verdict"
+    | "feeder-timeout" | null;
   mismatch: { program: string; rig: string } | null;
   failure: string | null;
   readOnly: boolean;
@@ -104,6 +105,13 @@ export type RunEvent =
   | { type: "selected"; command: string | null; now: number }
   | { type: "verified"; actual: string | null; now: number }
   | { type: "confirm"; now: number }
+  /** RUN style only. The feeder detector says a block is staged at `[0,0]`,
+   *  so the autonomous cycle may send its `M` — this replaces the operator's
+   *  BUILD tap. Driven from the server snapshot by `RunnerPanel`, never timed. */
+  | { type: "feeder-ready"; now: number }
+  /** RUN style only. The run has been waiting for a block at the feeder long
+   *  enough that the operator should be told. Pauses; CONTINUE resumes waiting. */
+  | { type: "feeder-timeout"; now: number }
   | { type: "build-running"; now: number }
   | { type: "build-step"; commandSeq: number | null; step: number; total: number;
       phaseId: string; label: string; action: BuildPhaseAction;
@@ -362,8 +370,15 @@ export function step(state: RunState, event: RunEvent): Turn {
         mismatch: { program: op.text, rig: event.actual ?? "null" },
       });
     }
-    if (state.style !== "dry") {
+    // STEP keeps the deliberate BUILD tap. RUN replaces it with the feeder
+    // detector: the cycle waits in `awaiting-feeder` until the camera confirms
+    // a block is staged at `[0,0]` (`feeder-ready`, driven from the server
+    // snapshot), then sends its `M` with no human input. DRY sends immediately.
+    if (state.style === "step") {
       return noEffects({ ...state, phase: "awaiting-confirm", pendingConfirm: "build" });
+    }
+    if (state.style === "run") {
+      return noEffects({ ...state, phase: "awaiting-feeder", pendingConfirm: null });
     }
     return issueBuild(state, event.now);
   }
@@ -373,6 +388,22 @@ export function step(state: RunState, event: RunEvent): Turn {
     if (state.pendingConfirm === "mode") return issueMode(state, event.now);
     if (state.pendingConfirm === "build") return issueBuild(state, event.now);
     return noEffects(state);
+  }
+
+  if (event.type === "feeder-ready") {
+    // The autonomous equivalent of `confirm` for a build op. Inert unless the
+    // cycle is actually waiting on the feeder, so a stale snapshot cannot
+    // launch a block mid-flight or after a pause.
+    if (state.phase !== "awaiting-feeder") return noEffects(state);
+    return issueBuild(state, event.now);
+  }
+
+  if (event.type === "feeder-timeout") {
+    if (state.phase !== "awaiting-feeder") return noEffects(state);
+    return noEffects({
+      ...state, phase: "paused", pauseReason: "feeder-timeout",
+      failure: "no block staged at the feeder — drop one and CONTINUE",
+    });
   }
 
   if (event.type === "build-running") {

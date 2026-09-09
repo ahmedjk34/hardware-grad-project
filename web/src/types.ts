@@ -135,6 +135,15 @@ export interface StateModel {
   /** The outcome of the last operator CORRECTION action this session, or null.
    *  The banner shows it; the runner resumes only after the board re-verifies. */
   last_correction?: CorrectionResult | null;
+  /** Camera-gated automatic pickup, armed only for an autonomous RUN. When
+   *  armed, the server closes the claw once `feeder_block_present` is true and
+   *  the firmware is at `await_manual_close`. */
+  auto_pickup?: boolean;
+  /** `rig.feeder_check` on the current frame — is a block staged at `[0,0]`.
+   *  Fails closed: stale / no-vision / uncalibrated all read false. */
+  feeder_block_present?: boolean;
+  /** The short sentence behind `feeder_block_present`. */
+  feeder_block_reason?: string;
   views: Record<string, boolean>;
   geometry: Geometry | null;
 }

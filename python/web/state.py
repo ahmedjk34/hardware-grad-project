@@ -657,6 +657,19 @@ class StateModel(BaseModel):
     #: `{result: placed|rejected|aborted, reason, cell: [c,r], verdict}`. The
     #: runner shows it and resumes only after the board re-verifies (D12).
     last_correction: dict[str, Any] | None
+    #: Camera-gated automatic pickup for an autonomous RUN. `auto_pickup` is
+    #: armed by `POST /api/auto-pickup` while a RUN-style program runs and
+    #: disarmed when it ends; STEP, DRY and the single-build console never arm
+    #: it. `feeder_block_present` is `rig.feeder_check.feeder_has_block` on the
+    #: current frame — the driver loop closes the claw on its own once this is
+    #: true AND the firmware has reached `await_manual_close`. The manual CLOSE
+    #: CLAW button stays available as the override in every style.
+    auto_pickup: bool
+    feeder_block_present: bool
+    #: The short sentence behind `feeder_block_present` — "block staged 0.6 cm
+    #: from the feeder centre", "camera frame is stale", "no block detected at
+    #: the feeder". Shown while an autonomous RUN waits for the next block.
+    feeder_block_reason: str
     views: dict[str, bool]
     geometry: dict[str, Any] | None
 
@@ -722,6 +735,10 @@ def build_state(app) -> StateModel:
             getattr(app.state, "supervision", None),
             acknowledged=bool(getattr(app.state, "supervision_acknowledged", False))),
         last_correction=getattr(app.state, "last_correction_result", None),
+        auto_pickup=bool(getattr(app.state, "auto_pickup", False)),
+        feeder_block_present=bool(getattr(app.state, "feeder_block_present", False)),
+        feeder_block_reason=str(getattr(app.state, "feeder_block_reason",
+                                        "no camera frame yet")),
         views=dict(app.state.views),
         geometry=build_geometry(frame, controller.selected) if frame is not None else None,
     )

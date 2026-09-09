@@ -225,11 +225,24 @@ Switching boards is then a one-line edit to `rig.json`.
 ### 2a. Manual pickup handoff — strict operator gate
 
 Every production placement is one indivisible Pi-owned operation. The operator
-places one block at `[0,0]` and explicitly confirms staging. The guarded path
-then sends Mega `M <col> <row> <level>`. `M` performs the validated approach,
-lowers the **open** claw, and pauses. Only after firmware announces
-`await_manual_close` may the UI send its one `C` byte to close the claw and
-finish the placement cycle.
+places one block at `[0,0]` and staging is confirmed. The guarded path then
+sends Mega `M <col> <row> <level>`. `M` performs the validated approach, lowers
+the **open** claw, and pauses. Only after firmware announces
+`await_manual_close` is the one `C` byte sent to close the claw and finish the
+placement cycle.
+
+**Two ways staging is confirmed.** A manual tap (STEP run-style, the
+single-build console) — an operator presses CLOSE CLAW, `POST /api/manual-close`
+sends the `C`. Or, for an autonomous RUN only, the **feeder detector**: the
+camera confirms a block is on the feeder cell (`rig.feeder_check.feeder_has_block`,
+armed by `POST /api/auto-pickup`), and the driver loop sends the `C` itself once
+`cell_phase == "awaiting_manual_close"`. `feeder_has_block` fails **closed** — no
+map, no vision, a stale frame, a block out of range all read "absent", so the
+firmware then just waits for the manual `C` exactly as before. The autonomous
+RUN also gates its **next `M` dispatch** on the same detector: no block at the
+feeder, no command sent, the rig idles parked. The manual CLOSE CLAW button
+stays live as the override in every run-style. `auto_pickup` is disarmed on a
+lock and on `/api/session/reset`.
 
 `BuildController` + `BuildJob` remain the outer single-operation guard;
 `PickupCoordinator` owns the pickup lock and the firmware-gated close. Any Mega
@@ -237,6 +250,12 @@ non-success after staging locks the session because pickup/claw state may be
 unknown. Direct `B` calls are reserved for explicit calibration or
 commissioning paths where a person has staged the block and accepts bypassing
 the open-claw alignment pause.
+
+**The feeder cell is not the board.** `rig.supervisor` (`FEEDER_CELL`,
+`FEEDER_RADIUS_CM`) drops every detection on or within a small radius of `[0,0]`
+before any verdict or hysteresis — a hand-fed block there is never `FOREIGN` /
+`MOVED` / `DISPLACED` / `DISAGREES`. `feeder_has_block` is the *only* thing that
+reads that region, and it never touches a verdict.
 
 ### 3. Grid dimensions — the one the firmware forgets
 

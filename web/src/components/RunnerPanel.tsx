@@ -14,7 +14,7 @@ import { loadTwinModel } from "../studio/twin";
 import {
   buildPosition, currentOp, currentOperationText, stagingPrompt, initialRun,
   programRows, runTiming, step,
-  type RunEvent, type RunState, type RunStyle,
+  type RunEvent, type RunPhase, type RunState, type RunStyle,
 } from "../studio/runner";
 import { captureCameraThumbnail, downloadMarkdown } from "../studio/run-report";
 import { executeEffect, type RunnerApi } from "../studio/runner-driver";
@@ -216,6 +216,53 @@ export function RunnerPanel({ state, connected, modelId, api, delay, onActiveCha
     });
   }, [boardVerdict, boardSeverity, acknowledged, applyEvent]);
 
+  // ── camera-gated automatic pickup (RUN style only) ──────────────────────
+  // Armed for the life of an autonomous RUN and nothing else. While armed the
+  // SERVER closes the claw once its own feeder detector confirms a block and
+  // the firmware is at `await_manual_close`; this panel only tells it when to
+  // arm. STEP and DRY never arm it, and the manual CLOSE CLAW button below
+  // stays live as the override in every style.
+  const RUN_OVER: RunPhase[] = ["idle", "done", "locked", "stopped-mismatch"];
+  const wantsAutoPickup = style === "run" && !RUN_OVER.includes(run.phase);
+  const autoPickupArmed = useRef(false);
+  const setAutoPickup = useCallback((enabled: boolean) => {
+    void (api?.setAutoPickup ?? transportApi.setAutoPickup)(enabled).catch(() => {
+      // A failed arm/disarm is not worth interrupting a run for: the server
+      // defaults to disarmed, and a stale-armed flag only ever means the
+      // firmware waits for a manual close it would have got anyway.
+    });
+  }, [api]);
+  useEffect(() => {
+    if (wantsAutoPickup === autoPickupArmed.current) return;
+    autoPickupArmed.current = wantsAutoPickup;
+    setAutoPickup(wantsAutoPickup);
+  }, [wantsAutoPickup, setAutoPickup]);
+  useEffect(() => () => {
+    if (autoPickupArmed.current) {
+      autoPickupArmed.current = false;
+      setAutoPickup(false);
+    }
+  }, [setAutoPickup]);
+
+  // RUN's replacement for the BUILD tap: the server says a block is staged at
+  // the feeder, so the next `M` may go. Driven from the snapshot, never timed.
+  const feederPresent = state.feeder_block_present ?? false;
+  useEffect(() => {
+    if (run.phase !== "awaiting-feeder" || !feederPresent) return;
+    applyEvent({ type: "feeder-ready", now: Date.now() });
+  }, [run.phase, feederPresent, applyEvent]);
+  // Q6: if a RUN has been waiting for a block at the feeder this long, tell the
+  // operator. It is not stuck — the firmware is simply waiting for a hand-fed
+  // block — so this pauses rather than stops, and CONTINUE resumes waiting.
+  const FEEDER_WAIT_TIMEOUT_MS = 180_000;
+  useEffect(() => {
+    if (run.phase !== "awaiting-feeder") return;
+    const id = window.setTimeout(
+      () => applyEvent({ type: "feeder-timeout", now: Date.now() }),
+      FEEDER_WAIT_TIMEOUT_MS);
+    return () => window.clearTimeout(id);
+  }, [run.phase, applyEvent]);
+
   const isActive = activePhase(run.phase);
   useEffect(() => onActiveChange?.(isActive), [isActive, onActiveChange]);
   useEffect(() => {
@@ -398,6 +445,18 @@ export function RunnerPanel({ state, connected, modelId, api, delay, onActiveCha
                      onBuild={() => applyEvent({
                        type: "confirm", now: Date.now(),
                      })} />
+      )}
+
+      {run.phase === "awaiting-feeder" && (
+        <div className="runner-warning" role="status" aria-live="polite">
+          <strong>WAITING FOR A BLOCK AT THE FEEDER</strong>
+          <span>
+            {feederPresent
+              ? "Block detected — sending the next placement."
+              : (state.feeder_block_reason
+                 ?? "Stage the next block at the pickup cell. The claw closes on its own.")}
+          </span>
+        </div>
       )}
 
       {state.cell_phase === "awaiting_manual_close" && run.inFlight && (

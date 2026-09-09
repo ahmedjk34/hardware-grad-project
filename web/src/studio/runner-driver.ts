@@ -19,6 +19,10 @@ export interface RunnerApi {
   mode(next: "vertical" | "horizontal"): Promise<StateModel>;
   shift(mode: "vertical" | "horizontal", x_cm: number, y_cm: number): Promise<StateModel>;
   closeManualPick?(): Promise<StateModel>;
+  /** Arm / disarm camera-gated automatic pickup for an autonomous RUN. Not a
+   *  reducer effect — the panel calls it directly on RUN start / end, like
+   *  `closeManualPick`, because it moves nothing and belongs to no op. */
+  setAutoPickup?(enabled: boolean): Promise<StateModel>;
   /** CLEAR BUILD STATE. Not a reducer effect — the button calls it directly,
    *  like `closeManualPick`, because it moves nothing and belongs to no op. */
   resetSession?(): Promise<StateModel>;

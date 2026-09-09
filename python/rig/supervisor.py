@@ -142,6 +142,49 @@ def _sorted(cells) -> tuple[Cell, ...]:
 #: the machine in 99.8% of windows on a board that was completely correct.
 PLACEMENTS = ("cell", "gap", "margin", "outside")
 
+#: The pickup / feeder cell. Blocks are hand-fed here and picked up from here;
+#: nothing is ever built on it (AGENTS.md §3b), so the ledger's expected
+#: occupancy never contains it. A block sitting on it — or a little off it,
+#: because a hand-fed block is not lattice-perfect — is the FEEDER, not the
+#: board, and must never become FOREIGN / MOVED / DISPLACED / DISAGREES.
+#: :func:`observe` drops every detection within :data:`FEEDER_RADIUS_CM` of this
+#: cell's centre before the classifier or the hysteresis ever sees it, and
+#: :meth:`Supervisor.step` keeps it out of the `interest` set.
+#:
+#: The one thing the camera DOES say about this cell — "is a block staged here
+#: right now" — is :func:`rig.feeder_check.feeder_has_block`, a separate,
+#: single-purpose, fail-closed read that never touches a verdict.
+FEEDER_CELL: Cell = (0, 0)
+
+#: Radius around the feeder cell centre, in workspace cm, inside which a
+#: detection is feeder business and not board business. Kept under half the
+#: smaller vertical pitch (block_x 2.2 + gap 1.6 -> pitch 3.8, half = 1.9) so a
+#: real placement on cell [1,0] or [0,1] can never be swallowed by it, while a
+#: hand-fed block that landed a centimetre off centre still counts as the
+#: feeder. PROVISIONAL — wants the same rig measurement the other constants in
+#: this module carry (audit §5.2).
+FEEDER_RADIUS_CM = 1.6
+
+
+def _feeder_centre_cm(workspace):
+    """The feeder cell's centre in workspace cm, or None with no physical grid."""
+    grid = getattr(workspace, "mapped_grid", None)
+    if grid is None:
+        return None
+    try:
+        return grid.cell_center_cm(int(FEEDER_CELL[0]), int(FEEDER_CELL[1]))
+    except (ValueError, TypeError):
+        return None
+
+
+def _is_feeder(cell, cm, feeder_cm) -> bool:
+    """Is this detection the feeder rather than the board? See :data:`FEEDER_CELL`."""
+    if cell is not None and (int(cell[0]), int(cell[1])) == FEEDER_CELL:
+        return True
+    if feeder_cm is None or cm is None:
+        return False
+    return math.hypot(cm[0] - feeder_cm[0], cm[1] - feeder_cm[1]) <= FEEDER_RADIUS_CM
+
 
 @dataclass(frozen=True)
 class DetectionRecord:
@@ -389,8 +432,16 @@ def observe(detections, workspace, image_size) -> Observation:
     cell_sizes: dict[Cell, tuple[float, float]] = {}
     details: list[DetectionRecord] = []
     counts = {name: 0 for name in PLACEMENTS}
+    feeder_cm = _feeder_centre_cm(workspace)
     for detection in detections:
         cell, placement = locate(workspace, detection.center, image_size)
+        cm = point_cm(workspace, detection.center, image_size)
+        # The feeder cell is where blocks are hand-fed and picked up from. A
+        # detection on or near it is the FEEDER, never the board — drop it
+        # whole, before any count, record, cell or gap array, so no verdict and
+        # no hysteresis can ever be built from it. See `FEEDER_CELL`.
+        if _is_feeder(cell, cm, feeder_cm):
+            continue
         counts[placement] += 1
         # `own_angle` / `own_size` are the block's pre-rectification measurement
         # — `block_outline._rectify` would otherwise hand back the lattice
@@ -399,7 +450,6 @@ def observe(detections, workspace, image_size) -> Observation:
                       if getattr(detection, "own_angle", None) is not None
                       else getattr(detection, "angle", 0.0) or 0.0)
         size = _detection_size_cm(workspace, detection, image_size)
-        cm = point_cm(workspace, detection.center, image_size)
         # ITEM 6: record EVERY detection whole, before any per-cell collapse.
         details.append(DetectionRecord(
             placement=placement, cell=cell, centre_cm=cm, angle_deg=angle,
@@ -548,8 +598,12 @@ def classify(mode: str, expected, observed, *, top_levels=None,
     """
     top_levels = top_levels or {}
     refused = set(unjudged_cells(top_levels))
-    expected = set(expected) - refused
-    observed = set(observed) - refused
+    # The feeder cell is never on the board's ledger and a block there is the
+    # hand-fed pickup, not a placement — keep it out of BOTH sides so it can
+    # never be missing, unexpected or in a gap. `observe()` already strips
+    # feeder detections; this is the belt-and-braces for a synthetic caller.
+    expected = (set(expected) - refused) - {FEEDER_CELL}
+    observed = (set(observed) - refused) - {FEEDER_CELL}
 
     missing = expected - observed
     unexpected = observed - expected
@@ -1373,6 +1427,10 @@ class Supervisor:
         expected = ledger.expected_occupancy(mode, epoch)
         top_levels = ledger.expected_top_level(mode, epoch)
         interest = set(expected) | set(observation.cells)
+        # The feeder cell is not the board (see `FEEDER_CELL`). `observe()`
+        # already strips it from `observation.cells` and the ledger never lists
+        # it; this keeps a stray one out of the per-cell hysteresis regardless.
+        interest.discard(FEEDER_CELL)
         self._history.update(interest, observation.cells)
         self._gap_history.update(observation)
         # ITEM 6 + 9: the CORRECTION pick target's track, from the SAME

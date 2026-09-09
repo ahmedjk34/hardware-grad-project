@@ -74,6 +74,12 @@ class ManualCloseRequest(BaseModel):
     confirm: bool = True
 
 
+class AutoPickupRequest(BaseModel):
+    """Arm or disarm camera-gated automatic pickup for an autonomous RUN."""
+
+    enabled: bool
+
+
 class CorrectRequest(BaseModel):
     """The operator CORRECTION action. `confirm` is the explicit consent the
     confirm dialog collects — a correction drives the claw into a finished
@@ -517,6 +523,31 @@ async def manual_close(request: ManualCloseRequest, http: Request) -> StateModel
     return _state(app)
 
 
+@router.post("/auto-pickup", response_model=StateModel)
+async def set_auto_pickup(request: AutoPickupRequest, http: Request) -> StateModel:
+    """Arm / disarm camera-gated automatic pickup (AGENTS.md §2a).
+
+    When armed, the driver loop closes the claw on its own once the feeder
+    detector confirms a block is staged at ``[0,0]`` and the firmware has
+    reached ``await_manual_close``. It sends the same single ``C`` byte the
+    manual button does and nothing else; ``feeder_has_block`` fails closed, so
+    when it cannot see a block the firmware just keeps waiting exactly as a
+    manual pickup would. Only the RUN run-style arms this; STEP, DRY and the
+    single-build console never do, and the manual CLOSE CLAW button stays live
+    as the override in every style.
+
+    Moves nothing itself, so it is not behind :func:`require_mutable` — it has
+    to be armable at the start of a RUN before the first block and re-settable
+    while one is in flight.
+    """
+    app = http.app
+    app.state.auto_pickup = bool(request.enabled)
+    build_log.build.note(
+        f"auto-pickup {'armed' if request.enabled else 'disarmed'}")
+    _signal(app)
+    return _state(app)
+
+
 @router.post("/session/reset", response_model=StateModel)
 async def reset_session(http: Request) -> StateModel:
     """CLEAR BUILD STATE — start over on a board nobody has looked at yet.
@@ -578,6 +609,9 @@ async def reset_session(http: Request) -> StateModel:
     controller.clear_selection()
     controller.last_result = None
     app.state.cell_phase = "idle"
+    # A cleared session is starting over; nothing autonomous should carry over.
+    app.state.auto_pickup = False
+    app.state.awaiting_close_since = None
 
     build_log.placements.note("operator cleared the build state — new board epoch")
     build_log.build.note("session reset: ledger epoch advanced, supervision dropped")

@@ -51,10 +51,19 @@ const noMemory = (): Partial<StateModel> => ({
 });
 
 async function confirmStaged(api: RunnerApi): Promise<void> {
-  await waitFor(() => expect(screen.getByRole("button", { name: "BUILD" })).toBeEnabled());
-  fireEvent.click(screen.getByRole("button", { name: "BUILD" }));
-  fireEvent.click(screen.getByRole("button", { name: /CONFIRM B/ }));
-  await waitFor(() => expect(api.build).toHaveBeenCalled());
+  // STEP shows a BUILD → CONFIRM pair. An autonomous RUN has no tap: it sends
+  // as soon as the feeder detector reports a block, which the dull test state
+  // does. Handle whichever this render is, and wait for a NEW build call so a
+  // second staged block is not satisfied by the first one's dispatch.
+  const build = api.build as ReturnType<typeof vi.fn>;
+  const before = build.mock.calls.length;
+  const buildButton = screen.queryByRole("button", { name: "BUILD" });
+  if (buildButton) {
+    await waitFor(() => expect(buildButton).toBeEnabled());
+    fireEvent.click(buildButton);
+    fireEvent.click(screen.getByRole("button", { name: /CONFIRM B/ }));
+  }
+  await waitFor(() => expect(build.mock.calls.length).toBeGreaterThan(before));
 }
 
 describe("RunnerPanel", () => {

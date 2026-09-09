@@ -41,6 +41,7 @@ from vision.block_outline import detect_aligned_blocks
 from vision.camera_source import LatestFramePump, open_camera
 from vision.color_grid import ColorGridSpec
 from vision.fisheye import INTERPOLATIONS, build_maps, undistort
+from vision.vertical_cell_exclusion import exclude_vertical_cell_remnants
 
 
 @dataclass(frozen=True)
@@ -191,8 +192,11 @@ class ConsolePipeline:
         # gone from the rig there is nothing off the lattice that is not a real
         # block. The overlay draws them at their measured position, unnormalised.
         self.analysis = AnalysisWorker(
-            lambda frame, **kwargs: detect_aligned_blocks(
-                frame, grid=self.grid, include_rejected=True, **kwargs),
+            lambda frame, vertical_workspace=None, image_size=None, **kwargs:
+                exclude_vertical_cell_remnants(
+                    detect_aligned_blocks(
+                        frame, grid=self.grid, include_rejected=True, **kwargs),
+                    vertical_workspace, image_size),
             max_hz=self.analysis_hz, consume_each=True)
         self.camera = open_camera(self.camera_backend or backend, size, device)
         self.camera.apply(sensor)
@@ -333,6 +337,21 @@ class ConsolePipeline:
             image_size = view.shape[1::-1]
             workspace = self.saved_workspace or approximate_workspace(
                 self.grid, image_size, self.projection)
+            # A calibrated horizontal map describes the same fixed camera /
+            # holder envelope as the vertical grid.  Reuse its four corners to
+            # classify a detected footprint against vertical cells before that
+            # detection reaches the overlay or supervision.  No saved map (or
+            # an unexpected map error) is fail-open: retain every detection.
+            vertical_workspace = None
+            if self.grid.mode == "horizontal" and self.saved_workspace is not None:
+                try:
+                    vertical_grid = MachineGrid.from_config(
+                        load_rig_config(self.rig_config_path, reload=True),
+                        mode="vertical")
+                    vertical_workspace = WorkspaceMap.from_grid_normalized(
+                        vertical_grid, workspace.corners, workspace.projection)
+                except (TypeError, ValueError):
+                    vertical_workspace = None
             view.flags.writeable = False
             context = FrameAnalysisContext(
                 view=view,
@@ -347,7 +366,8 @@ class ConsolePipeline:
             )
             self.analysis.submit(
                 view, snapshot.sequence, self._map_generation, context=context,
-                color_threshold=self.color_threshold, min_area=self.min_area)
+                color_threshold=self.color_threshold, min_area=self.min_area,
+                vertical_workspace=vertical_workspace, image_size=image_size)
             self.paper.submit(view, snapshot.sequence, self._map_generation)
 
         self.paper.poll(self._map_generation)

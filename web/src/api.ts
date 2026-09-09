@@ -25,6 +25,11 @@ export const selectAxis = (axis: "col" | "row", value: number) => post<StateMode
 export const build = (command: string) =>
   post<StateModel>("build", { confirm: true, command });
 export const closeManualPick = () => post<StateModel>("manual-close", { confirm: true });
+/** Arm / disarm camera-gated automatic pickup. Only an autonomous RUN arms it;
+ *  the server then closes the claw itself once a block is detected at the
+ *  feeder and the firmware is waiting. Moves nothing. */
+export const setAutoPickup = (enabled: boolean) =>
+  post<StateModel>("auto-pickup", { enabled });
 /** CLEAR BUILD STATE — forget the board and every judgement derived from it.
  *  Retires the as-built ledger's placements into a new board epoch, drops the
  *  observer's hysteresis, the published verdict and its baseline frame, the

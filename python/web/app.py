@@ -38,8 +38,9 @@ from rig import build_log
 from rig.build_controller import BuildController
 from rig.build_job import BuildJob
 from rig.console_pipeline import ConsolePipeline
+from rig.feeder_check import feeder_has_block
 from rig.mock_board import MockBoard
-from rig.link import PLACED
+from rig.link import PLACED, RigError
 from rig.pickup import PickupCoordinator
 from rig.placement_ledger import PlacementLedger
 from rig.supervisor import (
@@ -70,6 +71,10 @@ _SEMANTIC_FIELDS = (
     "build_total_steps", "build_phase", "build_phase_status",
     "build_release_confirmed", "views",
     "gantry_connected", "cell_phase",
+    # An autonomous RUN reacts to these to send the next block and to close the
+    # claw, so they must reach the client at the driver's full rate rather than
+    # on the 5 Hz geometry throttle.
+    "auto_pickup", "feeder_block_present",
     # M3a. The per-build verdict is the one camera opinion the run report
     # keeps, so it publishes IMMEDIATELY rather than waiting on the 5 Hz
     # geometry throttle — a verification that arrives a fifth of a second late
@@ -184,9 +189,43 @@ async def _drive_pipeline(app: FastAPI, pipeline: ConsolePipeline,
                 # work and goes to the same one owner thread (AGENTS.md §7);
                 # the set maths it feeds stays on the loop.
                 await _supervise(app, frame, job, loop, executor)
+                _auto_pickup(app, frame)
             await asyncio.sleep(interval_s)
     except asyncio.CancelledError:
         raise
+
+
+def _auto_pickup(app: FastAPI, frame) -> None:
+    """Camera-gated pickup close for an autonomous RUN. Moves the rig only by
+    sending the same one `C` byte the manual button does, and only after the
+    feeder detector confirms a block is staged. Never assumes 'no block' means
+    'proceed': `feeder_has_block` fails closed, so any doubt just leaves the
+    firmware waiting exactly as a manual pickup would — and the RunnerPanel
+    surfaces a prompt if that wait runs long (a `feeder-timeout`).
+    """
+    present, reason = feeder_has_block(frame)
+    app.state.feeder_block_present = present
+    app.state.feeder_block_reason = reason
+
+    was_awaiting = app.state.awaiting_close_since is not None
+    if app.state.cell_phase != "awaiting_manual_close":
+        app.state.awaiting_close_since = None
+        return
+    if not was_awaiting:
+        app.state.awaiting_close_since = time.monotonic()
+
+    if not (app.state.auto_pickup and present):
+        return
+    try:
+        app.state.pickup.close_manual_pick()
+    except RigError:
+        # `close_manual_pick` refuses unless the coordinator is still in its
+        # `awaiting_manual_close` phase — a second pass, or a close that
+        # already went out manually, lands here and is a no-op.
+        return
+    app.state.awaiting_close_since = None
+    build_log.build.note(f"auto-pickup: closed the claw — {reason}")
+    publish_state(app, force=True)
 
 
 async def _supervise(app: FastAPI, frame, job: BuildJob, loop,
@@ -422,6 +461,10 @@ def _publish_build_result(app: FastAPI, outcome) -> None:
     controller = app.state.controller
     result = outcome.result
     locked = bool(outcome.locked or controller.locked)
+    if locked:
+        # A locked session needs a human and a service restart; nothing
+        # automatic should still be poised to send a `C`.
+        app.state.auto_pickup = False
     reason = None
     if result is not None:
         reason = result.reason or None
@@ -483,6 +526,19 @@ def create_app(options: ConsoleAppOptions | None = None) -> FastAPI:
         app.state.driver = None
         app.state.mock_board = None
         app.state.cell_phase = "idle"
+        #: Camera-gated automatic pickup for an autonomous RUN (AGENTS.md §2a).
+        #: `auto_pickup` is armed by `POST /api/auto-pickup` for the life of a
+        #: RUN-style program; the driver loop then closes the claw itself once
+        #: `feeder_block_present` is true and the firmware is at
+        #: `await_manual_close`. STEP / DRY / single-build never arm it, and the
+        #: manual CLOSE CLAW button is always the override.
+        app.state.auto_pickup = False
+        app.state.feeder_block_present = False
+        app.state.feeder_block_reason = "no camera frame yet"
+        #: When the firmware entered `await_manual_close`, monotonic seconds —
+        #: so an autonomous RUN that has been waiting for a block too long can
+        #: be surfaced. None whenever the claw is not waiting.
+        app.state.awaiting_close_since = None
         app.state.calibration_points = []
         # The placed-block calibration run, when one is in progress.
         # Its lock is what stops two impatient clicks from issuing two

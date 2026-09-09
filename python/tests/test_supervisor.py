@@ -110,6 +110,53 @@ check("REGRESSION: an off-board detection NEVER produces FOREIGN",
       verdict.verdict == "VERIFIED", verdict.verdict)
 
 
+# --- the feeder cell [0,0] is not the board ------------------------------- #
+#
+# Blocks are hand-fed at [0,0] and picked up from it; the ledger never records
+# a placement there. A detection on it — or a centimetre off it, because a
+# hand-fed block is not lattice-perfect — must never reach the classifier.
+
+from rig.supervisor import FEEDER_CELL, FEEDER_RADIUS_CM  # noqa: E402
+
+feeder_centre = GRID.cell_center_cm(*FEEDER_CELL)
+just_off = (feeder_centre[0] + FEEDER_RADIUS_CM * 0.5, feeder_centre[1])
+past_it = (feeder_centre[0] + FEEDER_RADIUS_CM + 1.0, feeder_centre[1])
+
+fed = observe([FakeDetection(at_cm(*feeder_centre)),
+               FakeDetection(at_cm(*just_off)),
+               FakeDetection(at_cm(*centre))], MAP, SIZE)
+check("a block ON the feeder cell is dropped from observe()",
+      fed.cells == ((3, 2),), str(fed.cells))
+check("a block just OFF the feeder centre is dropped too (hand-fed slop)",
+      fed.in_gap == 0 and fed.off_board == 0, f"gap={fed.in_gap} off={fed.off_board}")
+check("the feeder detection leaves no track/detail record",
+      all(r.cell != FEEDER_CELL for r in fed.detections_detail))
+
+check("a feeder block never reads FOREIGN through classify()",
+      classify("vertical", {(3, 2)}, fed.cells).verdict == "VERIFIED")
+check("classify() also strips [0,0] from a synthetic caller's sets",
+      classify("vertical", {(3, 2)}, {(3, 2), FEEDER_CELL}).verdict == "VERIFIED")
+check("a real block one full cell away from the feeder is STILL judged",
+      classify("vertical", set(), {(1, 0)}).verdict == "FOREIGN")
+
+# End to end: a full board plus a hand-fed block at the feeder stays VERIFIED,
+# and the feeder block never warms a cell in the hysteresis.
+sup_fed = supervisor()
+led_fed = ledger_with("vertical", [(2, 1, 0), (3, 1, 0)])
+for _ in range(5):  # settle_m
+    obs = observe([FakeDetection(at_cm(*GRID.cell_center_cm(2, 1))),
+                   FakeDetection(at_cm(*GRID.cell_center_cm(3, 1))),
+                   FakeDetection(at_cm(*feeder_centre))], MAP, SIZE)
+    s_fed, r_fed, v_fed = sup_fed.step(
+        mode="vertical", ledger=led_fed, observation=obs,
+        interlocks=Interlocks(parked=True, calibrated=True, quiet=True))
+check("a hand-fed feeder block leaves a correct board VERIFIED end to end",
+      v_fed is not None and v_fed.verdict == "VERIFIED", f"{s_fed} {r_fed} {v_fed}")
+check("the feeder cell is never in expected/observed/unjudged",
+      v_fed is not None and FEEDER_CELL not in set(v_fed.observed)
+      and FEEDER_CELL not in set(v_fed.unjudged))
+
+
 # --- observe() retains a pick coordinate for the CORRECTION action -------- #
 #
 # The classifier never looks at these; the operator CORRECTION button does.
