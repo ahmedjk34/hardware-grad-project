@@ -142,39 +142,39 @@ def _sorted(cells) -> tuple[Cell, ...]:
 #: the machine in 99.8% of windows on a board that was completely correct.
 PLACEMENTS = ("cell", "gap", "margin", "outside")
 
-#: The pickup / feeder cell. Blocks are hand-fed here and picked up from here;
-#: nothing is ever built on it (AGENTS.md §3b), so the ledger's expected
-#: occupancy never contains it. A block sitting on it — or a little off it,
-#: because a hand-fed block is not lattice-perfect — is the FEEDER, not the
-#: board, and must never become FOREIGN / MOVED / DISPLACED / DISAGREES.
-#: :func:`observe` drops every detection within :data:`FEEDER_RADIUS_CM` of this
-#: cell's centre before the classifier or the hysteresis ever sees it, and
-#: :meth:`Supervisor.step` keeps it out of the `interest` set.
-#:
-#: The one thing the camera DOES say about this cell — "is a block staged here
-#: right now" — is :func:`rig.feeder_check.feeder_has_block`, a separate,
-#: single-purpose, fail-closed read that never touches a verdict.
+#: The index that is a no-op / pickup sentinel in EITHER grid: `B 0 0 <level>`
+#: never places (AGENTS.md §3b). A detection that `locate()` snaps to this cell
+#: is feeder business, not board business, in both modes — so horizontal `[0,0]`
+#: stays carved out exactly as vertical `[0,0]` does.
 FEEDER_CELL: Cell = (0, 0)
 
-#: Radius around the feeder cell centre, in workspace cm, inside which a
-#: detection is feeder business and not board business. Kept under half the
-#: smaller vertical pitch (block_x 2.2 + gap 1.6 -> pitch 3.8, half = 1.9) so a
-#: real placement on cell [1,0] or [0,1] can never be swallowed by it, while a
-#: hand-fed block that landed a centimetre off centre still counts as the
-#: feeder. PROVISIONAL — wants the same rig measurement the other constants in
-#: this module carry (audit §5.2).
+#: Radius around the PHYSICAL feeder, in workspace cm, inside which a detection
+#: is feeder business and not board business. Kept under half the smaller
+#: vertical pitch (block_x 2.2 + gap 1.6 -> pitch 3.8, half = 1.9) so a real
+#: placement on cell [1,0] / [0,1] (vertical) or [0,0] (horizontal, registered
+#: +1.9 cm out) can never be swallowed by it, while a hand-fed block that
+#: landed a centimetre off centre still counts as the feeder. PROVISIONAL —
+#: wants the same rig measurement the other constants in this module carry
+#: (audit §5.2).
 FEEDER_RADIUS_CM = 1.6
 
 
 def _feeder_centre_cm(workspace):
-    """The feeder cell's centre in workspace cm, or None with no physical grid."""
+    """The PHYSICAL feeder in workspace cm, or None with no physical grid.
+
+    The feeder never moves: a block is always picked up STANDING at the vertical
+    grid's `[0,0]`, which is the machine home corner — cm `(0, 0)` in the map
+    frame (`+` away from each home switch, AGENTS.md Rule 0). In HORIZONTAL mode
+    the pickup is still "a plain home to raw `[0,0]`" (AGENTS.md §3a); it is
+    NOT horizontal `[0,0]`, which is registered `+1.9 cm` out on both axes and
+    is a different point on the board. So this is `(0, 0)` in both modes, never
+    `active_grid.cell_center_cm(0, 0)`. The pickup also never rides the live
+    grid shift, so there is nothing to add here.
+    """
     grid = getattr(workspace, "mapped_grid", None)
     if grid is None:
         return None
-    try:
-        return grid.cell_center_cm(int(FEEDER_CELL[0]), int(FEEDER_CELL[1]))
-    except (ValueError, TypeError):
-        return None
+    return (0.0, 0.0)
 
 
 def _is_feeder(cell, cm, feeder_cm) -> bool:

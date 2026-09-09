@@ -40,6 +40,43 @@ def _static_grid(workspace, image_size: tuple[int, int]) -> tuple[dict[str, Any]
     return cached
 
 
+def _feeder_marker(workspace, image_size: tuple[int, int]) -> dict[str, Any] | None:
+    """A faint marker at the PHYSICAL feeder — the machine home corner, i.e. the
+    VERTICAL grid's `[0,0]`, in BOTH modes.
+
+    In vertical mode it sits under the drawn `[0,0]` cell. In HORIZONTAL mode
+    the drawn `[0,0]` cell is registered `+1.9 cm` out (AGENTS.md §3a) but the
+    pickup is still "a plain home to raw `[0,0]`", so the true feeder is a
+    distinct, otherwise-unmarked point — this is what draws it. The browser
+    renders it faintly; it is where a block is hand-fed, never a build target.
+    """
+    grid = getattr(workspace, "mapped_grid", None)
+    if grid is None:
+        return None
+    from rig.supervisor import FEEDER_RADIUS_CM
+
+    w_cm = float(grid.workspace_width_cm)
+    h_cm = float(grid.workspace_height_cm)
+    if w_cm <= 0 or h_cm <= 0:
+        return None
+    r = float(FEEDER_RADIUS_CM)
+    corners_cm = ((-r, -r), (r, -r), (r, r), (-r, r))
+    polygon = [
+        [float(x), float(y)]
+        for x, y in (workspace.pixel_at(cx / w_cm, cy / h_cm, image_size)
+                     for cx, cy in corners_cm)
+    ]
+    centre = workspace.pixel_at(0.0, 0.0, image_size)
+    return {
+        "mode": grid.mode,
+        "center": [float(centre[0]), float(centre[1])],
+        "polygon": polygon,
+        # True when the marker does NOT coincide with the drawn `[0,0]` cell —
+        # i.e. horizontal mode — so the browser can label it.
+        "offset_from_cell": grid.mode != "vertical",
+    }
+
+
 def _colour_name(hue: float) -> str:
     """Give the browser a stable, small display palette from OpenCV HSV hue."""
     hue = float(hue)
@@ -80,6 +117,7 @@ def build_geometry(frame, selected: tuple[int, int] | None) -> dict[str, Any]:
         "calibrated": bool(frame.calibrated),
         "grid": list(_static_grid(workspace, image_size)),
         "selected": selected_geometry,
+        "feeder": _feeder_marker(workspace, image_size),
         "detections": detections,
         "paper": None,
     }

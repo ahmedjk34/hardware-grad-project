@@ -234,15 +234,29 @@ placement cycle.
 **Two ways staging is confirmed.** A manual tap (STEP run-style, the
 single-build console) — an operator presses CLOSE CLAW, `POST /api/manual-close`
 sends the `C`. Or, for an autonomous RUN only, the **feeder detector**: the
-camera confirms a block is on the feeder cell (`rig.feeder_check.feeder_has_block`,
-armed by `POST /api/auto-pickup`), and the driver loop sends the `C` itself once
-`cell_phase == "awaiting_manual_close"`. `feeder_has_block` fails **closed** — no
-map, no vision, a stale frame, a block out of range all read "absent", so the
-firmware then just waits for the manual `C` exactly as before. The autonomous
-RUN also gates its **next `M` dispatch** on the same detector: no block at the
-feeder, no command sent, the rig idles parked. The manual CLOSE CLAW button
-stays live as the override in every run-style. `auto_pickup` is disarmed on a
-lock and on `/api/session/reset`.
+camera confirms a block is at the physical feeder
+(`rig.feeder_check.feeder_has_block`, armed by `POST /api/auto-pickup`). The
+autonomous RUN gates its **next `M` dispatch** on that detector — no block, no
+command, the rig idles parked — and `/api/build` **latches** the decision
+(`auto_close_pending`) at that moment, while the claw is still parked and the
+overhead camera has a clean view. The driver loop then sends the `C` on that
+latch once `cell_phase == "awaiting_manual_close"`, **without re-checking the
+frame** — by then the open claw is sitting over the block and hides it. No
+latch (feeder empty at dispatch, or `auto_pickup` not armed) → the firmware
+waits for the manual `C` exactly as before. `feeder_has_block` fails **closed**.
+The manual CLOSE CLAW button stays live as the override in every run-style.
+`auto_pickup` and `auto_close_pending` are cleared on a settled build, a lock,
+and `/api/session/reset`.
+
+**The physical feeder never moves and is not `active_grid[0,0]`.** A block is
+always picked up **standing** at the VERTICAL grid's `[0,0]` — the machine home
+corner, cm `(0, 0)` in the map frame — in *both* grid modes ("a plain home to
+raw `[0,0]`", §3a; it does not ride the grid shift). In HORIZONTAL mode the
+drawn `[0,0]` cell is registered `+1.9 cm` out on both axes and is a *different*
+point; `rig.supervisor._feeder_centre_cm` and `feeder_has_block` therefore use
+`(0, 0)` cm, never `active_grid.cell_center_cm(0, 0)`, and the console overlay
+draws a faint `FEEDER` marker at the true point when the two differ
+(`web/geometry.py` → `_feeder_marker`).
 
 `BuildController` + `BuildJob` remain the outer single-operation guard;
 `PickupCoordinator` owns the pickup lock and the firmware-gated close. Any Mega
@@ -251,11 +265,13 @@ unknown. Direct `B` calls are reserved for explicit calibration or
 commissioning paths where a person has staged the block and accepts bypassing
 the open-claw alignment pause.
 
-**The feeder cell is not the board.** `rig.supervisor` (`FEEDER_CELL`,
-`FEEDER_RADIUS_CM`) drops every detection on or within a small radius of `[0,0]`
-before any verdict or hysteresis — a hand-fed block there is never `FOREIGN` /
-`MOVED` / `DISPLACED` / `DISAGREES`. `feeder_has_block` is the *only* thing that
-reads that region, and it never touches a verdict.
+**The feeder is not the board.** `rig.supervisor` drops every detection that
+`locate()` snaps to `FEEDER_CELL` (`(0,0)` — the no-op sentinel in *either*
+grid) **or** that sits within `FEEDER_RADIUS_CM` of the physical feeder (home
+corner, cm `(0,0)`) before any verdict or hysteresis — a hand-fed block there
+is never `FOREIGN` / `MOVED` / `DISPLACED` / `DISAGREES`, in either mode.
+`feeder_has_block` is the *only* thing that reads that region, and it never
+touches a verdict.
 
 ### 3. Grid dimensions — the one the firmware forgets
 

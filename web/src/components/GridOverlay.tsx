@@ -162,6 +162,23 @@ export function GridOverlay({ state, onSelect, onHover, selectable = true }: {
         );
       })}
 
+      {showGrid && geometry.feeder?.offset_from_cell && (
+        <>
+          <polygon
+            className="feeder-true"
+            points={points(geometry.feeder.polygon)}
+          />
+          <text
+            className="feeder-label feeder-true-label"
+            x={geometry.feeder.center[0]}
+            y={geometry.feeder.center[1]}
+            textAnchor="middle"
+            dominantBaseline="middle"
+            fontSize={10 * stroke}
+          >FEEDER</text>
+        </>
+      )}
+
       {hover && <polygon className="hover-cell" points={points(hover.polygon)} />}
 
       {selected && (

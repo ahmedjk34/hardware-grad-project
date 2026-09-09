@@ -9,6 +9,13 @@ export interface Geometry {
   calibrated: boolean;
   grid: CellGeometry[];
   selected: CellGeometry | null;
+  /** The PHYSICAL feeder — the machine home corner (the VERTICAL grid's
+   *  `[0,0]`), in both modes. `offset_from_cell` is true in horizontal mode,
+   *  where the drawn `[0,0]` cell is registered +1.9 cm out and this marks the
+   *  real, otherwise-unmarked pickup point. */
+  feeder?: {
+    mode: string; center: Point; polygon: Point[]; offset_from_cell: boolean;
+  } | null;
   detections: { color: string; center: Point; box: Point[] }[];
   paper: unknown | null;
 }

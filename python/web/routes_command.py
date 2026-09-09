@@ -499,6 +499,18 @@ async def build(request: BuildRequest, http: Request) -> StateModel:
         level=controller.level, mode=controller.mode,
     )
     build_log.build.job_started()
+    # AGENTS.md §2a: an autonomous RUN closes the pickup claw itself. The
+    # decision is latched HERE, while the claw is still parked and the overhead
+    # camera has a clean view of the feeder — not at `await_manual_close`, where
+    # the open claw sits over the block and hides it. `_auto_pickup` acts on
+    # this latch. Feeder empty now, or `auto_pickup` not armed -> no latch ->
+    # the firmware waits for the manual `C`.
+    app.state.auto_close_pending = bool(
+        getattr(app.state, "auto_pickup", False)
+        and getattr(app.state, "feeder_block_present", False))
+    if app.state.auto_close_pending:
+        build_log.build.note("auto-pickup: block confirmed at the feeder; "
+                             "will close the claw automatically")
     # The console's own half of the progress story: the command is ACCEPTED.
     # Nothing has moved and nothing may be claimed yet - the board has not even
     # said RECV. Everything after this comes off the wire.
@@ -611,6 +623,7 @@ async def reset_session(http: Request) -> StateModel:
     app.state.cell_phase = "idle"
     # A cleared session is starting over; nothing autonomous should carry over.
     app.state.auto_pickup = False
+    app.state.auto_close_pending = False
     app.state.awaiting_close_since = None
 
     build_log.placements.note("operator cleared the build state — new board epoch")

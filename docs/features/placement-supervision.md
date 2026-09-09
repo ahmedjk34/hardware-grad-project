@@ -567,19 +567,33 @@ reset (P2) went with it.
 > verdict, not a bug: there are cells the plan cannot account for. The operator
 > dismisses per D12.
 
-#### The one exception — the feeder cell `[0,0]`
+#### The one exception — the feeder
 
-Blocks are hand-fed at `[0,0]` and picked up from it (AGENTS.md §2a); the ledger
-never records a placement there. So a detection **on or within
-`FEEDER_RADIUS_CM` of** `[0,0]` is dropped in `observe()` before it can become a
-cell, a gap, a track or a detail record, and `classify()` also subtracts
-`FEEDER_CELL` from both `expected` and `observed` for a synthetic caller. A
-hand-fed block waiting to be picked up is therefore never `FOREIGN` / `MOVED` /
-`DISPLACED` / `DISAGREES`, and never warms a cell in the hysteresis. The radius
-is kept under half the smaller vertical pitch (1.9 cm) so a real placement on
-`[1,0]` or `[0,1]` is still judged normally. `rig.feeder_check.feeder_has_block`
-is the *only* reader of that region — a presence-only, fail-closed check the
-autonomous-RUN pickup uses — and it produces no verdict.
+Blocks are hand-fed at the feeder and picked up from it (AGENTS.md §2a); the
+ledger never records a placement there. Two things are dropped in `observe()`
+before they can become a cell, gap, track or detail record:
+
+1. any detection `locate()` snaps to `FEEDER_CELL` `(0,0)` — the `B 0 0`
+   no-op sentinel in **either** grid;
+2. any detection within `FEEDER_RADIUS_CM` (1.6 cm, under half the smaller
+   vertical pitch) of the **physical feeder** — the machine home corner,
+   cm `(0,0)` in the map frame, which is the VERTICAL grid's `[0,0]`.
+
+`classify()` also subtracts `FEEDER_CELL` from both `expected` and `observed`
+for a synthetic caller. A hand-fed block waiting to be picked up is therefore
+never `FOREIGN` / `MOVED` / `DISPLACED` / `DISAGREES` and never warms a cell,
+in either mode.
+
+**In horizontal mode the two are different points.** The pickup is still "a
+plain home to raw `[0,0]`", so the physical feeder stays at cm `(0,0)`, while
+the drawn horizontal `[0,0]` cell is registered `+1.9 cm` out. Both are carved
+out (the cell by index, the physical point by radius) and a real horizontal
+`[1,0]`/`[0,1]` placement is untouched. `_feeder_centre_cm` returns `(0,0)` in
+both modes — never `active_grid.cell_center_cm(0,0)`.
+`rig.feeder_check.feeder_has_block` is the *only* reader of that region (a
+presence-only, fail-closed check the autonomous-RUN pickup uses); it produces no
+verdict. `web/geometry.py` draws a faint `FEEDER` marker at the true point when
+it differs from the drawn cell.
 
 To keep that from being noisy, the one signal that used to bypass D7's
 hysteresis — `in_gap` — now gets it: a non-zero `in_gap` reaches the classifier

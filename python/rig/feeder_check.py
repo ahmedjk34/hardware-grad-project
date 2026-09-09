@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import math
 
-from rig.supervisor import FEEDER_CELL, FEEDER_RADIUS_CM, point_cm
+from rig.supervisor import FEEDER_RADIUS_CM, _feeder_centre_cm, point_cm
 
 
 def feeder_has_block(frame) -> tuple[bool, str]:
@@ -41,13 +41,13 @@ def feeder_has_block(frame) -> tuple[bool, str]:
         return False, "camera frame is stale"
 
     workspace = getattr(frame, "workspace", None)
-    grid = getattr(workspace, "mapped_grid", None)
-    if workspace is None or grid is None:
+    feeder = _feeder_centre_cm(workspace)
+    if feeder is None:
         return False, "workspace map carries no physical grid"
-    try:
-        fx, fy = grid.cell_center_cm(int(FEEDER_CELL[0]), int(FEEDER_CELL[1]))
-    except (ValueError, TypeError):
-        return False, "cannot project the feeder cell centre"
+    # The physical feeder is the machine home corner (the VERTICAL grid's
+    # [0,0]) in BOTH modes — in horizontal mode it is NOT horizontal [0,0],
+    # which sits +1.9 cm out. `_feeder_centre_cm` returns the right point.
+    fx, fy = feeder
 
     image_size = getattr(frame, "image_size", None)
     nearest: float | None = None

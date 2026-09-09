@@ -197,24 +197,29 @@ async def _drive_pipeline(app: FastAPI, pipeline: ConsolePipeline,
 
 def _auto_pickup(app: FastAPI, frame) -> None:
     """Camera-gated pickup close for an autonomous RUN. Moves the rig only by
-    sending the same one `C` byte the manual button does, and only after the
-    feeder detector confirms a block is staged. Never assumes 'no block' means
-    'proceed': `feeder_has_block` fails closed, so any doubt just leaves the
-    firmware waiting exactly as a manual pickup would — and the RunnerPanel
-    surfaces a prompt if that wait runs long (a `feeder-timeout`).
+    sending the same one `C` byte the manual button does.
+
+    The decision is made BEFORE the descent, not at `await_manual_close`: by the
+    time the claw is down and open it is sitting over the feeder block and
+    occludes it from the overhead camera, so a re-check there would read "no
+    block" on the very block it is about to grip. `/api/build` latches
+    `auto_close_pending` while the claw is still parked and the feeder view is
+    clean (`auto_pickup` armed AND `feeder_block_present`); this just acts on
+    that latch once the firmware reports it is waiting. If the latch was not
+    set — feeder empty at dispatch, or `auto_pickup` not armed — nothing closes
+    and the firmware waits for the manual `C` exactly as before.
     """
     present, reason = feeder_has_block(frame)
     app.state.feeder_block_present = present
     app.state.feeder_block_reason = reason
 
-    was_awaiting = app.state.awaiting_close_since is not None
     if app.state.cell_phase != "awaiting_manual_close":
         app.state.awaiting_close_since = None
         return
-    if not was_awaiting:
+    if app.state.awaiting_close_since is None:
         app.state.awaiting_close_since = time.monotonic()
 
-    if not (app.state.auto_pickup and present):
+    if not getattr(app.state, "auto_close_pending", False):
         return
     try:
         app.state.pickup.close_manual_pick()
@@ -222,9 +227,13 @@ def _auto_pickup(app: FastAPI, frame) -> None:
         # `close_manual_pick` refuses unless the coordinator is still in its
         # `awaiting_manual_close` phase — a second pass, or a close that
         # already went out manually, lands here and is a no-op.
+        app.state.auto_close_pending = False
         return
+    app.state.auto_close_pending = False
     app.state.awaiting_close_since = None
-    build_log.build.note(f"auto-pickup: closed the claw — {reason}")
+    build_log.build.note(
+        "auto-pickup: closed the claw (block confirmed at the feeder "
+        "before the descent)")
     publish_state(app, force=True)
 
 
@@ -461,6 +470,8 @@ def _publish_build_result(app: FastAPI, outcome) -> None:
     controller = app.state.controller
     result = outcome.result
     locked = bool(outcome.locked or controller.locked)
+    # This build is over; its pickup latch does not carry to the next one.
+    app.state.auto_close_pending = False
     if locked:
         # A locked session needs a human and a service restart; nothing
         # automatic should still be poised to send a `C`.
@@ -535,6 +546,12 @@ def create_app(options: ConsoleAppOptions | None = None) -> FastAPI:
         app.state.auto_pickup = False
         app.state.feeder_block_present = False
         app.state.feeder_block_reason = "no camera frame yet"
+        #: Latched by `/api/build` at dispatch time, while the claw is still
+        #: parked and the feeder view is unoccluded, when `auto_pickup` is armed
+        #: and a block is confirmed at `[0,0]`. `_auto_pickup` acts on THIS at
+        #: `await_manual_close` rather than re-checking the (now claw-occluded)
+        #: frame. Cleared on close, on a settled build and on session reset.
+        app.state.auto_close_pending = False
         #: When the firmware entered `await_manual_close`, monotonic seconds —
         #: so an autonomous RUN that has been waiting for a block too long can
         #: be surfaced. None whenever the claw is not waiting.

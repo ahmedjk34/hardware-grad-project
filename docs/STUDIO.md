@@ -1323,16 +1323,24 @@ block. A new reducer phase `awaiting-feeder` (events `feeder-ready`,
 `building`: the panel dispatches `feeder-ready` when the server snapshot's
 `feeder_block_present` is true, driven from `rig.feeder_check.feeder_has_block`
 (presence only, fails closed). The panel arms the server with
-`POST /api/auto-pickup` for the life of a RUN; the driver loop then sends the
-`C` at `await_manual_close` on its own and disarms on lock / `/api/session/reset`.
-STEP, DRY and the single-build console are unchanged and still tap. The manual
-CLOSE CLAW override stays rendered in every style. `StateModel` gained
-`auto_pickup`, `feeder_block_present`, `feeder_block_reason`.
+`POST /api/auto-pickup` for the life of a RUN. `/api/build` then **latches** the
+close decision (`auto_close_pending`) at dispatch, while the claw is still
+parked and the feeder view is clean, and the driver loop sends the `C` on that
+latch at `await_manual_close` **without re-checking** the now claw-occluded
+frame. Disarmed on a settled build, a lock and `/api/session/reset`. STEP, DRY
+and the single-build console are unchanged and still tap; the manual CLOSE CLAW
+override stays rendered in every style. `StateModel` gained `auto_pickup`,
+`feeder_block_present`, `feeder_block_reason`.
 
-Supervision now ignores the feeder cell entirely: `rig.supervisor.FEEDER_CELL` /
-`FEEDER_RADIUS_CM` drop any detection on or near `[0,0]` before a verdict, so a
-hand-fed block waiting to be picked up is never `FOREIGN` / `MOVED` /
-`DISPLACED`. `runner.test.ts` is 37 (was 25).
+Supervision ignores the feeder: `rig.supervisor` drops any detection snapped to
+`FEEDER_CELL` `(0,0)` (the no-op sentinel in either grid) **or** within
+`FEEDER_RADIUS_CM` of the physical feeder — the machine home corner, cm
+`(0,0)`, i.e. the VERTICAL grid's `[0,0]` in **both** modes (`_feeder_centre_cm`
+never uses `active_grid.cell_center_cm(0,0)`; in horizontal mode the drawn
+`[0,0]` cell is a different point, +1.9 cm out). So a hand-fed block waiting to
+be picked up is never `FOREIGN` / `MOVED` / `DISPLACED`. `web/geometry.py`
+adds `geometry.feeder` and `GridOverlay` draws a faint `FEEDER` marker at the
+true point in horizontal mode. `runner.test.ts` is 37 (was 25).
 
 ### Fix: CLEAR BUILD STATE cleared the panel and nothing else
 

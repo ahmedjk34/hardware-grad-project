@@ -70,6 +70,26 @@ check("an empty frame reads absent",
 check("a block elsewhere on the board reads absent at the feeder",
       not feeder_has_block(Frame(detections=[Det(px(*FAR))]))[0])
 
+# HORIZONTAL mode: the physical feeder is STILL the machine home corner (cm
+# (0,0)), NOT horizontal [0,0], which is registered +1.9 cm out on both axes.
+HGRID = MachineGrid.from_config(mode="horizontal")
+HMAP = WorkspaceMap.from_grid(HGRID, ((0, 0), (1000, 0), (1000, 800), (0, 800)), SIZE)
+
+
+def hpx(x_cm, y_cm):
+    return HMAP.pixel_at(x_cm / HGRID.workspace_width_cm,
+                         y_cm / HGRID.workspace_height_cm, SIZE)
+
+
+hframe = lambda dets: Frame(detections=dets, workspace=HMAP)
+check("horizontal: a block at the home corner (0,0) cm reads present",
+      feeder_has_block(hframe([Det(hpx(0.0, 0.0))]))[0])
+h00 = HGRID.cell_center_cm(0, 0)
+check("horizontal: a block on horizontal [0,0] (+1.9 cm out) is NOT the feeder",
+      h00 != (0.0, 0.0)
+      and not feeder_has_block(hframe([Det(hpx(*h00))]))[0],
+      str(h00))
+
 # Fail-closed: every uncertainty is (False, reason), never (True, ...).
 staged = [Det(px(*FEEDER))]
 for label, frame in [

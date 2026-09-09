@@ -156,6 +156,28 @@ check("the feeder cell is never in expected/observed/unjudged",
       v_fed is not None and FEEDER_CELL not in set(v_fed.observed)
       and FEEDER_CELL not in set(v_fed.unjudged))
 
+# HORIZONTAL: the physical feeder is the machine home corner (cm (0,0)), NOT
+# horizontal [0,0], which is registered +1.9 cm out. A hand-fed block at the
+# home corner is still the feeder; horizontal [0,0] stays carved by the cell
+# index too.
+HGRID = MachineGrid.from_config(mode="horizontal")
+HMAP = WorkspaceMap.from_grid(HGRID, ((0, 0), (1000, 0), (1000, 800), (0, 800)), SIZE)
+
+
+def hat_cm(x_cm, y_cm):
+    return HMAP.pixel_at(x_cm / HGRID.workspace_width_cm,
+                         y_cm / HGRID.workspace_height_cm, SIZE)
+
+
+h_fed = observe([FakeDetection(hat_cm(0.0, 0.0)),
+                 FakeDetection(hat_cm(*HGRID.cell_center_cm(1, 3)))], HMAP, SIZE)
+check("horizontal: a block at the home corner is dropped as the feeder",
+      (1, 3) in h_fed.cells and (0, 0) not in h_fed.cells, str(h_fed.cells))
+check("horizontal: a home-corner feeder block is never FOREIGN",
+      classify("horizontal", {(1, 3)}, h_fed.cells).verdict == "VERIFIED")
+check("horizontal [0,0] (cm 1.9,1.9) is not the same point as the feeder",
+      HGRID.cell_center_cm(0, 0) != (0.0, 0.0))
+
 
 # --- observe() retains a pick coordinate for the CORRECTION action -------- #
 #
