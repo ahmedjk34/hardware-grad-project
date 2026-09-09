@@ -371,7 +371,9 @@ def _box_iou(a: _RectangleCandidate, b: _RectangleCandidate) -> float:
 
 def _decompose_compound(frame: np.ndarray, hsv: np.ndarray, contour: np.ndarray,
                         block_length: float, block_width: float,
-                        min_area: float,
+                        min_area: float, compound_count_headroom: int = 0,
+                        compound_hypothesis_budget: int = MAX_RECTANGLE_HYPOTHESES,
+                        compound_new_area_fraction: float = 0.30,
                         metrics: DetectionMetrics | None = None
                         ) -> list[BlockDetection]:
     """Explain one irregular colour blob as standard four-sided blocks."""
@@ -399,7 +401,7 @@ def _decompose_compound(frame: np.ndarray, hsv: np.ndarray, contour: np.ndarray,
     edge_support = cv2.dilate(edge_support, _EDGE_KERNEL)
 
     candidates = []
-    budget = _CandidateBudget()
+    budget = _CandidateBudget(remaining=int(compound_hypothesis_budget))
     if metrics is not None:
         metrics.compound_components += 1
     # Find every cheap erosion-derived seed first, then spend the bounded
@@ -440,13 +442,14 @@ def _decompose_compound(frame: np.ndarray, hsv: np.ndarray, contour: np.ndarray,
     # double-counted that allowance and let seam-straddling rectangles turn a
     # two-block row into three detections (and a three-block U into four).
     estimated_count = max(2, min(12, int(math.ceil(
-        cv2.contourArea(contour) / max(standard_area, 1.0)))))
+        cv2.contourArea(contour) / max(standard_area, 1.0)))
+        + int(compound_count_headroom)))
     for candidate in candidates:
         if any(_box_iou(candidate, existing) > 0.45 for existing in selected):
             continue
         new_pixels = cv2.countNonZero(cv2.bitwise_and(
             candidate.mask, cv2.bitwise_and(component, cv2.bitwise_not(covered))))
-        if new_pixels < standard_area * 0.30:
+        if new_pixels < standard_area * compound_new_area_fraction:
             continue
         selected.append(candidate)
         covered = cv2.bitwise_or(covered, candidate.mask)
@@ -528,6 +531,9 @@ def _detect_blocks_native(frame: np.ndarray, *, color_threshold: int,
                           metrics: DetectionMetrics | None = None,
                           balance: bool = False, flatten: bool = False,
                           expected_size: tuple[float, float] | None = None,
+                          compound_count_headroom: int = 0,
+                          compound_hypothesis_budget: int = MAX_RECTANGLE_HYPOTHESES,
+                          compound_new_area_fraction: float = 0.30,
                           ) -> list[BlockDetection]:
     """Detector implementation at its bounded working resolution."""
     # Segment on a corrected copy but measure hue on the original: the caller
@@ -608,7 +614,10 @@ def _detect_blocks_native(frame: np.ndarray, *, color_threshold: int,
             candidates = [original]
         else:
             candidates = _decompose_compound(
-                frame, hsv, contour, block_length, block_width, min_area, metrics)
+                frame, hsv, contour, block_length, block_width, min_area,
+                compound_count_headroom, compound_hypothesis_budget,
+                compound_new_area_fraction,
+                metrics)
 
         for detection in candidates:
             if detection.area < min_area:
@@ -652,6 +661,9 @@ def detect_blocks(frame: np.ndarray, *, color_threshold: int = 8,
                   metrics: DetectionMetrics | None = None,
                   balance: bool = False, flatten: bool = False,
                   expected_size: tuple[float, float] | None = None,
+                  compound_count_headroom: int = 0,
+                  compound_hypothesis_budget: int = MAX_RECTANGLE_HYPOTHESES,
+                  compound_new_area_fraction: float = 0.30,
                   ) -> list[BlockDetection]:
     """Detect warm rectangular blocks in one corrected BGR frame.
 
@@ -671,6 +683,12 @@ def detect_blocks(frame: np.ndarray, *, color_threshold: int = 8,
         raise ValueError("detect_blocks expects a BGR colour image")
     if min_area <= 0 or max_processing_width <= 0:
         raise ValueError("min_area and max_processing_width must be positive")
+    if compound_count_headroom < 0:
+        raise ValueError("compound_count_headroom must be non-negative")
+    if compound_hypothesis_budget <= 0:
+        raise ValueError("compound_hypothesis_budget must be positive")
+    if not 0 < compound_new_area_fraction <= 1:
+        raise ValueError("compound_new_area_fraction must be in (0, 1]")
 
     original_h, original_w = frame.shape[:2]
     if metrics is not None:
@@ -687,7 +705,10 @@ def detect_blocks(frame: np.ndarray, *, color_threshold: int = 8,
             min_area=float(min_area),
             max_area=None if max_area is None else float(max_area),
             metrics=metrics, balance=balance, flatten=flatten,
-            expected_size=expected_size)
+            expected_size=expected_size,
+            compound_count_headroom=compound_count_headroom,
+            compound_hypothesis_budget=compound_hypothesis_budget,
+            compound_new_area_fraction=compound_new_area_fraction)
 
     scale = max_processing_width / original_w
     work_h = max(1, round(original_h * scale))
@@ -706,7 +727,10 @@ def detect_blocks(frame: np.ndarray, *, color_threshold: int = 8,
         min_area=float(min_area) / area_scale,
         max_area=None if max_area is None else float(max_area) / area_scale,
         metrics=metrics, balance=balance, flatten=flatten,
-        expected_size=work_expected)
+        expected_size=work_expected,
+        compound_count_headroom=compound_count_headroom,
+        compound_hypothesis_budget=compound_hypothesis_budget,
+        compound_new_area_fraction=compound_new_area_fraction)
     return sorted((_rescale_detection(detection, sx, sy)
                    for detection in detections),
                   key=lambda d: (d.center[1], d.center[0]))

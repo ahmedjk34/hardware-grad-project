@@ -17,6 +17,7 @@ from camera.camera_feed import SETTINGS_PATH, STALE_FRAME_AFTER_S  # noqa: E402
 from rig.console_pipeline import (  # noqa: E402
     ConsolePipeline,
     FrameAnalysisContext,
+    STACK_STALE_FRAME_AFTER_S,
 )
 from rig.workspace import WorkspaceMap  # noqa: E402
 from rig.grid import MachineGrid  # noqa: E402
@@ -65,7 +66,8 @@ def completed(context, *, source=None, sequence=None, generation=None,
     )
 
 
-def context(*, sequence=12, generation=4, captured_at=None, workspace=None):
+def context(*, sequence=12, generation=4, captured_at=None, workspace=None,
+            stale_after_s=STALE_FRAME_AFTER_S):
     image = np.full((3, 4, 3), sequence, dtype=np.uint8)
     image.flags.writeable = False
     return FrameAnalysisContext(
@@ -78,6 +80,7 @@ def context(*, sequence=12, generation=4, captured_at=None, workspace=None):
         paper_status="bound",
         grid_mode="vertical",
         map_generation=generation,
+        stale_after_s=stale_after_s,
     )
 
 
@@ -175,6 +178,22 @@ def test_analysis_staleness_uses_the_bound_source_capture_time():
     frame = pipeline._coherent_frame(completed(bound))
 
     assert frame is not None and frame.stale is True
+
+
+def test_stack_analysis_carries_its_longer_fail_closed_age_budget():
+    pipeline = ConsolePipeline()
+    pipeline._map_generation = 4
+    age = STALE_FRAME_AFTER_S + 0.1
+    bound = context(
+        generation=4,
+        captured_at=time.monotonic() - age,
+        stale_after_s=STACK_STALE_FRAME_AFTER_S,
+    )
+
+    frame = pipeline._coherent_frame(completed(bound))
+
+    assert frame is not None and frame.stale is False
+    assert frame.stale_after_s == STACK_STALE_FRAME_AFTER_S
 
 
 def test_mock_pipeline_processes_latest_frames_and_stops_idempotently(tmp_path):

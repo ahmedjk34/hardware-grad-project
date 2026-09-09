@@ -56,7 +56,7 @@ import cv2
 import numpy as np
 
 from vision.block_detector import BlockDetection, detect_blocks
-from vision.block_levels import detect_top_blocks
+from vision.block_levels import STACK_HUE_TOLERANCE, detect_top_blocks
 from vision.block_grid import (
     DUPLICATE_IOU,
     MAX_INDEX_SNAP,
@@ -94,6 +94,12 @@ EDGE_TOLERANCE_PX = 1.0
 # How far a detection may sit from an integer lattice site and still be a block
 # on that site. Same threshold, and the same reasoning, as block_grid's.
 LATTICE_SNAP = MAX_INDEX_SNAP
+
+# Stack decomposition admits more partial hypotheses than the flat path. The
+# purple gantry rails can then satisfy rectangle geometry near the frame edge,
+# but their hue is well outside the wood population (142-151 versus 164-171 on
+# the committed stack capture). Keep a generous circular-hue band so lighting
+# variation survives while non-wood geometry does not become a "block".
 
 
 def _sighting_view(detection: BlockDetection):
@@ -134,6 +140,20 @@ def _drop_duplicates(detections):
     keep_centres = {tuple(round(v, 3) for v in item.center) for item in kept}
     return [item for item in detections
             if tuple(round(v, 3) for v in item.center) in keep_centres]
+
+
+def _drop_stack_hue_outliers(detections):
+    if len(detections) < MIN_POPULATION:
+        return list(detections)
+    # Hue is circular on OpenCV's [0, 180) scale. Anchor at the first sample,
+    # unwrap around it, then take a robust population median.
+    anchor = float(detections[0].hue)
+    unwrapped = [anchor + ((float(item.hue) - anchor + 90.0) % 180.0 - 90.0)
+                 for item in detections]
+    centre = float(np.median(unwrapped)) % 180.0
+    return [item for item in detections
+            if abs((float(item.hue) - centre + 90.0) % 180.0 - 90.0)
+            <= STACK_HUE_TOLERANCE]
 
 
 def _lattice_filter(detections, grid):
@@ -312,6 +332,8 @@ def detect_aligned_blocks(frame: np.ndarray, *, grid=None,
     detections = _drop_duplicates(detections)
     detections = [item for item in detections
                   if _inside_frame(item, frame.shape, edge_tolerance)]
+    if stack_aware:
+        detections = _drop_stack_hue_outliers(detections)
     if not detections:
         return []
 

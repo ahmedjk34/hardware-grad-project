@@ -648,13 +648,14 @@ is deliberate:
 detect both orientations → resolve stack tops → orientation filter → lattice
 ```
 
-Resolving orientation first is incorrect. In the committed 20260909 mixed tower,
-it exposes the buried vertical middle in vertical mode and both horizontal layers
-in horizontal mode. `detect_top_blocks` instead reconciles ordinary layer-1
-candidates with side-suppressed recovery candidates per stack region, keeps the
-ordinary result wherever it already establishes covering, and adopts recovery
-only for another unresolved region. Border rejection, orientation filtering and
-lattice handling remain owned by `block_outline` after that step.
+Resolving orientation first is incorrect. In the committed 20260909 scene, the
+top-left pile is one vertical block over two horizontal blocks; elsewhere two
+horizontal blocks form one highest course over vertical supports. The resolver
+must therefore suppress both lower top-left horizontals while retaining every
+member of each two-block highest course. `detect_top_blocks` reconciles ordinary
+and side-suppressed candidates per physical pile using the stronger orientation-
+course margin. Border rejection, orientation filtering and lattice handling
+remain owned by `block_outline` after that step.
 
 The ledger is only the activation signal. Vision receives a boolean snapshot,
 not the ledger and not a copied block height. Absolute numbered levels remain

@@ -492,12 +492,9 @@ if multi:
           "levels declined, stacks still resolved")
 
 # The 20260909 scene is the regression that forced top resolution into the
-# production ordering.  Its upper pile is horizontal / vertical / horizontal:
-# mode-filtering first used to expose the buried vertical middle in vertical
-# mode and both horizontal layers in horizontal mode.  This layer owns the
-# orientation-independent half: only the physically highest horizontal face
-# may survive here.  Border rails are deliberately left for block_outline's
-# existing edge filter, so assert identities rather than a whole-frame count.
+# production ordering. Its upper-left pile is one vertical block over two
+# horizontal blocks. This layer owns the orientation-independent half: only
+# the physically highest vertical face may survive there.
 mixed = [p for p in paths if "20260909-094841" in p.name]
 if mixed:
     capture = cv2.imread(str(mixed[0]))
@@ -508,11 +505,11 @@ if mixed:
                               item.center[1] - point[1]) <= radius
                    for item in tops)
 
-    check("the mixed tower keeps its physical horizontal top",
-          has_top_near((176, 149)))
-    check("the mixed tower suppresses its buried vertical middle",
-          not has_top_near((160, 165)))
-    check("the mixed tower suppresses its buried horizontal base",
+    check("the mixed tower keeps its physical vertical top",
+          has_top_near((160, 165)))
+    check("the mixed tower suppresses its first buried horizontal",
+          not has_top_near((176, 149)))
+    check("the mixed tower suppresses its second buried horizontal",
           not has_top_near((176, 184)))
 
 # The 29-block reference board is FLAT, and this is the regression that matters

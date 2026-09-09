@@ -57,10 +57,11 @@ with patch("vision.block_outline.detect_blocks", return_value=[vertical]):
         FRAME, grid=VERTICAL, orientation_workspace=MAP,
         include_rejected=True, rectify=False) == [vertical]
 
-# Named real-frame regression: the upper pile is horizontal / vertical /
-# horizontal from top to bottom.  Resolving orientation first used to return
-# the buried vertical middle and both horizontal layers.  Stack-aware mode must
-# elect one physical top across orientations, then let only horizontal keep it.
+# Named real-frame regression. The top-left pile has one vertical block above
+# two horizontal blocks; the scene also contains two-horizontal-on-two-vertical
+# piles, a two-vertical cap, and an inverted U with a horizontal cap. Stack
+# resolution must keep every block in each highest course, not elect one
+# rectangle for the whole connected pile.
 capture_path = (Path(__file__).resolve().parents[1] / "captures" /
                 "20260909-094841_corrected_equidistant-lens168-out120-"
                 "k+0.14_+0.18_+0.03_+0.00-c+0_+0-f1.200_1.105-s+0.042-"
@@ -87,12 +88,25 @@ horizontal_tops = detect_aligned_blocks(
     include_rejected=True, rectify=False, stack_aware=True)
 
 assert len(vertical_tops) == 4
-assert len(horizontal_tops) == 3
-assert all(np.hypot(item.center[0] - 160, item.center[1] - 165) > 4
-           for item in vertical_tops)
-assert sum(np.hypot(item.center[0] - 176, item.center[1] - 149) <= 4
-           for item in horizontal_tops) == 1
-assert all(np.hypot(item.center[0] - 176, item.center[1] - 184) > 4
+assert len(horizontal_tops) == 5
+
+
+def centres_near(detections, expected, radius=7):
+    return all(any(np.hypot(item.center[0] - x, item.center[1] - y) <= radius
+                   for item in detections) for x, y in expected)
+
+
+assert centres_near(vertical_tops,
+                    ((160, 165), (214, 247), (236, 247), (135, 407)))
+assert centres_near(horizontal_tops,
+                    ((268, 327), (208, 332), (266, 363),
+                     (210, 366), (262, 423)))
+# Explicit lower-course negatives: matching the count is not enough.
+assert all(np.hypot(item.center[0] - 176, item.center[1] - 149) > 7
            for item in horizontal_tops)
+assert all(np.hypot(item.center[0] - 176, item.center[1] - 184) > 7
+           for item in horizontal_tops)
+assert all(np.hypot(item.center[0] - 252, item.center[1] - 345) > 7
+           for item in vertical_tops)
 
 print("all detector-orientation and stack-first capture checks passed")

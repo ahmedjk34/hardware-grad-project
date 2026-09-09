@@ -291,7 +291,32 @@ COMPLETE_SOLIDITY = 0.84
 # the larger. Deliberately generous: a stacked pair is rarely aligned to the
 # pixel, and splitting one stack into two is the failure that produces a phantom
 # extra block in the report.
-STACK_OVERLAP = 0.32
+# Raised faces shift radially away from the ground footprint.  At the third
+# course in the committed V-over-H/H tower a lower crossing retains 0.287 overlap;
+# 0.32 split the buried base into a fake independent stack.  Grid neighbours do
+# not overlap at all, so 0.27 keeps them separate while preserving the complete
+# physical pile through that parallax shift.
+STACK_OVERLAP = 0.27
+
+# The 384 px flat-board budget loses the horizontal cap of the lower U-shaped
+# tower in the committed 20260909 capture.  Stack mode is intentionally the
+# slower path; 512 px is the smallest width at which that complete top face is
+# proposed consistently.
+MIN_STACK_PROCESSING_WIDTH = 512
+STACK_HUE_TOLERANCE = 14.0
+
+
+def _wood_hue_population(detections):
+    """Discard colour outliers before they can vote on a stack course."""
+    if len(detections) < 4:
+        return list(detections)
+    anchor = float(detections[0].hue)
+    unwrapped = [anchor + ((float(item.hue) - anchor + 90.0) % 180.0 - 90.0)
+                 for item in detections]
+    centre = float(np.median(unwrapped)) % 180.0
+    return [item for item in detections
+            if abs((float(item.hue) - centre + 90.0) % 180.0 - 90.0)
+            <= STACK_HUE_TOLERANCE]
 
 
 @dataclass
@@ -851,13 +876,23 @@ def _completeness(block: LeveledBlock) -> float:
     return float(detection.rectangularity * detection.solidity)
 
 
-def _resolve_stacks(blocks: list[LeveledBlock]) -> tuple[int, int]:
-    """Group footprints into stacks and elect the block on top of each.
+def _resolve_stacks(blocks: list[LeveledBlock], *, trust_height: bool = True,
+                    support_detections=()
+                    ) -> tuple[int, int]:
+    """Group footprints into stacks and retain the complete highest course.
 
-    Height decides when it is known. When it is not -- near the optical axis, or
-    on a frame whose luminance never split -- completeness decides instead: the
-    block on top is whole, and every block under it is notched by the one above.
-    That fallback is the reason this stage never simply returns "unknown".
+    A course may contain several parallel blocks.  Electing one rectangle for
+    an entire overlap-connected component destroys exactly the common rig
+    pattern of two blocks laid across two blocks.  We therefore first select
+    the highest *orientation course*, then keep the largest mutually separated
+    subset in that course.  Close parallel hypotheses are alternative fits of
+    one physical block; grid-spaced neighbours survive together.
+
+    Absolute height evidence is used by ``detect_leveled_blocks``.  The live
+    top-only path passes ``trust_height=False`` because the real-frame side
+    ratios are deliberately documented as too noisy to name levels; there the
+    compound detector's edge-support confidence decides which course visibly
+    continues through the crossings.
     """
     count = len(blocks)
     parent = list(range(count))
@@ -883,29 +918,117 @@ def _resolve_stacks(blocks: list[LeveledBlock]) -> tuple[int, int]:
             blocks[index].stack = stack_id
         if len(members) == 1:
             continue
-        # Prefer a measured height; fall back to the more complete rectangle,
-        # then to the larger one. Ties on all three are a genuine coin flip.
-        def rank(index: int):
-            block = blocks[index]
-            return (
-                block.height_ratio is not None,
-                block.height_ratio or 0.0,
-                _completeness(block),
-                block.detection.area,
-            )
 
-        winner = max(members, key=rank)
+        # Split the overlap component into parallel courses. Block bearings are
+        # unoriented, so 0 and 180 degrees are the same line.
+        courses: list[list[int]] = []
         for index in members:
-            if index == winner:
+            angle = blocks[index].detection.angle
+            for course in courses:
+                reference = blocks[course[0]].detection.angle
+                delta = abs((angle - reference + 90.0) % 180.0 - 90.0)
+                if delta <= 30.0:
+                    course.append(index)
+                    break
+            else:
+                courses.append([index])
+
+        def course_rank(course: list[int]):
+            ratios = [blocks[i].height_ratio for i in course
+                      if blocks[i].height_ratio is not None]
+            confidence = max(blocks[i].detection.confidence for i in course)
+            if trust_height and ratios:
+                return (1, max(ratios), confidence)
+            return (0, 0.0, confidence)
+
+        course = max(courses, key=course_rank)
+
+        # A decomposition deliberately proposes neighbouring alternative fits.
+        # Select the maximum-cardinality non-conflicting subset. Physical grid
+        # neighbours are separated by block+gap; alternatives sit within about
+        # one short side of each other.
+        reference = blocks[course[0]].detection
+        radians = math.radians(reference.angle)
+        along = np.array((math.cos(radians), math.sin(radians)))
+        normal = np.array((-along[1], along[0]))
+        long_side = float(np.median([blocks[i].detection.size[0] for i in course]))
+        short_side = float(np.median([blocks[i].detection.size[1] for i in course]))
+
+        def conflict(left: int, right: int) -> bool:
+            delta = (np.asarray(blocks[left].detection.center)
+                     - np.asarray(blocks[right].detection.center))
+            # Same-course blocks may sit almost edge-to-edge (the two vertical
+            # caps are 0.95 short-sides apart). Alternative fits sit inside one
+            # another; 0.90 removes those without collapsing real neighbours.
+            return (abs(float(delta @ normal)) < 0.90 * short_side
+                    and abs(float(delta @ along)) < 0.60 * long_side)
+
+        if len(course) <= 16:
+            best: tuple[int, float, tuple[int, ...]] = (-1, -1.0, ())
+            for mask in range(1, 1 << len(course)):
+                chosen = tuple(course[pos] for pos in range(len(course))
+                               if mask & (1 << pos))
+                if any(conflict(chosen[i], chosen[j])
+                       for i in range(len(chosen))
+                       for j in range(i + 1, len(chosen))):
+                    continue
+                score = sum(blocks[i].detection.confidence for i in chosen)
+                rank = (len(chosen), score, chosen)
+                if rank > best:
+                    best = rank
+            winners = set(best[2])
+        else:
+            winners = set()
+            for index in sorted(course,
+                                key=lambda i: blocks[i].detection.confidence,
+                                reverse=True):
+                if not any(conflict(index, kept) for kept in winners):
+                    winners.add(index)
+
+        # A supported course cannot contain more blocks than the crossing
+        # course beneath it.  When one perpendicular block connects two
+        # parallel candidates in an alternating tower, those candidates are
+        # different levels, not two blocks on one course; retain only the
+        # strongest one.  In a two-on-two bridge both courses contain two, so
+        # both genuine top blocks remain.  Count the opposing hypotheses before
+        # their own proximity pruning: exposed lower fragments are biased
+        # inward and can look like duplicate centres even when two supports are
+        # physically present.
+        if len(courses) > 1:
+            support_count = max(len(other) for other in courses
+                                if other is not course)
+            course_angle = blocks[course[0]].detection.angle
+            external_support = []
+            for detection in support_detections:
+                delta = abs((detection.angle - course_angle + 90.0)
+                            % 180.0 - 90.0)
+                if delta <= 30.0:
+                    continue
+                if any(_overlap(detection.box, blocks[i].ground_box)
+                       >= STACK_OVERLAP for i in members):
+                    external_support.append(detection)
+            support_count = max(support_count, len(external_support))
+            if len(winners) > support_count:
+                winners = set(sorted(
+                    winners,
+                    key=lambda i: blocks[i].detection.confidence,
+                    reverse=True)[:support_count])
+
+        representative = max(winners,
+                             key=lambda i: blocks[i].detection.confidence)
+        for index in members:
+            if index in winners:
                 continue
             blocks[index].on_top = False
-            blocks[index].covered_by = winner
+            blocks[index].covered_by = representative
             suppressed += 1
     return len(stacks), suppressed
 
 
 def _measure_candidates(detections, masks: SurfaceMasks,
-                        axis_full) -> list[LeveledBlock]:
+                        axis_full, *, trust_height: bool = True,
+                        support_detections=()
+                        ) -> list[LeveledBlock]:
     """Attach relative height evidence to an existing layer-1 candidate set.
 
     This is the height-independent half of ``detect_leveled_blocks`` factored
@@ -944,7 +1067,8 @@ def _measure_candidates(detections, masks: SurfaceMasks,
         blocks.append(block)
 
     _share_plateaus(blocks, masks)
-    _resolve_stacks(blocks)
+    _resolve_stacks(blocks, trust_height=trust_height,
+                    support_detections=support_detections)
     return blocks
 
 
@@ -968,13 +1092,11 @@ def detect_top_blocks(frame: np.ndarray, *,
     * a copy with solid vertical side faces neutralised can recover top faces
       that those sides welded into one compound component.
 
-    The two are reconciled per physical stack. Ordinary evidence wins where it
-    already proves a covering relationship; split evidence is adopted only in
-    another region that ordinary layer 1 left unresolved. This matters on the
-    20260909 capture: suppressing sides helps older merged towers but changes
-    the height cue enough to elect a buried middle block in the upper three-
-    layer tower. Conversely, the 20260905 capture needs the split to expose its
-    covered faces. The rule is evidence-based, deterministic, and does not infer
+    The side-suppressed set selects the visible orientation course; the raw set
+    supplies missing support-count evidence where suppression hides too much of
+    a lower block. A course can contain multiple parallel blocks, so the result
+    keeps every separated member at the highest course instead of electing one
+    rectangle for an entire pile. The rule is deterministic and does not infer
     a numbered level.
 
     This entry point intentionally has no ``block_height_cm`` argument.  It
@@ -984,11 +1106,13 @@ def detect_top_blocks(frame: np.ndarray, *,
     if frame is None or frame.ndim != 3 or frame.shape[2] != 3:
         raise ValueError("detect_top_blocks expects a BGR colour image")
 
+    stack_processing_width = max(int(max_processing_width),
+                                 MIN_STACK_PROCESSING_WIDTH)
     masks = split_surfaces(
         frame, color_threshold=color_threshold,
         red_green_threshold=red_green_threshold,
         balance=balance, flatten=flatten,
-        max_processing_width=max_processing_width)
+        max_processing_width=stack_processing_width)
 
     height, width = frame.shape[:2]
     axis_full = (np.array(((width - 1) / 2.0, (height - 1) / 2.0))
@@ -1003,27 +1127,45 @@ def detect_top_blocks(frame: np.ndarray, *,
     area_scale = sx * sy
     work_expected = None if expected_size is None else (
         float(expected_size[0]) / sx, float(expected_size[1]) / sy)
+    hsv_full = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     detector_args = dict(
         color_threshold=color_threshold,
         red_green_threshold=red_green_threshold,
         min_area=float(min_area) / area_scale,
         max_area=(None if max_area is None else float(max_area) / area_scale),
         max_processing_width=work_w,
-        balance=False, flatten=False, expected_size=work_expected)
+        balance=False, flatten=False, expected_size=work_expected,
+        # A stack component contains partially visible lower-course blocks in
+        # addition to its complete top faces.  Visible area therefore
+        # undercounts the number of rectangle hypotheses needed to expose the
+        # cap.  The ordinary flat-board detector keeps its conservative zero
+        # headroom; this extra budget is stack-resolver-only.
+        compound_count_headroom=4,
+        compound_hypothesis_budget=1024,
+        compound_new_area_fraction=0.01)
 
     def candidates(image):
         found = detect_blocks(image, **detector_args)
-        if sx == 1.0 and sy == 1.0:
-            return found
-        return sorted((_rescale_detection(item, sx, sy) for item in found),
-                      key=lambda item: (item.center[1], item.center[0]))
+        scaled = (found if sx == 1.0 and sy == 1.0 else
+                  [_rescale_detection(item, sx, sy) for item in found])
+        # The reusable analysis image is illumination-flattened. Geometry
+        # should come from it, hue must not: stack/rail rejection compares the
+        # physical wood colour across raw and split candidates.
+        for item in scaled:
+            mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+            cv2.fillConvexPoly(mask, item.box.astype(np.int32), 255)
+            item.hue = float(cv2.mean(hsv_full[:, :, 0], mask=mask)[0])
+        return sorted(scaled, key=lambda item: (item.center[1], item.center[0]))
 
-    raw = _measure_candidates(candidates(masks.analysis),
-                              masks, axis_full)
-    raw_covered = sum(not block.on_top for block in raw)
-
-    split: list[LeveledBlock] = []
-    split_covered = 0
+    # HoughLinesP consumes OpenCV's process-global RNG.  Without resetting it,
+    # the split candidate set changes merely because the raw pass ran first;
+    # identical frames can then disagree about the top course.  The analysis
+    # worker is single-threaded, so fixing the seed at each layer-1 pass makes
+    # this production path repeatable.
+    # Materialise both candidate sets before either is resolved. The raw set
+    # supplies the support count when side suppression hides most of one lower
+    # block; the split set remains the authority on which course is visible.
+    split_detections = []
     if masks.split_ok and masks.solid_side.any():
         # Recovery candidate. Neutralise on the original-resolution image,
         # then let layer 1 perform its normal bounded preprocessing.
@@ -1031,45 +1173,84 @@ def detect_top_blocks(frame: np.ndarray, *,
         # on the work image is faster but loses covered faces in the real
         # 20260905 and 20260909 towers.
         separated = suppress_side_faces(frame, masks)
+        cv2.setRNGSeed(0)
         split_detections = detect_blocks(
             separated,
             color_threshold=color_threshold,
             red_green_threshold=red_green_threshold,
             min_area=min_area, max_area=max_area,
-            max_processing_width=max_processing_width,
-            balance=balance, flatten=flatten, expected_size=expected_size)
-        split = _measure_candidates(split_detections, masks, axis_full)
-        split_covered = sum(not block.on_top for block in split)
+            max_processing_width=stack_processing_width,
+            balance=balance, flatten=flatten, expected_size=expected_size,
+            compound_count_headroom=4, compound_hypothesis_budget=1024,
+            compound_new_area_fraction=0.01)
+        split_detections = _wood_hue_population(split_detections)
+    cv2.setRNGSeed(0)
+    raw_detections = candidates(masks.analysis)
+    raw_detections = _wood_hue_population(raw_detections)
+    raw = _measure_candidates(raw_detections,
+                              masks, axis_full, trust_height=False)
+    raw_covered = sum(not block.on_top for block in raw)
 
-    # Prefer direct evidence PER STACK, not once for the whole frame.  One scene
-    # can contain both a tower layer 1 decomposed cleanly and a tower whose side
-    # faces welded it into one blob.  A global raw/split switch necessarily
-    # loses one of those.  Start with raw tops; adopt a split-resolved group only
-    # when it does not overlap a group raw already resolved.
+    split = _measure_candidates(
+        split_detections, masks, axis_full, trust_height=False,
+        support_detections=raw_detections)
+    split_covered = sum(not block.on_top for block in split)
+
+    # Reconcile per physical pile. Suppression is often much clearer (the lower
+    # inverted U), but it can also slightly strengthen the wrong course (the
+    # top-left V-over-H/H pile). Use whichever observation separates its best
+    # orientation course from the runner-up by the larger confidence margin.
     def groups(blocks):
         result: dict[int, list[LeveledBlock]] = {}
         for block in blocks:
             result.setdefault(block.stack, []).append(block)
         return [members for members in result.values() if len(members) > 1]
 
+    def course_margin(members):
+        courses: list[list[LeveledBlock]] = []
+        for block in members:
+            for course in courses:
+                delta = abs((block.detection.angle
+                             - course[0].detection.angle + 90.0)
+                            % 180.0 - 90.0)
+                if delta <= 30.0:
+                    course.append(block)
+                    break
+            else:
+                courses.append([block])
+        scores = sorted((max(item.detection.confidence for item in course)
+                         for course in courses), reverse=True)
+        return scores[0] - scores[1] if len(scores) > 1 else 0.0
+
     raw_groups = groups(raw)
-    adopted_split_groups = []
-    for members in groups(split):
-        overlaps_resolved_raw = any(
-            _overlap(left.ground_box, right.ground_box) >= STACK_OVERLAP
-            for left in members for raw_group in raw_groups for right in raw_group)
-        if not overlaps_resolved_raw:
-            adopted_split_groups.append(members)
+    replacements = []
+    for split_group in groups(split):
+        matches = [raw_group for raw_group in raw_groups
+                   if any(_overlap(left.ground_box, right.ground_box)
+                          >= STACK_OVERLAP
+                          for left in split_group for right in raw_group)]
+        if not matches:
+            replacements.append((None, split_group))
+            continue
+        raw_group = max(matches, key=lambda members: sum(
+            _overlap(left.ground_box, right.ground_box)
+            for left in split_group for right in members))
+        if course_margin(split_group) > course_margin(raw_group):
+            replacements.append((raw_group, split_group))
 
     chosen_tops = [block for block in raw if block.on_top]
-    for members in adopted_split_groups:
-        chosen_tops = [
-            block for block in chosen_tops
-            if not any(_overlap(block.ground_box, member.ground_box)
-                       >= STACK_OVERLAP
-                       for member in members)
-        ]
-        chosen_tops.extend(block for block in members if block.on_top)
+    for raw_group, split_group in replacements:
+        if raw_group is not None:
+            raw_ids = {id(block) for block in raw_group}
+            chosen_tops = [block for block in chosen_tops
+                           if id(block) not in raw_ids]
+        else:
+            chosen_tops = [
+                block for block in chosen_tops
+                if not any(_overlap(block.ground_box, member.ground_box)
+                           >= STACK_OVERLAP for member in split_group)
+            ]
+        chosen_tops.extend(block for block in split_group if block.on_top)
     tops = [block.detection for block in chosen_tops]
 
     if metrics is not None:
@@ -1078,7 +1259,7 @@ def detect_top_blocks(frame: np.ndarray, *,
         metrics.split_detections = len(split)
         metrics.split_covered = split_covered
         metrics.returned_tops = len(tops)
-        metrics.used_surface_split = bool(adopted_split_groups)
+        metrics.used_surface_split = bool(replacements)
         metrics.separability = masks.separability
     return tops
 

@@ -43,6 +43,14 @@ from vision.color_grid import ColorGridSpec
 from vision.fisheye import INTERPOLATIONS, build_maps, undistort
 
 
+# Stack decomposition is intentionally more expensive than the flat-board
+# path. On the committed tower capture it already exceeds the ordinary 0.75 s
+# source-age budget on a development machine, making every correct result
+# arrive pre-marked CAMERA STALE (and therefore look like vision is dead).
+# Three seconds keeps the fail-closed age bound while covering the Pi path.
+STACK_STALE_FRAME_AFTER_S = 3.0
+
+
 @dataclass(frozen=True)
 class ProcessedFrame:
     """One coherent, completed analysis and the exact image it analyzed."""
@@ -60,6 +68,7 @@ class ProcessedFrame:
     map_generation: int
     analysis_result_id: int
     analysis_completed_at: float
+    stale_after_s: float = STALE_FRAME_AFTER_S
     #: Whether the analyzer returned a real observation for this frame. False
     #: when the detector raised (the worker caught it, emptied the detections,
     #: and left the reason in ``analysis_error``). A consumer MUST treat an
@@ -84,6 +93,7 @@ class FrameAnalysisContext:
     paper_status: str
     grid_mode: str
     map_generation: int
+    stale_after_s: float = STALE_FRAME_AFTER_S
 
 
 class ConsolePipeline:
@@ -338,6 +348,7 @@ class ConsolePipeline:
             workspace = self.saved_workspace or approximate_workspace(
                 self.grid, image_size, self.projection)
             view.flags.writeable = False
+            stack_aware = self._stack_aware()
             context = FrameAnalysisContext(
                 view=view,
                 sequence=snapshot.sequence,
@@ -348,12 +359,14 @@ class ConsolePipeline:
                 paper_status=self.paper.status(),
                 grid_mode=self.grid.mode,
                 map_generation=self._map_generation,
+                stale_after_s=(STACK_STALE_FRAME_AFTER_S if stack_aware
+                               else STALE_FRAME_AFTER_S),
             )
             self.analysis.submit(
                 view, snapshot.sequence, self._map_generation, context=context,
                 color_threshold=self.color_threshold, min_area=self.min_area,
                 analysis_grid=self.grid, orientation_workspace=workspace,
-                stack_aware=self._stack_aware())
+                stack_aware=stack_aware)
             self.paper.submit(view, snapshot.sequence, self._map_generation)
 
         self.paper.poll(self._map_generation)
@@ -369,7 +382,7 @@ class ConsolePipeline:
         # capture that may currently be queued or in flight.
         if self._last_frame is not None:
             stale = ((time.monotonic() - self._last_frame.captured_at)
-                     >= STALE_FRAME_AFTER_S)
+                     >= self._last_frame.stale_after_s)
             if stale != self._last_stale:
                 self._last_stale = stale
                 self._last_frame = replace(self._last_frame, stale=stale)
@@ -406,7 +419,7 @@ class ConsolePipeline:
                 or completed.map_generation != self._map_generation):
             return None
         stale = ((time.monotonic() - context.captured_at)
-                 >= STALE_FRAME_AFTER_S)
+                 >= context.stale_after_s)
         # A detector exception reaches here as `completed.error` set and
         # `completed.detections` already emptied by the worker. Publish the
         # frame anyway - supervision needs to SEE the failure and fall to
@@ -427,6 +440,7 @@ class ConsolePipeline:
             map_generation=context.map_generation,
             analysis_result_id=completed.completed_count,
             analysis_completed_at=completed.completed_at,
+            stale_after_s=context.stale_after_s,
             analysis_ok=analysis_ok,
             analysis_error=completed.error,
         )
