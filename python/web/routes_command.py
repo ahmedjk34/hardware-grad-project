@@ -616,8 +616,44 @@ async def set_auto_pickup(request: AutoPickupRequest, http: Request) -> StateMod
     return _state(app)
 
 
+def _clear_grid_shift(app) -> None:
+    """Put the active lattice back on its unshifted registration.
+
+    A running-bond course leaves ``shiftX`` / ``shiftY`` latched on the board,
+    and the next model compiles its own courses against a lattice it assumes
+    starts at zero — so a reset that left the shift on would put every cell of
+    the new build half a pitch from where the Studio drew it, silently.
+
+    This is the one part of the reset that touches the cable, and it is the
+    same two lines ``/api/shift`` sends: the firmware's ``applyGridShift``
+    re-clips its reachable range in place, so **nothing moves** — no homing, no
+    ``S`` re-sent. It is skipped entirely when the shift is already zero, which
+    is every reset after an unshifted build, and it takes the mode-latch lock
+    for the same reason that route does.
+    """
+    rig = app.state.rig
+    grid = rig.grid
+    if (grid.shift_x_cm, grid.shift_y_cm) == (0.0, 0.0):
+        return
+    lock = app.state.mode_latch_lock
+    if not lock.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail=MODE_BUSY_MESSAGE)
+    try:
+        rig.set_shift(x_cm=0.0, y_cm=0.0)
+        # The re-sync `/shift` does: the saved workspace map is re-validated
+        # against the now-unshifted lattice rather than left describing the
+        # shifted one, which would pair old pixels with new cells.
+        app.state.pipeline.set_grid_mode(rig.grid.mode, rig.grid)
+    except (RigError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    finally:
+        lock.release()
+
+
+# Sync, on a worker thread, for the same reason as `/shift`: clearing the grid
+# shift blocks on serial round-trips, and nothing else here awaits.
 @router.post("/session/reset", response_model=StateModel)
-async def reset_session(http: Request) -> StateModel:
+def reset_session(http: Request) -> StateModel:
     """CLEAR BUILD STATE — start over on a board nobody has looked at yet.
 
     The operator has taken the blocks off the table (or is about to) and wants
@@ -633,39 +669,43 @@ async def reset_session(http: Request) -> StateModel:
     — but no reader answers for them any more, so the next verdict is built
     from frames gathered after this moment and from nothing else.
 
-    **It moves nothing and it sends no serial line.** It is refused, like every
-    other mutating route, while a job is running or a mode latch is homing —
-    and while the session is LOCKED, because a lock means the claw's position
-    is unknown and forgetting the board would not make that any less true.
-    That is a human and a service restart, exactly as before.
+    The lattice goes back to its unshifted registration too. A running-bond
+    course is a *session* fact, not a machine one: leaving `shiftX`/`shiftY`
+    latched would put every cell of the next model half a pitch from where the
+    Studio drew it. That is the one thing here that reaches the cable, and it
+    still **moves nothing** — see :func:`_clear_grid_shift`.
+
+    What it deliberately does NOT touch: the grid MODE, because latching it
+    homes X and Y and this route is not allowed to move the rig; the saved
+    calibration, which describes the camera and not the build; and the
+    supervision ON/OFF switch, which is the operator's and not this route's to
+    flip back. It is refused, like every other mutating route, while a job is
+    running or a mode latch is homing — and while the session is LOCKED,
+    because a lock means the claw's position is unknown and forgetting the
+    board would not make that any less true. That is a human and a service
+    restart, exactly as before.
     """
+    # `web.app` imports this module, so the shared clear is imported here.
+    from web.app import _clear_supervision_state
+
     app = http.app
     require_mutable(app)
+
+    # First, because it is the only step that can be refused by the machine:
+    # better to fail with the session intact than half-forgotten.
+    _clear_grid_shift(app)
 
     ledger = getattr(app.state, "ledger", None)
     if ledger is not None and ledger.has_memory():
         ledger.new_board_epoch()
-    supervisor = getattr(app.state, "supervisor", None)
-    if supervisor is not None:
-        supervisor.reset()
-
-    # The published verdict and every input it was derived from. Dropping the
-    # baseline as well as the reading matters: D5's frame difference against a
-    # frame of the OLD board would read as motion and hold the next window BUSY.
-    app.state.supervision = None
-    app.state.supervision_signature = None
-    app.state.supervision_baseline = None
-    app.state.supervision_sequence = None
-    app.state.supervision_result_id = None
-    app.state.supervision_acknowledged = False
-    #: The armed per-build check and its one sentence.
-    app.state.pending_check = None
-    app.state.vision_verification = None
+    # The published verdict and every input it was derived from — the same
+    # clear the operator OFF switch uses. Dropping the baseline as well as the
+    # reading matters: D5's frame difference against a frame of the OLD board
+    # would read as motion and hold the next window BUSY.
+    _clear_supervision_state(app)
     # The correction authorisation is scoped to a verdict that no longer
-    # exists. Leaving the ticket would leave a one-shot pick-and-place armed
-    # against a board this route has just declared unknown.
-    app.state.correction_ticket = None
-    app.state.correction_attempted_signature = None
+    # exists. Leaving the result would leave the runner's banner describing a
+    # repair to a board this route has just declared unknown.
     app.state.last_correction_result = None
 
     # The console's own read-outs: the phase bar, the last result banner and
@@ -676,6 +716,10 @@ async def reset_session(http: Request) -> StateModel:
     controller = app.state.controller
     controller.clear_selection()
     controller.last_result = None
+    # Level 0 is where a new build starts. A level left at 3 from the last
+    # tower is the same trap as a left-over shift: the next command is valid,
+    # accepted, and lands nowhere near where the operator is looking.
+    controller.set_level(0)
     app.state.cell_phase = "idle"
     # A cleared session is starting over; nothing autonomous should carry over.
     app.state.auto_pickup = False
@@ -683,6 +727,7 @@ async def reset_session(http: Request) -> StateModel:
     app.state.awaiting_close_since = None
 
     build_log.placements.note("operator cleared the build state — new board epoch")
-    build_log.build.note("session reset: ledger epoch advanced, supervision dropped")
+    build_log.build.note("session reset: ledger epoch advanced, supervision "
+                         "dropped, grid shift and level back to zero")
     _signal(app)
     return _state(app)

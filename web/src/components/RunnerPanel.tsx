@@ -28,6 +28,9 @@ const STYLES: { style: RunStyle; label: string }[] = [
   { style: "dry", label: "DRY RUN" },
 ];
 
+/** How long the CLEAR BUILD STATE arm stays live, matching `BuildButton`. */
+const CLEAR_ARM_MS = 6000;
+
 const activePhase = (phase: RunState["phase"]) =>
   phase !== "idle" && phase !== "done";
 
@@ -77,6 +80,7 @@ export function RunnerPanel({ state, connected, modelId, api, delay, onActiveCha
 }) {
   const [style, setStyle] = useState<RunStyle>("step");
   const [clearError, setClearError] = useState<string | null>(null);
+  const [clearArmed, setClearArmed] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [run, setRun] = useState<RunState>(() => ({
     ...initialRun(), connected, buildState: state.build_state,
@@ -314,6 +318,7 @@ export function RunnerPanel({ state, connected, modelId, api, delay, onActiveCha
   const hasStateToClear = run.phase !== "idle" || serverRemembers;
   const clearBuildState = useCallback(async () => {
     setClearError(null);
+    setClearArmed(false);
     try {
       await (api?.resetSession ?? transportApi.resetSession)();
     } catch (error) {
@@ -325,6 +330,19 @@ export function RunnerPanel({ state, connected, modelId, api, delay, onActiveCha
     }
     applyEvent({ type: "reset", now: Date.now() });
   }, [api, applyEvent]);
+  // Two taps, like the build arm, and for a related reason. The reset tells
+  // the server the board it remembers is gone; if the blocks are still on the
+  // table that is now a board nothing is tracking, and the first verdict of
+  // the next build will be FOREIGN. The arm is where that is said out loud.
+  // It expires, so a stray tap never leaves a live confirm sitting on screen.
+  useEffect(() => {
+    if (!clearArmed) return;
+    const id = window.setTimeout(() => setClearArmed(false), CLEAR_ARM_MS);
+    return () => window.clearTimeout(id);
+  }, [clearArmed]);
+  useEffect(() => {
+    if (run.inFlight || !hasStateToClear) setClearArmed(false);
+  }, [run.inFlight, hasStateToClear]);
 
   // ── toasts for building mode ────────────────────────────────────────────
   // Purely a mirror of state this panel already derives. The console mounts
@@ -381,17 +399,29 @@ export function RunnerPanel({ state, connected, modelId, api, delay, onActiveCha
           <span className="chip is-motion">DRY RUN{compact ? "" : " — no serial traffic"}</span>
         )}
         {run.phase !== "locked" && server.build_state !== "LOCKED" && (
-          <button type="button" className="btn btn-ghost runner-clear"
+          <button type="button"
+                  className={`btn runner-clear ${clearArmed ? "btn-build armed" : "btn-ghost"}`}
                   disabled={run.inFlight || !hasStateToClear}
                   title={run.inFlight
                     ? "Can't clear while a block is in flight — Mega motion cannot be interrupted"
                     : !hasStateToClear
                       ? "There is no build state to clear"
                       : "Start over: clear the panel AND make the server forget the board — "
-                        + "the as-built ledger, the verdict and the last result. Moves nothing."}
-                  onClick={() => { void clearBuildState(); }}>
-            CLEAR BUILD STATE
+                        + "the ledger, the verdict, the grid shift, the level and the last "
+                        + "result. Moves nothing; take the blocks off the table first."}
+                  onClick={() => {
+                    if (!clearArmed) { setClearError(null); setClearArmed(true); return; }
+                    void clearBuildState();
+                  }}>
+            {clearArmed ? "TAKE EVERY BLOCK OFF THE BOARD · TAP TO CONFIRM" : "CLEAR BUILD STATE"}
           </button>
+        )}
+        {clearArmed && (
+          <span className="reason" role="note">
+            The server will forget this board entirely — the as-built ledger, the
+            verdict, the grid shift and the build level. Anything still on the
+            table is unaccounted for and reads as FOREIGN on the next build.
+          </span>
         )}
         {clearError && (
           <span className="reason" role="alert">could not clear — {clearError}</span>

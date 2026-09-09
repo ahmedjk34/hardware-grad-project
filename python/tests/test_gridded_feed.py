@@ -160,6 +160,28 @@ with tempfile.TemporaryDirectory() as directory:
           migrated_document["version"] == 3
           and set(migrated_document["modes"]) == {"vertical"})
 
+    # A live grid shift slides the placement cells INSIDE the calibrated
+    # rectangle - it must not reject the saved map (which would drop the
+    # console to the uncalibrated approximate grid), and it must not move the
+    # feeder cell [0,0], which stays a plain home to raw [0,0].
+    base_grid = MachineGrid.from_config(mode="vertical")
+    base_map = approximate_workspace(base_grid, image_size, projection)
+    shifted_grid = MachineGrid.from_config(
+        mode="vertical", shift_y_cm=base_grid.pitch_y_cm / 2)
+    check("a grid shift does not reject the saved calibration",
+          base_map.matches_grid(shifted_grid))
+    shifted_map = base_map.with_live_shift(0.0, shifted_grid.shift_y_cm)
+    moved = np.mean(shifted_map.cell_polygon(1, 1, image_size), axis=0)
+    still = np.mean(base_map.cell_polygon(1, 1, image_size), axis=0)
+    check("a live shift moves an ordinary cell in the calibrated map",
+          not np.allclose(moved, still))
+    check("a live shift never moves the feeder cell [0,0]",
+          np.allclose(shifted_map.cell_polygon(0, 0, image_size),
+                      base_map.cell_polygon(0, 0, image_size)))
+    check("the saved calibration JSON records no grid shift",
+          "shift_x_cm" not in base_map._entry().get("physical_grid", {})
+          and "shift_y_cm" not in base_map._entry().get("physical_grid", {}))
+
 print(f"\n{len(PASSED)} passed, {len(FAILED)} failed")
 if FAILED:
     print("failed: " + ", ".join(FAILED))

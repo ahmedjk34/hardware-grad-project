@@ -1384,7 +1384,7 @@ def test_clear_build_state_forgets_the_board_and_every_derived_judgement(tmp_pat
     describing a board that no longer exists, so supervision went on naming
     cells from the build before it. This route does to the memory exactly what
     a gantry reboot does: a new board epoch, retaining the rows for the record.
-    It moves nothing and sends no serial line.
+    It moves nothing.
     """
     from rig.supervisor import Verdict
     from web.app import _note_supervision
@@ -1566,3 +1566,40 @@ def test_the_correct_route_refuses_when_supervision_is_switched_off():
     except HTTPException as exc:
         assert exc.status_code == 409 and "switched off" in exc.detail
     assert sent == []
+
+
+def test_clear_build_state_puts_the_lattice_and_the_level_back_to_zero(tmp_path):
+    """A running-bond course and a build level are SESSION facts.
+
+    Leaving `shiftX` / `shiftY` latched is the quiet half of this bug: the next
+    model compiles its courses against a lattice it assumes starts at zero, so
+    every cell of the new build lands half a pitch from where the Studio drew
+    it — accepted, valid, and wrong. Same for a level left at 3 from the last
+    tower. Clearing the shift sends two serial lines and moves nothing: the
+    firmware's `applyGridShift` re-clips its reachable range in place.
+    """
+    app = create_app(ConsoleAppOptions(
+        mock=True,
+        settings_path=mock_settings(tmp_path),
+        workspace_map_path=tmp_path / "workspace_map.json",
+    ))
+
+    async def scenario():
+        async with LifespanManager(app):
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport,
+                                         base_url="http://test") as client:
+                shifted = (await client.post("/api/shift", json={
+                    "mode": "vertical", "x_cm": 0.0, "y_cm": 3.0})).json()
+                await client.post("/api/level", json={"value": 2})
+                cleared = (await client.post("/api/session/reset")).json()
+                # A second reset is a no-op on an already-square lattice: the
+                # shift clear is skipped rather than re-sent.
+                again = (await client.post("/api/session/reset")).json()
+                return shifted, cleared, again
+
+    shifted, cleared, again = asyncio.run(scenario())
+    assert shifted["shift_cm"] == [0.0, 3.0]
+    assert cleared["shift_cm"] == [0.0, 0.0]
+    assert cleared["level"] == 0
+    assert again["shift_cm"] == [0.0, 0.0]

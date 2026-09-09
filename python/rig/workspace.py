@@ -366,11 +366,18 @@ class WorkspaceMap:
         if wanted not in GRID_MODES:
             return False
         geometry = self.physical_grid
+        # Against the REQUESTED counts, not the shift-clipped ones: a live shift
+        # can trim `grid.cols` / `grid.rows` to what still fits the envelope
+        # while `requested_*` keeps the asked-for size. The calibration was made
+        # for that requested grid and still describes it - clearing the shift
+        # restores every clipped cell.
+        want_cols = grid.requested_cols or grid.cols
+        want_rows = grid.requested_rows or grid.rows
         return (
             self.mode == wanted
             and grid.mode == wanted
             and
-            (self.cols, self.rows) == (grid.cols, grid.rows)
+            (self.cols, self.rows) == (want_cols, want_rows)
             and float(geometry["workspace_width_cm"]) == grid.workspace_width_cm
             and float(geometry["workspace_height_cm"]) == grid.workspace_height_cm
             and float(_block_cm(geometry, "x")) == grid.block_x_cm

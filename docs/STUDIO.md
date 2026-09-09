@@ -56,7 +56,7 @@ per-file counts as approximate.)
 | `studio/runner.test.ts` | 37 | every named transition, serial phases that never advance the cursor, socket-loss pause and phase-driven resume, HELD locks / SAFE does not, feeder sequencing, abort program position, elapsed/ETA arithmetic, plus an exhaustive all-event walk proving no second build and no serial effect while RUNNING |
 | `studio/runner-driver.test.ts` | 7 | the level/select/verify/build/mode request sequence against a mocked API, axis selection, zero-API dry transport and the defensive RUNNING refusal |
 | `studio/run-report.test.ts` | 2 | deterministic event-derived Markdown, verbatim failures, durations, verification and camera evidence |
-| `components/RunnerPanel.test.tsx` | 13 | full dry tower with no API traffic, mismatch stop, feeder cancel, honest stop copy, rejected pause and abort lock, the rig's own phase readout, fourteen phases advancing nothing, stale-on-disconnect, and CLEAR BUILD STATE: it calls `/api/session/reset` as well as clearing the panel, it is live on an idle panel the server still remembers and disabled on `NO_MEMORY`, and a refused reset leaves the panel untouched |
+| `components/RunnerPanel.test.tsx` | 14 | full dry tower with no API traffic, mismatch stop, feeder cancel, honest stop copy, rejected pause and abort lock, the rig's own phase readout, fourteen phases advancing nothing, stale-on-disconnect, and CLEAR BUILD STATE: the two-tap arm and its expiry, it calls `/api/session/reset` as well as clearing the panel, it is live on an idle panel the server still remembers and disabled on `NO_MEMORY`, and a refused reset leaves the panel untouched |
 | `store.test.ts` | 20 | `build_step` applied with no timer advanced, id deduplication, phase/snapshot tie-breaks, the reconnect cursor, terminal-only `placed` |
 | `ws.test.ts` | 7 | immediate delivery against a fake socket, the `?after=` cursor, replay envelope, backoff, unparseable frames |
 | `blockCalibration.test.tsx` | 4 | the placed-block calibration panel — the plan walked cell by cell, SAVE disabled until the backend calls the fit ready, a refused step kept retryable, an abort disabling further steps, and a refusal to start leaving the other two routes reachable |
@@ -297,7 +297,9 @@ comes back whole: a shift clips what the machine can reach without changing what
 was asked for, and the Studio draws clipped cells struck through rather than
 deleting them. **The pickup outranks clipping** — `[0,0]` reads as pickup in
 every state, including one a shift has put out of reach, because it is never
-built on either way. `validate.ts` reports `PICKUP_CELL` for `[0,0]`; every
+built on either way. **The pickup also never rides the shift**: every other cell
+slides by `shift`, but `[0,0]` is drawn at its unshifted registration — it is a
+plain home to raw `[0,0]` (AGENTS.md §3a). `validate.ts` reports `PICKUP_CELL` for `[0,0]`; every
 other requested, reachable cell proceeds through the ordinary rules.
 
 ### 5.4 `studio/view.ts` — where the camera stands
@@ -1127,17 +1129,33 @@ rig cannot be interrupted`. Pressing it changes the disabled control to
 `DRY RUN — no serial traffic` in `--motion` for the full session.
 
 The header shows a `CLEAR BUILD STATE` button, and it clears **both halves of
-the session**. It first awaits `POST /api/session/reset`, which is what makes
-the server forget the board — the as-built ledger's placements are retired into
-a new board epoch, and the supervisor's hysteresis, the published verdict, its
-baseline frame, the correction ticket, the phase read-out, the selection and
-the last result all go with them — and only then dispatches the reducer's
+the session**. It takes two taps: the first arms it and says, in the button and
+underneath it, *take every block off the board* — the server is about to stop
+accounting for anything on it, so a block left behind reads as `FOREIGN` on the
+next build. The arm expires after six seconds, like `BuildButton`'s.
+
+The second tap awaits `POST /api/session/reset`, which is what makes the server
+forget the board — the as-built ledger's placements are retired into a new
+board epoch, and the supervisor's hysteresis, the published verdict, its
+baseline frame, the correction ticket, the phase read-out, the selection, the
+last result, **the grid shift and the build level** all go with them — and only
+then dispatches the reducer's
 `reset` event, a client-side turn that emits no effect and returns the panel to
 `idle`. Awaiting the route first is the point: a panel cleared over a server
 that still remembers would be the console claiming a reset that did not happen,
 and that was the original bug — the panel cleared, and supervision went on
 naming cells from the build before it. A refusal leaves the panel exactly as it
 was and prints `could not clear — <the server's reason>` in the header.
+
+The grid shift is the half of this that bites silently. A running-bond course
+latches `shiftX` / `shiftY` on the board, and the next model compiles its own
+courses against a lattice it assumes starts at zero — so a reset that left the
+shift on would put every cell of the new build half a pitch from where the
+Studio drew it: accepted, valid and wrong. Same for a build level left at 3
+from the last tower. Clearing the shift is the only part of the route that
+reaches the cable and it still moves nothing (`applyGridShift` re-clips the
+reachable range in place, no homing, no `S`). The grid **mode** is deliberately
+not reset: latching it homes X and Y, and this route may not move the rig.
 
 Because the server half is the half that matters, the button is live whenever
 **either** side has something to forget: the panel is off `idle`, or the
@@ -1314,6 +1332,54 @@ first in the diff.
 
 Newest first. One entry per landed change; note anything that contradicts the
 plan or that a future reader could not infer.
+
+### Fix: CLEAR BUILD STATE left the grid shift, the level and the board on
+
+Follow-up to the entry below. Forgetting the ledger was not enough to start a
+build from scratch: `POST /api/session/reset` now also puts the **active
+lattice back to zero shift** and the **build level back to 0**, and the button
+now asks the operator to clear the table before it fires.
+
+- **The shift was the silent one.** A running-bond course leaves `shiftX` /
+  `shiftY` latched on the board. The next model compiles its courses against a
+  lattice it assumes starts at zero, so every cell of the new build lands half
+  a pitch from where the Studio drew it — accepted, valid, and wrong, with the
+  twin and the rig disagreeing about a picture that looks fine. Clearing it is
+  the one step of the reset that reaches the cable (two `shift` lines behind
+  the mode-latch lock, skipped when the shift is already zero) and it still
+  moves nothing: `applyGridShift` re-clips the reachable range in place.
+- **The mode is deliberately NOT reset.** Latching a grid mode homes X and Y.
+  This route is not allowed to move the rig, so it leaves the mode where the
+  operator put it and says so in its docstring.
+- **Two taps, and the arm says why.** The reset tells the server the board it
+  remembers is gone; if the blocks are still on the table, that is now a board
+  nothing is tracking and the first verdict of the next build is `FOREIGN`. The
+  arm is where "take every block off the board" is stated, and it expires after
+  six seconds so a stray tap never leaves a live confirm on screen.
+- The shift clear runs **first**, before any memory is dropped, because it is
+  the only step the machine can refuse — better to fail with the session intact
+  than half-forgotten.
+
+### A grid shift keeps its calibration, and never moves the feeder
+
+Two fixes to how the live operator grid shift (`shiftX` / `shiftY`,
+`state.shift_cm`) is drawn — camera overlay, click-to-build and the Twin:
+
+- **The saved four-corner calibration survives a shift.** `WorkspaceMap` gained
+  `live_shift` + `with_live_shift(x_cm, y_cm)`; `console_pipeline` composes the
+  active grid's shift onto the loaded map every (re)load instead of the map
+  being rejected and the console dropping to the uncalibrated full-frame
+  `approximate_workspace`. `matches_grid` no longer compares `shift_*` and
+  compares the **requested** (pre-clip) counts, and the shift is no longer
+  written into `config/workspace_map.json` — it is runtime state, not
+  calibration. `web/geometry.py` and `gridded_camera_feed` cache keys now
+  include the shift.
+- **The feeder `[0,0]` never rides the shift**, matching AGENTS.md §3a ("a
+  plain home to raw `[0,0]`"). `latticeCells` draws the `[0,0]` cell at its
+  unshifted registration while every other cell slides;
+  `WorkspaceMap.cell_polygon` / `cell_at` do the same via `_feeder_bounds_cm`;
+  `_feeder_marker.offset_from_cell` is now computed from the registration
+  rather than hard-coded to `mode != "vertical"`.
 
 ### Camera-gated pickup for an autonomous RUN
 

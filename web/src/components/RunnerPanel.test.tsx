@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { StateModel } from "../types";
 import type { RunnerApi } from "../studio/runner-driver";
@@ -292,10 +292,15 @@ describe("RunnerPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "START DRY RUN" }));
     await waitFor(() => expect(screen.getByText("RUN COMPLETE")).toBeInTheDocument());
 
+    // Two taps: the arm is where "take every block off the board" is said,
+    // because the server is about to stop accounting for anything on it.
     fireEvent.click(screen.getByRole("button", { name: "CLEAR BUILD STATE" }));
+    expect(api.resetSession).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: /TAKE EVERY BLOCK OFF THE BOARD/ }));
 
-    // The ledger, the observer and the verdict live on the server: clearing
-    // the panel alone is what used to leave supervision naming old cells.
+    // The ledger, the observer, the verdict, the grid shift and the level live
+    // on the server: clearing the panel alone is what used to leave
+    // supervision naming old cells over a still-shifted lattice.
     await waitFor(() => expect(api.resetSession).toHaveBeenCalledOnce());
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "START DRY RUN" })).toBeInTheDocument());
@@ -316,6 +321,23 @@ describe("RunnerPanel", () => {
     expect(screen.getByRole("button", { name: "CLEAR BUILD STATE" })).toBeDisabled();
   });
 
+  it("expires the clear arm rather than leaving a live confirm on screen", async () => {
+    vi.useFakeTimers();
+    try {
+      const api = mockedApi();
+      render(<RunnerPanel state={readyState({ last_result: "placed" })} connected
+                          modelId="example-tower" api={api} />);
+      fireEvent.click(screen.getByRole("button", { name: "CLEAR BUILD STATE" }));
+      expect(screen.getByRole("button", { name: /TAKE EVERY BLOCK OFF/ })).toBeInTheDocument();
+
+      await act(async () => { vi.advanceTimersByTime(6000); });
+      expect(screen.getByRole("button", { name: "CLEAR BUILD STATE" })).toBeInTheDocument();
+      expect(api.resetSession).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("leaves the panel exactly as it was when the server refuses the reset", async () => {
     const api = mockedApi();
     api.resetSession = vi.fn(async () => { throw new Error("a build is running"); });
@@ -326,6 +348,7 @@ describe("RunnerPanel", () => {
     await waitFor(() => expect(screen.getByText("RUN COMPLETE")).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole("button", { name: "CLEAR BUILD STATE" }));
+    fireEvent.click(screen.getByRole("button", { name: /TAKE EVERY BLOCK OFF THE BOARD/ }));
 
     // A cleared panel over a server that still remembers would be the console
     // claiming a reset that did not happen.

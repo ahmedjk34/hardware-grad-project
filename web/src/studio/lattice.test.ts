@@ -98,6 +98,14 @@ describe("a shift clips the far cells, and the lattice says which", () => {
     expect(shifted.centre.z).toBeCloseTo(centre.z, 6);
   });
 
+  it("never slides the feeder [0,0] — it is a plain home to raw [0,0]", () => {
+    const shift = { x_cm: 1.2, y_cm: -0.4 };
+    const feeder = find(latticeCells("vertical", shift), 0, 0);
+    const unshifted = find(latticeCells("vertical"), 0, 0);
+    expect(feeder.centre.x).toBeCloseTo(unshifted.centre.x, 6);
+    expect(feeder.centre.z).toBeCloseTo(unshifted.centre.z, 6);
+  });
+
   it("the feeder stays the feeder even when the shift clips it out", () => {
     const refused = JSON.parse(JSON.stringify(rigConfig())) as RigConfig;
     refused.grid.modes.vertical.shift_x_cm = 40;
