@@ -36,6 +36,7 @@ from vision.block_levels import (                                   # noqa: E402
     MIN_HEIGHT_CONFIDENCE,
     LevelMetrics,
     detect_leveled_blocks,
+    detect_top_blocks,
     detect_top_layer,
     estimate_camera_height,
     height_map,
@@ -489,6 +490,30 @@ if multi:
           all(b.level is None for b in found) and
           any(not b.on_top for b in found),
           "levels declined, stacks still resolved")
+
+# The 20260909 scene is the regression that forced top resolution into the
+# production ordering.  Its upper pile is horizontal / vertical / horizontal:
+# mode-filtering first used to expose the buried vertical middle in vertical
+# mode and both horizontal layers in horizontal mode.  This layer owns the
+# orientation-independent half: only the physically highest horizontal face
+# may survive here.  Border rails are deliberately left for block_outline's
+# existing edge filter, so assert identities rather than a whole-frame count.
+mixed = [p for p in paths if "20260909-094841" in p.name]
+if mixed:
+    capture = cv2.imread(str(mixed[0]))
+    tops = detect_top_blocks(capture)
+
+    def has_top_near(point, radius=4.0):
+        return any(math.hypot(item.center[0] - point[0],
+                              item.center[1] - point[1]) <= radius
+                   for item in tops)
+
+    check("the mixed tower keeps its physical horizontal top",
+          has_top_near((176, 149)))
+    check("the mixed tower suppresses its buried vertical middle",
+          not has_top_near((160, 165)))
+    check("the mixed tower suppresses its buried horizontal base",
+          not has_top_near((176, 184)))
 
 # The 29-block reference board is FLAT, and this is the regression that matters
 # most: a flat board must not be reported as a tower. With self_calibrate on it

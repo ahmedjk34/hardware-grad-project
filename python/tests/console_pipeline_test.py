@@ -19,6 +19,7 @@ from rig.console_pipeline import (  # noqa: E402
     FrameAnalysisContext,
 )
 from rig.workspace import WorkspaceMap  # noqa: E402
+from rig.grid import MachineGrid  # noqa: E402
 from vision.analysis_worker import AnalysisSnapshot  # noqa: E402
 
 
@@ -127,6 +128,24 @@ def test_a_successful_empty_frame_stays_analysis_ok():
     assert frame.analysis_ok is True
     assert frame.analysis_error is None
     assert frame.detections == ()
+
+
+def test_stack_path_activates_only_when_this_mode_has_a_higher_level():
+    class Ledger:
+        levels = {}
+
+        def expected_top_level(self, mode):
+            return self.levels.get(mode, {})
+
+    ledger = Ledger()
+    pipeline = ConsolePipeline(placement_ledger=ledger)
+    pipeline.grid = MachineGrid.from_config(mode="vertical")
+
+    assert pipeline._stack_aware() is False
+    ledger.levels["horizontal"] = {(1, 1): 4}
+    assert pipeline._stack_aware() is False
+    ledger.levels["vertical"] = {(1, 1): 0, (2, 2): 1}
+    assert pipeline._stack_aware() is True
 
 
 def test_mismatched_source_sequence_is_never_published():

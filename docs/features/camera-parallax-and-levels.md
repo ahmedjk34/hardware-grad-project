@@ -1,8 +1,9 @@
 # Camera parallax and levels — why a stacked block is not where it looks
 
-**Status: FUTURE WORK. Not built, and deliberately IGNORED by
-[placement supervision](placement-supervision.md) v1 — which has now shipped,
-so §4's price is being paid in production.**
+**Status: PARTIAL. Covered lower layers are now removed before orientation and
+grid filtering whenever the placement ledger says the active board contains a
+stack. Absolute level measurement and parallax-corrected cell localisation are
+still future work, so placement supervision retains the level-3 ceiling.**
 
 The ceiling is **enforced in code**: `rig.supervisor.LEVEL_CEILING = 3`, and
 `unjudged_cells()` refuses every cell whose expected top level reaches it.
@@ -15,7 +16,9 @@ document's arithmetic into `config/rig.json` is what raises that constant.
 This document exists because ignoring parallax is a *choice with a measurable
 price*, and the price has to be written down somewhere the next person will
 find it. §4 is that price: **a hard level ceiling on what supervision can see
-at all.** Everything else here is the design for lifting it later.
+at all.** The top-layer resolver removes false evidence from covered layers;
+everything else here is the design for lifting the remaining localisation
+ceiling later.
 
 In one sentence: **the workspace map is fitted to one plane, a stacked block is
 on a different one, so the map reports it displaced away from the camera —

@@ -638,6 +638,29 @@ ordering of two measurements in the same stack, never their absolute size, so it
 needs no camera height and no calibration. It is what `on_top`, `covered_by` and
 `detect_top_layer` report.
 
+### Production stack path
+
+The web console now activates `detect_aligned_blocks(stack_aware=True)` whenever
+the active mode's placement ledger contains a top level above zero. The ordering
+is deliberate:
+
+```text
+detect both orientations → resolve stack tops → orientation filter → lattice
+```
+
+Resolving orientation first is incorrect. In the committed 20260909 mixed tower,
+it exposes the buried vertical middle in vertical mode and both horizontal layers
+in horizontal mode. `detect_top_blocks` instead reconciles ordinary layer-1
+candidates with side-suppressed recovery candidates per stack region, keeps the
+ordinary result wherever it already establishes covering, and adopts recovery
+only for another unresolved region. Border rejection, orientation filtering and
+lattice handling remain owned by `block_outline` after that step.
+
+The ledger is only the activation signal. Vision receives a boolean snapshot,
+not the ledger and not a copied block height. Absolute numbered levels remain
+untrusted on real frames, and the supervisor's level-3 parallax ceiling therefore
+remains enforced.
+
 **Which numbered level a block is on — not validated on real frames.** On the
 29-block reference board, which is *entirely flat*, the measured ratios scatter
 with a coefficient of variation of **0.54** — higher than the genuinely

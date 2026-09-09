@@ -93,6 +93,7 @@ class ConsolePipeline:
                  settings_path: Path = SETTINGS_PATH,
                  rig_config_path: Path = CONFIG_PATH,
                  workspace_map_path: Path = WORKSPACE_MAP_PATH,
+                 placement_ledger=None,
                  mode: str | None = None, analysis_hz: float = 10.0,
                  paper_hz: float = PAPER_GRID_HZ, color_threshold: int = 8,
                  min_area: int = 500):
@@ -104,6 +105,7 @@ class ConsolePipeline:
         self.settings_path = Path(settings_path)
         self.rig_config_path = Path(rig_config_path)
         self.workspace_map_path = Path(workspace_map_path)
+        self.placement_ledger = placement_ledger
         self.requested_mode = mode
         self.analysis_hz = float(analysis_hz)
         self.paper_hz = float(paper_hz)
@@ -350,7 +352,8 @@ class ConsolePipeline:
             self.analysis.submit(
                 view, snapshot.sequence, self._map_generation, context=context,
                 color_threshold=self.color_threshold, min_area=self.min_area,
-                analysis_grid=self.grid, orientation_workspace=workspace)
+                analysis_grid=self.grid, orientation_workspace=workspace,
+                stack_aware=self._stack_aware())
             self.paper.submit(view, snapshot.sequence, self._map_generation)
 
         self.paper.poll(self._map_generation)
@@ -372,6 +375,25 @@ class ConsolePipeline:
                 self._last_frame = replace(self._last_frame, stale=stale)
                 return self._last_frame
         return None
+
+    def _stack_aware(self) -> bool:
+        """Whether this mode's ledger says a covered layer can exist.
+
+        A snapshot is taken on the pipeline owner thread and travels with the
+        exact submitted frame.  The vision worker receives only a boolean; it
+        never imports or queries the placement ledger itself.
+        """
+        ledger = self.placement_ledger
+        if ledger is None or self.grid is None:
+            return False
+        try:
+            return any(level > 0 for level in
+                       ledger.expected_top_level(self.grid.mode).values())
+        except (AttributeError, TypeError, ValueError):
+            # A missing/malformed memory source cannot justify changing the
+            # detector path.  Supervision's own NO_MEMORY gate remains the
+            # authority on whether the board may be judged.
+            return False
 
     def _coherent_frame(self, completed) -> ProcessedFrame | None:
         """Validate and materialize one worker result without mutable joins."""

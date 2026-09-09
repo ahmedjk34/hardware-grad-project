@@ -175,6 +175,7 @@ from vision.block_detector import (
     MAX_PROCESSING_WIDTH,
     BlockDetection,
     DetectionMetrics,
+    _rescale_detection,
     _warm_mask,
     detect_blocks,
 )
@@ -301,6 +302,10 @@ class SurfaceMasks:
     side: np.ndarray
     solid_side: np.ndarray
     warm: np.ndarray
+    # The exact bounded, colour-corrected BGR image the masks were derived
+    # from.  The live top resolver reuses it for layer 1, avoiding a second
+    # illumination-flattening pass whose result could not differ.
+    analysis: np.ndarray
     scale: float
     separability: float
     split_ok: bool
@@ -347,6 +352,27 @@ class LevelMetrics:
     height_residual: float | None = None
     height_confidence: float = 0.0
     self_calibrated: bool = False
+
+
+@dataclass
+class TopLayerMetrics:
+    """Work performed by :func:`detect_top_blocks`.
+
+    The live detector does not need an absolute camera height or numbered
+    levels.  It needs the smaller, safer answer: which block-shaped surfaces
+    are covered by another surface in the same physical stack.  Keeping these
+    metrics separate from :class:`LevelMetrics` makes that distinction explicit
+    and lets the console expose/benchmark the stack-only path without implying
+    that it measured a level.
+    """
+
+    raw_detections: int = 0
+    raw_covered: int = 0
+    split_detections: int = 0
+    split_covered: int = 0
+    returned_tops: int = 0
+    used_surface_split: bool = False
+    separability: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -440,7 +466,7 @@ def split_surfaces(frame: np.ndarray, *, color_threshold: int = 8,
         # one.
         empty = np.zeros_like(warm)
         return SurfaceMasks(top=warm.copy(), side=empty, solid_side=empty.copy(),
-                            warm=union, scale=scale,
+                            warm=union, analysis=corrected, scale=scale,
                             separability=separability, split_ok=False)
 
     bright = cv2.compare(luminance, threshold, cv2.CMP_GE)
@@ -466,6 +492,7 @@ def split_surfaces(frame: np.ndarray, *, color_threshold: int = 8,
     solid = cv2.dilate(solid, _SPLIT_OPEN)
     solid = cv2.bitwise_and(solid, side)
     return SurfaceMasks(top=top, side=side, solid_side=solid, warm=union,
+                        analysis=corrected,
                         scale=scale, separability=separability, split_ok=True)
 
 
@@ -875,6 +902,185 @@ def _resolve_stacks(blocks: list[LeveledBlock]) -> tuple[int, int]:
             blocks[index].covered_by = winner
             suppressed += 1
     return len(stacks), suppressed
+
+
+def _measure_candidates(detections, masks: SurfaceMasks,
+                        axis_full) -> list[LeveledBlock]:
+    """Attach relative height evidence to an existing layer-1 candidate set.
+
+    This is the height-independent half of ``detect_leveled_blocks`` factored
+    out for the live stack resolver.  It deliberately never converts a ratio
+    into centimetres or a numbered level: relative ordering within one stack
+    is all that is required to discard covered layers.
+    """
+    if not detections:
+        return []
+
+    axis_full = np.asarray(axis_full, dtype=np.float64)
+    axis_work = axis_full * masks.scale
+    half_diagonal = math.hypot(masks.top.shape[1], masks.top.shape[0]) * 0.5
+    min_radius = half_diagonal * MIN_AXIS_RADIUS_FRACTION
+    max_run = max(8, int(round(min(masks.top.shape[:2]) * 0.22)))
+
+    blocks: list[LeveledBlock] = []
+    for detection in detections:
+        block = LeveledBlock(
+            detection=detection,
+            ground_center=detection.center,
+            ground_box=detection.box.astype(np.float64),
+            complete=(detection.rectangularity >= COMPLETE_RECTANGULARITY and
+                      detection.solidity >= COMPLETE_SOLIDITY),
+        )
+        if masks.split_ok:
+            box_work = detection.box.astype(np.float64) * masks.scale
+            centre_work = box_work.mean(axis=0)
+            if float(np.hypot(*(centre_work - axis_work))) >= min_radius:
+                short_side = min(detection.width, detection.height) * masks.scale
+                ratio, support = _side_ratio(
+                    box_work, axis_work, masks.top, masks.side, max_run,
+                    max(2.0, short_side * 0.30))
+                block.height_ratio = ratio
+                block.support = support
+        blocks.append(block)
+
+    _share_plateaus(blocks, masks)
+    _resolve_stacks(blocks)
+    return blocks
+
+
+def detect_top_blocks(frame: np.ndarray, *,
+                      axis: tuple[float, float] | None = None,
+                      color_threshold: int = 8,
+                      red_green_threshold: int = 3,
+                      min_area: int = 500,
+                      max_area: int | None = None,
+                      max_processing_width: int = MAX_PROCESSING_WIDTH,
+                      balance: bool = False, flatten: bool = True,
+                      expected_size: tuple[float, float] | None = None,
+                      metrics: TopLayerMetrics | None = None,
+                      ) -> list[BlockDetection]:
+    """Return only visible stack tops, before any orientation/grid filtering.
+
+    Two layer-1 candidate sets are compared against the same surface masks:
+
+    * the ordinary frame preserves thin/lower faces and gives the best relative
+      ordering when layer 1 can already decompose a tower;
+    * a copy with solid vertical side faces neutralised can recover top faces
+      that those sides welded into one compound component.
+
+    The two are reconciled per physical stack. Ordinary evidence wins where it
+    already proves a covering relationship; split evidence is adopted only in
+    another region that ordinary layer 1 left unresolved. This matters on the
+    20260909 capture: suppressing sides helps older merged towers but changes
+    the height cue enough to elect a buried middle block in the upper three-
+    layer tower. Conversely, the 20260905 capture needs the split to expose its
+    covered faces. The rule is evidence-based, deterministic, and does not infer
+    a numbered level.
+
+    This entry point intentionally has no ``block_height_cm`` argument.  It
+    does not create the forbidden Pi-side copy of firmware ``BLOCK_HEIGHT_CM``;
+    ratios and relative stack order are scale-free.
+    """
+    if frame is None or frame.ndim != 3 or frame.shape[2] != 3:
+        raise ValueError("detect_top_blocks expects a BGR colour image")
+
+    masks = split_surfaces(
+        frame, color_threshold=color_threshold,
+        red_green_threshold=red_green_threshold,
+        balance=balance, flatten=flatten,
+        max_processing_width=max_processing_width)
+
+    height, width = frame.shape[:2]
+    axis_full = (np.array(((width - 1) / 2.0, (height - 1) / 2.0))
+                 if axis is None else np.asarray(axis, dtype=np.float64))
+    # Layer 1 normally repeats the resize + colour preparation internally.
+    # ``SurfaceMasks.analysis`` is already that exact working image, so run it
+    # there and scale its detections back through the same helper used by
+    # detect_blocks.  This preserves detector geometry while paying for the
+    # expensive flattening once rather than once per candidate set.
+    work_h, work_w = masks.analysis.shape[:2]
+    sx, sy = width / work_w, height / work_h
+    area_scale = sx * sy
+    work_expected = None if expected_size is None else (
+        float(expected_size[0]) / sx, float(expected_size[1]) / sy)
+    detector_args = dict(
+        color_threshold=color_threshold,
+        red_green_threshold=red_green_threshold,
+        min_area=float(min_area) / area_scale,
+        max_area=(None if max_area is None else float(max_area) / area_scale),
+        max_processing_width=work_w,
+        balance=False, flatten=False, expected_size=work_expected)
+
+    def candidates(image):
+        found = detect_blocks(image, **detector_args)
+        if sx == 1.0 and sy == 1.0:
+            return found
+        return sorted((_rescale_detection(item, sx, sy) for item in found),
+                      key=lambda item: (item.center[1], item.center[0]))
+
+    raw = _measure_candidates(candidates(masks.analysis),
+                              masks, axis_full)
+    raw_covered = sum(not block.on_top for block in raw)
+
+    split: list[LeveledBlock] = []
+    split_covered = 0
+    if masks.split_ok and masks.solid_side.any():
+        # Recovery candidate. Neutralise on the original-resolution image,
+        # then let layer 1 perform its normal bounded preprocessing.
+        # Suppression and illumination flattening do not commute; doing both
+        # on the work image is faster but loses covered faces in the real
+        # 20260905 and 20260909 towers.
+        separated = suppress_side_faces(frame, masks)
+        split_detections = detect_blocks(
+            separated,
+            color_threshold=color_threshold,
+            red_green_threshold=red_green_threshold,
+            min_area=min_area, max_area=max_area,
+            max_processing_width=max_processing_width,
+            balance=balance, flatten=flatten, expected_size=expected_size)
+        split = _measure_candidates(split_detections, masks, axis_full)
+        split_covered = sum(not block.on_top for block in split)
+
+    # Prefer direct evidence PER STACK, not once for the whole frame.  One scene
+    # can contain both a tower layer 1 decomposed cleanly and a tower whose side
+    # faces welded it into one blob.  A global raw/split switch necessarily
+    # loses one of those.  Start with raw tops; adopt a split-resolved group only
+    # when it does not overlap a group raw already resolved.
+    def groups(blocks):
+        result: dict[int, list[LeveledBlock]] = {}
+        for block in blocks:
+            result.setdefault(block.stack, []).append(block)
+        return [members for members in result.values() if len(members) > 1]
+
+    raw_groups = groups(raw)
+    adopted_split_groups = []
+    for members in groups(split):
+        overlaps_resolved_raw = any(
+            _overlap(left.ground_box, right.ground_box) >= STACK_OVERLAP
+            for left in members for raw_group in raw_groups for right in raw_group)
+        if not overlaps_resolved_raw:
+            adopted_split_groups.append(members)
+
+    chosen_tops = [block for block in raw if block.on_top]
+    for members in adopted_split_groups:
+        chosen_tops = [
+            block for block in chosen_tops
+            if not any(_overlap(block.ground_box, member.ground_box)
+                       >= STACK_OVERLAP
+                       for member in members)
+        ]
+        chosen_tops.extend(block for block in members if block.on_top)
+    tops = [block.detection for block in chosen_tops]
+
+    if metrics is not None:
+        metrics.raw_detections = len(raw)
+        metrics.raw_covered = raw_covered
+        metrics.split_detections = len(split)
+        metrics.split_covered = split_covered
+        metrics.returned_tops = len(tops)
+        metrics.used_surface_split = bool(adopted_split_groups)
+        metrics.separability = masks.separability
+    return tops
 
 
 # ---------------------------------------------------------------------------

@@ -704,6 +704,7 @@ def create_app(options: ConsoleAppOptions | None = None) -> FastAPI:
             camera_backend="mock" if mock else "auto",
             settings_path=options.settings_path,
             workspace_map_path=options.workspace_map_path,
+            placement_ledger=app.state.ledger,
             mode=options.mode,
         )
         board = MockBoard(build_seconds=options.build_seconds) if mock else None

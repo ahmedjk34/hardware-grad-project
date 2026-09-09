@@ -1323,6 +1323,7 @@ def test_the_lifespan_owns_a_ledger_the_controller_writes_to(tmp_path):
     state = asyncio.run(scenario())
     assert isinstance(state.ledger, PlacementLedger)
     assert state.controller.ledger is state.ledger
+    assert state.pipeline.placement_ledger is state.ledger
     assert isinstance(state.supervisor, Supervisor)
     # D3: empty on every process, never reloaded from `placements.log`.
     assert state.ledger.has_memory() is False

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The orientation rule is inside detect_aligned_blocks, before its lattice."""
+"""Stack tops are resolved before detect_aligned_blocks filters orientation."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 from unittest.mock import patch
 
+import cv2
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -56,4 +57,42 @@ with patch("vision.block_outline.detect_blocks", return_value=[vertical]):
         FRAME, grid=VERTICAL, orientation_workspace=MAP,
         include_rejected=True, rectify=False) == [vertical]
 
-print("all detector-orientation integration checks passed")
+# Named real-frame regression: the upper pile is horizontal / vertical /
+# horizontal from top to bottom.  Resolving orientation first used to return
+# the buried vertical middle and both horizontal layers.  Stack-aware mode must
+# elect one physical top across orientations, then let only horizontal keep it.
+capture_path = (Path(__file__).resolve().parents[1] / "captures" /
+                "20260909-094841_corrected_equidistant-lens168-out120-"
+                "k+0.14_+0.18_+0.03_+0.00-c+0_+0-f1.200_1.105-s+0.042-"
+                "p-0.020_+0.008.png")
+capture = cv2.imread(str(capture_path))
+assert capture is not None
+image_size = capture.shape[1::-1]
+
+
+def full_frame_map(grid):
+    width, height = image_size
+    return WorkspaceMap.from_grid(
+        grid, ((0, height - 1), (width - 1, height - 1),
+               (width - 1, 0), (0, 0)), image_size)
+
+
+vertical_map = full_frame_map(VERTICAL)
+horizontal_map = full_frame_map(HORIZONTAL)
+vertical_tops = detect_aligned_blocks(
+    capture, grid=VERTICAL, orientation_workspace=vertical_map,
+    include_rejected=True, rectify=False, stack_aware=True)
+horizontal_tops = detect_aligned_blocks(
+    capture, grid=HORIZONTAL, orientation_workspace=horizontal_map,
+    include_rejected=True, rectify=False, stack_aware=True)
+
+assert len(vertical_tops) == 4
+assert len(horizontal_tops) == 3
+assert all(np.hypot(item.center[0] - 160, item.center[1] - 165) > 4
+           for item in vertical_tops)
+assert sum(np.hypot(item.center[0] - 176, item.center[1] - 149) <= 4
+           for item in horizontal_tops) == 1
+assert all(np.hypot(item.center[0] - 176, item.center[1] - 184) > 4
+           for item in horizontal_tops)
+
+print("all detector-orientation and stack-first capture checks passed")

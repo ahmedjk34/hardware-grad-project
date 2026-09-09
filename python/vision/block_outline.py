@@ -56,6 +56,7 @@ import cv2
 import numpy as np
 
 from vision.block_detector import BlockDetection, detect_blocks
+from vision.block_levels import detect_top_blocks
 from vision.block_grid import (
     DUPLICATE_IOU,
     MAX_INDEX_SNAP,
@@ -245,7 +246,7 @@ def _rectify(detections, bearing):
 def detect_aligned_blocks(frame: np.ndarray, *, grid=None,
                           edge_tolerance: float = EDGE_TOLERANCE_PX,
                           rectify: bool = True, include_rejected: bool = False,
-                          orientation_workspace=None,
+                          orientation_workspace=None, stack_aware: bool = False,
                           **detector_kwargs) -> list[BlockDetection]:
     """Detect blocks and return them as clean, grid-aligned rectangles.
 
@@ -265,10 +266,18 @@ def detect_aligned_blocks(frame: np.ndarray, *, grid=None,
     offcuts were the only thing off the lattice; that holder is off the rig.
 
     ``orientation_workspace`` makes the detector mode-specific. Before any
-    lattice is fitted, each raw block's long edge is compared with the local
-    camera projection of machine X/Y. A confidently vertical block is omitted
-    from a horizontal grid and vice versa. Ambiguous detections stay visible so
-    a rotated or partially occluded active-mode block still reaches supervision.
+    lattice is fitted, each surviving block's long edge is compared with the
+    local camera projection of machine X/Y. A confidently vertical block is
+    omitted from a horizontal grid and vice versa. Ambiguous detections stay
+    visible so a rotated or partially occluded active-mode block still reaches
+    supervision.
+
+    ``stack_aware`` resolves physical stack tops across BOTH orientations before
+    that mode filter runs.  This ordering is load-bearing: filtering orientation
+    first exposes a buried middle layer whenever the real top is laid the other
+    way.  The web console enables it from placement-ledger memory as soon as the
+    active board contains a level above zero; ordinary single-layer feeds retain
+    the established fast path.
     """
     if frame is None or frame.ndim != 3 or frame.shape[2] != 3:
         raise ValueError("detect_aligned_blocks expects a BGR colour image")
@@ -295,7 +304,8 @@ def detect_aligned_blocks(frame: np.ndarray, *, grid=None,
     # default, 161 ms at 250.
     kwargs = {}
     kwargs.update(detector_kwargs)
-    detections = detect_blocks(frame, **kwargs)
+    detections = (detect_top_blocks(frame, **kwargs) if stack_aware
+                  else detect_blocks(frame, **kwargs))
     if not detections:
         return []
 

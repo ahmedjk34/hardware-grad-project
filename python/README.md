@@ -48,6 +48,8 @@ python/
 └── vision/                     importable library — no windows, no argv, no prints
     ├── camera_source.py        Picamera2 on the Pi, V4L2 elsewhere
     ├── block_detector.py       colour + contour block detection and geometry
+    ├── block_levels.py         stack-top ordering and optional offline levels
+    ├── block_outline.py        grid-aware cleanup, orientation and top filtering
     ├── commands.py             the typed-command engine the viewers share
     ├── devices.py              /dev/video* enumeration and picker
     ├── fisheye.py              the fisheye → rectilinear correction
