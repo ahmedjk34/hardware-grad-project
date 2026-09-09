@@ -26,11 +26,29 @@
  */
 import { aabbOf, footprintOverlapArea } from "./geometry";
 import type { Model, ModelBlock } from "./model";
-import { resolveShift, runAxisOf, type BondShifts, type ModeName, type Shift } from "./coords";
+import { runAxisOf, type BondShifts, type ModeName, type Shift } from "./coords";
 import type { StudioSettings } from "./settings";
 import {
   validateModel, type Diagnostic, type RigGeometrySnapshot, type ValidationContext,
 } from "./validate";
+
+/**
+ * The shift a block is BUILT at: the block's OWN frozen `shiftCm` (stamped when
+ * it was placed) composed with the mode's live baseline `shifts[mode]`.
+ * `bondShifts` is no longer consulted per block - a placed block carries its
+ * own registration and nothing re-derives it.
+ */
+function blockShift(
+  block: ModelBlock, shifts?: Partial<Record<ModeName, Shift>>,
+): Shift | undefined {
+  const base = shifts?.[block.mode];
+  const frozen = block.shiftCm;
+  if (!base && !frozen) return undefined;
+  return {
+    x_cm: (base?.x_cm ?? 0) + (frozen?.[0] ?? 0),
+    y_cm: (base?.y_cm ?? 0) + (frozen?.[1] ?? 0),
+  };
+}
 
 // ── Program shape (Plan 4 §6.1) ──────────────────────────────────────────────
 
@@ -122,10 +140,10 @@ export function supportGraph(
   for (const block of model.blocks) graph.set(block.id, new Set<string>());
   for (const block of model.blocks) {
     if (block.level <= 0) continue;
-    const box = aabbOf(block, resolveShift(block, shifts, bondShifts));
+    const box = aabbOf(block, blockShift(block, shifts));
     for (const other of model.blocks) {
       if (other.id === block.id) continue;
-      const otherBox = aabbOf(other, resolveShift(other, shifts, bondShifts));
+      const otherBox = aabbOf(other, blockShift(other, shifts));
       if (Math.abs(otherBox.max.z - box.min.z) > 1e-6) continue;
       if (footprintOverlapArea(otherBox, box) > 1e-6) graph.get(block.id)!.add(other.id);
     }
@@ -291,7 +309,7 @@ export function emitOps(
 
   const emitShiftIfNeeded = (block: ModelBlock) => {
     const axis = runAxisOf(block.mode);
-    const want = resolveShift(block, shifts, bondShifts) ?? { x_cm: 0, y_cm: 0 };
+    const want = blockShift(block, shifts) ?? { x_cm: 0, y_cm: 0 };
     const wantAxis = axis === "x" ? want.x_cm : want.y_cm;
     const haveAxis = axis === "x" ? applied[block.mode][0] : applied[block.mode][1];
     if (Math.abs(wantAxis - haveAxis) < 1e-9) return;

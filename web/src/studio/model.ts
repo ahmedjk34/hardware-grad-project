@@ -17,6 +17,14 @@ export interface ModelBlock {
   row: number;
   level: number;
   colour: BlockColour;
+  /**
+   * The grid shift, in `[x_cm, y_cm]`, that was live when this block was
+   * placed - FROZEN here at placement. It is the block's own registration and
+   * nothing re-derives it: re-dialling a course later moves only blocks placed
+   * after the change, never this one. Absent ⇒ this block sits on its plain
+   * integer cell. Rendered from and compiled from directly.
+   */
+  shiftCm?: [number, number];
 }
 
 export interface Model {

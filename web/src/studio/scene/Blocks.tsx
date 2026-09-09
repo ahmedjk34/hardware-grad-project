@@ -264,10 +264,11 @@ export const Blocks = memo(function Blocks({ blocks, activeMode, shift, heldLeve
   heldLevel: number | null;
   reduced: boolean;
 } & SurfaceHandlers) {
-  // A placed block never moves. It always draws at its own stored cell — the
-  // grid shift is a placement preview for the held level only, never a force
-  // on committed geometry.
-  const shiftOf = (_block: ModelBlock): Shift | undefined => undefined;
+  // A placed block draws at the shift it was PLACED with — frozen on the block
+  // itself. Re-dialling a course never moves an existing block; the live grid
+  // shift is only a preview for the next drop.
+  const shiftOf = (block: ModelBlock): Shift | undefined =>
+    block.shiftCm ? { x_cm: block.shiftCm[0], y_cm: block.shiftCm[1] } : undefined;
   const knownIds = useRef(new Set<string>());
   const animateIds = new Set(blocks.filter(block => !knownIds.current.has(block.id)).map(block => block.id));
   useLayoutEffect(() => {

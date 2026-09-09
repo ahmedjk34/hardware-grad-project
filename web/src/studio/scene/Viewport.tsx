@@ -178,11 +178,14 @@ function Scene({ mode, shift, bondShifts, view, nonce, reduced, model, target, s
 } & SurfaceHandlers) {
   const box = useMemo(() => envelopeBoxScene(), []);
   const centre = boxCentre(box);
-  // A placed block never moves. It draws — shadow included — at its own stored
-  // cell, whatever the grid shift is doing. The shift is a placement preview
-  // for the held level only; it never drags committed geometry.
+  // Shadows follow their block: at the shift the block was PLACED with, frozen
+  // on the block. Re-dialling a course never drags an existing block.
   const shadowBlocks = useMemo(
-    () => model.blocks.map(block => ({ ...block, shift: undefined })),
+    () => model.blocks.map(block => ({
+      ...block,
+      shift: block.shiftCm
+        ? { x_cm: block.shiftCm[0], y_cm: block.shiftCm[1] } : undefined,
+    })),
     [model.blocks],
   );
   return (

@@ -222,6 +222,7 @@ export default function Studio() {
         const candidate: ModelBlock = {
           id: `b${nextId.current + blocks.length}`, mode: start.mode,
           col: cell.col, row: cell.row, level: cell.level, colour: "white",
+          ...(previewShift ? { shiftCm: [previewShift.x_cm, previewShift.y_cm] as [number, number] } : {}),
         };
         if (!legalPlacement(preview, candidate)) continue;
         blocks.push(candidate);
@@ -243,16 +244,17 @@ export default function Studio() {
       }
       return;
     }
-    const candidate = {
+    const candidate: ModelBlock = {
       id: `b${nextId.current}`, mode: start.mode,
       col: hit.target.col, row: hit.target.row, level: hit.target.level, colour: "white" as const,
+      ...(previewShift ? { shiftCm: [previewShift.x_cm, previewShift.y_cm] as [number, number] } : {}),
     };
     if (legalPlacement(model, candidate)) {
       nextId.current += 1;
       commit({ type: "place", block: candidate });
       setTarget(null);
     }
-  }, [atHeldLevel, commit, legalPlacement, model]);
+  }, [atHeldLevel, commit, legalPlacement, model, previewShift]);
 
   const selectDiagnostic = useCallback((id: string) => {
     const block = model.blocks.find(item => item.id === id);

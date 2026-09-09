@@ -302,10 +302,17 @@ function parseBlock(value: unknown, index: number): Result<ModelBlock> {
     if (!Number.isInteger(value[key])) return fail(`${id} has a non-integer ${key}`);
   }
   const colour = COLOURS.includes(value.colour as BlockColour) ? value.colour as BlockColour : "white";
+  // The grid shift frozen onto the block when it was placed. Absent ⇒ plain cell.
+  const s = value.shiftCm;
+  const shiftCm = Array.isArray(s) && s.length === 2
+    && Number.isFinite(s[0]) && Number.isFinite(s[1]) && (s[0] !== 0 || s[1] !== 0)
+    ? [s[0] as number, s[1] as number] as [number, number]
+    : undefined;
   return ok({
     id, mode: value.mode,
     col: value.col as number, row: value.row as number, level: value.level as number,
     colour,
+    ...(shiftCm ? { shiftCm } : {}),
   });
 }
 
