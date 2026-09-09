@@ -90,6 +90,20 @@ export function SupervisionBanner({ state, onAcknowledge, onCorrect, quiet = fal
   const supervision = state.supervision;
   if (!supervision) return null;
 
+  // The operator (or a crash) switched supervision off: every surface it feeds
+  // goes quiet. A crash leaves one dim line so the toolbar toggle is not the
+  // only sign; a deliberate OFF says nothing at all.
+  if (state.supervision_enabled === false) {
+    if (!state.supervision_fault) return null;
+    return (
+      <p className="sv-status sv-faint" role="status" aria-live="polite">
+        <span aria-hidden="true">○</span>{" "}
+        SUPERVISOR OFF — stopped after an error: {state.supervision_fault}.{" "}
+        Re-enable from the camera toolbar.
+      </p>
+    );
+  }
+
   // VERIFIED gets NO banner, deliberately. A 40-block build would produce 40
   // green bars, and a console that celebrates every success trains the
   // operator to ignore it — and then the one amber bar that matters is ignored

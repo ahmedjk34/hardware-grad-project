@@ -24,6 +24,7 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
+import logging
 import os
 from pathlib import Path
 import threading
@@ -59,6 +60,8 @@ from web.state import (
     worst_cell_residual_cm,
 )
 
+logger = logging.getLogger(__name__)
+
 
 #: The state fields that make a snapshot MEAN something different. Camera
 #: geometry and frame age are deliberately absent: they change on every frame
@@ -71,6 +74,10 @@ _SEMANTIC_FIELDS = (
     "build_total_steps", "build_phase", "build_phase_status",
     "build_release_confirmed", "views",
     "gantry_connected", "cell_phase",
+    # The operator kill switch flips this the instant it is pressed, mid-build
+    # included, and the fault path flips it on a crash — either way every
+    # supervision surface has to go quiet at once, not on the 5 Hz throttle.
+    "supervision_enabled",
     # An autonomous RUN reacts to these to send the next block and to close the
     # claw, so they must reach the client at the driver's full rate rather than
     # on the 5 Hz geometry throttle.
@@ -188,8 +195,12 @@ async def _drive_pipeline(app: FastAPI, pipeline: ConsolePipeline,
                 # The frame difference inside is the THIRD piece of blocking
                 # work and goes to the same one owner thread (AGENTS.md §7);
                 # the set maths it feeds stays on the loop.
-                await _supervise(app, frame, job, loop, executor)
-                _auto_pickup(app, frame)
+                await _supervise_guarded(app, frame, job, loop, executor)
+                try:
+                    _auto_pickup(app, frame)
+                except Exception:  # noqa: BLE001 - a feeder-check bug must not stall a RUN
+                    logger.exception(
+                        "auto-pickup check raised; skipped this frame")
             await asyncio.sleep(interval_s)
     except asyncio.CancelledError:
         raise
@@ -235,6 +246,61 @@ def _auto_pickup(app: FastAPI, frame) -> None:
         "auto-pickup: closed the claw (block confirmed at the feeder "
         "before the descent)")
     publish_state(app, force=True)
+
+
+def _clear_supervision_state(app: FastAPI) -> None:
+    """Drop the published verdict and everything derived from it, exactly as
+    ``/api/session/reset`` does. Shared by the operator OFF switch and the
+    fault path so a disabled observer leaves nothing on screen.
+    """
+    supervisor = getattr(app.state, "supervisor", None)
+    if supervisor is not None:
+        supervisor.reset()
+    app.state.supervision = None
+    app.state.supervision_signature = None
+    app.state.supervision_baseline = None
+    app.state.supervision_sequence = None
+    app.state.supervision_result_id = None
+    app.state.supervision_acknowledged = False
+    app.state.pending_check = None
+    app.state.vision_verification = None
+    app.state.correction_ticket = None
+    app.state.correction_attempted_signature = None
+
+
+def _fault_supervision(app: FastAPI, exc: BaseException) -> None:
+    """An exception escaped ``_supervise``. Contain it: disable supervision for
+    the rest of the session, record why, and blank every surface it feeds. The
+    driver loop — and with it ``job.poll()``, ``_auto_pickup`` and the camera
+    feed — goes on. The operator restarts the observer from the camera toolbar
+    once the cause is fixed (``POST /api/supervision/enabled``).
+    """
+    app.state.supervision_enabled = False
+    app.state.supervision_fault = f"{type(exc).__name__}: {exc}"
+    _clear_supervision_state(app)
+    logger.exception("supervision raised; disabled for this session")
+    with suppress(Exception):
+        build_log.build.note(
+            f"placement supervision raised ({type(exc).__name__}: {exc}); "
+            "disabled — re-enable from the camera toolbar once fixed")
+
+
+async def _supervise_guarded(app: FastAPI, frame, job: BuildJob, loop,
+                             executor: ThreadPoolExecutor) -> None:
+    """``_supervise``, wrapped so a bug in the observer can never take the
+    driver loop down with it (F1 of the kill-switch change). When supervision
+    is switched off — by the operator or by an earlier crash — the observer is
+    skipped entirely and the last verdict is cleared once.
+    """
+    if not getattr(app.state, "supervision_enabled", True):
+        if (getattr(app.state, "supervision", None) is not None
+                or getattr(app.state, "vision_verification", None) is not None):
+            _clear_supervision_state(app)
+        return
+    try:
+        await _supervise(app, frame, job, loop, executor)
+    except Exception as exc:  # noqa: BLE001 - any observer bug, contained here
+        _fault_supervision(app, exc)
 
 
 async def _supervise(app: FastAPI, frame, job: BuildJob, loop,
@@ -499,7 +565,7 @@ def _publish_build_result(app: FastAPI, outcome) -> None:
     # to stop a key repeat placing twice into one cell.
     placed = str(result) == PLACED if result is not None else False
     entries = app.state.ledger.placements() if placed else ()
-    if entries:
+    if entries and getattr(app.state, "supervision_enabled", True):
         app.state.pending_check = entries[-1]
         app.state.vision_verification = "checking — waiting for a still frame"
     else:
@@ -578,6 +644,13 @@ def create_app(options: ConsoleAppOptions | None = None) -> FastAPI:
         # at since the process died, and what consumes it drives a claw (D3).
         app.state.ledger = PlacementLedger()
         app.state.supervisor = Supervisor()
+        #: The operator kill switch (camera toolbar). While False, `_supervise`
+        #: is skipped every frame, no verdict / per-build check is published,
+        #: and `/api/supervision/correct` refuses. `supervision_fault` carries
+        #: the reason when the observer disabled ITSELF after raising; None
+        #: when the operator turned it off, or when it is on.
+        app.state.supervision_enabled = True
+        app.state.supervision_fault = None
         app.state.supervision = None
         app.state.supervision_signature = None
         #: The previous accepted analyzed image, for D5's frame difference,

@@ -75,6 +75,10 @@ export function SupervisionActivity({ state, defaultOpen = false, className = ""
 }) {
   const activity = useSupervisionActivity(state);
   const [open, setOpen] = useState(defaultOpen);
+  // Supervision switched off: this read-only history has nothing live to show.
+  // The hook above still runs (rules of hooks) but the server has stopped
+  // publishing verdicts and checks, so nothing new is appended.
+  if (state.supervision_enabled === false) return null;
   // The live CORRECTION control lives on the SupervisionBanner (both routes);
   // this panel is the read-only history so the two cannot say different things.
   return (

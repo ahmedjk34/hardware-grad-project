@@ -653,6 +653,15 @@ class StateModel(BaseModel):
     vision_verification: str | None
     #: M3b. The board's verdict, published whole. See `SupervisionModel`.
     supervision: SupervisionModel
+    #: The operator kill switch (camera toolbar power toggle). False = the
+    #: observer is skipped every frame, no verdict is published, the per-build
+    #: check is not armed, and `/api/supervision/correct` refuses. Toggled by
+    #: `POST /api/supervision/enabled`, mid-build included — it moves nothing.
+    supervision_enabled: bool
+    #: Set only when the observer disabled ITSELF after raising: the exception,
+    #: as one line, so the toolbar toggle is not the only sign it stopped.
+    #: None when the operator turned it off, or when supervision is running.
+    supervision_fault: str | None
     #: The outcome of the last operator CORRECTION action this session, or None.
     #: `{result: placed|rejected|aborted, reason, cell: [c,r], verdict}`. The
     #: runner shows it and resumes only after the board re-verifies (D12).
@@ -734,6 +743,8 @@ def build_state(app) -> StateModel:
         supervision=supervision_model(
             getattr(app.state, "supervision", None),
             acknowledged=bool(getattr(app.state, "supervision_acknowledged", False))),
+        supervision_enabled=bool(getattr(app.state, "supervision_enabled", True)),
+        supervision_fault=getattr(app.state, "supervision_fault", None),
         last_correction=getattr(app.state, "last_correction_result", None),
         auto_pickup=bool(getattr(app.state, "auto_pickup", False)),
         feeder_block_present=bool(getattr(app.state, "feeder_block_present", False)),

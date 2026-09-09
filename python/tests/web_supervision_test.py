@@ -1457,3 +1457,112 @@ def test_clear_build_state_is_refused_while_the_session_is_locked(tmp_path):
     assert response.status_code == 409
     assert "position is unknown" in response.json()["detail"]
     assert app.state.ledger.board_epoch == 0
+
+
+# --- the operator kill switch, and crash isolation ----------------------- #
+#
+# `_supervise_guarded` is the seam `_drive_pipeline` actually calls. It skips
+# the observer entirely when supervision is switched off, and it contains any
+# exception the observer raises so the driver loop — and with it `job.poll()`,
+# `_auto_pickup` and the camera feed — keeps running instead of dying with it.
+
+from web.app import _supervise_guarded  # noqa: E402
+
+
+def guarded(app, frames, *, running=False):
+    """Like `drive`, but through the wrapped seam rather than the raw observer."""
+    job = SimpleNamespace(running=running)
+
+    async def scenario():
+        loop = asyncio.get_running_loop()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            for frame in frames:
+                await _supervise_guarded(app, frame, job, loop, executor)
+            return app.state.supervision
+
+    return asyncio.run(scenario())
+
+
+def test_switching_supervision_off_skips_the_observer_and_clears_the_verdict():
+    app = fake_app()
+    # A live REMOVED verdict, exactly as `test_a_missing_block_names_the_exact_cell`.
+    guarded(app, [frame_at(1), frame_at(2, cells=((1, 1),))])
+    assert app.state.supervision.verdict.verdict == "REMOVED"
+
+    # Operator flips the toolbar toggle off.
+    app.state.supervision_enabled = False
+    app.state.correction_ticket = object()
+    guarded(app, [frame_at(3, cells=((1, 1),))])
+
+    assert app.state.supervision is None
+    assert app.state.vision_verification is None
+    assert app.state.correction_ticket is None
+    assert app.state.supervision_signature is None
+
+    # And it stays skipped: frames that WOULD settle a verdict produce nothing.
+    guarded(app, [frame_at(4, cells=((1, 1),)), frame_at(5, cells=((1, 1),))])
+    assert app.state.supervision is None
+
+
+def test_an_observer_that_raises_disables_supervision_and_the_loop_survives(monkeypatch):
+    import web.app as web_app
+
+    async def boom(*_a, **_k):
+        raise RuntimeError("detector exploded")
+
+    monkeypatch.setattr(web_app, "_supervise", boom)
+    app = fake_app()
+    app.state.supervision_enabled = True
+
+    # No exception escapes — the driver loop would have died otherwise.
+    guarded(app, [frame_at(1), frame_at(2)])
+
+    assert app.state.supervision_enabled is False
+    assert "RuntimeError" in app.state.supervision_fault
+    assert "detector exploded" in app.state.supervision_fault
+    assert app.state.supervision is None
+    # It does not keep retrying the broken observer every frame.
+    guarded(app, [frame_at(3), frame_at(4)])
+    assert app.state.supervision is None
+
+
+def test_the_kill_switch_route_drops_the_verdict_and_toggles_back(tmp_path):
+    app = create_app(ConsoleAppOptions(
+        mock=True,
+        settings_path=mock_settings(tmp_path),
+        workspace_map_path=tmp_path / "workspace_map.json",
+    ))
+
+    async def scenario():
+        async with LifespanManager(app):
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport,
+                                         base_url="http://test") as client:
+                on = (await client.get("/api/state")).json()
+                off = (await client.post("/api/supervision/enabled",
+                                         json={"enabled": False})).json()
+                back = (await client.post("/api/supervision/enabled",
+                                          json={"enabled": True})).json()
+                return on, off, back
+
+    on, off, back = asyncio.run(scenario())
+    assert on["supervision_enabled"] is True and on["supervision_fault"] is None
+    assert off["supervision_enabled"] is False
+    assert off["supervision_fault"] is None          # operator OFF, not a crash
+    assert off["supervision"]["verdict"] is None
+    assert off["vision_verification"] is None
+    assert back["supervision_enabled"] is True
+    # Not behind `require_mutable`: it is settable while a build runs.
+    assert app.state.supervision_enabled is True
+
+
+def test_the_correct_route_refuses_when_supervision_is_switched_off():
+    from fastapi import HTTPException
+    http, state, sent = _correct_app(off_cm=8.75)
+    state.supervision_enabled = False
+    try:
+        _call_correct(http)
+        assert False, "should have refused"
+    except HTTPException as exc:
+        assert exc.status_code == 409 and "switched off" in exc.detail
+    assert sent == []

@@ -30,6 +30,11 @@ export const closeManualPick = () => post<StateModel>("manual-close", { confirm:
  *  feeder and the firmware is waiting. Moves nothing. */
 export const setAutoPickup = (enabled: boolean) =>
   post<StateModel>("auto-pickup", { enabled });
+/** Turn placement supervision — and every surface it feeds (banner, runner
+ *  board, activity log, twin overlay) — on or off. Togglable any time,
+ *  mid-build included; moves nothing. ON also clears a crash fault. */
+export const setSupervisionEnabled = (enabled: boolean) =>
+  post<StateModel>("supervision/enabled", { enabled });
 /** CLEAR BUILD STATE — forget the board and every judgement derived from it.
  *  Retires the as-built ledger's placements into a new board epoch, drops the
  *  observer's hysteresis, the published verdict and its baseline frame, the

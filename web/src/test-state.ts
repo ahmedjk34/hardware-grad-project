@@ -27,6 +27,8 @@ export const BASE_STATE: StateModel = {
     expected: [], observed: [], unjudged: [], reason: null, judged_at_ms: null,
     acknowledged: false,
   },
+  supervision_enabled: true,
+  supervision_fault: null,
   // The DULL state has a block ready at the feeder, so an autonomous RUN in a
   // test advances without a special step. A test about the WAITING state sets
   // this false.

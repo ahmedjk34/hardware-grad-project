@@ -139,6 +139,13 @@ export interface StateModel {
    *  build result — the server needs a still, settled scene to form it. */
   vision_verification?: string | null;
   supervision?: Supervision;
+  /** The operator kill switch (camera toolbar power toggle). `false` = the
+   *  observer is skipped every frame, no verdict is published, and the
+   *  CORRECTION route refuses. Toggled by `POST /api/supervision/enabled`. */
+  supervision_enabled?: boolean;
+  /** Set only when the observer disabled ITSELF after raising — the exception
+   *  as one line. `null` when the operator turned it off, or it is running. */
+  supervision_fault?: string | null;
   /** The outcome of the last operator CORRECTION action this session, or null.
    *  The banner shows it; the runner resumes only after the board re-verifies. */
   last_correction?: CorrectionResult | null;

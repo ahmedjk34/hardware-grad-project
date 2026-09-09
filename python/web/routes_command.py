@@ -80,6 +80,13 @@ class AutoPickupRequest(BaseModel):
     enabled: bool
 
 
+class SupervisionEnabledRequest(BaseModel):
+    """The operator kill switch for placement supervision and every surface it
+    feeds. Togglable at any time, mid-build included — it moves nothing."""
+
+    enabled: bool
+
+
 class CorrectRequest(BaseModel):
     """The operator CORRECTION action. `confirm` is the explicit consent the
     confirm dialog collects — a correction drives the claw into a finished
@@ -298,6 +305,52 @@ async def acknowledge_supervision(http: Request) -> StateModel:
     return _state(app)
 
 
+@router.post("/supervision/enabled", response_model=StateModel)
+async def set_supervision_enabled(request: SupervisionEnabledRequest,
+                                  http: Request) -> StateModel:
+    """Turn placement supervision — and every surface it feeds — on or off.
+
+    The operator switch behind the camera toolbar's power toggle. Unlike every
+    mutating route it is deliberately **not** behind :func:`require_mutable`:
+    supervision has to be dismissable the instant it is wrong, mid-build
+    included, and it moves nothing either way (D14).
+
+    OFF drops the published verdict, the per-build check, the correction ticket
+    and the observer's hysteresis on the spot — exactly what ``/session/reset``
+    does to them — so the banner, the runner board, the activity log and the
+    twin overlay all go quiet at once. ``_supervise`` then early-returns every
+    frame until this is turned back on. ON also clears any ``supervision_fault``
+    a crash left behind, so the observer gets a clean restart.
+    """
+    app = http.app
+    app.state.supervision_enabled = bool(request.enabled)
+    if request.enabled:
+        app.state.supervision_fault = None
+        supervisor = getattr(app.state, "supervisor", None)
+        if supervisor is not None:
+            supervisor.reset()
+    else:
+        # Same fields, same order as `/session/reset` and `_clear_supervision_state`.
+        supervisor = getattr(app.state, "supervisor", None)
+        if supervisor is not None:
+            supervisor.reset()
+        app.state.supervision = None
+        app.state.supervision_signature = None
+        app.state.supervision_baseline = None
+        app.state.supervision_sequence = None
+        app.state.supervision_result_id = None
+        app.state.supervision_acknowledged = False
+        app.state.pending_check = None
+        app.state.vision_verification = None
+        app.state.correction_ticket = None
+        app.state.correction_attempted_signature = None
+    build_log.build.note(
+        f"placement supervision {'enabled' if request.enabled else 'disabled'} "
+        "by operator")
+    _signal(app)
+    return _state(app)
+
+
 def _verdict_signature(sv) -> tuple | None:
     if sv is None or getattr(sv, "verdict", None) is None:
         return None
@@ -332,6 +385,9 @@ def correct_supervision(request: CorrectRequest, http: Request) -> StateModel:
     app = http.app
     if not request.confirm:
         raise HTTPException(status_code=400, detail="correction requires confirm=true")
+    if not getattr(app.state, "supervision_enabled", True):
+        raise HTTPException(status_code=409,
+                            detail="placement supervision is switched off")
     require_mutable(app)
     frame = require_fresh_camera(app)
     rig = app.state.rig

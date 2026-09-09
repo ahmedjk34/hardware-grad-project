@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import * as api from "../api";
 import { GridOverlay } from "./GridOverlay";
 import { Icon } from "./Icon";
@@ -30,6 +30,13 @@ export function CameraView({ state, connected, onCalibrationPoint }: {
   const shown = hover ?? state.geometry?.selected ?? null;
   const stageState = !connected ? "offline" : state.camera === "STALE" ? "stale" : "";
 
+  // The operator kill switch. Not a "view" — it stops the observer server-side
+  // and blanks the banner, runner board, activity log and twin overlay — but
+  // it lives here, next to the overlay toggles, because it is the same kind of
+  // "always available, moves nothing" control.
+  const supervising = state.supervision_enabled !== false;
+  const supervisionFaulted = !supervising && !!state.supervision_fault;
+
   return (
     <>
       {/* Display-only toggles: the server allows these while the rig is moving,
@@ -38,17 +45,42 @@ export function CameraView({ state, connected, onCalibrationPoint }: {
         {VIEWS.map(item => {
           const active = state.views[item.key] !== false;
           return (
-            <button
-              key={item.key}
-              type="button"
-              className="toggle"
-              aria-pressed={active}
-              aria-label={`Toggle ${item.label} overlay`}
-              onClick={() => void api.view({ [item.key]: !active })}
-            >
-              <Icon name={item.icon} size={15} />
-              {item.label}
-            </button>
+            <Fragment key={item.key}>
+              <button
+                type="button"
+                className="toggle"
+                aria-pressed={active}
+                aria-label={`Toggle ${item.label} overlay`}
+                onClick={() => void api.view({ [item.key]: !active })}
+              >
+                <Icon name={item.icon} size={15} />
+                {item.label}
+              </button>
+              {/* The supervisor kill switch sits right after DETECT. It is not
+                  an overlay toggle — it stops the observer server-side and
+                  blanks the banner, runner board, activity log and twin
+                  overlay — but it is the same "always available, moves
+                  nothing" kind of control, so it lives in this row. */}
+              {item.key === "detect" && (
+                <button
+                  type="button"
+                  className="toggle"
+                  aria-pressed={supervising}
+                  aria-label={supervising
+                    ? "Turn placement supervision off"
+                    : "Turn placement supervision on"}
+                  title={supervisionFaulted
+                    ? `Supervision stopped after an error: ${state.supervision_fault}. Click to restart it.`
+                    : supervising
+                      ? "Placement supervision is on — banner, runner board, activity log and twin overlay are live"
+                      : "Placement supervision is off — no board checks, no corrections"}
+                  onClick={() => void api.setSupervisionEnabled(!supervising)}
+                >
+                  <Icon name="power" size={15} />
+                  supervisor
+                </button>
+              )}
+            </Fragment>
           );
         })}
         <span className="spacer" />
