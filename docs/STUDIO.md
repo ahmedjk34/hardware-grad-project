@@ -56,7 +56,7 @@ per-file counts as approximate.)
 | `studio/runner.test.ts` | 25 | every named transition, serial phases that never advance the cursor, socket-loss pause and phase-driven resume, HELD locks / SAFE does not, feeder sequencing, abort program position, elapsed/ETA arithmetic, plus an exhaustive all-event walk proving no second build and no serial effect while RUNNING |
 | `studio/runner-driver.test.ts` | 7 | the level/select/verify/build/mode request sequence against a mocked API, axis selection, zero-API dry transport and the defensive RUNNING refusal |
 | `studio/run-report.test.ts` | 2 | deterministic event-derived Markdown, verbatim failures, durations, verification and camera evidence |
-| `components/RunnerPanel.test.tsx` | 9 | full dry tower with no API traffic, mismatch stop, feeder cancel, honest stop copy, rejected pause and abort lock, the rig's own phase readout, fourteen phases advancing nothing, stale-on-disconnect |
+| `components/RunnerPanel.test.tsx` | 13 | full dry tower with no API traffic, mismatch stop, feeder cancel, honest stop copy, rejected pause and abort lock, the rig's own phase readout, fourteen phases advancing nothing, stale-on-disconnect, and CLEAR BUILD STATE: it calls `/api/session/reset` as well as clearing the panel, it is live on an idle panel the server still remembers and disabled on `NO_MEMORY`, and a refused reset leaves the panel untouched |
 | `store.test.ts` | 20 | `build_step` applied with no timer advanced, id deduplication, phase/snapshot tie-breaks, the reconnect cursor, terminal-only `placed` |
 | `ws.test.ts` | 7 | immediate delivery against a fake socket, the `?after=` cursor, replay envelope, backoff, unparseable frames |
 | `blockCalibration.test.tsx` | 4 | the placed-block calibration panel — the plan walked cell by cell, SAVE disabled until the backend calls the fit ready, a refused step kept retryable, an abort disabling further steps, and a refusal to start leaving the other two routes reachable |
@@ -1116,13 +1116,32 @@ rig cannot be interrupted`. Pressing it changes the disabled control to
 `STOPPING AFTER THIS BLOCK`; it does not alter the current effect. DRY RUN keeps
 `DRY RUN — no serial traffic` in `--motion` for the full session.
 
-Once a run has reached a terminal or paused phase, the header shows a `CLEAR`
-button. It dispatches a `reset` event — a purely client-side turn that emits no
-effect and returns the reducer to `idle`, so another library build can be
-chosen and started without reloading the page. It is disabled while a block is
-in flight (Mega motion cannot be interrupted) and is not shown at all while the
-runner phase or the server's `build_state` is `LOCKED`: an aborted session
-still needs a human and a service restart, exactly as before. The button
+The header shows a `CLEAR BUILD STATE` button, and it clears **both halves of
+the session**. It first awaits `POST /api/session/reset`, which is what makes
+the server forget the board — the as-built ledger's placements are retired into
+a new board epoch, and the supervisor's hysteresis, the published verdict, its
+baseline frame, the correction ticket, the phase read-out, the selection and
+the last result all go with them — and only then dispatches the reducer's
+`reset` event, a client-side turn that emits no effect and returns the panel to
+`idle`. Awaiting the route first is the point: a panel cleared over a server
+that still remembers would be the console claiming a reset that did not happen,
+and that was the original bug — the panel cleared, and supervision went on
+naming cells from the build before it. A refusal leaves the panel exactly as it
+was and prints `could not clear — <the server's reason>` in the header.
+
+Because the server half is the half that matters, the button is live whenever
+**either** side has something to forget: the panel is off `idle`, or the
+snapshot still carries board memory (`supervision.state` is not `NO_MEMORY`), a
+`last_result`, a `vision_verification` or a selection. Cells built straight
+from the console never move this panel off `idle`, so an idle panel over a
+remembered board is exactly the case the old `disabled={run.phase === "idle"}`
+locked the operator out of.
+
+It is disabled while a block is in flight (Mega motion cannot be interrupted)
+and is not shown at all while the runner phase or the server's `build_state` is
+`LOCKED`; the route refuses a locked session for the same reason, because a
+lock means the claw's position is unknown and forgetting the board would not
+make that less true. That is still a human and a service restart. The button
 appears in both places the panel is mounted — the console at `#/` and building
 mode at `#/build`.
 
@@ -1285,6 +1304,37 @@ first in the diff.
 
 Newest first. One entry per landed change; note anything that contradicts the
 plan or that a future reader could not infer.
+
+### Fix: CLEAR BUILD STATE cleared the panel and nothing else
+
+`CLEAR BUILD STATE` dispatched the runner reducer's `reset` and stopped there.
+Every piece of session memory that actually drives a judgement lives on the
+server — the `PlacementLedger`, the supervisor's hysteresis, the published
+verdict and the frame it differences against — so an operator who cleared the
+panel, lifted the blocks off the table and started again was met by supervision
+still naming cells from the previous build. The panel was clear; the machine's
+memory was not.
+
+The button now awaits a new `POST /api/session/reset` before dispatching
+`reset`. That route does to the memory exactly what a `@0 BOOT` does:
+`PlacementLedger.new_board_epoch()` retires every placement (the rows stay —
+the ledger is the append-only record — but no reader answers for them), the
+supervisor goes through its one reset primitive, and the verdict, its baseline
+frame, the pending check, the correction ticket, the phase read-out, the
+selection and the last result are all dropped. It moves nothing and sends no
+serial line, and it is refused (409) while a build runs, while a mode latch
+homes, and while the session is `LOCKED`.
+
+Two things a future reader could not infer:
+
+- **The refusal is not swallowed.** If the route says no, the panel is left
+  untouched and the reason is printed. Clearing the panel over a server that
+  refused would be the console asserting a reset that did not happen — the same
+  class of lie as the twin interpolating a descent it never saw.
+- **The button is live on an idle panel.** It used to be disabled whenever
+  `run.phase === "idle"`, which is precisely the state of an operator who
+  builds cells straight from the console and never touches the runner — the
+  people most likely to be sitting on a stale board.
 
 ### Fix: an applied grid shift was lost on save, and snapped back on Apply
 

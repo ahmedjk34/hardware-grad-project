@@ -515,3 +515,71 @@ async def manual_close(request: ManualCloseRequest, http: Request) -> StateModel
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     _signal(app)
     return _state(app)
+
+
+@router.post("/session/reset", response_model=StateModel)
+async def reset_session(http: Request) -> StateModel:
+    """CLEAR BUILD STATE — start over on a board nobody has looked at yet.
+
+    The operator has taken the blocks off the table (or is about to) and wants
+    the next build judged on its own evidence. Clearing the runner panel alone
+    was never enough: the as-built ledger, the observer's hysteresis and the
+    published verdict all live here, so the console would sit on a cleared
+    panel while supervision went on naming cells from the build before it.
+
+    What this does is exactly what a gantry reboot does to the memory, minus
+    the reboot: :meth:`PlacementLedger.new_board_epoch` retires every existing
+    placement, and the supervisor's histories go through its one reset
+    primitive. The rows are KEPT — the ledger is the append-only thesis record
+    — but no reader answers for them any more, so the next verdict is built
+    from frames gathered after this moment and from nothing else.
+
+    **It moves nothing and it sends no serial line.** It is refused, like every
+    other mutating route, while a job is running or a mode latch is homing —
+    and while the session is LOCKED, because a lock means the claw's position
+    is unknown and forgetting the board would not make that any less true.
+    That is a human and a service restart, exactly as before.
+    """
+    app = http.app
+    require_mutable(app)
+
+    ledger = getattr(app.state, "ledger", None)
+    if ledger is not None and ledger.has_memory():
+        ledger.new_board_epoch()
+    supervisor = getattr(app.state, "supervisor", None)
+    if supervisor is not None:
+        supervisor.reset()
+
+    # The published verdict and every input it was derived from. Dropping the
+    # baseline as well as the reading matters: D5's frame difference against a
+    # frame of the OLD board would read as motion and hold the next window BUSY.
+    app.state.supervision = None
+    app.state.supervision_signature = None
+    app.state.supervision_baseline = None
+    app.state.supervision_sequence = None
+    app.state.supervision_result_id = None
+    app.state.supervision_acknowledged = False
+    #: The armed per-build check and its one sentence.
+    app.state.pending_check = None
+    app.state.vision_verification = None
+    # The correction authorisation is scoped to a verdict that no longer
+    # exists. Leaving the ticket would leave a one-shot pick-and-place armed
+    # against a board this route has just declared unknown.
+    app.state.correction_ticket = None
+    app.state.correction_attempted_signature = None
+    app.state.last_correction_result = None
+
+    # The console's own read-outs: the phase bar, the last result banner and
+    # the selection. None of these is authority — they are what the operator
+    # sees — but a cleared session showing the previous build's `placed` is
+    # the same half-truth the tracker exists to prevent.
+    app.state.progress.reset()
+    controller = app.state.controller
+    controller.clear_selection()
+    controller.last_result = None
+    app.state.cell_phase = "idle"
+
+    build_log.placements.note("operator cleared the build state — new board epoch")
+    build_log.build.note("session reset: ledger epoch advanced, supervision dropped")
+    _signal(app)
+    return _state(app)

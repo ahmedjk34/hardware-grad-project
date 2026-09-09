@@ -38,8 +38,17 @@ function mockedApi(command = "B 3 2 0"): RunnerApi {
     build: vi.fn(async sent => readyState({ selected: [3, 2], command: sent, build_state: "RUNNING" })),
     mode: vi.fn(async next => readyState({ mode: next })),
     shift: vi.fn(async (mode, x_cm, y_cm) => readyState({ mode, shift_cm: [x_cm, y_cm] })),
+    resetSession: vi.fn(async () => readyState()),
   };
 }
+
+const noMemory = (): Partial<StateModel> => ({
+  supervision: {
+    state: "NO_MEMORY", verdict: null, severity: "none", cells: [],
+    mode: "vertical", expected: [], observed: [], unjudged: [],
+    reason: "NO MEMORY", judged_at_ms: null, acknowledged: false,
+  },
+});
 
 async function confirmStaged(api: RunnerApi): Promise<void> {
   await waitFor(() => expect(screen.getByRole("button", { name: "BUILD" })).toBeEnabled());
@@ -264,5 +273,55 @@ describe("RunnerPanel", () => {
     await waitFor(() =>
       expect(screen.getByText("10/14 · Lower Z to the target level")).toBeInTheDocument());
     expect(screen.queryByText("STALE — RUN PAUSED")).not.toBeInTheDocument();
+  });
+
+  it("clears the server's board memory as well as the panel", async () => {
+    const api = mockedApi();
+    render(<RunnerPanel state={readyState()} connected modelId="example-tower"
+                        api={api} delay={async () => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: "DRY RUN" }));
+    fireEvent.click(screen.getByRole("button", { name: "START DRY RUN" }));
+    await waitFor(() => expect(screen.getByText("RUN COMPLETE")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "CLEAR BUILD STATE" }));
+
+    // The ledger, the observer and the verdict live on the server: clearing
+    // the panel alone is what used to leave supervision naming old cells.
+    await waitFor(() => expect(api.resetSession).toHaveBeenCalledOnce());
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "START DRY RUN" })).toBeInTheDocument());
+    expect(screen.queryByText("RUN COMPLETE")).not.toBeInTheDocument();
+  });
+
+  it("offers the clear on an idle panel the server still remembers, and not otherwise", () => {
+    const api = mockedApi();
+    const { rerender } = render(
+      <RunnerPanel state={readyState({ last_result: "placed" })} connected
+                   modelId="example-tower" api={api} />);
+    // Cells built straight from the console never move this panel off `idle`,
+    // so an idle panel is exactly when a stale board is most likely.
+    expect(screen.getByRole("button", { name: "CLEAR BUILD STATE" })).toBeEnabled();
+
+    rerender(<RunnerPanel state={readyState(noMemory())} connected
+                          modelId="example-tower" api={api} />);
+    expect(screen.getByRole("button", { name: "CLEAR BUILD STATE" })).toBeDisabled();
+  });
+
+  it("leaves the panel exactly as it was when the server refuses the reset", async () => {
+    const api = mockedApi();
+    api.resetSession = vi.fn(async () => { throw new Error("a build is running"); });
+    render(<RunnerPanel state={readyState()} connected modelId="example-tower"
+                        api={api} delay={async () => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: "DRY RUN" }));
+    fireEvent.click(screen.getByRole("button", { name: "START DRY RUN" }));
+    await waitFor(() => expect(screen.getByText("RUN COMPLETE")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "CLEAR BUILD STATE" }));
+
+    // A cleared panel over a server that still remembers would be the console
+    // claiming a reset that did not happen.
+    await waitFor(() =>
+      expect(screen.getByText(/could not clear — a build is running/)).toBeInTheDocument());
+    expect(screen.getByText("RUN COMPLETE")).toBeInTheDocument();
   });
 });

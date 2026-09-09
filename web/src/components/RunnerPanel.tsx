@@ -76,6 +76,7 @@ export function RunnerPanel({ state, connected, modelId, api, delay, onActiveCha
   lastResult?: ConsoleSnapshot["lastResult"];
 }) {
   const [style, setStyle] = useState<RunStyle>("step");
+  const [clearError, setClearError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [run, setRun] = useState<RunState>(() => ({
     ...initialRun(), connected, buildState: state.build_state,
@@ -254,6 +255,30 @@ export function RunnerPanel({ state, connected, modelId, api, delay, onActiveCha
     && (style === "dry" || (style === "step" ? server.gantry_connected : server.hardware_ready))
     && server.build_state === "READY";
 
+  // ── CLEAR BUILD STATE ───────────────────────────────────────────────────
+  // The panel is not the only thing this clears. The server holds the as-built
+  // ledger, the observer's hysteresis and the published verdict, and those
+  // outlive an idle panel — which is exactly the state an operator is in when
+  // they lift the blocks off the table and want to start again. Clearing only
+  // the panel left supervision naming cells from the build before it.
+  const serverRemembers = (server.supervision != null && server.supervision.state !== "NO_MEMORY")
+    || server.last_result !== null || !!server.vision_verification
+    || server.selected !== null;
+  const hasStateToClear = run.phase !== "idle" || serverRemembers;
+  const clearBuildState = useCallback(async () => {
+    setClearError(null);
+    try {
+      await (api?.resetSession ?? transportApi.resetSession)();
+    } catch (error) {
+      // The server refused — a running job, a homing latch, a locked session.
+      // The panel is left exactly as it was: clearing it here would be this
+      // component claiming a reset that did not happen.
+      setClearError(error instanceof Error ? error.message : String(error));
+      return;
+    }
+    applyEvent({ type: "reset", now: Date.now() });
+  }, [api, applyEvent]);
+
   // ── toasts for building mode ────────────────────────────────────────────
   // Purely a mirror of state this panel already derives. The console mounts
   // this without `onToast` and none of it runs.
@@ -310,15 +335,19 @@ export function RunnerPanel({ state, connected, modelId, api, delay, onActiveCha
         )}
         {run.phase !== "locked" && server.build_state !== "LOCKED" && (
           <button type="button" className="btn btn-ghost runner-clear"
-                  disabled={run.phase === "idle" || run.inFlight}
+                  disabled={run.inFlight || !hasStateToClear}
                   title={run.inFlight
                     ? "Can't clear while a block is in flight — Mega motion cannot be interrupted"
-                    : run.phase === "idle"
+                    : !hasStateToClear
                       ? "There is no build state to clear"
-                      : "End this run and clear the panel so another build can be chosen"}
-                  onClick={() => applyEvent({ type: "reset", now: Date.now() })}>
+                      : "Start over: clear the panel AND make the server forget the board — "
+                        + "the as-built ledger, the verdict and the last result. Moves nothing."}
+                  onClick={() => { void clearBuildState(); }}>
             CLEAR BUILD STATE
           </button>
+        )}
+        {clearError && (
+          <span className="reason" role="alert">could not clear — {clearError}</span>
         )}
       </header>
 

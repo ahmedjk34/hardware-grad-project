@@ -25,6 +25,14 @@ export const selectAxis = (axis: "col" | "row", value: number) => post<StateMode
 export const build = (command: string) =>
   post<StateModel>("build", { confirm: true, command });
 export const closeManualPick = () => post<StateModel>("manual-close", { confirm: true });
+/** CLEAR BUILD STATE — forget the board and every judgement derived from it.
+ *  Retires the as-built ledger's placements into a new board epoch, drops the
+ *  observer's hysteresis, the published verdict and its baseline frame, the
+ *  correction ticket, the phase read-out and the last result. Moves nothing
+ *  and sends no serial line; refused (409) while a build runs, while a mode
+ *  latch homes, and while the session is LOCKED — a lock still needs a human
+ *  and a service restart. */
+export const resetSession = () => post<StateModel>("session/reset");
 
 export interface BlockCalibrationReport {
   observations: number;

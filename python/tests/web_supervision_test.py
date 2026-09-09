@@ -1373,3 +1373,86 @@ def test_a_gantry_reboot_starts_a_new_board_epoch(tmp_path):
     # rather than judging the new board against the old one.
     assert st.ledger.has_memory("vertical") is False
     assert st.ledger.has_memory("vertical", 0) is True
+
+
+def test_clear_build_state_forgets_the_board_and_every_derived_judgement(tmp_path):
+    """`POST /api/session/reset` — the console's CLEAR BUILD STATE.
+
+    The operator has lifted the blocks off the table. Clearing the runner panel
+    alone left the ledger, the observer's hysteresis and the published verdict
+    describing a board that no longer exists, so supervision went on naming
+    cells from the build before it. This route does to the memory exactly what
+    a gantry reboot does: a new board epoch, retaining the rows for the record.
+    It moves nothing and sends no serial line.
+    """
+    from rig.supervisor import Verdict
+    from web.app import _note_supervision
+
+    app = create_app(ConsoleAppOptions(
+        mock=True,
+        settings_path=mock_settings(tmp_path),
+        workspace_map_path=tmp_path / "workspace_map.json",
+    ))
+
+    async def scenario():
+        async with LifespanManager(app):
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport,
+                                         base_url="http://test") as client:
+                st = app.state
+                st.ledger.append("vertical", 2, 1, 0, BuildResult(PLACED))
+                _note_supervision(app, "VERDICT", None, Verdict(
+                    verdict="REMOVED", cells=((2, 1),), mode="vertical",
+                    expected=((2, 1),), observed=(), unjudged=()))
+                st.supervision_baseline = np.zeros((8, 8, 3), np.uint8)
+                st.vision_verification = "not detected at [2,1]"
+                st.controller.last_result = BuildResult(PLACED)
+                st.progress.command_accepted(1)
+                before = (await client.get("/api/state")).json()
+                cleared = (await client.post("/api/session/reset")).json()
+                return st, before, cleared
+
+    st, before, cleared = asyncio.run(scenario())
+    assert before["supervision"]["verdict"] == "REMOVED"
+
+    # The verdict, and everything it was derived from, is gone — including the
+    # baseline frame, which would otherwise read as motion against the next one.
+    assert cleared["supervision"]["state"] == "NO_MEMORY"
+    assert cleared["supervision"]["verdict"] is None
+    assert cleared["vision_verification"] is None
+    assert cleared["last_result"] is None
+    assert cleared["build_phase_status"] == "idle"
+    assert st.supervision is None and st.supervision_baseline is None
+    assert st.pending_check is None and st.correction_ticket is None
+    assert st.supervision_acknowledged is False
+
+    # The rows stay — the ledger is the append-only record — but no reader
+    # answers for them, so the next verdict is built from fresh frames only.
+    assert st.ledger.board_epoch == 1
+    assert len(st.ledger.placements("vertical", board_epoch=None)) == 1
+    assert st.ledger.has_memory("vertical") is False
+
+
+def test_clear_build_state_is_refused_while_the_session_is_locked(tmp_path):
+    """A lock means the claw's position is unknown. Forgetting the board does
+    not make that less true, so the reset is refused exactly like every other
+    mutating route: still a human and a service restart."""
+    app = create_app(ConsoleAppOptions(
+        mock=True,
+        settings_path=mock_settings(tmp_path),
+        workspace_map_path=tmp_path / "workspace_map.json",
+    ))
+
+    async def scenario():
+        async with LifespanManager(app):
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport,
+                                         base_url="http://test") as client:
+                app.state.ledger.append("vertical", 2, 1, 0, BuildResult(PLACED))
+                app.state.controller.locked_reason = "the claw's position is unknown"
+                return await client.post("/api/session/reset")
+
+    response = asyncio.run(scenario())
+    assert response.status_code == 409
+    assert "position is unknown" in response.json()["detail"]
+    assert app.state.ledger.board_epoch == 0

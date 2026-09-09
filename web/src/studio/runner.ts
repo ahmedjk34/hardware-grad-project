@@ -277,11 +277,15 @@ export function step(state: RunState, event: RunEvent): Turn {
   }
 
   if (event.type === "reset") {
-    // A purely client-side clear: drop a finished or stuck run so another
-    // library build can be chosen without reloading the page. It issues no
-    // effect, so it sends nothing to the rig. It deliberately will NOT clear a
-    // locked session (that still needs a human and a service restart) and will
-    // NOT abandon a block in flight — Mega motion cannot be interrupted anyway.
+    // Drop a finished or stuck run so another library build can be chosen
+    // without reloading the page. This half is client-side and issues no
+    // effect, so the reducer sends nothing to the rig; the panel pairs it with
+    // `POST /api/session/reset`, which is what makes the SERVER forget the
+    // board — the ledger, the observer and the verdict — and which it awaits
+    // before dispatching this, so a refused reset never clears the panel. It
+    // deliberately will NOT clear a locked session (that still needs a human
+    // and a service restart) and will NOT abandon a block in flight — Mega
+    // motion cannot be interrupted anyway.
     if (state.inFlight || state.phase === "locked" || state.buildState === "LOCKED") {
       return noEffects(state);
     }
