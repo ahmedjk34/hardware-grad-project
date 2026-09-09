@@ -162,22 +162,21 @@ export function GridOverlay({ state, onSelect, onHover, selectable = true }: {
         );
       })}
 
-      {showGrid && geometry.feeder?.offset_from_cell && (
-        <>
-          <polygon
-            className="feeder-true"
-            points={points(geometry.feeder.polygon)}
-          />
-          <text
-            className="feeder-label feeder-true-label"
-            x={geometry.feeder.center[0]}
-            y={geometry.feeder.center[1]}
-            textAnchor="middle"
-            dominantBaseline="middle"
-            fontSize={10 * stroke}
-          >FEEDER</text>
-        </>
-      )}
+      {showGrid && geometry.feeder?.offset_from_cell && (() => {
+        const [fx, fy] = geometry.feeder.center;
+        const b = bounds(geometry.feeder.polygon);
+        const r = Math.max(b.maxX - b.minX, b.maxY - b.minY) / 2;
+        return (
+          <g className="feeder-true-group" aria-label="Physical feeder (vertical [0,0])">
+            <polygon className="feeder-true-fill" points={points(geometry.feeder.polygon)} />
+            <circle className="feeder-true-ring" cx={fx} cy={fy} r={r} strokeWidth={2 * stroke} />
+            <line className="feeder-true-cross" x1={fx - r} y1={fy} x2={fx + r} y2={fy} strokeWidth={1.5 * stroke} />
+            <line className="feeder-true-cross" x1={fx} y1={fy - r} x2={fx} y2={fy + r} strokeWidth={1.5 * stroke} />
+            <text className="feeder-true-label" x={fx} y={b.minY - 4 * stroke}
+                  textAnchor="middle" fontSize={11 * stroke}>FEEDER</text>
+          </g>
+        );
+      })()}
 
       {hover && <polygon className="hover-cell" points={points(hover.polygon)} />}
 

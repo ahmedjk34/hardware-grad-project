@@ -9,12 +9,42 @@
  * Everything handed out is in SCENE units, converted only by `machineToScene`.
  */
 import {
-  blockExtents, cellToMachine, isFeeder, machineToScene,
+  blockExtents, cellToMachine, feederCentre, isFeeder, machineToScene,
   type ModeName, type Shift, type Vec3,
 } from "./coords";
 import { clippedCells } from "./geometry";
 
 export type CellKind = "feeder" | "cell" | "clipped";
+
+export interface FeederMarker {
+  /** Footprint centre on the ground plane, in scene units. */
+  centre: Vec3;
+  sizeX: number; sizeZ: number;
+}
+
+/**
+ * The PHYSICAL feeder — the VERTICAL grid's `[0,0]`, i.e. the machine home
+ * corner — in SCENE units, when it is NOT the drawn `[0,0]` cell.
+ *
+ * A block is always picked up STANDING there ("a plain home to raw `[0,0]`",
+ * AGENTS.md §3a), whatever the active grid. In VERTICAL mode that IS the drawn
+ * `[0,0]` cell, so this returns null. In HORIZONTAL mode the drawn `[0,0]` cell
+ * is registered `+1.9 cm` out on both axes, so the real pickup point is a
+ * distinct, otherwise-unmarked spot and this returns it — the Studio draws a
+ * faint marker so the operator (and anyone reading the model) knows the feed
+ * and the camera's feeder check both happen there, not at horizontal `[0,0]`.
+ */
+export function trueFeederMarker(mode: ModeName): FeederMarker | null {
+  const home = machineToScene(feederCentre());
+  const drawnZero = machineToScene(cellToMachine(mode, 0, 0, 0));
+  if (Math.abs(home.x - drawnZero.x) < 1e-6 && Math.abs(home.z - drawnZero.z) < 1e-6) {
+    return null;
+  }
+  const block = blockExtents("vertical");
+  const sizeX = machineToScene({ x: block.x, y: 0, z: 0 }).x;
+  const sizeZ = Math.abs(machineToScene({ x: 0, y: block.y, z: 0 }).z);
+  return { centre: { x: home.x, y: 0, z: home.z }, sizeX, sizeZ };
+}
 
 export interface LatticeCell {
   col: number; row: number; kind: CellKind;

@@ -723,10 +723,13 @@ def main():
     frame_pump = LatestFramePump(camera)
     # Grid-aware: lets the overlay reject block-shaped things that are not
     # on the lattice (the holder's offcuts beside [0,0]) and draw every
-    # rectangle on one shared bearing. The lambda re-reads `grid`, which
-    # the mode switch rebinds, so no worker restart is needed.
+    # rectangle on one shared bearing. Grid + workspace travel with the exact
+    # submitted frame, so a mode latch cannot mix detector geometry.
     analysis = AnalysisWorker(
-        lambda frame, **kwargs: detect_aligned_blocks(frame, grid=grid, **kwargs),
+        lambda frame, analysis_grid=None, orientation_workspace=None, **kwargs:
+            detect_aligned_blocks(
+                frame, grid=analysis_grid,
+                orientation_workspace=orientation_workspace, **kwargs),
         max_hz=args.analysis_hz)
     snapshots = SnapshotWorker(save_detection_snapshot)
     frame_pump.start()
@@ -988,7 +991,9 @@ def main():
             if ui["detect_enabled"]:
                 analysis.submit(view, snapshot.sequence, map_generation,
                                 color_threshold=args.color_threshold,
-                                min_area=args.min_area)
+                                min_area=args.min_area,
+                                analysis_grid=grid,
+                                orientation_workspace=workspace)
             paper.submit(view, snapshot.sequence, map_generation)
             paper.poll(map_generation)
             display = enhance_for_display(view) if args.enhance else view.copy()

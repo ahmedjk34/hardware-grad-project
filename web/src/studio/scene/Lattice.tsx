@@ -12,7 +12,7 @@ import { Html } from "@react-three/drei";
 import {
   BufferGeometry, DoubleSide, Float32BufferAttribute, Matrix4, type InstancedMesh,
 } from "three";
-import { latticeCells, type LatticeCell } from "../lattice";
+import { latticeCells, trueFeederMarker, type LatticeCell } from "../lattice";
 import type { ModeName, Shift } from "../coords";
 import { resolveGroundTarget } from "../pick";
 import { hatchTexture, tokenColor } from "./theme";
@@ -100,6 +100,10 @@ export const Lattice = memo(function Lattice({ mode, shift, ...handlers }: {
   const plain = cells.filter(cell => cell.kind === "cell");
   const clipped = cells.filter(cell => cell.kind === "clipped");
   const feeder = cells.find(cell => cell.kind === "feeder");
+  // The physical feeder — vertical [0,0] / the home corner — when it is NOT the
+  // drawn [0,0] cell (i.e. horizontal mode). A block is fed and camera-checked
+  // there regardless of the active grid.
+  const trueFeeder = useMemo(() => trueFeederMarker(mode), [mode]);
   const hatch = useMemo(() => {
     const texture = hatchTexture("--text-dim");
     // One repeat per centimetre of footprint, so the stripes stay square
@@ -107,8 +111,22 @@ export const Lattice = memo(function Lattice({ mode, shift, ...handlers }: {
     if (feeder) texture.repeat.set(Math.max(1, feeder.sizeX), Math.max(1, feeder.sizeZ));
     return texture;
   }, [feeder?.sizeX, feeder?.sizeZ]);
+  const trueFeederHatch = useMemo(() => {
+    const texture = hatchTexture("--motion");
+    if (trueFeeder) {
+      texture.repeat.set(Math.max(1, trueFeeder.sizeX), Math.max(1, trueFeeder.sizeZ));
+    }
+    return texture;
+  }, [trueFeeder?.sizeX, trueFeeder?.sizeZ]);
   const outlines = useMemo(() => outlineGeometry(plain, false), [plain]);
   const clippedOutlines = useMemo(() => outlineGeometry(clipped, true), [clipped]);
+  const trueFeederOutline = useMemo(() => trueFeeder
+    ? outlineGeometry([{
+        col: 0, row: 0, kind: "feeder" as const,
+        centre: { x: trueFeeder.centre.x, y: 0, z: trueFeeder.centre.z },
+        sizeX: trueFeeder.sizeX, sizeZ: trueFeeder.sizeZ,
+      }], false)
+    : null, [trueFeeder]);
 
   return (
     <group>
@@ -134,6 +152,23 @@ export const Lattice = memo(function Lattice({ mode, shift, ...handlers }: {
           </mesh>
           <Html center position={[feeder.centre.x, GROUND_Y, feeder.centre.z]}>
             <span className="studio-tag">PICKUP</span>
+          </Html>
+        </Fragment>
+      )}
+      {trueFeeder && (
+        <Fragment>
+          <mesh rotation={[-Math.PI / 2, 0, 0]}
+                position={[trueFeeder.centre.x, GROUND_Y, trueFeeder.centre.z]}>
+            <planeGeometry args={[trueFeeder.sizeX, trueFeeder.sizeZ]} />
+            <meshBasicMaterial map={trueFeederHatch} transparent opacity={0.4} side={DoubleSide} />
+          </mesh>
+          {trueFeederOutline && (
+            <lineSegments geometry={trueFeederOutline}>
+              <lineBasicMaterial color={tokenColor("--motion")} transparent opacity={0.85} />
+            </lineSegments>
+          )}
+          <Html center position={[trueFeeder.centre.x, GROUND_Y, trueFeeder.centre.z]}>
+            <span className="studio-tag is-true-feeder">FEEDER · VERTICAL [0,0]</span>
           </Html>
         </Fragment>
       )}

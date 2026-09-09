@@ -4,7 +4,7 @@ import {
   type ModeName, type RigConfig,
 } from "./coords";
 import { clippedCells } from "./geometry";
-import { latticeCells, rulerTicks, type LatticeCell } from "./lattice";
+import { latticeCells, rulerTicks, trueFeederMarker, type LatticeCell } from "./lattice";
 
 const shipped = rigConfig();
 afterEach(() => setRigConfig(shipped));
@@ -47,6 +47,25 @@ describe("which cells the lattice draws", () => {
     const next = find(cells, 1, 0);
     const gap = (next.centre.x - next.sizeX / 2) - (first.centre.x + first.sizeX / 2);
     expect(gap).toBeCloseTo(machineToScene({ x: 16, y: 0, z: 0 }).x, 6);
+  });
+
+  it("the physical feeder is the home corner: marked in horizontal, not in vertical", () => {
+    // Vertical: the physical feeder IS the drawn [0,0] cell, so no extra marker.
+    expect(trueFeederMarker("vertical")).toBeNull();
+    // Horizontal: horizontal [0,0] is registered +1.9 cm out, so the real
+    // pickup point (vertical [0,0] / the home corner) is a distinct marker.
+    const marker = trueFeederMarker("horizontal");
+    expect(marker).not.toBeNull();
+    const home = machineToScene({ x: 0, y: 0, z: 0 });
+    expect(marker!.centre.x).toBeCloseTo(home.x, 6);
+    expect(marker!.centre.z).toBeCloseTo(home.z, 6);
+    // It is drawn at a VERTICAL block's footprint (picked up standing).
+    const v = blockExtents("vertical");
+    expect(marker!.sizeX).toBeCloseTo(machineToScene({ x: v.x, y: 0, z: 0 }).x, 6);
+    // And it does NOT coincide with the drawn horizontal [0,0] cell.
+    const drawnZero = machineToScene(cellToMachine("horizontal", 0, 0, 0));
+    expect(Math.hypot(marker!.centre.x - drawnZero.x, marker!.centre.z - drawnZero.z))
+      .toBeGreaterThan(0.1);
   });
 
   it("the two modes are different grids, not one rotated grid", () => {

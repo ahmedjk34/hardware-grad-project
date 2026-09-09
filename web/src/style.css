@@ -560,11 +560,14 @@ svg.grid-overlay.selectable { cursor: crosshair; }
 .grid-cell { fill: none; stroke: var(--signal); opacity: .55; }
 .grid-cell.approximate { stroke: var(--motion); stroke-dasharray: 6 4; }
 .grid-cell.feeder { stroke: var(--text-faint); stroke-dasharray: 2 3; fill: var(--halo); opacity: .8; }
-/* The PHYSICAL feeder in horizontal mode — the true pickup point, offset from
-   the drawn [0,0] cell. Deliberately very faint: it is a reference, not a
-   target. */
-.feeder-true { fill: var(--text-faint); stroke: var(--text-faint); stroke-dasharray: 2 3; opacity: .18; }
-.feeder-true-label { opacity: .35; }
+/* The PHYSICAL feeder in horizontal mode — the true pickup point, which sits
+   1.9 cm from the drawn [0,0] cell. It is a reference, not a build target, so
+   it reads in --motion (amber, the same "not a normal cell" colour the clipped
+   and approximate cells use) with a crosshair rather than a solid fill. */
+.feeder-true-fill { fill: var(--motion); opacity: .12; }
+.feeder-true-ring { fill: none; stroke: var(--motion); stroke-dasharray: 3 3; opacity: .8; }
+.feeder-true-cross { stroke: var(--motion); opacity: .7; }
+.feeder-true-label { fill: var(--motion); font-family: var(--font-mono); font-weight: 700; letter-spacing: .12em; opacity: .9; }
 
 /* --- supervision on the live video -------------------------------------- */
 /* The strongest surface, because it is the one the operator is looking at.
@@ -1580,6 +1583,14 @@ svg.grid-overlay.selectable { cursor: crosshair; }
   border: 1px solid var(--line-strong);
   border-radius: var(--r-sm);
   background: var(--plate);
+}
+
+/* The physical feeder marker (horizontal mode): the real pickup point, offset
+   from the drawn [0,0] cell. Amber, like every other "not a normal build cell"
+   cue in the Studio. */
+.studio-tag.is-true-feeder {
+  color: var(--motion);
+  border-color: var(--motion);
 }
 
 .studio-ghost-reason {

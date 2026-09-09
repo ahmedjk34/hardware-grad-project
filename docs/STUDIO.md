@@ -1338,9 +1338,16 @@ Supervision ignores the feeder: `rig.supervisor` drops any detection snapped to
 `(0,0)`, i.e. the VERTICAL grid's `[0,0]` in **both** modes (`_feeder_centre_cm`
 never uses `active_grid.cell_center_cm(0,0)`; in horizontal mode the drawn
 `[0,0]` cell is a different point, +1.9 cm out). So a hand-fed block waiting to
-be picked up is never `FOREIGN` / `MOVED` / `DISPLACED`. `web/geometry.py`
-adds `geometry.feeder` and `GridOverlay` draws a faint `FEEDER` marker at the
-true point in horizontal mode. `runner.test.ts` is 37 (was 25).
+be picked up is never `FOREIGN` / `MOVED` / `DISPLACED`.
+
+The **physical feeder** is marked in horizontal mode, where it is offset from
+the drawn `[0,0]` cell: `web/geometry.py` adds `geometry.feeder` and
+`GridOverlay` draws an amber crosshair + `FEEDER` label on the live video;
+`studio/lattice.ts` `trueFeederMarker(mode)` + `scene/Lattice.tsx` draw an
+amber hatched `FEEDER · VERTICAL [0,0]` plate on the 3D lattice. Both sit at
+the machine home corner (scene origin). Vertical mode is unchanged — there the
+feeder IS the drawn `[0,0]` cell. `runner.test.ts` is 37 (was 25);
+`lattice.test.ts` gained a `trueFeederMarker` case.
 
 ### Fix: CLEAR BUILD STATE cleared the panel and nothing else
 

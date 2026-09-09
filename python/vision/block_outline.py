@@ -64,6 +64,7 @@ from vision.block_grid import (
     _lattice_vectors,
     spec_for_grid,
 )
+from vision.orientation_filter import filter_detections_for_mode
 
 
 # Below this many blocks there is no population to speak of: the median size is
@@ -244,6 +245,7 @@ def _rectify(detections, bearing):
 def detect_aligned_blocks(frame: np.ndarray, *, grid=None,
                           edge_tolerance: float = EDGE_TOLERANCE_PX,
                           rectify: bool = True, include_rejected: bool = False,
+                          orientation_workspace=None,
                           **detector_kwargs) -> list[BlockDetection]:
     """Detect blocks and return them as clean, grid-aligned rectangles.
 
@@ -261,6 +263,12 @@ def detect_aligned_blocks(frame: np.ndarray, *, grid=None,
     supervision sees a block knocked off its site (a DISPLACED verdict is
     precisely about one). It was safe to drop them only while the holder's
     offcuts were the only thing off the lattice; that holder is off the rig.
+
+    ``orientation_workspace`` makes the detector mode-specific. Before any
+    lattice is fitted, each raw block's long edge is compared with the local
+    camera projection of machine X/Y. A confidently vertical block is omitted
+    from a horizontal grid and vice versa. Ambiguous detections stay visible so
+    a rotated or partially occluded active-mode block still reaches supervision.
     """
     if frame is None or frame.ndim != 3 or frame.shape[2] != 3:
         raise ValueError("detect_aligned_blocks expects a BGR colour image")
@@ -296,6 +304,13 @@ def detect_aligned_blocks(frame: np.ndarray, *, grid=None,
                   if _inside_frame(item, frame.shape, edge_tolerance)]
     if not detections:
         return []
+
+    mode = getattr(grid, "mode", None)
+    if orientation_workspace is not None and mode in ("vertical", "horizontal"):
+        detections = filter_detections_for_mode(
+            detections, orientation_workspace, frame.shape[1::-1], mode)
+        if not detections:
+            return []
 
     detections, rejected, bearing = _lattice_filter(detections, grid)
     if include_rejected and rejected:
