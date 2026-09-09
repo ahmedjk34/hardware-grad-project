@@ -7,7 +7,7 @@
  * behaviour change, that the library selects (and only selects) a build, and
  * that the route wires all three together over the shared store.
  */
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useBuildToasts } from "./components/buildmode/useBuildToasts";
 import { ToastStack } from "./components/buildmode/ToastStack";
@@ -194,6 +194,26 @@ describe("BuildMode", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /CONTROLS/ }));
     expect(screen.queryByLabelText("Program runner")).not.toBeInTheDocument();
+  });
+
+  it("keeps the supervisor kill switch in the always-visible top bar", () => {
+    render(<BuildMode />);
+    const bar = document.querySelector(".bm-bar")!;
+    const toggle = within(bar as HTMLElement).getByRole("button", {
+      name: "Turn placement supervision off",
+    });
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("shows the kill switch as switched-off when supervision is disabled", () => {
+    store.applyEvent({ type: "state", event_id: 2, at: 2,
+      state: readyState({ supervision_enabled: false }) });
+    render(<BuildMode />);
+    const bar = document.querySelector(".bm-bar")!;
+    const toggle = within(bar as HTMLElement).getByRole("button", {
+      name: "Turn placement supervision on",
+    });
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
   });
 
   it("raises a sticky toast when the socket drops and clears it when it returns", async () => {

@@ -23,6 +23,7 @@ import { Icon } from "../Icon";
 import { RunnerPanel } from "../RunnerPanel";
 import { SupervisionActivity } from "../SupervisionActivity";
 import { SupervisionBanner } from "../SupervisionBanner";
+import { SupervisionToggle } from "../SupervisionToggle";
 import { requestCorrection } from "../CorrectionControl";
 import { TwinPanel, rememberModelId, storedModelId } from "../TwinPanel";
 import { BuildLibrary } from "./BuildLibrary";
@@ -173,6 +174,10 @@ export function BuildMode() {
         </span>
 
         <span className="spacer" />
+
+        {/* The supervisor kill switch, in the one bar that is always on screen
+            in building mode. Same control as the console's camera toolbar. */}
+        <SupervisionToggle state={state} className="bm-librarybtn" />
 
         <span className={`chip ${
           buildState === "RUNNING" ? "is-motion"

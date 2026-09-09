@@ -2,6 +2,7 @@ import { Fragment, useState } from "react";
 import * as api from "../api";
 import { GridOverlay } from "./GridOverlay";
 import { Icon } from "./Icon";
+import { SupervisionToggle } from "./SupervisionToggle";
 import type { CellGeometry, StateModel } from "../types";
 
 const VIEWS: { key: string; icon: string; label: string }[] = [
@@ -30,13 +31,6 @@ export function CameraView({ state, connected, onCalibrationPoint }: {
   const shown = hover ?? state.geometry?.selected ?? null;
   const stageState = !connected ? "offline" : state.camera === "STALE" ? "stale" : "";
 
-  // The operator kill switch. Not a "view" — it stops the observer server-side
-  // and blanks the banner, runner board, activity log and twin overlay — but
-  // it lives here, next to the overlay toggles, because it is the same kind of
-  // "always available, moves nothing" control.
-  const supervising = state.supervision_enabled !== false;
-  const supervisionFaulted = !supervising && !!state.supervision_fault;
-
   return (
     <>
       {/* Display-only toggles: the server allows these while the rig is moving,
@@ -61,25 +55,7 @@ export function CameraView({ state, connected, onCalibrationPoint }: {
                   blanks the banner, runner board, activity log and twin
                   overlay — but it is the same "always available, moves
                   nothing" kind of control, so it lives in this row. */}
-              {item.key === "detect" && (
-                <button
-                  type="button"
-                  className="toggle"
-                  aria-pressed={supervising}
-                  aria-label={supervising
-                    ? "Turn placement supervision off"
-                    : "Turn placement supervision on"}
-                  title={supervisionFaulted
-                    ? `Supervision stopped after an error: ${state.supervision_fault}. Click to restart it.`
-                    : supervising
-                      ? "Placement supervision is on — banner, runner board, activity log and twin overlay are live"
-                      : "Placement supervision is off — no board checks, no corrections"}
-                  onClick={() => void api.setSupervisionEnabled(!supervising)}
-                >
-                  <Icon name="power" size={15} />
-                  supervisor
-                </button>
-              )}
+              {item.key === "detect" && <SupervisionToggle state={state} />}
             </Fragment>
           );
         })}

@@ -351,6 +351,24 @@ button:disabled { cursor: not-allowed; }
 .toggle[aria-pressed="true"] { color: var(--text); background: var(--raised); border-color: var(--line-strong); }
 .toggle[aria-pressed="true"] .icon { color: var(--signal); }
 
+/* The supervisor kill switch (D14). It appears in the camera toolbar and in
+   building mode's top bar; "off" is a deliberate state, not a fault, so it
+   reads as switched-off — dashed outline, faint — never amber/red. */
+.sv-toggle[aria-pressed="false"] {
+  color: var(--text-faint);
+  border-style: dashed;
+  border-color: var(--line-strong);
+  text-decoration: line-through;
+}
+.sv-toggle.is-faulted { border-color: var(--motion); border-style: dashed; }
+.sv-toggle.is-faulted .icon { color: var(--motion); }
+.bm-librarybtn.sv-toggle[aria-pressed="true"] {
+  color: var(--signal);
+  border-color: color-mix(in srgb, var(--signal) 45%, var(--line));
+  background: var(--wash-signal);
+}
+.bm-librarybtn.sv-toggle[aria-pressed="true"] .icon { color: var(--signal); }
+
 /* ── the instrument: camera and twin, in step (Plan 4 §9.1) ───────────── */
 
 /* One border around both, so they read as one instrument and not two widgets.
