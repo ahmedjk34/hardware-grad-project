@@ -12,7 +12,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Viewport } from "../studio/scene/Viewport";
 import {
   activeMode, cellCount, modeGeometry, reachableCells, resolveShift,
-  type ModeName,
+  type ModeName, type Shift,
 } from "../studio/coords";
 import { GridShift } from "../studio/panels/GridShift";
 import { VIEWS, type ViewName } from "../studio/view";
@@ -130,21 +130,25 @@ export default function Studio() {
     () => compile(model, { mode, settings, shifts, bondShifts, rigSnapshot }),
     [model, mode, settings, shifts, bondShifts, rigSnapshot],
   );
-  // While the GRID SHIFT panel's incrementer is being turned, its pending
-  // (not-yet-applied) course + offset drives the lattice preview so the grid
-  // moves live. Cleared on Apply / Reset. Otherwise the preview follows the
-  // level held on the scrubber and the committed bond map.
+  // The grid shift is a PLACEMENT PREVIEW for the one course the level toggle
+  // holds — it moves the lattice grid and the ghost so the next drop on THAT
+  // level is seen where it will land, and nothing else. It never touches a
+  // level below the held one, and it never moves a block that is already
+  // placed (see `shiftOf` in Blocks / Viewport). With no level held there is
+  // no shift at all: the base grid draws clean.
   const [pendingShift, setPendingShift] = useState<{ level: number; cm: number } | null>(null);
-  const previewShift = useMemo(() => {
-    if (pendingShift) {
-      const offset: [number, number] = mode === "horizontal"
-        ? [pendingShift.cm, 0] : [0, pendingShift.cm];
-      return resolveShift({ mode, level: pendingShift.level },
-        { [mode]: shifts[mode] }, { [mode]: { [pendingShift.level]: offset } }) ?? shifts[mode];
+  const previewShift = useMemo<Shift | undefined>(() => {
+    // Actively turning the GRID SHIFT incrementer: preview its pending offset.
+    if (pendingShift && pendingShift.level >= 1) {
+      return mode === "horizontal"
+        ? { x_cm: pendingShift.cm, y_cm: 0 }
+        : { x_cm: 0, y_cm: pendingShift.cm };
     }
-    return resolveShift({ mode, level: heldLevel ?? 0 }, { [mode]: shifts[mode] }, bondShifts)
-      ?? shifts[mode];
-  }, [mode, heldLevel, shifts, bondShifts, pendingShift]);
+    // Otherwise: the committed course offset for the level the scrubber holds,
+    // and only that. No held level (or level 0) ⇒ no preview shift.
+    if (heldLevel == null || heldLevel < 1) return undefined;
+    return resolveShift({ mode, level: heldLevel }, undefined, bondShifts);
+  }, [mode, heldLevel, bondShifts, pendingShift]);
   const placementDiagnostics = useMemo(() => target ? validatePlacement(model, {
     id: "ghost", mode, col: target.col, row: target.row, level: target.level, colour: "white",
   }, validationContext) : [], [model, mode, target, validationContext]);

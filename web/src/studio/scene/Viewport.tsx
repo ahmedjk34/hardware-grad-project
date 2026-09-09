@@ -12,7 +12,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Vector3 } from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
-import { resolveShift, type BondShifts, type ModeName, type Shift } from "../coords";
+import { type BondShifts, type ModeName, type Shift } from "../coords";
 import type { Model } from "../model";
 import type { CellTarget } from "../pick";
 import type { Diagnostic } from "../validate";
@@ -178,12 +178,12 @@ function Scene({ mode, shift, bondShifts, view, nonce, reduced, model, target, s
 } & SurfaceHandlers) {
   const box = useMemo(() => envelopeBoxScene(), []);
   const centre = boxCentre(box);
-  // Placed blocks — and their contact shadows — draw where they will physically
-  // land: at the shifted spot on their running-bond course. Horizontal only
-  // (`resolveShift` gates the vertical grid out).
+  // A placed block never moves. It draws — shadow included — at its own stored
+  // cell, whatever the grid shift is doing. The shift is a placement preview
+  // for the held level only; it never drags committed geometry.
   const shadowBlocks = useMemo(
-    () => model.blocks.map(block => ({ ...block, shift: resolveShift(block, undefined, bondShifts) })),
-    [model.blocks, bondShifts],
+    () => model.blocks.map(block => ({ ...block, shift: undefined })),
+    [model.blocks],
   );
   return (
     <>
@@ -198,7 +198,7 @@ function Scene({ mode, shift, bondShifts, view, nonce, reduced, model, target, s
       <Envelope box={box} />
       <Lattice mode={mode} shift={shift} {...handlers} />
       <BlockShadows blocks={shadowBlocks} />
-      <Blocks blocks={model.blocks} activeMode={mode} shift={shift} bondShifts={bondShifts}
+      <Blocks blocks={model.blocks} activeMode={mode} shift={shift}
               heldLevel={heldLevel} reduced={reduced} {...handlers} />
       <DiagnosticMarkers blocks={model.blocks} diagnostics={diagnostics} emphasizedId={emphasizedId} />
       <Ghost mode={mode} shift={shift} target={target} status={status} />
