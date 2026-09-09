@@ -109,6 +109,33 @@ describe("the supervision banner", () => {
     expect(container.querySelector(".banner")).toBeNull();
   });
 
+  it("renders nothing at all when the operator switched supervision off", () => {
+    // A live amber verdict — but the kill switch is off, so no surface shouts.
+    const { container } = render(
+      <SupervisionBanner
+        state={testState({ supervision_enabled: false, supervision: supervision() })}
+        onAcknowledge={() => {}} />);
+    expect(container.querySelector(".banner")).toBeNull();
+    expect(container.querySelector(".sv-status")).toBeNull();
+    expect(container.textContent).toBe("");
+  });
+
+  it("shows one dim line, not a verdict, when a crash disabled supervision", () => {
+    const { container } = render(
+      <SupervisionBanner
+        state={testState({
+          supervision_enabled: false,
+          supervision_fault: "RuntimeError: detector exploded",
+          supervision: supervision(),
+        })}
+        onAcknowledge={() => {}} />);
+    expect(container.querySelector(".banner")).toBeNull();
+    const line = screen.getByRole("status");
+    expect(line).toHaveClass("sv-faint");
+    expect(line.textContent).toContain("SUPERVISOR OFF");
+    expect(line.textContent).toContain("detector exploded");
+  });
+
   // --- the CORRECTION control (docs/features/correction-action.md) --------- #
 
   const correctable = (over: Partial<Supervision> = {}) => state({

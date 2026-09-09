@@ -70,7 +70,13 @@ export function latticeCells(mode: ModeName, shift?: Shift): LatticeCell[] {
   const cells: LatticeCell[] = [];
   for (let row = 0; row < requested.rows; row++) {
     for (let col = 0; col < requested.cols; col++) {
-      const centre = machineToScene(cellToMachine(mode, col, row, 0, shift));
+      // The feeder `[0,0]` is a plain home to raw `[0,0]` and never rides the
+      // grid shift (AGENTS.md §3a); every other cell does. Only `[0,0]` is
+      // exempt — `[0,r]` and `[c,0]` are ordinary shifted cells.
+      const centre = machineToScene(
+        isFeeder(col, row)
+          ? cellToMachine(mode, col, row, 0)
+          : cellToMachine(mode, col, row, 0, shift));
       const clipped = col >= reachable.cols || row >= reachable.rows;
       cells.push({
         col, row,

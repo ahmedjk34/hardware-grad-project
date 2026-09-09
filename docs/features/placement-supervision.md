@@ -657,11 +657,36 @@ when `frame.grid_mode != rig.grid.mode`, and `set_grid_mode` clears
 when it sees `frame.grid_mode` change — per D7, evidence gathered under one
 lattice must not leak into a verdict about the other.
 
-### D14 — Always on, notify-only
+### D14 — Always on by default, notify-only, with an operator OFF switch
 
-Idle supervision runs whenever the rig is parked and unlocked. No arming toggle,
-because it produces no motion and the whole point is that it is watching when
-nobody thought to ask it to. The **repair** path (M4) is what gets a toggle.
+Idle supervision runs whenever the rig is parked and unlocked. It needs **no
+arming** toggle — it produces no motion and the whole point is that it is
+watching when nobody thought to ask it to — so it is **on by every fresh
+process**. The **repair** path (M4) is the thing that stays behind a toggle.
+
+**But it can be switched off (2026).** The camera stage toolbar carries a
+power toggle, directly after `DETECT`. Off means:
+
+- `_supervise` early-returns every frame — no verdict, no per-build check, no
+  correction ticket;
+- the last verdict, its baseline, the ticket and the observer's hysteresis are
+  dropped on the spot (exactly what `/session/reset` does to them), so the
+  banner, the runner board, the activity log and the twin overlay all go
+  quiet at once;
+- `POST /api/supervision/correct` refuses with `409`.
+
+It is `POST /api/supervision/enabled {enabled}`, is **not** behind
+`require_mutable` — it has to be usable the instant a verdict is wrong,
+mid-build included — and it moves nothing either way. It exists for two real
+situations: supervision that is *running but wrong* (a false `REMOVED` that
+keeps re-arming, a nagging banner over a board the operator can see is fine),
+and supervision that has *broken* — any exception out of `_supervise` is
+caught in `_supervise_guarded`, flips this switch off itself, records the
+exception in `supervision_fault`, and lets the driver loop carry on. Without
+that guard an observer bug takes down the one loop that also runs
+`job.poll()` and `_auto_pickup`, which stalls an autonomous RUN. The operator
+turns it back on from the same toggle once the cause is fixed; turning it on
+clears `supervision_fault` and resets the hysteresis for a clean restart.
 
 ---
 
@@ -680,10 +705,17 @@ python/rig/supervisor.py         NEW   D5-D9 — interlocks, pixel→cell, hyste
 python/rig/build_controller.py   edit  one call on the PLACED branch
 python/web/app.py                edit  hand each frame to the supervisor in
                                        _drive_pipeline; per-build trigger in
-                                       _publish_build_result
-python/web/state.py              edit  + vision_verification, + supervision block
-python/web/routes_command.py     edit  POST /api/supervision/ack
-web/src/types.ts                 edit  the two new state fields
+                                       _publish_build_result; _supervise_guarded
+                                       — the D14 kill switch + crash containment
+python/web/state.py              edit  + vision_verification, + supervision block,
+                                       + supervision_enabled / supervision_fault
+python/web/routes_command.py     edit  POST /api/supervision/ack;
+                                       POST /api/supervision/enabled (D14);
+                                       /supervision/correct refuses while off
+web/src/components/CameraView.tsx edit  the D14 power toggle, right after DETECT
+web/src/components/SupervisionActivity.tsx
+                                 edit  renders nothing while supervision is off
+web/src/types.ts                 edit  the two new state fields, + D14's two
 web/src/studio/runner.ts         edit  a "board-verdict" RunEvent → pause/stop
 web/src/components/GridOverlay.tsx  edit  a per-cell class on the LIVE VIDEO —
                                        same mechanism as `blocked` cells today
@@ -757,6 +789,16 @@ Plus the free win from §2b, published beside it:
 ```python
 vision_verification: str | None   # "verified" / "not detected at [2,2]" /
                                   # "unchecked — level 3 above the ceiling"
+```
+
+And the operator OFF switch (D14), published as two flat fields so every
+surface can go quiet without re-deriving anything:
+
+```python
+supervision_enabled: bool         # camera-toolbar power toggle; false = the
+                                  # observer is skipped and every surface blanks
+supervision_fault: str | None     # the exception, when the observer disabled
+                                  # ITSELF after raising; None on a plain OFF
 ```
 
 ### What this does to the camera's role
@@ -1150,9 +1192,10 @@ and `PASSED`/`FAILED` lists, and `FakeRig` is the pattern (fakes over mocks).
 | `tests/test_placement_ledger.py` | append/reload, per-mode separation, level collapse to a column, `PLACED`-only admission, `NO MEMORY` after restart, the two Stage 15 predicates |
 | `tests/test_supervisor.py` | every D9 row from synthetic cell sets, incl. `MOVED` vs `DISPLACED` by landing and the ambiguous gap counts that fall through to `DISAGREES`; hysteresis needs `N of M`; each D5 interlock independently suppresses a verdict; counters **reset rather than decay** on a tripped interlock; D6 refuses level ≥ 3; `in_gap` gets `N of M` too (D10 removed); D13 resets on a mode change |
 | `tests/test_supervisor_frames.py` | **built differently, and stronger.** Not the reference stills — the **four Gate 0 rig traces** in `docs/measurements/`, 1398 frames the rig actually produced, replayed through the shipped `Supervisor`. Reproduces the measured distribution to within a tenth of a percent, names the exact residual cell `(2,0)`, and replays the pre-fix merged reading to measure it emitting `FOREIGN` in 99.4% of windows on a correct board |
-| `tests/web_supervision_test.py` | **new.** The seam: what `web/app.py` hands the supervisor, the mode-latch suspension, the repeated-sequence guard, D5's parked gate including the `complete` trap, and the per-build check's four outcomes |
+| `tests/web_supervision_test.py` | **new.** The seam: what `web/app.py` hands the supervisor, the mode-latch suspension, the repeated-sequence guard, D5's parked gate including the `complete` trap, and the per-build check's four outcomes. **Kill switch (D14):** `_supervise_guarded` skips the observer and clears the verdict when off; an exception out of `_supervise` disables supervision, records `supervision_fault`, and does **not** propagate (the driver loop lives); `POST /api/supervision/enabled` toggles both ways and drops the verdict; `/supervision/correct` refuses `409` while off |
+| `web/src/components/CameraView.test.tsx` | **new.** The toolbar power toggle sits directly after `DETECT`, is never disabled, flips in one click, and calls `/api/supervision/enabled` — not `/api/view` |
 | `web/src/tokens.test.ts` | **new.** Reads the real stylesheet and asserts every colour that carries a state WORD clears 7:1, and pins the fact that `--danger` itself does not |
-| `web/src/components/SupervisionBanner.test.tsx` | **new.** No banner for `VERIFIED`; no state colour for BUSY/QUIET/NO_MEMORY; `role` by severity; the cell named in the dismiss label; the hatch is not a colour; `DISPLACED` is amber, names its cell, and says "straighten it" |
+| `web/src/components/SupervisionBanner.test.tsx` | **new.** No banner for `VERIFIED`; no state colour for BUSY/QUIET/NO_MEMORY; `role` by severity; the cell named in the dismiss label; the hatch is not a colour; `DISPLACED` is amber, names its cell, and says "straighten it". **Kill switch:** renders nothing at all on a plain OFF even over a live verdict; one dim `SUPERVISOR OFF` line naming the exception when a crash disabled it |
 | `tests/web_state_test.py` | `vision_verification` and the supervision block appear in the snapshot and survive a mode latch |
 | `web/src/studio/runner.test.ts` | a `board-verdict` event pauses on `REMOVED`, stops on `DISAGREES`, and never reaches `locked` |
 | existing | `test_block_outline.py`'s timing guard must still pass — supervision adds no detector work |

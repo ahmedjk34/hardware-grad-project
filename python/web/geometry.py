@@ -19,7 +19,9 @@ def _static_grid(workspace, image_size: tuple[int, int]) -> tuple[dict[str, Any]
     key = (image_size, tuple(workspace.corners), grid.mode, grid.cols, grid.rows,
            grid.block_x_cm, grid.block_y_cm, grid.gap_x_cm, grid.gap_y_cm,
            grid.trim_x_cm, grid.trim_y_cm, grid.error_offset_x_cm,
-           grid.error_offset_y_cm)
+           grid.error_offset_y_cm,
+           # The live grid shift moves every drawn cell but the feeder.
+           grid.shift_x_cm, grid.shift_y_cm)
     cached = _STATIC_GRID_CACHE.get(key)
     if cached is not None:
         return cached
@@ -67,13 +69,18 @@ def _feeder_marker(workspace, image_size: tuple[int, int]) -> dict[str, Any] | N
                      for cx, cy in corners_cm)
     ]
     centre = workspace.pixel_at(0.0, 0.0, image_size)
+    # The drawn `[0,0]` cell sits at its registration (`trim + error_offset`)
+    # and never rides the live grid shift, so the marker coincides with it iff
+    # that registration is zero — vertical today, not horizontal's `+1.9 cm`.
+    drawn_zero_cm = (grid.trim_x_cm + grid.error_offset_x_cm,
+                     grid.trim_y_cm + grid.error_offset_y_cm)
     return {
         "mode": grid.mode,
         "center": [float(centre[0]), float(centre[1])],
         "polygon": polygon,
-        # True when the marker does NOT coincide with the drawn `[0,0]` cell —
-        # i.e. horizontal mode — so the browser can label it.
-        "offset_from_cell": grid.mode != "vertical",
+        # True when the marker does NOT coincide with the drawn `[0,0]` cell,
+        # so the browser labels it as the true, separate feeder point.
+        "offset_from_cell": abs(drawn_zero_cm[0]) > 1e-6 or abs(drawn_zero_cm[1]) > 1e-6,
     }
 
 

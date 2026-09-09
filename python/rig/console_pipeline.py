@@ -215,6 +215,7 @@ class ConsolePipeline:
         try:
             self.saved_workspace, self.workspace_rejection = load_workspace(
                 self.workspace_map_path, self.grid, self.projection)
+            self.saved_workspace = self._with_live_shift(self.saved_workspace)
             self.analysis.start()
             self.paper.start()
             self.frame_pump.start()
@@ -267,6 +268,7 @@ class ConsolePipeline:
             raise RuntimeError("start the pipeline before reloading its workspace")
         self.saved_workspace, self.workspace_rejection = load_workspace(
             self.workspace_map_path, self.grid, self.projection)
+        self.saved_workspace = self._with_live_shift(self.saved_workspace)
         self._map_generation += 1
         self._last_frame = None
         self._last_stale = None
@@ -284,7 +286,7 @@ class ConsolePipeline:
             raise ValueError("workspace map does not match the active grid")
         if workspace.projection != self.projection:
             raise ValueError("workspace map was made for another camera projection")
-        self.saved_workspace = workspace
+        self.saved_workspace = self._with_live_shift(workspace)
         self.workspace_rejection = None
         # A workspace is part of the pixel-to-cell evidence map.  Results
         # submitted under the previous workspace must not be interpreted with
@@ -292,6 +294,21 @@ class ConsolePipeline:
         self._map_generation += 1
         self._last_frame = None
         self._last_stale = None
+
+    def _with_live_shift(self, workspace: WorkspaceMap | None) -> WorkspaceMap | None:
+        """Compose the active grid's live operator shift onto a loaded map.
+
+        The saved calibration is shift-agnostic - a camera<->envelope mapping -
+        while ``shiftX`` / ``shiftY`` slide the placement cells INSIDE that same
+        rectangle. Re-applied on every (re)load so a shifted grid keeps its
+        calibration instead of dropping to ``approximate_workspace``. The feeder
+        cell ``[0,0]`` still never rides it (``WorkspaceMap.cell_polygon`` /
+        ``cell_at``). Returns ``self``-equivalent maps unchanged.
+        """
+        if workspace is None:
+            return None
+        return workspace.with_live_shift(
+            self.grid.shift_x_cm, self.grid.shift_y_cm)
 
     def set_grid_mode(self, mode: str, grid: MachineGrid | None = None) -> None:
         """Switch all per-mode camera state after the controller latches the rig."""
@@ -312,6 +329,7 @@ class ConsolePipeline:
         self.paper.set_spec(ColorGridSpec.from_config(rig_data, mode=mode))
         self.saved_workspace, self.workspace_rejection = load_workspace(
             self.workspace_map_path, self.grid, self.projection)
+        self.saved_workspace = self._with_live_shift(self.saved_workspace)
         self._map_generation += 1
         self._last_frame = None
         self._last_stale = None
@@ -345,8 +363,11 @@ class ConsolePipeline:
                     crop_resize(frame, self._roi, self._maps.out_size,
                                 self._interpolation))
             image_size = view.shape[1::-1]
-            workspace = self.saved_workspace or approximate_workspace(
-                self.grid, image_size, self.projection)
+            # `approximate_workspace` reads the shift straight off `self.grid`;
+            # the saved map is re-composed here in case the live shift moved
+            # since the last (re)load (it normally does via `set_grid_mode`).
+            workspace = self._with_live_shift(self.saved_workspace) \
+                or approximate_workspace(self.grid, image_size, self.projection)
             view.flags.writeable = False
             stack_aware = self._stack_aware()
             context = FrameAnalysisContext(

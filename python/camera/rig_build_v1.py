@@ -724,6 +724,11 @@ def main():
                 image_size = view.shape[1::-1]
                 workspace = saved_workspace or approximate_workspace(
                     grid, image_size, projection)
+                # The saved calibration is shift-agnostic; compose the active
+                # grid's live shift onto it rather than dropping to the
+                # approximate map. The feeder `[0,0]` never rides it.
+                workspace = workspace.with_live_shift(
+                    grid.shift_x_cm, grid.shift_y_cm)
                 calibrated = saved_workspace is not None
                 view.flags.writeable = False
                 if ui["detect_enabled"]:

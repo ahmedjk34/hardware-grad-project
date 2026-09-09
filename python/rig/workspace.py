@@ -98,6 +98,13 @@ class WorkspaceMap:
     # A calibration belongs to a block orientation as well as a camera.  Flat
     # v2 maps predate that distinction and are migrated as vertical on read.
     mode: str = DEFAULT_GRID_MODE
+    # The LIVE operator grid shift (`shiftX` / `shiftY`), in cm, composed onto
+    # this calibration at draw/hit-test time. It is RUNTIME state held by
+    # `rig.grid` / the firmware - never part of the saved calibration and never
+    # a reason to reject a saved map (see `matches_grid`). `with_live_shift()`
+    # is the only way it is set; the feeder cell `[0,0]` never rides it
+    # (`cell_polygon` / `cell_at`), matching "a plain home to raw `[0,0]`".
+    live_shift: tuple[float, float] = (0.0, 0.0)
 
     def __post_init__(self):
         if self.cols < 1 or self.rows < 1:
@@ -111,6 +118,9 @@ class WorkspaceMap:
         self.corners = [(float(x), float(y)) for x, y in self.corners]
         if not all(math.isfinite(v) for point in self.corners for v in point):
             raise ValueError("workspace corners must be finite")
+        self.live_shift = (float(self.live_shift[0]), float(self.live_shift[1]))
+        if not all(math.isfinite(v) for v in self.live_shift):
+            raise ValueError("workspace live shift must be finite")
         if not all(0.0 <= v <= 1.0 for point in self.corners for v in point):
             raise ValueError("normalized workspace corners must lie inside the image")
         crosses = []
@@ -148,8 +158,11 @@ class WorkspaceMap:
                     if "max_edge_overhang_y_cm" in geometry else None),
                 error_offset_x_cm=float(geometry.get("error_offset_x_cm", 0.0)),
                 error_offset_y_cm=float(geometry.get("error_offset_y_cm", 0.0)),
-                shift_x_cm=float(geometry.get("shift_x_cm", 0.0)),
-                shift_y_cm=float(geometry.get("shift_y_cm", 0.0)),
+                # The grid shift is LIVE runtime state, applied via
+                # `with_live_shift()`, not read from the saved geometry. Any
+                # `shift_*_cm` a pre-fix map baked in is deliberately ignored.
+                shift_x_cm=self.live_shift[0],
+                shift_y_cm=self.live_shift[1],
                 mode=self.mode,
             )
 
@@ -168,6 +181,11 @@ class WorkspaceMap:
 
         Its own copy of the block/gap/trim numbers, so a loaded calibration
         cannot silently borrow whatever ``config/rig.json`` says today.
+
+        The live grid shift (`shift_x_cm` / `shift_y_cm`) is deliberately NOT
+        recorded: it is runtime state, it moves the placement cells inside this
+        same calibrated rectangle, and baking it in would make an otherwise
+        valid calibration look stale the moment the operator nudges the grid.
         """
         return {
             "workspace_width_cm": grid.workspace_width_cm,
@@ -182,8 +200,6 @@ class WorkspaceMap:
             "max_edge_overhang_y_cm": grid.max_edge_overhang_y_cm,
             "error_offset_x_cm": grid.error_offset_x_cm,
             "error_offset_y_cm": grid.error_offset_y_cm,
-            "shift_x_cm": grid.shift_x_cm,
-            "shift_y_cm": grid.shift_y_cm,
         }
 
     @classmethod
@@ -196,7 +212,8 @@ class WorkspaceMap:
             raise ValueError("image size must be positive")
         return cls(grid.cols, grid.rows, [(x / w, y / h) for x, y in corners],
                    projection, cls._geometry_from_grid(grid),
-                   grid.mode or DEFAULT_GRID_MODE)
+                   grid.mode or DEFAULT_GRID_MODE,
+                   live_shift=(grid.shift_x_cm, grid.shift_y_cm))
 
     @classmethod
     def from_grid_normalized(cls, grid: MachineGrid, corners, projection=None):
@@ -215,7 +232,25 @@ class WorkspaceMap:
         return cls(grid.cols, grid.rows,
                    [(float(x), float(y)) for x, y in corners],
                    projection, cls._geometry_from_grid(grid),
-                   grid.mode or DEFAULT_GRID_MODE)
+                   grid.mode or DEFAULT_GRID_MODE,
+                   live_shift=(grid.shift_x_cm, grid.shift_y_cm))
+
+    def with_live_shift(self, x_cm: float, y_cm: float) -> "WorkspaceMap":
+        """This same calibration with the operator grid shift composed in.
+
+        The four clicked corners, the projection and the frozen block geometry
+        are untouched - a grid shift translates the placement cells INSIDE the
+        calibrated rectangle, it does not move the rectangle. Returns ``self``
+        when the shift is already the one in force, so callers can invoke it on
+        every frame cheaply. The feeder cell ``[0,0]`` still never rides it -
+        that exception lives in :meth:`cell_polygon` / :meth:`cell_at`.
+        """
+        x_cm, y_cm = float(x_cm), float(y_cm)
+        if (x_cm, y_cm) == self.live_shift:
+            return self
+        return WorkspaceMap(
+            self.cols, self.rows, list(self.corners), self.projection,
+            self.physical_grid, self.mode, live_shift=(x_cm, y_cm))
 
     @classmethod
     def load(cls, path=WORKSPACE_MAP_PATH, cols=None, rows=None, *, mode=None):
@@ -355,10 +390,10 @@ class WorkspaceMap:
                  == grid.max_edge_overhang_y_cm)
             and float(geometry.get("error_offset_x_cm", 0.0)) == grid.error_offset_x_cm
             and float(geometry.get("error_offset_y_cm", 0.0)) == grid.error_offset_y_cm
-            # Absent in maps saved before shiftX/shiftY existed: absence means
-            # "unshifted", so an old map still matches an unshifted grid.
-            and float(geometry.get("shift_x_cm", 0.0)) == grid.shift_x_cm
-            and float(geometry.get("shift_y_cm", 0.0)) == grid.shift_y_cm
+            # The live grid shift is deliberately NOT compared: it is runtime
+            # state that slides the placement cells inside this same calibrated
+            # rectangle. `console_pipeline` composes it onto the loaded map with
+            # `with_live_shift()`; a shifted grid keeps its calibration.
         )
 
     def normalized_at(self, point, image_size):
@@ -380,6 +415,15 @@ class WorkspaceMap:
         x_cm = u * g.workspace_width_cm
         y_cm = v * g.workspace_height_cm
         epsilon = 1e-9
+        # The feeder cell `[0,0]` is drawn at its UNSHIFTED registration and
+        # never rides the operator shift, so a click on it resolves there
+        # whatever the live shift is. With no shift this rectangle IS slot 0 and
+        # nothing changes. Only `[0,0]` is exempt - `[0,r]` and `[c,0]` are
+        # ordinary cells and do ride the shift.
+        fx0, fy0, fx1, fy1 = self._feeder_bounds_cm()
+        if fx0 - epsilon <= x_cm <= fx1 + epsilon \
+                and fy0 - epsilon <= y_cm <= fy1 + epsilon:
+            return 0, 0
         if x_cm < g.x_start_cm - epsilon or x_cm > g.x_end_cm + epsilon \
                 or y_cm < g.y_start_cm - epsilon or y_cm > g.y_end_cm + epsilon:
             return None
@@ -423,12 +467,28 @@ class WorkspaceMap:
         x, y = _project(self._to_image, (u, v))
         return x * image_size[0], y * image_size[1]
 
+    def _feeder_bounds_cm(self) -> tuple[float, float, float, float]:
+        """The `[0,0]` block edges WITHOUT the live grid shift.
+
+        The feeder is a plain home to raw `[0,0]` and never rides the operator
+        shift (AGENTS.md §3a). Its registration - horizontal's `+1.9 cm` trim -
+        still applies; only `live_shift` is dropped.
+        """
+        g = self._grid
+        cx = g.trim_x_cm + g.error_offset_x_cm
+        cy = g.trim_y_cm + g.error_offset_y_cm
+        return (cx - g.block_x_cm / 2, cy - g.block_y_cm / 2,
+                cx + g.block_x_cm / 2, cy + g.block_y_cm / 2)
+
     def cell_polygon(self, col, row, image_size):
         if self._grid is None:
             u0, u1 = col / self.cols, (col + 1) / self.cols
             v0, v1 = row / self.rows, (row + 1) / self.rows
         else:
-            x0, y0, x1, y1 = self._grid.cell_bounds_cm(col, row)
+            if self._grid.is_pickup(col, row):
+                x0, y0, x1, y1 = self._feeder_bounds_cm()
+            else:
+                x0, y0, x1, y1 = self._grid.cell_bounds_cm(col, row)
             u0, u1 = x0 / self._grid.workspace_width_cm, x1 / self._grid.workspace_width_cm
             v0, v1 = y0 / self._grid.workspace_height_cm, y1 / self._grid.workspace_height_cm
         return [self.pixel_at(u0, v0, image_size), self.pixel_at(u1, v0, image_size),

@@ -489,6 +489,9 @@ def _grid_geometry(workspace, image_size):
         g.workspace_width_cm, g.workspace_height_cm,
         g.trim_x_cm, g.trim_y_cm,
         g.error_offset_x_cm, g.error_offset_y_cm,
+        # The live grid shift moves every cell but the feeder, so it is part of
+        # the projected geometry now - two shifts must not share a cache slot.
+        g.shift_x_cm, g.shift_y_cm,
     )
     cached = _GRID_GEOMETRY_CACHE.get(key)
     if cached is not None:
@@ -522,7 +525,12 @@ def _grid_geometry(workspace, image_size):
     if show_labels:
         for row in range(g.rows):
             for col in range(g.cols):
-                x_cm, y_cm = g.cell_center_cm(col, row)
+                if g.is_pickup(col, row):
+                    # The feeder label tracks its rectangle: unshifted `[0,0]`.
+                    x_cm = g.trim_x_cm + g.error_offset_x_cm
+                    y_cm = g.trim_y_cm + g.error_offset_y_cm
+                else:
+                    x_cm, y_cm = g.cell_center_cm(col, row)
                 x, y = _pixel(_point(workspace, g, x_cm, y_cm, image_size))
                 _add_label(labels, f"{col},{row}", x, y)
 
